@@ -53,7 +53,7 @@ Implement the runner against small fake sources, sinks, clocks, and progress sto
 - Commit all of a worker's partitions in one request with at most one in flight, every second or at 50% of a worker cap; retain uncommitted accounting until commit success. Admit one oversized record alone.
 - Implement the agreed per-partition cutoff rule, including strict `> end + cutoff`, wall-clock/tip completion, and trigger-record commit position.
 - Stop intake immediately on shutdown; allow up to 10 seconds for outstanding writes and confirmed progress commits. Apply the same drain bound to revoked partitions.
-- Track initial assignment and revocation explicitly: a worker temporarily assigned no partitions during a rebalance must not mistake that for completing its query.
+- Track initial assignment and revocation explicitly: a worker temporarily assigned no partitions during a rebalance must not mistake that for completing its query. In bounded runs, exit after `worker.idle_exit` with no partitions; any assignment resets the timer.
 
 Gate: deterministic state-machine tests for out-of-order acknowledgments, partial batch failure, offset gaps, failed commits, all caps, retries, shutdown, revocation, and late outcomes. Assert that durable progress never passes unresolved work.
 
@@ -93,7 +93,7 @@ Exercise complete commands against real files and Kafka clusters.
 
 - Cover all four copy directions and byte-level record comparison, with only the documented destination timestamp exceptions.
 - Verify same-key source order at the destination across retries, crashes, and revocations whose drain times out.
-- Run two workers in one group; force reassignment, stop a completed worker, crash a worker, and verify independent local completion without done markers or a coordinator.
+- Run two workers in one group; force reassignment, stop a completed worker, crash a worker, run more workers than partitions, and verify independent local completion without done markers or a coordinator.
 - Demonstrate duplicate windows by killing the process after durable output but before source progress commit; verify no committed record is lost.
 - Test out-of-order timestamps, boundary equality, future timestamps, missing timestamps, timestamp rejection, records past destination retention, cutoff-trigger replay, and new source partitions.
 - Test absent/expired commits, empty topics, timestamp lookups with no match, stalled transactions, group rebalances, destination outages, and commit failures under full limits.

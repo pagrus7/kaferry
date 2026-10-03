@@ -41,6 +41,7 @@
 - Kafka workers share a group without a coordinator and progress independently per assigned partition.
 - Store a query fingerprint and the resolved `[lo, hi)` window in every Kafka commit's metadata and every file-source checkpoint. The fingerprint hashes the normalized query (endpoints, `WHERE` expression text, semantic options), not resolved values. A mismatched fingerprint fails; a partition without a commit adopts the window from any committed sibling.
 - Workers stop assigned partitions locally and exit when all are stopped; rebalances may extend a run.
+- In bounded runs, a worker that holds no partitions continuously for TOML `worker.idle_exit` (default 30 seconds) logs it and exits; in follow mode, idle workers stay as standbys.
 - On a timestamp stop, commit at the trigger record so a new owner can reevaluate it; at a tip stop, commit the next offset.
 - On revocation, stop consuming that partition immediately, drain writes for up to 10 seconds, purge and close that partition's producer, commit confirmed progress, then release it.
 - Rebalances pick up new source partitions while workers run; later additions need another run.
