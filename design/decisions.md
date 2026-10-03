@@ -38,6 +38,7 @@
 
 - Require `GROUP` in SQL for every query: a broker consumer group for Kafka sources, a local checkpoint identity for file sources.
 - `GROUP = 'name'` is stable and shared by Kafka workers; `GROUP = ONE_OFF` generates/logs a fresh ID, runs with one worker, and can resume via the named form. No `AUTO` mode.
+- A successful `ONE_OFF` file-source run deletes its checkpoint; failed or interrupted runs keep it and log the resume form. Kafka `ONE_OFF` groups are left to broker offset expiry (`offsets.retention.minutes`). Named groups are never deleted automatically.
 - Kafka workers share a group without a coordinator and progress independently per assigned partition.
 - Store a query fingerprint and the resolved `[lo, hi)` window in every Kafka commit's metadata and every file-source checkpoint. The fingerprint hashes the normalized query (endpoints, `WHERE` expression text, semantic options), not resolved values. A mismatched fingerprint fails; a partition without a commit adopts the window from any committed sibling.
 - Workers stop assigned partitions locally and exit when all are stopped; rebalances may extend a run.
