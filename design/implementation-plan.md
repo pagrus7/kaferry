@@ -36,8 +36,9 @@ Suggested packages: `cmd/kafka-fwd2`, `internal/sql`, `internal/config`, `intern
 Build the CLI input path, TOML loader, small parser, AST, and planner before client integration. Prefer a small recursive-descent parser over a general SQL engine.
 
 - Support topic/file endpoints, prefixed connections, `SELECT *`, timestamp bounds, `BETWEEN`, `NOW()`, interval arithmetic, and flat options.
-- Freeze `NOW()` once per execution; normalize times and validate interval units and range bounds. Preserve inclusive `BETWEEN` versus exclusive `<` explicitly.
-- Implement start rules: usable commit wins; otherwise lower time bound, earliest for upper-only filters, or explicit earliest/latest without a time filter. Reject `START` with time filters.
+- Freeze `NOW()` once per execution for a group that has no stored window; normalize times and validate interval units and range bounds. Preserve inclusive `BETWEEN` versus exclusive `<` explicitly.
+- Compute a query fingerprint from the normalized query, excluding resolved values.
+- Implement start rules: usable commit with a matching fingerprint wins; otherwise lower time bound, earliest for upper-only filters, or explicit earliest/latest without a time filter. Reject `START` with time filters.
 - Validate required group, one-off restrictions, option applicability/conflicts, connection aliases, and safe file paths/identity before copying.
 - Merge SQL properties over TOML by alias/key; resolve environment values without exposing secrets.
 
@@ -75,6 +76,7 @@ Integrate `confluent-kafka-go`; keep Kafka types inside the adapter packages.
 
 - Use one polling loop per worker, committed isolation, explicit offset management, and ownership-aware assignment/revocation handling.
 - Resolve committed positions and retention validity per partition; apply the agreed missing/expired fallback. Persist initial positions before copying.
+- Read commit metadata on assignment: fail on a fingerprint mismatch, adopt a stored window, or resolve the window and store it with the initial position. Partitions without commits adopt a committed sibling's window.
 - Resolve timestamp starts through the client timestamp lookup. If no qualifying record exists, establish the current readable end and follow/finish according to the time rule.
 - Determine the visible tip consistently with committed isolation. Verify client EOF/position behavior around open transactions before relying on it for termination.
 - Produce asynchronously with original key bytes and partition unset; retain headers and timestamps. Use delivery reports and librdkafka batching; enable idempotence and protect settings required by our guarantees.
@@ -92,7 +94,7 @@ Exercise complete commands against real files and Kafka clusters.
 - Demonstrate duplicate windows by killing the process after durable output but before source progress commit; verify no committed record is lost.
 - Test out-of-order timestamps, boundary equality, future timestamps, missing timestamps, timestamp rejection, cutoff-trigger replay, and new source partitions.
 - Test absent/expired commits, empty topics, timestamp lookups with no match, stalled transactions, group rebalances, destination outages, and commit failures under full limits.
-- Verify resume identity when expressions use `NOW()`: a new execution resolves a new window as agreed; keep stable query identity separate from its evaluated values and log the resolved window.
+- Verify resume identity when expressions use `NOW()`: restarts and later workers reuse the stored window, a changed query fails on fingerprint mismatch, and the resolved window is logged.
 - Test across different partition counts and opaque schema-encoded bytes. Document that Schema Registry compatibility is the user's responsibility.
 
 Gate: end-to-end scenarios prove the recorded semantics. Retention/time/transaction tests use controlled fixtures rather than timing-dependent sleeps wherever possible.

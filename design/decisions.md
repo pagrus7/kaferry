@@ -13,9 +13,9 @@
 ## Time
 
 - Kafka record time governs filters; `>= start AND < end` gives an inclusive start and exclusive end. SQL `BETWEEN` includes both endpoints.
-- Support `NOW()` and basic timestamp/interval arithmetic with seconds, minutes, and hours; evaluate `NOW()` once per execution. Separate workers/restarts may resolve different boundaries; use literals for identical windows.
+- Support `NOW()` and basic timestamp/interval arithmetic with seconds, minutes, and hours; evaluate `NOW()` once, when a group first stores its window. Later workers and restarts of that group reuse the stored window; a new window needs a new group.
 - Spell time literals as `TIMESTAMP '2026-10-01T00:00:00Z'`; require RFC 3339 with `Z` or an explicit UTC offset.
-- A Kafka group's usable commit wins. Otherwise a time filter starts at its lower-bound timestamp, or at the earliest retained offset if it has only an upper bound; commit the initial position before copying.
+- A Kafka group's usable commit with a matching query fingerprint wins. Otherwise a time filter starts at its lower-bound timestamp, or at the earliest retained offset if it has only an upper bound; commit the initial position before copying.
 - Without a time filter, require `START = EARLIEST|LATEST` if no usable commit exists. Reject `START` with time filters; timestamp starts are expressed through `WHERE`. Allow follow mode.
 - Bounded partitions stop at the first timestamp `> end + cutoff`, or at the visible tip after wall time passes `end + cutoff` (default cutoff: one minute).
 - Out-of-order or late records may be omitted by this stop rule.
@@ -35,6 +35,7 @@
 - Require `GROUP` in SQL for every query: a broker consumer group for Kafka sources, a local checkpoint identity for file sources.
 - `GROUP = 'name'` is stable and shared by Kafka workers; `GROUP = ONE_OFF` generates/logs a fresh ID, runs with one worker, and can resume via the named form. No `AUTO` mode.
 - Kafka workers share a group without a coordinator and progress independently per assigned partition.
+- Store a query fingerprint and the resolved `[lo, hi)` window in every Kafka commit's metadata and every file-source checkpoint. The fingerprint hashes the normalized query (endpoints, `WHERE` expression text, semantic options), not resolved values. A mismatched fingerprint fails; a partition without a commit adopts the window from any committed sibling.
 - Workers stop assigned partitions locally and exit when all are stopped; rebalances may extend a run.
 - On a timestamp stop, commit at the trigger record so a new owner can reevaluate it; at a tip stop, commit the next offset.
 - On revocation, stop consuming that partition immediately, drain writes for up to 10 seconds, commit confirmed progress, then release it.
