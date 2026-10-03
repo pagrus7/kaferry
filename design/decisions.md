@@ -48,6 +48,7 @@
 ## Errors
 
 - Fail by default. SQL may supply either `ON_ERROR` or specific error policies; mixing them is a validation error.
+- Use flat options: `ON_ERROR = FAIL|SKIP`, `ON_MISSING_TIMESTAMP = FAIL|SKIP`, `ON_REJECTED_TIMESTAMP = FAIL|SKIP`, and `ON_SOURCE_FILE_CHANGED = FAIL|CONTINUE`.
 - Global `SKIP` skips any failed record with an identifiable source position and logs its position/reason. Authentication, outages, and unreadable framing retain retry/fail behavior when no record can be skipped.
 - Specific policies may skip a missing timestamp required by a filter or a destination-rejected timestamp; changed source files may explicitly continue from the saved frame position and log the mismatch.
 
@@ -70,7 +71,7 @@
 
 ## Open
 
-- Final SQL option spellings, exact CBOR field schema, CLI flag names, and exact OS state-folder path. CBOR may change; file segmentation can come later.
+- Remaining SQL grammar, exact CBOR field schema, CLI flag names, and exact OS state-folder path. CBOR may change; file segmentation can come later.
 
 ## Engineering
 
