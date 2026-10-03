@@ -114,7 +114,7 @@ OPTIONS (GROUP = 'clicks-backfill-1', CUTOFF = INTERVAL '5' MINUTE, ON_ERROR = S
 | Statement or fragment | Expected error |
 | --- | --- |
 | `... WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` cannot be combined with a time filter |
-| `OPTIONS (GROUP = 'g', ON_ERROR = SKIP, ON_MISSING_TIMESTAMP = FAIL)` | `ON_ERROR` cannot be mixed with specific error policies |
+| `... WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS (GROUP = 'g', ON_ERROR = SKIP, ON_MISSING_TIMESTAMP = FAIL)` | `ON_ERROR` cannot be mixed with specific error policies |
 | `... FROM FILE cbor('a.cbor') ... OPTIONS (GROUP = 'g', CUTOFF = INTERVAL '1' MINUTE)` | `CUTOFF` applies to topic sources |
 | `... FROM FILE cbor('a.cbor') OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` applies to topic sources |
 | `OPTIONS (START = EARLIEST)` | `GROUP` is required |
