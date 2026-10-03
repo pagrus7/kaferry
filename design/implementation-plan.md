@@ -40,7 +40,7 @@ Build the CLI input path, TOML loader, small parser, AST, and planner before cli
 - Compute a query fingerprint from the normalized query, excluding resolved values.
 - Implement start rules: usable commit with a matching fingerprint wins; otherwise lower time bound, earliest for upper-only filters, or explicit earliest/latest without a time filter. Reject `START` with time filters.
 - Validate required group, one-off restrictions, option applicability/conflicts (including `CUTOFF` on file sources), connection aliases, same alias/topic self-copies, and safe file paths/identity before copying.
-- Merge SQL properties over TOML by alias/key; resolve environment values without exposing secrets.
+- Resolve an omitted `@conn` to `default`. Merge SQL properties over TOML by alias/key; resolve environment values without exposing secrets.
 
 Gate: table-driven valid/invalid query tests, examples for all four endpoint combinations, boundary-time tests, and parser fuzzing. No broker needed.
 

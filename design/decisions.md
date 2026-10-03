@@ -84,6 +84,7 @@
 - Reject unknown, repeated, conflicting, or inapplicable options and file queries that would overwrite their source.
 - Reject topic queries whose source and destination name the same connection alias and topic. Different aliases for one cluster are not detected; documentation warns about copy loops.
 - Prefix statements with `WITH CONNECTION alias AS (...)` for inline librdkafka properties; TOML supplies named profiles. SQL properties override matching TOML keys.
+- `TOPIC 'topic'` without `@conn` uses the connection named `default` and fails if none is defined.
 - `ENV('NAME')` resolves at startup, fails if unset, and is redacted in logs. Reject unknown or guarantee-breaking librdkafka settings.
 - TOML holds connection profiles and worker tuning; file paths use `FILE cbor('path')`.
 - CLI uses `run --file/-f path`, `run --sql/-e statement`, or `run --file -` for stdin; require exactly one input. Load TOML with `--config/-c path`.
