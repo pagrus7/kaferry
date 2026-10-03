@@ -80,6 +80,7 @@ Integrate `confluent-kafka-go`; keep Kafka types inside the adapter packages.
 - Resolve timestamp starts through the client timestamp lookup. If no qualifying record exists, establish the current readable end and follow/finish according to the time rule.
 - Determine the visible tip consistently with committed isolation. Verify client EOF/position behavior around open transactions before relying on it for termination.
 - Produce asynchronously with original key bytes and partition unset; retain headers and timestamps. Use delivery reports and librdkafka batching; enable idempotence and protect settings required by our guarantees.
+- Read destination timestamp type, cleanup policy, and retention; apply the retention-horizon check at planning and per record, warning when configuration access is denied.
 - Validate destination existence and prevent automatic topic creation. Monitor destination partition-count changes and log them without assigning source partitions.
 - Map record-specific timestamp failures and transient/fatal failures to the agreed policies. Keep retry duration bounded and expose the terminal cause.
 
@@ -92,7 +93,7 @@ Exercise complete commands against real files and Kafka clusters.
 - Cover all four copy directions and byte-level record comparison, with only the documented destination timestamp exceptions.
 - Run two workers in one group; force reassignment, stop a completed worker, crash a worker, and verify independent local completion without done markers or a coordinator.
 - Demonstrate duplicate windows by killing the process after durable output but before source progress commit; verify no committed record is lost.
-- Test out-of-order timestamps, boundary equality, future timestamps, missing timestamps, timestamp rejection, cutoff-trigger replay, and new source partitions.
+- Test out-of-order timestamps, boundary equality, future timestamps, missing timestamps, timestamp rejection, records past destination retention, cutoff-trigger replay, and new source partitions.
 - Test absent/expired commits, empty topics, timestamp lookups with no match, stalled transactions, group rebalances, destination outages, and commit failures under full limits.
 - Verify resume identity when expressions use `NOW()`: restarts and later workers reuse the stored window, a changed query fails on fingerprint mismatch, and the resolved window is logged.
 - Test across different partition counts and opaque schema-encoded bytes. Document that Schema Registry compatibility is the user's responsibility.

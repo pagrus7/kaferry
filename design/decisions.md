@@ -27,6 +27,7 @@
 - Do not copy source partition or offset; log destination partition-count changes and continue.
 - Same-key routing depends on the destination partitioner and partition count; `LogAppendTime` destinations may restamp records.
 - Destination topics must already exist; do not support auto-creation.
+- For a destination that keeps CreateTime and deletes by time (`retention.ms` ≠ -1), compute the horizon `NOW() - retention.ms` from the stored window's `NOW()`. Fail at planning if the window's lower bound is older; during the copy, treat older records as destination-rejected timestamps. If topic configuration cannot be read, warn and skip the check.
 - Read committed source records; acknowledge output before committing source offsets.
 - Crashes between output and commit can duplicate records.
 
@@ -55,7 +56,7 @@
 - Fail by default. SQL may supply either `ON_ERROR` or specific error policies; mixing them is a validation error.
 - Use flat options: `ON_ERROR = FAIL|SKIP`, `ON_MISSING_TIMESTAMP = FAIL|SKIP`, `ON_REJECTED_TIMESTAMP = FAIL|SKIP`, and `ON_SOURCE_FILE_CHANGED = FAIL|CONTINUE`.
 - Global `SKIP` skips any failed record with an identifiable source position and logs its position/reason. Authentication, outages, and unreadable framing retain retry/fail behavior when no record can be skipped.
-- Specific policies may skip a missing timestamp required by a filter or a destination-rejected timestamp; changed source files may explicitly continue from the saved frame position and log the mismatch.
+- Specific policies may skip a missing timestamp required by a filter or a destination-rejected timestamp (including one past destination retention); changed source files may explicitly continue from the saved frame position and log the mismatch.
 
 ## Files
 
