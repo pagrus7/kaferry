@@ -100,7 +100,7 @@ Exercise complete commands against real files and Kafka clusters.
 - Verify resume identity when expressions use `NOW()`: restarts and later workers reuse the stored window, a changed query fails on fingerprint mismatch, and the resolved window is logged.
 - Test across different partition counts and opaque schema-encoded bytes. Document that Schema Registry compatibility is the user's responsibility.
 
-Gate: end-to-end scenarios prove the recorded semantics. Retention/time/transaction tests use controlled fixtures rather than timing-dependent sleeps wherever possible.
+Gate: end-to-end scenarios prove the recorded semantics and exit codes. Retention/time/transaction tests use controlled fixtures rather than timing-dependent sleeps wherever possible.
 
 ## 6. Production packaging and measurement
 

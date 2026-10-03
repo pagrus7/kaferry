@@ -86,6 +86,7 @@
 - `ENV('NAME')` resolves at startup, fails if unset, and is redacted in logs. Reject unknown or guarantee-breaking librdkafka settings.
 - TOML holds connection profiles and worker tuning; file paths use `FILE cbor('path')`.
 - CLI uses `run --file/-f path`, `run --sql/-e statement`, or `run --file -` for stdin; require exactly one input. Load TOML with `--config/-c path`.
+- Exit 0 on completion or a clean signal stop, 1 on runtime failure, and 2 on usage, parse, plan, or configuration errors. Skipped records do not change the exit code; logs carry their count.
 
 ## Deferred
 
