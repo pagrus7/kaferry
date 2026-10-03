@@ -35,8 +35,8 @@ Suggested packages: `cmd/kafka-fwd2`, `internal/sql`, `internal/config`, `intern
 
 Build the CLI input path, TOML loader, small parser, AST, and planner before client integration. Prefer a small recursive-descent parser over a general SQL engine.
 
-- Support topic/file endpoints, prefixed connections, `SELECT *`, timestamp bounds, `BETWEEN`, `NOW()`, interval arithmetic, and flat options.
-- Freeze `NOW()` once per execution for a group that has no stored window; normalize times and validate interval units and range bounds. Preserve inclusive `BETWEEN` versus exclusive `<` explicitly.
+- Support topic/file endpoints, prefixed connections, `SELECT *`, `RECORD_TIMESTAMP` comparisons, `BETWEEN`, `NOW()`, interval arithmetic, and flat options.
+- Freeze `NOW()` once per execution for a group that has no stored window; normalize times and validate interval units and range bounds. Normalize all comparisons to a half-open millisecond range `[lo, hi)`.
 - Compute a query fingerprint from the normalized query, excluding resolved values.
 - Implement start rules: usable commit with a matching fingerprint wins; otherwise lower time bound, earliest for upper-only filters, or explicit earliest/latest without a time filter. Reject `START` with time filters.
 - Validate required group, one-off restrictions, option applicability/conflicts, connection aliases, same alias/topic self-copies, and safe file paths/identity before copying.

@@ -12,7 +12,8 @@
 
 ## Time
 
-- Kafka record time governs filters; `>= start AND < end` gives an inclusive start and exclusive end. SQL `BETWEEN` includes both endpoints.
+- Kafka record time governs filters through the column `RECORD_TIMESTAMP`. Allow `>=`, `>`, `<`, `<=`, and inclusive `BETWEEN`, with at most one lower and one upper bound joined by `AND`; no `OR` or `NOT`.
+- Normalize every filter to a half-open millisecond range `[lo, hi)` and log it; reject sub-millisecond literals and empty ranges.
 - Support `NOW()` and basic timestamp/interval arithmetic with seconds, minutes, and hours; evaluate `NOW()` once, when a group first stores its window. Later workers and restarts of that group reuse the stored window; a new window needs a new group.
 - Spell time literals as `TIMESTAMP '2026-10-01T00:00:00Z'`; require RFC 3339 with `Z` or an explicit UTC offset.
 - A Kafka group's usable commit with a matching query fingerprint wins. Otherwise a time filter starts at its lower-bound timestamp, or at the earliest retained offset if it has only an upper bound; commit the initial position before copying.
@@ -73,7 +74,7 @@
 
 ## SQL and configuration
 
-- Use `INSERT INTO TOPIC 'topic@conn' SELECT * FROM TOPIC 'topic@conn'`; `WHERE` selects by record timestamp, `OPTIONS (...)` holds copy semantics.
+- Use `INSERT INTO TOPIC 'topic@conn' SELECT * FROM TOPIC 'topic@conn'`; `WHERE` filters `RECORD_TIMESTAMP`, `OPTIONS (...)` holds copy semantics.
 - Parse case-insensitive keywords, single-quoted strings, SQL comments, and an optional final semicolon; accept exactly one statement.
 - Reject unknown, repeated, conflicting, or inapplicable options and file queries that would overwrite their source.
 - Reject topic queries whose source and destination name the same connection alias and topic. Different aliases for one cluster are not detected; documentation warns about copy loops.
