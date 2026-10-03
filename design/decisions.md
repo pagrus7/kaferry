@@ -13,6 +13,7 @@
 ## Time
 
 - Kafka record time governs filters; start is inclusive, end exclusive.
+- Spell time literals as `TIMESTAMP '2026-10-01T00:00:00Z'`; require RFC 3339 with `Z` or an explicit UTC offset in filters and `START`.
 - A Kafka group's commit wins; if absent, use explicit earliest/latest/timestamp start or a time-range start, then commit that start. Otherwise fail. Allow follow mode.
 - Bounded partitions stop at the first timestamp `> end + cutoff`, or at the visible tip after wall time passes `end + cutoff` (default cutoff: one minute).
 - Out-of-order or late records may be omitted by this stop rule.
