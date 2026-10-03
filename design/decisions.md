@@ -81,6 +81,7 @@
 ## SQL and configuration
 
 - Use `INSERT INTO TOPIC 'topic@conn' SELECT * FROM TOPIC 'topic@conn'`; `WHERE` filters `RECORD_TIMESTAMP`, `OPTIONS (...)` holds copy semantics.
+- Grammar and valid/invalid examples live in `grammar.md`.
 - Parse case-insensitive keywords, single-quoted strings, SQL comments, and an optional final semicolon; accept exactly one statement.
 - Reject unknown, repeated, conflicting, or inapplicable options and file queries that would overwrite their source.
 - Reject topic queries whose source and destination name the same connection alias and topic. Different aliases for one cluster are not detected; documentation warns about copy loops.

@@ -42,7 +42,7 @@ Build the CLI input path, TOML loader, small parser, AST, and planner before cli
 - Validate required group, one-off restrictions, option applicability/conflicts (including `CUTOFF` on file sources), connection aliases, same alias/topic self-copies, and safe file paths/identity before copying.
 - Resolve an omitted `@conn` to `default`. Merge SQL properties over TOML by alias/key; resolve environment values without exposing secrets.
 
-Gate: table-driven valid/invalid query tests, examples for all four endpoint combinations, boundary-time tests, and parser fuzzing. No broker needed.
+Gate: table-driven valid/invalid query tests built from the `grammar.md` examples, all four endpoint combinations, boundary-time tests, and parser fuzzing. No broker needed.
 
 ## 2. Delivery and progress core
 
