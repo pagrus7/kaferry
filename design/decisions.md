@@ -74,6 +74,7 @@
 - Use `INSERT INTO TOPIC 'topic@conn' SELECT * FROM TOPIC 'topic@conn'`; `WHERE` selects by record timestamp, `OPTIONS (...)` holds copy semantics.
 - Parse case-insensitive keywords, single-quoted strings, SQL comments, and an optional final semicolon; accept exactly one statement.
 - Reject unknown, repeated, conflicting, or inapplicable options and file queries that would overwrite their source.
+- Reject topic queries whose source and destination name the same connection alias and topic. Different aliases for one cluster are not detected; documentation warns about copy loops.
 - Prefix statements with `WITH CONNECTION alias AS (...)` for inline librdkafka properties; TOML supplies named profiles. SQL properties override matching TOML keys.
 - `ENV('NAME')` resolves at startup, fails if unset, and is redacted in logs. Reject unknown or guarantee-breaking librdkafka settings.
 - TOML holds connection profiles and worker tuning; file paths use `FILE cbor('path')`.
