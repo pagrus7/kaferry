@@ -63,11 +63,11 @@
 - Use one append-order file with provisional versioned length/CBOR/checksum frames, named CBOR fields, and source position metadata.
 - Use a flat record map: `key`, `value`, ordered `headers` (`name`, `value`), `timestamp_ms`, `timestamp_type` (`create_time`, `log_append_time`, `unknown`), and optional `source` (`topic`, `partition`, `offset`); byte fields retain null/empty distinction.
 - Preserve original source metadata through file copies; use it for diagnostics, never Kafka destination routing.
-- File header holds format marker, version, and file ID; frames are big-endian 32-bit payload length, CBOR payload, then CRC32C over length/payload. Enforce a configurable read-size limit; no file compression initially.
+- File header holds format marker, version, file ID, the writing query's `GROUP`, and its query fingerprint; frames are big-endian 32-bit payload length, CBOR payload, then CRC32C over length/payload. Enforce a configurable read-size limit; no file compression initially.
 - Use one process per file source or output; lock its file-source checkpoint exclusively.
 - Store file-source checkpoints in `~/.kafka-fwd2/checkpoints`, overridable via TOML `worker.checkpoint_dir`; derive filenames safely from `GROUP`, validate source/query identity, and store the next frame position atomically.
 - Fsync file output before acknowledging its records; truncate an incomplete final frame on restart and fail on complete corruption.
-- Existing output files fail by default; append only when resuming the same validated query.
+- Existing output files fail by default; append only when the header's `GROUP` and query fingerprint match the current query.
 
 ## SQL and configuration
 
