@@ -1,10 +1,10 @@
 # kafka-fwd2 statement grammar
 
-Syntax for the semantics in `decisions.md`; if they disagree, `decisions.md` wins and this file is fixed. Stage 1 uses the examples below as table-driven parser and planner cases.
+Syntax for `decisions.md`, which wins on any conflict. The examples are Stage 1 test cases.
 
 ## Lexical rules
 
-- Keywords are case-insensitive. Connection aliases match `[A-Za-z_][A-Za-z0-9_]*`.
+- Keywords are case-insensitive. Connection aliases match `[A-Za-z_][A-Za-z0-9_]*` and are case-sensitive, matching TOML profile names.
 - Strings are single-quoted; `''` inside a string is one quote.
 - Comments: `--` to end of line, and non-nested `/* ... */`.
 - Exactly one statement; the final `;` is optional.
@@ -43,16 +43,16 @@ option      = "GROUP" "=" ( string | "ONE_OFF" )
             | "ON_SOURCE_FILE_CHANGED" "=" ( "FAIL" | "CONTINUE" ) ;
 ```
 
-## Planner rules
+## Validation rules
 
-The grammar accepts some statements that planning rejects:
+The grammar accepts some statements that planning or startup rejects:
 
 - `GROUP` is required; every option appears at most once.
-- `START` cannot be combined with `WHERE`.
+- `START` requires a topic source and no `WHERE`.
 - `ON_ERROR` cannot be combined with any specific error policy.
 - `CUTOFF` requires a topic source with an upper bound. `ON_SOURCE_FILE_CHANGED` requires a file source; `ON_REJECTED_TIMESTAMP` a topic destination; `ON_MISSING_TIMESTAMP` a `WHERE` clause.
 - At most one lower and one upper bound. Timestamps are RFC 3339 with `Z` or an explicit offset and at most millisecond precision. The normalized `[lo, hi)` must be non-empty.
-- Reject a destination that is the source: the same file (including path aliases), or the same connection alias and topic.
+- Reject a destination that is the source: the same file (including path aliases), or, at startup, the same Kafka cluster ID and topic.
 - A topic without `@alias` uses the connection `default`, which must exist.
 
 ## Valid examples
@@ -116,9 +116,10 @@ OPTIONS (GROUP = 'clicks-backfill-1', CUTOFF = INTERVAL '5' MINUTE, ON_ERROR = S
 | `... WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` cannot be combined with a time filter |
 | `OPTIONS (GROUP = 'g', ON_ERROR = SKIP, ON_MISSING_TIMESTAMP = FAIL)` | `ON_ERROR` cannot be mixed with specific error policies |
 | `... FROM FILE cbor('a.cbor') ... OPTIONS (GROUP = 'g', CUTOFF = INTERVAL '1' MINUTE)` | `CUTOFF` applies to topic sources |
+| `... FROM FILE cbor('a.cbor') OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` applies to topic sources |
 | `OPTIONS (START = EARLIEST)` | `GROUP` is required |
 | `OPTIONS (GROUP = 'a', GROUP = 'b')` | repeated option `GROUP` |
-| `INSERT INTO TOPIC 'a@x' SELECT * FROM TOPIC 'a@x' ...` | destination is the source topic |
+| `INSERT INTO TOPIC 'a@x' SELECT * FROM TOPIC 'a@y' ...` where `x` and `y` reach one cluster | destination is the source topic |
 | `INSERT INTO FILE cbor('a.cbor') SELECT * FROM FILE cbor('./a.cbor') ...` | destination would overwrite the source file |
 | `SELECT key FROM TOPIC 'a' ...` | only `SELECT *` is supported |
 | `WHERE RECORD_TIMESTAMP >= NOW() OR ...` | expected `OPTIONS` |
@@ -129,12 +130,3 @@ OPTIONS (GROUP = 'clicks-backfill-1', CUTOFF = INTERVAL '5' MINUTE, ON_ERROR = S
 | `INTERVAL '1' MONTH` | unsupported interval unit |
 | `TOPIC 'orders'` with no `default` connection | no connection for `orders` |
 | two statements separated by `;` | exactly one statement |
-
-## Open points
-
-Grammar choices made here that `decisions.md` does not settle:
-
-- Several inline connections are comma-separated after one `WITH`; property keys are quoted strings.
-- Alias case sensitivity (proposed: case-sensitive, matching TOML profile names).
-- Whether `START` applies to file sources.
-- The destination retry duration is configurable only in TOML.

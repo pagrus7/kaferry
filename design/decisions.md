@@ -2,105 +2,85 @@
 
 ## Scope
 
-- Lightweight Go CLI; SQL-like copy command, no transformations.
-- Support topic→topic, topic→file, file→topic, and file→file.
+- Lightweight Go CLI that copies Kafka records with one SQL-like statement; no transformations.
+- Directions: topic→topic, topic→file, file→topic, file→file. Syntax and examples: `grammar.md`.
+- Preserve raw key/value bytes, null versus empty, ordered headers (duplicates included), and timestamp/type where the destination allows. Payloads are opaque; format and Schema Registry compatibility are the user's responsibility.
 
-## Records
+## Time window
 
-- Preserve raw key/value bytes, nulls, ordered headers (including duplicates), and Kafka record timestamp/type where possible.
-- Keep payloads opaque; users ensure format and Schema Registry compatibility.
+- `WHERE` filters `RECORD_TIMESTAMP` (Kafka record time) with `>=`, `>`, `<`, `<=`, or inclusive `BETWEEN`: at most one lower and one upper bound, joined by `AND`. Every filter normalizes to a logged half-open millisecond range `[lo, hi)`; sub-millisecond literals and empty ranges are rejected.
+- Literals are `TIMESTAMP '2026-10-01T00:00:00Z'` (RFC 3339 with `Z` or an explicit offset). Intervals use `SECOND`, `MINUTE`, `HOUR`, or `DAY` (86,400 s).
+- `NOW()` resolves once per group, not per run. The stored window is reused by every worker and restart; a new window needs a new group.
 
-## Time
+## Start and completion
 
-- Kafka record time governs filters through the column `RECORD_TIMESTAMP`. Allow `>=`, `>`, `<`, `<=`, and inclusive `BETWEEN`, with at most one lower and one upper bound joined by `AND`; no `OR` or `NOT`.
-- Normalize every filter to a half-open millisecond range `[lo, hi)` and log it; reject sub-millisecond literals and empty ranges.
-- Support `NOW()` and basic timestamp/interval arithmetic in `SECOND`, `MINUTE`, `HOUR`, and `DAY` (fixed 86,400 s; no months or years); evaluate `NOW()` once, when a group first stores its window. Later workers and restarts of that group reuse the stored window; a new window needs a new group.
-- Spell time literals as `TIMESTAMP '2026-10-01T00:00:00Z'`; require RFC 3339 with `Z` or an explicit UTC offset.
-- A Kafka group's usable commit with a matching query fingerprint wins. Otherwise a time filter starts at its lower-bound timestamp, or at the earliest retained offset if it has only an upper bound; commit the initial position before copying.
-- Without a time filter, require `START = EARLIEST|LATEST` if no usable commit exists. Reject `START` with time filters; timestamp starts are expressed through `WHERE`. Allow follow mode.
-- Bounded partitions stop at the first timestamp `> end + cutoff`, or at the visible tip after wall time passes `end + cutoff` (default cutoff: one minute). Why: Kafka has no end-of-window marker; a per-partition rule needs no coordination, and the cutoff sets how much lateness is tolerated.
-- Out-of-order or late records may be omitted by this stop rule.
-- Spell the cutoff as `CUTOFF = INTERVAL '1' MINUTE`. For Kafka sources an upper filter bound enables cutoff completion; without one, Kafka follows.
-- File sources always read to EOF; upper bounds only filter, and `CUTOFF` on a file source is a validation error. Why: files interleave source partitions, so a cutoff could drop slower partitions' records.
+- A Kafka partition starts at its commit when the commit's fingerprint matches; otherwise at the lower bound's timestamp, or at the earliest retained offset for an upper-only filter. Without `WHERE`, `START = EARLIEST|LATEST` is required when no commit exists; `START` with `WHERE` is rejected. Initial positions are committed before copying.
+- With an upper bound, each Kafka partition stops at the first timestamp `> hi + cutoff`, or at the read-committed tip once wall time passes `hi + cutoff` (`CUTOFF`, default `INTERVAL '1' MINUTE`). Out-of-order records past the stop are omitted. Why: Kafka has no end-of-window marker, and a per-partition rule needs no coordination.
+- A timestamp stop commits at the trigger record so a new owner re-evaluates it; a tip stop commits the next offset. Without an upper bound, Kafka follows.
+- File sources start at their checkpoint or first frame and read to EOF, defined as the size at open; a partial frame there ends input, and later appends wait for another run. `START` and `CUTOFF` are rejected for file sources. Why: files interleave source partitions, so a cutoff would drop slower partitions.
+
+## Groups and workers
+
+- `GROUP` is required: a Kafka consumer group for Kafka sources, a local checkpoint identity for file sources. `GROUP = 'name'` is shared by workers; `GROUP = ONE_OFF` generates and logs an ID, runs one worker, and resumes through the named form.
+- Kafka workers share a group with no coordinator and progress independently per assigned partition. Why: nothing extra to run or fail; group membership already divides partitions.
+- A worker exits when all its assigned partitions have stopped; an empty assignment during a rebalance is not completion. In bounded runs, a worker holding no partitions for `worker.idle_exit` (default 30 s) exits; in follow mode it stays as a standby.
+- On revocation, stop intake for the partition, drain for up to 10 s, commit its confirmed prefix while ownership holds, and release it. A drain timeout fails the worker; unresolved work replays.
+- Rebalances pick up source partitions added while workers run. Never seed from another group's offsets.
+- A successful `ONE_OFF` file-source run deletes its checkpoint. Kafka `ONE_OFF` groups expire through broker offset retention.
+
+## Identity
+
+- The query fingerprint hashes endpoint kinds, cluster ID + topic of each Kafka endpoint, the normalized `WHERE` (each bound as side, literal ms or `NOW()`, and offset in seconds), and `CUTOFF`. It excludes aliases, paths, file IDs, credentials and other connection properties, `GROUP`, `START`, error policies (so a failed run can resume with `SKIP`), and tuning.
+- Kafka commit metadata is versioned: `kfwd2:1;fp=<sha256>` on every partition, the destination file ID for file outputs, and `win=<lo>,<hi>` (either side may be empty) on partition 0 for `NOW()` queries.
+- For `NOW()` queries, only the current owner of source partition 0 resolves the window. It commits the window with partition 0's initial position, fenced by its assignment generation and never retried after losing ownership, and only then copies. Other workers keep polling with partitions paused until that window is readable and write nothing before it. A replacement owner reads stored metadata before resolving. Literal windows need no barrier.
+- Fail on a fingerprint mismatch, on commits without kafka-fwd2 metadata, and on `NOW()` progress whose partition 0 window is missing. A stored window stays authoritative after its offset leaves source retention. When all of a group's offsets expire (`offsets.retention.minutes`), the group starts fresh.
+- File instances are validated outside the fingerprint. File-source checkpoints store fingerprint, window, source file ID, last-frame CRC, next frame position, and the destination file ID for file outputs. Output headers store their own file ID and the fingerprint.
 
 ## Kafka output
 
-- Send the original key with partition unset. Default destination producers to `partitioner=murmur2_random` (Java-compatible keyed routing) unless the connection sets a partitioner; log the choice.
-- Do not copy source partition or offset; log destination partition-count changes and continue.
-- Same-key routing depends on the destination partitioner and partition count; `LogAppendTime` destinations may restamp records.
-- Destination topics must already exist; do not support auto-creation.
-- For a destination that keeps CreateTime and deletes by time (`retention.ms` ≠ -1), compute the horizon `NOW() - retention.ms` from the stored window's `NOW()`. Fail before copying if the window's lower bound is older; during the copy, treat older records as destination-rejected timestamps. If topic configuration cannot be read, warn and skip the check. Why: the broker accepts such records and deletes them later without an error.
-- Read committed source records; acknowledge output before committing source offsets. Why: duplicates are recoverable; lost records are not.
-- Crashes between output and commit can duplicate records.
-- Records with the same key from one source partition reach the destination in source order. Crashes and rebalances may repeat an ordered run but never place an older record after a newer one, except a produce request already sent when a revocation purge runs.
+- One idempotent producer per worker, with asynchronous calls and delivery reports; librdkafka batches internally (the Go batch producer drops headers/timestamps).
+- Send the original key with partition unset, using `partitioner=murmur2_random` (Java-compatible) unless the connection sets one. Do not copy source partition or offset; key routing depends on destination partition count, and changes to it are logged.
+- Destination topics must exist; no auto-creation. Reject a destination with the same cluster ID and topic as the source.
+- Delivery retries belong to the client (`message.timeout.ms`, 60 s default), then the run fails. A queue-full refusal pauses intake and retries the same record first. Terminal record failures follow FAIL/SKIP and are never re-produced behind later records.
+- Ordering: within one uninterrupted producer session with stable routing, a source partition's records arrive in submission order. Crash replay repeats ordered runs (100, 101, 100, 101), and a request already sent before a revocation can land late. Nothing is promised across source partitions. `LogAppendTime` destinations restamp records.
+- Retention risk applies to CreateTime destinations with a delete policy and finite `retention.ms`. The horizon is current wall time minus `retention.ms`, evaluated at preflight and per batch, never from the filter's `NOW()`. A lower bound older than the horizon fails before copying unless SKIP applies; older records go through `ON_REJECTED_TIMESTAMP`. Retention risks are logged and counted apart from broker rejections. Unreadable topic configuration produces a warning and no check. This is a conservative check, not a retention guarantee.
 
-## Workers
+## Delivery and progress
 
-- Require `GROUP` in SQL for every query: a broker consumer group for Kafka sources, a local checkpoint identity for file sources.
-- `GROUP = 'name'` is stable and shared by Kafka workers; `GROUP = ONE_OFF` generates/logs a fresh ID, runs with one worker, and can resume via the named form. No `AUTO` mode.
-- A successful `ONE_OFF` file-source run deletes its checkpoint; failed or interrupted runs keep it and log the resume form. Kafka `ONE_OFF` groups are left to broker offset expiry (`offsets.retention.minutes`). Named groups are never deleted automatically.
-- Kafka workers share a group without a coordinator and progress independently per assigned partition. Why: no extra service to run or fail; group membership already divides partitions.
-- Store a query fingerprint and the resolved `[lo, hi)` window in every Kafka commit's metadata and every file-source checkpoint. The fingerprint hashes the normalized query (endpoints, `WHERE` expression text, semantic options), not resolved values. A mismatched fingerprint fails; a partition without a commit adopts the window from any committed sibling. Why: a reused group would otherwise silently resume, skip, or split a different query.
-- Workers stop assigned partitions locally and exit when all are stopped; rebalances may extend a run.
-- In bounded runs, a worker that holds no partitions continuously for TOML `worker.idle_exit` (default 30 seconds) logs it and exits; in follow mode, idle workers stay as standbys.
-- On a timestamp stop, commit at the trigger record so a new owner can reevaluate it; at a tip stop, commit the next offset.
-- On revocation, stop consuming that partition immediately, drain writes for up to 10 seconds, purge and close that partition's producer, commit confirmed progress, then release it.
-- Rebalances pick up new source partitions while workers run; later additions need another run.
-- Do not seed from another consumer group's offsets.
-
-## Delivery and limits
-
-- Submit bounded batches; track each record's result and commit only each partition's contiguous confirmed prefix. Batches are not atomic.
-- Kafka writes use one idempotent producer per assigned source partition, with normal asynchronous calls and delivery reports; librdkafka batches internally. Size per-producer queues so their total stays within worker caps. The Go batch producer cannot preserve headers/timestamps. Why: a revoked partition's queue can be purged without touching the others.
-- Bound uncommitted work by records and bytes: defaults 5,000/16 MiB per partition and 20,000/128 MiB per worker; configurable, with one oversized record allowed alone. Defaults are provisional until the Stage 6 baseline. Why: record caps bound crash duplicates; byte caps bound memory.
-- Each worker commits all its partitions in one request, with at most one commit in flight: every second, when worker uncommitted records or bytes reach 50% of a worker cap, and on clean shutdown/revocation. Pause a partition or worker at its cap until a commit succeeds.
-- Retry destination outages for 60 seconds by default, configurable; then fail.
+- Read committed source records. Output is acknowledged (delivery report or fsync) before source progress is committed, so crashes can duplicate but not lose records.
+- Submit bounded, non-atomic batches. Commit only each partition's contiguous resolved prefix (filtered, delivered, or skipped), tracked by consumed positions rather than offset arithmetic.
+- Uncommitted work is capped at 5,000 records / 16 MiB per partition and 20,000 records / 128 MiB per worker; one oversized record may proceed alone; intake pauses at a cap until a commit succeeds. Record caps bound crash duplicates and byte caps bound memory; the defaults are provisional until measured for both throughput and duplicate exposure.
+- Each worker commits all its partitions in one request, at most one in flight: every second, at 50% of a worker cap, and on shutdown and revocation. Per-partition results decide which work is released.
+- Shutdown stops intake, drains for up to 10 s, and commits confirmed progress.
 
 ## Errors
 
-- Fail by default. SQL may supply either `ON_ERROR` or specific error policies; mixing them is a validation error.
-- Use flat options: `ON_ERROR = FAIL|SKIP`, `ON_MISSING_TIMESTAMP = FAIL|SKIP`, `ON_REJECTED_TIMESTAMP = FAIL|SKIP`, and `ON_SOURCE_FILE_CHANGED = FAIL|CONTINUE`.
-- Global `SKIP` skips any failed record with an identifiable source position and logs its position/reason. Authentication, outages, and unreadable framing retain retry/fail behavior when no record can be skipped.
-- Specific policies may skip a missing timestamp required by a filter or a destination-rejected timestamp (including one past destination retention); changed source files may explicitly continue from the saved frame position and log the mismatch.
+- Default is FAIL. A query uses either `ON_ERROR = FAIL|SKIP` or the specific policies `ON_MISSING_TIMESTAMP = FAIL|SKIP`, `ON_REJECTED_TIMESTAMP = FAIL|SKIP`, and `ON_SOURCE_FILE_CHANGED = FAIL|CONTINUE`; mixing them is a validation error.
+- SKIP skips a failed record with an identifiable source position and logs position and reason. Authentication failures, outages, and unreadable framing still retry and fail.
+- A source file has changed when its file ID differs, it is shorter than the checkpoint, or the last checkpointed frame's CRC differs; appends never count. CONTINUE resumes at the saved frame position and logs old and new identity.
 
 ## Files
 
-- Spell file endpoints as `FILE cbor('path')`; the format name leaves room for more handlers later.
-- Use one append-order file with provisional versioned length/CBOR/checksum frames, named CBOR fields, and source position metadata.
-- Use a flat record map: `key`, `value`, ordered `headers` (`name`, `value`), `timestamp_ms`, `timestamp_type` (`create_time`, `log_append_time`, `unknown`), and optional `source` (`topic`, `partition`, `offset`); byte fields retain null/empty distinction.
-- Preserve original source metadata through file copies; use it for diagnostics, never Kafka destination routing.
-- File header holds format marker, version, file ID, the writing query's `GROUP`, and its query fingerprint; frames are big-endian 32-bit payload length, CBOR payload, then CRC32C over length/payload. Enforce a configurable read-size limit; no file compression initially.
-- Use one process per file source or output; lock its file-source checkpoint exclusively.
-- A file source's EOF is its size at open; records appended later wait for another run. A partial frame at that point ends input and is not corruption. Why: a file can be copied while a follow run is still writing it.
-- File-source checkpoints store file ID, next frame position, and the CRC of the last consumed frame. A different file ID, a file shorter than the checkpoint, or a CRC mismatch counts as changed for `ON_SOURCE_FILE_CHANGED`; appends never do.
-- Store file-source checkpoints in `~/.kafka-fwd2/checkpoints`, overridable via TOML `worker.checkpoint_dir`; derive filenames safely from `GROUP`, validate source/query identity, and store the next frame position atomically.
-- Fsync the parent directory after creating an output or checkpoint file and after every checkpoint rename.
-- Fsync file output before acknowledging its records; truncate an incomplete final frame on restart and fail on complete corruption.
-- Existing output files fail by default; append only when the header's `GROUP` and query fingerprint match the current query.
+- Endpoints are `FILE cbor('path')`. One process per file source or output, each locked exclusively.
+- Header: format marker, version, file ID, writing `GROUP`, fingerprint. Frames: big-endian u32 payload length, CBOR payload, CRC32C over length and payload. Configurable read-size limit; no compression or segmentation.
+- Record map: `key`, `value`, ordered `headers` (`name`, `value`), `timestamp_ms`, `timestamp_type` (`create_time`, `log_append_time`, `unknown`), and optional `source` (`topic`, `partition`, `offset`) for diagnostics only, never routing. Byte fields keep null versus empty. The format is provisional.
+- Output is fsynced before records are acknowledged. On restart, truncate an incomplete final frame; fail on corruption. An existing output is appended to only when its header fingerprint matches and its file ID equals the stored destination file ID; the ID is read from the header, never regenerated.
+- Checkpoints live in `~/.kafka-fwd2/checkpoints` (TOML `worker.checkpoint_dir`), named safely from `GROUP`, and replaced atomically. Fsync the parent directory after creating any output or checkpoint file and after every checkpoint rename.
+- Reject a file destination that is its source, including path aliases.
 
-## SQL and configuration
+## SQL, configuration, CLI
 
-- Use `INSERT INTO TOPIC 'topic@conn' SELECT * FROM TOPIC 'topic@conn'`; `WHERE` filters `RECORD_TIMESTAMP`, `OPTIONS (...)` holds copy semantics.
-- Grammar and valid/invalid examples live in `grammar.md`.
-- Parse case-insensitive keywords, single-quoted strings, SQL comments, and an optional final semicolon; accept exactly one statement.
-- Reject unknown, repeated, conflicting, or inapplicable options and file queries that would overwrite their source.
-- Reject topic queries whose source and destination name the same connection alias and topic. Different aliases for one cluster are not detected; documentation warns about copy loops. Why: planning needs no broker metadata; the alias gap is accepted.
-- Prefix statements with `WITH CONNECTION alias AS (...)` for inline librdkafka properties; TOML supplies named profiles. SQL properties override matching TOML keys.
-- `TOPIC 'topic'` without `@conn` uses the connection named `default` and fails if none is defined.
-- `ENV('NAME')` resolves at startup, fails if unset, and is redacted in logs. Reject unknown or guarantee-breaking librdkafka settings.
-- TOML holds connection profiles and worker tuning; file paths use `FILE cbor('path')`.
-- CLI uses `run --file/-f path`, `run --sql/-e statement`, or `run --file -` for stdin; require exactly one input. Load TOML with `--config/-c path`.
-- Exit 0 on completion or a clean signal stop, 1 on runtime failure, and 2 on usage, parse, plan, or configuration errors. Skipped records do not change the exit code; logs carry their count.
-
-## Deferred
-
-- CBOR may change; file segmentation can come later.
+- Exactly one statement; case-insensitive keywords, case-sensitive connection aliases. Reject unknown, repeated, conflicting, or inapplicable options.
+- `TOPIC 'topic@alias'`; without `@alias` the connection `default` is used and must exist. Aliases come from TOML profiles or `WITH CONNECTION alias AS (...)`, comma-separated; inline properties override TOML keys. `ENV('NAME')` resolves at startup, fails if unset, and is redacted. Reject unknown or guarantee-breaking librdkafka settings.
+- TOML holds connection profiles and worker tuning: caps, delivery timeout, `idle_exit`, `checkpoint_dir`.
+- CLI: `run --file/-f path`, `run --sql/-e statement`, or `run --file -`; exactly one input. `--config/-c path` loads TOML.
+- Exit codes: 0 for completion or a follow run stopped cleanly by a signal; 1 for runtime failure or a bounded run interrupted before completion; 2 for usage, parse, plan, or configuration errors. Skips do not change the code; logs carry the count.
 
 ## Engineering
 
-- Use single-purpose structs behind narrow interfaces. Wire replaceable components as Fx modules at the composition root; keep core logic Fx-free.
-- Use `confluent-kafka-go` for Kafka I/O.
+- Single-purpose structs behind narrow interfaces. Wire replaceable components as Fx modules at the composition root; core logic is Fx-free.
+- `confluent-kafka-go` for Kafka I/O.
 - Test with unit, mock, component, end-to-end, load, and targeted edge-case coverage at the cheapest useful layer.
-- Keep code simple; review lines of code and cyclomatic complexity as signals, not targets.
-- Prioritize correctness, simplicity, throughput, CI duration, then binary size.
-- Keep user documentation example-based and under 10,000 characters.
+- Keep code simple; lines of code and cyclomatic complexity are signals, not targets.
+- Priorities: correctness, simplicity, throughput, CI duration, binary size.
+- User documentation is example-based and under 10,000 characters.
