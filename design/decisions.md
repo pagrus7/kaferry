@@ -20,7 +20,8 @@
 - Without a time filter, require `START = EARLIEST|LATEST` if no usable commit exists. Reject `START` with time filters; timestamp starts are expressed through `WHERE`. Allow follow mode.
 - Bounded partitions stop at the first timestamp `> end + cutoff`, or at the visible tip after wall time passes `end + cutoff` (default cutoff: one minute).
 - Out-of-order or late records may be omitted by this stop rule.
-- Spell the cutoff as `CUTOFF = INTERVAL '1' MINUTE`; an upper filter bound enables cutoff completion, Kafka without one follows, and files end at EOF.
+- Spell the cutoff as `CUTOFF = INTERVAL '1' MINUTE`. For Kafka sources an upper filter bound enables cutoff completion; without one, Kafka follows.
+- File sources always read to EOF; upper bounds only filter, and `CUTOFF` on a file source is a validation error.
 
 ## Kafka output
 
