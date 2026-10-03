@@ -30,7 +30,7 @@ bound       = "RECORD_TIMESTAMP" compare time ;
 compare     = ">=" | ">" | "<" | "<=" ;
 time        = instant { ( "+" | "-" ) interval } ;
 instant     = "TIMESTAMP" string | "NOW" "(" ")" ;
-interval    = "INTERVAL" string unit ;             (* string holds a non-negative integer *)
+interval    = "INTERVAL" string unit ;             (* non-negative integer; DAY = 86,400 s *)
 unit        = "SECOND" | "MINUTE" | "HOUR" | "DAY" ;
 
 options     = "OPTIONS" "(" option { "," option } ")" ;
@@ -39,18 +39,17 @@ option      = "GROUP" "=" ( string | "ONE_OFF" )
             | "CUTOFF" "=" interval
             | "ON_ERROR" "=" ( "FAIL" | "SKIP" )
             | "ON_MISSING_TIMESTAMP" "=" ( "FAIL" | "SKIP" )
-            | "ON_REJECTED_TIMESTAMP" "=" ( "FAIL" | "SKIP" )
-            | "ON_SOURCE_FILE_CHANGED" "=" ( "FAIL" | "CONTINUE" ) ;
+            | "ON_REJECTED_TIMESTAMP" "=" ( "FAIL" | "SKIP" ) ;
 ```
 
 ## Validation rules
 
-The grammar accepts some statements that planning or startup rejects:
+Planning or startup enforces:
 
-- `GROUP` is required; every option appears at most once.
-- `START` requires a topic source and no `WHERE`.
+- `GROUP` is required; no option repeats.
+- A topic source needs exactly one of `WHERE` and `START`; a file source takes no `START`.
 - `ON_ERROR` cannot be combined with any specific error policy.
-- `CUTOFF` requires a topic source with an upper bound. `ON_SOURCE_FILE_CHANGED` requires a file source; `ON_REJECTED_TIMESTAMP` a topic destination; `ON_MISSING_TIMESTAMP` a `WHERE` clause.
+- `CUTOFF` requires a topic source with an upper bound. `ON_REJECTED_TIMESTAMP` requires a topic destination; `ON_MISSING_TIMESTAMP` a `WHERE` clause.
 - At most one lower and one upper bound. Timestamps are RFC 3339 with `Z` or an explicit offset and at most millisecond precision. The normalized `[lo, hi)` must be non-empty.
 - Reject a destination that is the source: the same file (including path aliases), or, at startup, the same Kafka cluster ID and topic.
 - A topic without `@alias` uses the connection `default`, which must exist.
@@ -99,7 +98,7 @@ WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z'
 OPTIONS (GROUP = ONE_OFF);
 ```
 
-Topic→topic, relative window with cutoff; the window is fixed on the group's first run:
+Topic→topic, relative window with cutoff, fixed per partition when first positioned:
 
 ```sql
 INSERT INTO TOPIC 'clicks@analytics'
@@ -117,6 +116,7 @@ OPTIONS (GROUP = 'clicks-backfill-1', CUTOFF = INTERVAL '5' MINUTE, ON_ERROR = S
 | `... WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS (GROUP = 'g', ON_ERROR = SKIP, ON_MISSING_TIMESTAMP = FAIL)` | `ON_ERROR` cannot be mixed with specific error policies |
 | `... FROM FILE cbor('a.cbor') ... OPTIONS (GROUP = 'g', CUTOFF = INTERVAL '1' MINUTE)` | `CUTOFF` applies to topic sources |
 | `... FROM FILE cbor('a.cbor') OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` applies to topic sources |
+| `... FROM TOPIC 'a' OPTIONS (GROUP = 'g')` | `START` is required without a time filter |
 | `OPTIONS (START = EARLIEST)` | `GROUP` is required |
 | `OPTIONS (GROUP = 'a', GROUP = 'b')` | repeated option `GROUP` |
 | `INSERT INTO TOPIC 'a@x' SELECT * FROM TOPIC 'a@y' ...` where `x` and `y` reach one cluster | destination is the source topic |
