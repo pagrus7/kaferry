@@ -12,11 +12,14 @@
 
 ## Time
 
-- Kafka record time governs filters; start is inclusive, end exclusive.
-- Spell time literals as `TIMESTAMP '2026-10-01T00:00:00Z'`; require RFC 3339 with `Z` or an explicit UTC offset in filters and `START`.
-- A Kafka group's commit wins; if absent, use explicit earliest/latest/timestamp start or a time-range start, then commit that start. Otherwise fail. Allow follow mode.
+- Kafka record time governs filters; `>= start AND < end` gives an inclusive start and exclusive end. SQL `BETWEEN` includes both endpoints.
+- Support `NOW()` and basic timestamp/interval arithmetic with seconds, minutes, and hours; evaluate `NOW()` once per execution. Separate workers/restarts may resolve different boundaries; use literals for identical windows.
+- Spell time literals as `TIMESTAMP '2026-10-01T00:00:00Z'`; require RFC 3339 with `Z` or an explicit UTC offset.
+- A Kafka group's usable commit wins. Otherwise a time filter starts at its lower-bound timestamp, or at the earliest retained offset if it has only an upper bound; commit the initial position before copying.
+- Without a time filter, require `START = EARLIEST|LATEST` if no usable commit exists. Reject `START` with time filters; timestamp starts are expressed through `WHERE`. Allow follow mode.
 - Bounded partitions stop at the first timestamp `> end + cutoff`, or at the visible tip after wall time passes `end + cutoff` (default cutoff: one minute).
 - Out-of-order or late records may be omitted by this stop rule.
+- Spell the cutoff as `CUTOFF = INTERVAL '1' MINUTE`; an upper filter bound enables cutoff completion, Kafka without one follows, and files end at EOF.
 
 ## Kafka output
 
@@ -61,21 +64,23 @@
 - Preserve original source metadata through file copies; use it for diagnostics, never Kafka destination routing.
 - File header holds format marker, version, and file ID; frames are big-endian 32-bit payload length, CBOR payload, then CRC32C over length/payload. Enforce a configurable read-size limit; no file compression initially.
 - Use one process per file source or output; lock its file-source checkpoint exclusively.
-- Derive the file-source checkpoint filename from `GROUP` in the OS user state folder, with a TOML override; validate source/query identity and store the next frame position atomically.
+- Store file-source checkpoints in `~/.kafka-fwd2/checkpoints`, overridable via TOML `worker.checkpoint_dir`; derive filenames safely from `GROUP`, validate source/query identity, and store the next frame position atomically.
 - Fsync file output before acknowledging its records; truncate an incomplete final frame on restart and fail on complete corruption.
 - Existing output files fail by default; append only when resuming the same validated query.
 
 ## SQL and configuration
 
 - Use `INSERT INTO TOPIC 'topic@conn' SELECT * FROM TOPIC 'topic@conn'`; `WHERE` selects by record timestamp, `OPTIONS (...)` holds copy semantics.
+- Parse case-insensitive keywords, single-quoted strings, SQL comments, and an optional final semicolon; accept exactly one statement.
+- Reject unknown, repeated, conflicting, or inapplicable options and file queries that would overwrite their source.
 - Prefix statements with `WITH CONNECTION alias AS (...)` for inline librdkafka properties; TOML supplies named profiles. SQL properties override matching TOML keys.
 - `ENV('NAME')` resolves at startup, fails if unset, and is redacted in logs. Reject unknown or guarantee-breaking librdkafka settings.
 - TOML holds connection profiles and worker tuning; file paths use `FILE cbor('path')`.
 - CLI uses `run --file/-f path`, `run --sql/-e statement`, or `run --file -` for stdin; require exactly one input. Load TOML with `--config/-c path`.
 
-## Open
+## Deferred
 
-- Remaining SQL grammar and exact OS state-folder path. CBOR may change; file segmentation can come later.
+- CBOR may change; file segmentation can come later.
 
 ## Engineering
 
