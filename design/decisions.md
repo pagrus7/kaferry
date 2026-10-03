@@ -57,6 +57,8 @@
 
 - Spell file endpoints as `FILE cbor('path')`; the format name leaves room for more handlers later.
 - Use one append-order file with provisional versioned length/CBOR/checksum frames, named CBOR fields, and source position metadata.
+- Use a flat record map: `key`, `value`, ordered `headers` (`name`, `value`), `timestamp_ms`, `timestamp_type` (`create_time`, `log_append_time`, `unknown`), and optional `source` (`topic`, `partition`, `offset`); byte fields retain null/empty distinction.
+- Preserve original source metadata through file copies; use it for diagnostics, never Kafka destination routing.
 - Use one process per file source or output; lock its file-source checkpoint exclusively.
 - Derive the file-source checkpoint filename from `GROUP` in the OS user state folder, with a TOML override; validate source/query identity and store the next frame position atomically.
 - Fsync file output before acknowledging its records; truncate an incomplete final frame on restart and fail on complete corruption.
@@ -72,7 +74,7 @@
 
 ## Open
 
-- Remaining SQL grammar, exact CBOR field schema, CLI flag names, and exact OS state-folder path. CBOR may change; file segmentation can come later.
+- Remaining SQL grammar, exact file frame layout, CLI flag names, and exact OS state-folder path. CBOR may change; file segmentation can come later.
 
 ## Engineering
 
