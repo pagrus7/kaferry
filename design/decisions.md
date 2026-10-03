@@ -47,8 +47,8 @@
 
 - Submit bounded batches; track each record's result and commit only each partition's contiguous confirmed prefix. Batches are not atomic.
 - Kafka writes use normal asynchronous producer calls and delivery reports; librdkafka batches internally. The Go batch producer cannot preserve headers/timestamps.
-- Bound uncommitted work by records and bytes: defaults 250/16 MiB per partition and 2,000/128 MiB per worker; configurable, with one oversized record allowed alone.
-- Commit every second or at 25% of the cap, and on clean shutdown/revocation. Pause at the cap until a commit succeeds.
+- Bound uncommitted work by records and bytes: defaults 5,000/16 MiB per partition and 20,000/128 MiB per worker; configurable, with one oversized record allowed alone. Defaults are provisional until the Stage 6 baseline.
+- Each worker commits all its partitions in one request, with at most one commit in flight: every second, when worker uncommitted records or bytes reach 50% of a worker cap, and on clean shutdown/revocation. Pause a partition or worker at its cap until a commit succeeds.
 - Retry destination outages for 60 seconds by default, configurable; then fail.
 
 ## Errors

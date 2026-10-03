@@ -50,7 +50,7 @@ Implement the runner against small fake sources, sinks, clocks, and progress sto
 
 - Keep output submission, confirmation, and durable source progress as distinct states.
 - Implement bounded batching, per-record results, retry deadlines, filtering, explicit skipping, and pause/resume at uncommitted caps.
-- Commit every second or at 25% of a cap; retain uncommitted accounting until commit success. Admit one oversized record alone.
+- Commit all of a worker's partitions in one request with at most one in flight, every second or at 50% of a worker cap; retain uncommitted accounting until commit success. Admit one oversized record alone.
 - Implement the agreed per-partition cutoff rule, including strict `> end + cutoff`, wall-clock/tip completion, and trigger-record commit position.
 - Stop intake immediately on shutdown; allow up to 10 seconds for outstanding writes and confirmed progress commits. Apply the same drain bound to revoked partitions.
 - Track initial assignment and revocation explicitly: a worker temporarily assigned no partitions during a rebalance must not mistake that for completing its query.
