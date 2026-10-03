@@ -1,6 +1,6 @@
 # Implementation plan
 
-Baseline: `design-v1` (`bd0d461`). This plan proposes implementation stages; it does not authorize coding or change the agreed semantics.
+Baseline: `design-v1` (`bd0d461`), amended by the 2026-10-02 design review; syntax in `grammar.md`. This plan proposes implementation stages; it does not authorize coding or change the agreed semantics.
 
 ## Structure
 
@@ -81,7 +81,7 @@ Integrate `confluent-kafka-go`; keep Kafka types inside the adapter packages.
 - Determine the visible tip consistently with committed isolation. Verify client EOF/position behavior around open transactions before relying on it for termination.
 - Create one producer per assigned source partition with queue limits that sum within worker caps; on revocation drain, then purge and close it.
 - Produce asynchronously with original key bytes and partition unset; retain headers and timestamps. Default to `murmur2_random` unless the connection overrides it. Use delivery reports and librdkafka batching; enable idempotence and protect settings required by our guarantees.
-- Read destination timestamp type, cleanup policy, and retention; apply the retention-horizon check at planning and per record, warning when configuration access is denied.
+- Read destination timestamp type, cleanup policy, and retention; apply the retention-horizon check once the window is resolved and per record, warning when configuration access is denied.
 - Validate destination existence and prevent automatic topic creation. Monitor destination partition-count changes and log them without assigning source partitions.
 - Map record-specific timestamp failures and transient/fatal failures to the agreed policies. Keep retry duration bounded and expose the terminal cause.
 
