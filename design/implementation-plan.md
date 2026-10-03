@@ -79,12 +79,12 @@ Integrate `confluent-kafka-go`; keep Kafka types inside the adapter packages.
 - Read commit metadata on assignment: fail on a fingerprint mismatch, adopt a stored window, or resolve the window and store it with the initial position. Partitions without commits adopt a committed sibling's window.
 - Resolve timestamp starts through the client timestamp lookup. If no qualifying record exists, establish the current readable end and follow/finish according to the time rule.
 - Determine the visible tip consistently with committed isolation. Verify client EOF/position behavior around open transactions before relying on it for termination.
-- Produce asynchronously with original key bytes and partition unset; retain headers and timestamps. Use delivery reports and librdkafka batching; enable idempotence and protect settings required by our guarantees.
+- Produce asynchronously with original key bytes and partition unset; retain headers and timestamps. Default to `murmur2_random` unless the connection overrides it. Use delivery reports and librdkafka batching; enable idempotence and protect settings required by our guarantees.
 - Read destination timestamp type, cleanup policy, and retention; apply the retention-horizon check at planning and per record, warning when configuration access is denied.
 - Validate destination existence and prevent automatic topic creation. Monitor destination partition-count changes and log them without assigning source partitions.
 - Map record-specific timestamp failures and transient/fatal failures to the agreed policies. Keep retry duration bounded and expose the terminal cause.
 
-Gate: adapter tests with a thin mocked client boundary plus component tests against disposable brokers. Verify nil/empty fidelity, timestamp types, delivery errors, routing, different partition counts, and committed versus uncommitted records with real clients.
+Gate: adapter tests with a thin mocked client boundary plus component tests against disposable brokers. Verify nil/empty fidelity, timestamp types, delivery errors, Java-compatible key routing, different partition counts, and committed versus uncommitted records with real clients.
 
 ## 5. Distributed and restart verification
 

@@ -23,7 +23,7 @@
 
 ## Kafka output
 
-- Send the original key with partition unset; configure key-aware routing.
+- Send the original key with partition unset. Default destination producers to `partitioner=murmur2_random` (Java-compatible keyed routing) unless the connection sets a partitioner; log the choice.
 - Do not copy source partition or offset; log destination partition-count changes and continue.
 - Same-key routing depends on the destination partitioner and partition count; `LogAppendTime` destinations may restamp records.
 - Destination topics must already exist; do not support auto-creation.
