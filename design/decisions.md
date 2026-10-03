@@ -74,6 +74,7 @@
 - A file source's EOF is its size at open; records appended later wait for another run. A partial frame at that point ends input and is not corruption.
 - File-source checkpoints store file ID, next frame position, and the CRC of the last consumed frame. A different file ID, a file shorter than the checkpoint, or a CRC mismatch counts as changed for `ON_SOURCE_FILE_CHANGED`; appends never do.
 - Store file-source checkpoints in `~/.kafka-fwd2/checkpoints`, overridable via TOML `worker.checkpoint_dir`; derive filenames safely from `GROUP`, validate source/query identity, and store the next frame position atomically.
+- Fsync the parent directory after creating an output or checkpoint file and after every checkpoint rename.
 - Fsync file output before acknowledging its records; truncate an incomplete final frame on restart and fail on complete corruption.
 - Existing output files fail by default; append only when the header's `GROUP` and query fingerprint match the current query.
 

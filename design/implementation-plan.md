@@ -62,7 +62,7 @@ Gate: deterministic state-machine tests for out-of-order acknowledgments, partia
 Deliver file→file first to exercise the complete runner without a broker.
 
 - Implement a header carrying version, file ID, `GROUP`, and query fingerprint, and length/CBOR/CRC32C frames with bounded allocation. Preserve all named fields, duplicate headers, and null/empty distinctions.
-- Append in submission order and fsync once per confirmed batch. File→file retains input traversal order; there is no global ordering guarantee across Kafka partitions.
+- Append in submission order and fsync once per confirmed batch. Fsync parent directories after file creation and checkpoint renames. File→file retains input traversal order; there is no global ordering guarantee across Kafka partitions.
 - Implement safe group-derived checkpoint names, exclusive locks, query/source identity checks, atomic checkpoint replacement, `ONE_OFF` checkpoint removal on success, and checkpoint-directory override.
 - Identify a source by its header file ID, not path alone. Read only up to the size at open and treat a partial final frame there as end of input. Detect a changed file ID, truncation below the checkpoint, or a last-frame CRC mismatch and apply the changed-source policy; appends are not changes.
 - Guard against identical source/destination files, including aliases. Lock file output for single-process use and permit append only when the output header's `GROUP` and fingerprint match.
