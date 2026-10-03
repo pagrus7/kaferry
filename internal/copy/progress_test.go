@@ -1,0 +1,64 @@
+package copy
+
+import "testing"
+
+func TestConfirmedPrefixIncludesNumericGaps(t *testing.T) {
+	tk := NewTracker()
+	tk.Assign(Cursor{0, 100})
+	a, _ := tk.Observe(Cursor{0, 100}, 101, 10, false)
+	b, _ := tk.Observe(Cursor{0, 105}, 106, 20, false)
+	tk.Resolve(b)
+	if tk.Confirmed(0).Position != 100 {
+		t.Fatal("committed past unresolved record")
+	}
+	tk.Resolve(a)
+	if tk.Confirmed(0).Position != 106 {
+		t.Fatal("numeric offset gaps blocked consumed prefix")
+	}
+	if records, bytes := tk.Total(); records != 2 || bytes != 30 {
+		t.Fatal("confirmed work was released before commit")
+	}
+	tk.Committed(Cursor{0, 101})
+	if records, bytes := tk.Total(); records != 1 || bytes != 20 {
+		t.Fatal("partial commit released the wrong work")
+	}
+	tk.Committed(Cursor{0, 106})
+	if records, bytes := tk.Total(); records != 0 || bytes != 0 {
+		t.Fatal("committed work retained")
+	}
+}
+
+func TestOldGenerationDeliveryCannotAdvanceNewOwner(t *testing.T) {
+	tk := NewTracker()
+	tk.Assign(Cursor{0, 0})
+	old, _ := tk.Observe(Cursor{0, 0}, 1, 1, false)
+	tk.Revoke(0)
+	tk.Assign(Cursor{0, 0})
+	current, _ := tk.Observe(Cursor{0, 0}, 1, 1, false)
+	if tk.Resolve(old) || tk.Confirmed(0).Position != 0 {
+		t.Fatal("late delivery advanced new assignment")
+	}
+	if !tk.Resolve(current) || tk.Confirmed(0).Position != 1 {
+		t.Fatal("current delivery not confirmed")
+	}
+}
+
+func TestControlRecordCursorAndTimestampStop(t *testing.T) {
+	tk := NewTracker()
+	tk.Assign(Cursor{0, 0})
+	_, err := tk.Observe(Cursor{0, 0}, 2, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.Confirmed(0).Position != 2 {
+		t.Fatal("control cursor did not advance")
+	}
+	_, err = tk.Observe(Cursor{0, 2}, 2, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk.Committed(Cursor{0, 2})
+	if records, _ := tk.Total(); records != 0 {
+		t.Fatal("trigger marker retained")
+	}
+}

@@ -1,0 +1,34 @@
+name: checks
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: test -z "$(gofmt -l cmd internal tests)"
+      - run: make check build
+      - run: python3 -c "from pathlib import Path; assert sum(len(p.read_text()) for p in [Path('README.md'),Path('docs/file-format.md')]) < 10000"
+  kafka:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make broker integration
+      - if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: make fault load benchmark
+      - if: always()
+        run: make broker-down

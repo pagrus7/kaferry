@@ -85,7 +85,7 @@ Gate: component tests on real temporary files with injected write/fsync/rename f
 
 - One poll loop per worker, read-committed isolation, explicit offsets, generation-aware assignment; classic protocol with protected `cooperative-sticky` and incremental assign/unassign.
 - Pre-subscribe group check; startup metadata: cluster IDs, source topic IDs, destination existence and configuration.
-- Commit metadata: fingerprint, topic ID, and window checks on every partition; window adoption or local resolution; `fid` and E on every partition for Kafka→file, initialized before subscribing.
+- Commit metadata: fingerprint, topic ID, and window checks on every partition; window adoption or local resolution; `fid` and E on every partition for Kafka→file. Lock/create/validate output before subscribing; commit assigned initial positions with `fid`/E before consuming records.
 - Start positions: commits, timestamp lookup, `START` and its fallback once the group has progress, expired and above-end commits, no-match lookups at the LSO, the possible-incompleteness warning; tip completion through a sampled high watermark.
 - One idempotent producer per worker: `murmur2_random` default, protected settings including the capped `message.max.bytes`, order-preserving queue-full handling, delivery timeout, timestamp-bound checks.
 - Failure mapping to the error policies; deterministic authentication and authorization failures fail without retry.

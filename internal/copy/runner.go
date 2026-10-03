@@ -1,0 +1,515 @@
+package copy
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sort"
+	"time"
+
+	"kafka-fwd2/internal/config"
+	"kafka-fwd2/internal/plan"
+)
+
+type partition struct {
+	window      plan.Window
+	stopped     bool
+	paused      bool
+	position    int64
+	stable      int64
+	atTip       bool
+	high        *int64
+	waitStarted time.Time
+}
+type submission struct {
+	input     Input
+	token     Token
+	busySince time.Time
+}
+type Runner struct {
+	source         Source
+	sink           Sink
+	store          ProgressStore
+	clock          Clock
+	log            *slog.Logger
+	plan           plan.Plan
+	limits         config.Worker
+	tracker        *Tracker
+	partitions     map[int32]*partition
+	pending        *submission
+	deferred       *Input
+	deferredEOF    *Cursor
+	submitted      uint64
+	confirmed      uint64
+	filtered       uint64
+	skipped        uint64
+	peakRecords    int
+	peakBytes      int64
+	timestampStops uint64
+	tipStops       uint64
+	lastCommit     time.Time
+	assignmentSeen bool
+	idleSince      time.Time
+	failure        error
+}
+
+func NewRunner(source Source, sink Sink, store ProgressStore, clock Clock, logger *slog.Logger, p plan.Plan, limits config.Worker, tracker *Tracker) *Runner {
+	return &Runner{source: source, sink: sink, store: store, clock: clock, log: logger, plan: p, limits: limits, tracker: tracker, partitions: make(map[int32]*partition)}
+}
+func (r *Runner) Assign(assignments []Assignment) error {
+	r.assignmentSeen = true
+	if len(assignments) == 0 && len(r.partitions) == 0 {
+		r.idleSince = r.clock.Now()
+	}
+	for _, a := range assignments {
+		r.tracker.Assign(a.Cursor)
+		r.partitions[a.Cursor.Partition] = &partition{window: a.Window, position: a.Cursor.Position}
+		r.log.Info("partition assigned", "partition", a.Cursor.Partition, "position", a.Cursor.Position, "window", a.Window)
+	}
+	return nil
+}
+func (r *Runner) Revoke(partitions []int32, lost bool) error {
+	if !lost {
+		if err := r.commit(partitions); err != nil {
+			r.failure = err
+		}
+	}
+	for _, id := range partitions {
+		if r.deferred != nil && r.deferred.Cursor.Partition == id {
+			r.deferred, r.deferredEOF = nil, nil
+		}
+		if r.pending != nil && r.pending.token.Partition == id {
+			r.pending = nil
+		}
+		r.tracker.Revoke(id)
+		delete(r.partitions, id)
+		r.log.Info("partition revoked", "partition", id)
+	}
+	if len(r.partitions) == 0 {
+		r.assignmentSeen = false
+	}
+	return r.failure
+}
+
+func (r *Runner) Run(ctx context.Context) error {
+	defer func() {
+		r.log.Info("copy summary", "submitted", r.submitted, "confirmed", r.confirmed, "filtered", r.filtered, "skipped", r.skipped, "timestamp_stops", r.timestampStops, "tip_stops", r.tipStops, "peak_uncommitted_records", r.peakRecords, "peak_uncommitted_bytes", r.peakBytes)
+	}()
+	if err := r.source.Start(r); err != nil {
+		return err
+	}
+	for {
+		if ctx.Err() != nil {
+			err := r.drain()
+			if r.failure != nil {
+				return errors.Join(r.failure, err)
+			}
+			if err != nil {
+				return err
+			}
+			if r.bounded() {
+				return fmt.Errorf("bounded copy interrupted before completion")
+			}
+			return nil
+		}
+		if r.failure != nil {
+			_ = r.drain()
+			return r.failure
+		}
+		if err := r.deliveries(); err != nil {
+			r.failure = err
+			continue
+		}
+		if err := r.admitDeferred(); err != nil {
+			r.failure = err
+			continue
+		}
+		if err := r.submitPending(); err != nil {
+			r.failure = err
+			continue
+		}
+		if err := r.tips(); err != nil {
+			r.failure = err
+			continue
+		}
+		if r.finished() {
+			return r.commit(r.ids())
+		}
+		if r.shouldCommit() {
+			if err := r.flush(); err != nil {
+				r.failure = err
+				continue
+			}
+			if err := r.commit(r.ids()); err != nil {
+				r.failure = err
+				continue
+			}
+		}
+		if err := r.pause(); err != nil {
+			r.failure = err
+			continue
+		}
+		event, err := r.source.Poll(20 * time.Millisecond)
+		if err != nil {
+			r.failure = err
+			continue
+		}
+		if ctx.Err() != nil {
+			continue
+		} // A signal during Poll must not submit its input.
+		if event.Input != nil {
+			if err = r.input(*event.Input); err != nil {
+				r.failure = err
+			}
+		}
+		if event.EOF != nil {
+			if err = r.eof(*event.EOF); err != nil {
+				r.failure = err
+			}
+		}
+		if event.Input == nil {
+			if err := r.flush(); err != nil {
+				r.failure = err
+			}
+		}
+	}
+}
+
+func (r *Runner) input(input Input) error {
+	p := r.partitions[input.Cursor.Partition]
+	if p == nil || p.stopped {
+		return nil
+	}
+	if r.pending != nil || r.deferred != nil {
+		return fmt.Errorf("source delivered a record while intake was paused")
+	}
+	p.atTip = false
+	if p.high != nil && input.Cursor.Position >= *p.high {
+		cursor := Cursor{Partition: input.Cursor.Partition, Position: *p.high}
+		_, err := r.tracker.Observe(cursor, cursor.Position, 0, true)
+		p.position = cursor.Position
+		return err // A later visible record proves control/aborted gaps reached H.
+	}
+	if !r.admits(input) {
+		r.deferred = &input
+		return nil
+	}
+	if input.Record.TimestampMS != nil && p.window.Upper != nil && r.plan.Source.Kind == "TOPIC" {
+		threshold, err := stopThreshold(p.window, r.plan.CutoffMS)
+		if err != nil {
+			return err
+		}
+		if *input.Record.TimestampMS > threshold {
+			_, err = r.tracker.Observe(input.Cursor, input.Cursor.Position, 0, true)
+			if err != nil {
+				return err
+			}
+			p.stopped = true
+			r.timestampStops++
+			r.log.Info("partition stopped", "reason", "timestamp", "partition", input.Cursor.Partition, "position", input.Cursor.Position, "timestamp", *input.Record.TimestampMS, "upper", *p.window.Upper, "past_upper_ms", *input.Record.TimestampMS-*p.window.Upper, "future_dated", *input.Record.TimestampMS > r.clock.Now().Add(time.Minute).UnixMilli())
+			return nil
+		}
+	}
+	token, err := r.tracker.Observe(input.Cursor, input.Next, input.Record.Size(), false)
+	if err != nil {
+		return err
+	}
+	p.position = input.Next
+	n, b := r.tracker.Total()
+	if n > r.peakRecords {
+		r.peakRecords = n
+	}
+	if b > r.peakBytes {
+		r.peakBytes = b
+	}
+	if input.Record.TimestampMS == nil && (p.window.Lower != nil || p.window.Upper != nil) {
+		return r.recordError(token, &RecordError{Class: "missing_timestamp", Err: fmt.Errorf("record lacks required timestamp")})
+	}
+	if input.Record.TimestampMS != nil && !p.window.Contains(*input.Record.TimestampMS) {
+		r.tracker.Resolve(token)
+		r.filtered++
+		return nil
+	}
+	r.pending = &submission{input: input, token: token}
+	return r.submitPending()
+}
+func (r *Runner) submitPending() error {
+	if r.pending == nil {
+		return nil
+	}
+	s := r.pending
+	err := r.sink.Submit(s.input.Record, s.token)
+	var busy *Busy
+	if errors.As(err, &busy) {
+		if s.busySince.IsZero() {
+			s.busySince = r.clock.Now()
+			r.log.Warn("destination queue full; intake paused")
+		}
+		budget, _ := time.ParseDuration(r.limits.DeliveryTimeout)
+		if r.clock.Now().Sub(s.busySince) >= budget {
+			return fmt.Errorf("destination queue remained full for %s", budget)
+		}
+		return nil
+	}
+	r.pending = nil
+	if err != nil {
+		return r.recordError(s.token, err)
+	}
+	r.tracker.Submitted(s.token)
+	r.submitted++
+	return nil
+}
+func (r *Runner) recordError(token Token, err error) error {
+	var record *RecordError
+	if !errors.As(err, &record) {
+		return err
+	}
+	policy := r.plan.Policies.OtherRecord
+	switch record.Class {
+	case "missing_timestamp":
+		policy = r.plan.Policies.MissingTimestamp
+	case "rejected_timestamp":
+		policy = r.plan.Policies.RejectedTimestamp
+	}
+	if policy != "SKIP" {
+		return fmt.Errorf("partition %d: %w", token.Partition, err)
+	}
+	r.tracker.Resolve(token)
+	r.skipped++
+	r.log.Warn("record skipped", "partition", token.Partition, "position", r.tracker.PositionOf(token), "class", record.Class, "reason", record.Error())
+	return nil
+}
+func (r *Runner) deliveries() error {
+	for {
+		select {
+		case delivery, open := <-r.sink.Deliveries():
+			if !open {
+				return fmt.Errorf("destination delivery stream closed unexpectedly")
+			}
+			if delivery.Fatal {
+				return delivery.Err
+			}
+			if !r.tracker.ResolveIfOwned(delivery.Token, delivery.Err == nil) {
+				continue
+			}
+			if delivery.Err != nil {
+				return delivery.Err
+			}
+			r.confirmed++
+		default:
+			return nil
+		}
+	}
+}
+func (r *Runner) eof(cursor Cursor) error {
+	p := r.partitions[cursor.Partition]
+	if p == nil || p.stopped {
+		return nil
+	}
+	if r.deferred != nil && r.deferred.Cursor.Partition == cursor.Partition {
+		r.deferredEOF = &cursor
+		return nil
+	}
+	_, err := r.tracker.Observe(cursor, cursor.Position, 0, true)
+	if err != nil {
+		return err
+	}
+	p.atTip = true
+	p.position = cursor.Position
+	p.stable = cursor.Position
+	if r.plan.Source.Kind == "FILE" {
+		p.stopped = true
+	}
+	return nil
+}
+func stopThreshold(window plan.Window, cutoff int64) (int64, error) {
+	hi := *window.Upper
+	if cutoff > 0 && hi > int64(^uint64(0)>>1)-cutoff {
+		return 0, fmt.Errorf("cutoff overflows timestamp")
+	}
+	return hi + cutoff, nil
+}
+func (r *Runner) tips() error {
+	wait, _ := time.ParseDuration(r.limits.TipWait)
+	for id, p := range r.partitions {
+		if p.stopped || p.window.Upper == nil || r.plan.Source.Kind != "TOPIC" {
+			continue
+		}
+		threshold, err := stopThreshold(p.window, r.plan.CutoffMS)
+		if err != nil {
+			return err
+		}
+		if p.high == nil {
+			if !p.atTip || r.clock.Now().UnixMilli() <= threshold {
+				continue
+			}
+			high, err := r.source.HighWatermark(id)
+			if err != nil {
+				return err
+			}
+			p.high = &high
+			p.waitStarted = r.clock.Now()
+		}
+		if p.position >= *p.high {
+			p.stopped = true
+			r.tipStops++
+			r.log.Info("partition stopped", "reason", "tip", "partition", id, "position", p.position, "high_watermark", *p.high)
+		} else if r.clock.Now().Sub(p.waitStarted) > wait {
+			return fmt.Errorf("partition %d tip wait exceeded: H=%d stable=%d consumed=%d", id, *p.high, p.stable, p.position)
+		}
+	}
+	return nil
+}
+func (r *Runner) ids() []int32 {
+	ids := make([]int32, 0, len(r.partitions))
+	for id := range r.partitions {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+func (r *Runner) commit(ids []int32) error {
+	r.lastCommit = r.clock.Now()
+	var cursors []Cursor
+	for _, id := range ids {
+		if r.tracker.HasProgress(id) {
+			cursors = append(cursors, r.tracker.Confirmed(id))
+		}
+	}
+	if len(cursors) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	results, err := r.store.Save(ctx, cursors)
+	if err != nil {
+		return err
+	}
+	var failed error
+	for _, cursor := range cursors {
+		err, present := results[cursor.Partition]
+		if !present {
+			err = fmt.Errorf("missing commit result for partition %d", cursor.Partition)
+		}
+		if err != nil {
+			failed = errors.Join(failed, err)
+			continue
+		}
+		r.tracker.Committed(cursor)
+		r.log.Debug("progress committed", "partition", cursor.Partition, "position", cursor.Position)
+	}
+	return failed
+}
+func (r *Runner) shouldCommit() bool {
+	if r.deferred != nil {
+		return true
+	}
+	if r.clock.Now().Sub(r.lastCommit) >= time.Second {
+		return true
+	}
+	n, b := r.tracker.Total()
+	if n*2 >= r.limits.RecordCap || b*2 >= r.limits.ByteCap {
+		return true
+	}
+	for id := range r.partitions {
+		n, b := r.tracker.Work(id)
+		if n*2 >= r.limits.PartitionRecordCap || b*2 >= r.limits.PartitionByteCap {
+			return true
+		}
+	}
+	return false
+}
+func (r *Runner) pause() error {
+	n, b := r.tracker.Total()
+	full := n >= r.limits.RecordCap || b >= r.limits.ByteCap || r.pending != nil || r.deferred != nil
+	for id, p := range r.partitions {
+		n, b := r.tracker.Work(id)
+		paused := full || p.stopped || n >= r.limits.PartitionRecordCap || b >= r.limits.PartitionByteCap
+		if paused != p.paused {
+			if err := r.source.Pause(id, paused); err != nil {
+				return err
+			}
+			p.paused = paused
+		}
+	}
+	return nil
+}
+func (r *Runner) bounded() bool { return r.plan.Source.Kind == "FILE" || r.plan.Window.Upper != nil }
+func (r *Runner) finished() bool {
+	if r.deferred != nil || r.pending != nil {
+		return false
+	}
+	if len(r.partitions) == 0 {
+		idle, _ := time.ParseDuration(r.limits.IdleExit)
+		if r.bounded() && r.assignmentSeen && r.clock.Now().Sub(r.idleSince) >= idle {
+			r.log.Info("local idle exit")
+			return true
+		}
+		return false
+	}
+	for id, p := range r.partitions {
+		if !p.stopped || !r.tracker.Resolved(id) {
+			return false
+		}
+	}
+	return true
+}
+func (r *Runner) drain() error {
+	r.pending = nil // Unsubmitted input replays from the confirmed cursor.
+	r.deferred, r.deferredEOF = nil, nil
+	deadline := r.clock.Now().Add(10 * time.Second)
+	var failed error
+	for id := range r.partitions {
+		if err := r.source.Pause(id, true); err != nil {
+			failed = errors.Join(failed, err)
+		}
+	}
+	if err := r.sink.Flush(); err != nil {
+		return errors.Join(failed, err, r.commit(r.ids()))
+	}
+	for r.clock.Now().Before(deadline) {
+		if err := r.deliveries(); err != nil {
+			failed = errors.Join(failed, err)
+		}
+		if !r.tracker.InFlight() {
+			return errors.Join(failed, r.commit(r.ids()))
+		}
+		r.clock.Sleep(10 * time.Millisecond)
+	}
+	if err := r.commit(r.ids()); err != nil {
+		return err
+	}
+	return errors.Join(failed, fmt.Errorf("outstanding writes did not finish within 10 seconds"))
+}
+
+func (r *Runner) admits(input Input) bool {
+	n, b := r.tracker.Total()
+	if n == 0 {
+		return true
+	} // One oversized record is admitted alone.
+	pn, pb := r.tracker.Work(input.Cursor.Partition)
+	size := input.Record.Size()
+	return n < r.limits.RecordCap && pn < r.limits.PartitionRecordCap && size <= r.limits.ByteCap-b && size <= r.limits.PartitionByteCap-pb
+}
+
+func (r *Runner) admitDeferred() error {
+	if r.deferred == nil || !r.admits(*r.deferred) {
+		return nil
+	}
+	input, eof := *r.deferred, r.deferredEOF
+	r.deferred, r.deferredEOF = nil, nil
+	if err := r.input(input); err != nil {
+		return err
+	}
+	if eof != nil {
+		return r.eof(*eof)
+	}
+	return nil
+}
+func (r *Runner) flush() error {
+	if err := r.sink.Flush(); err != nil {
+		return err
+	}
+	return r.deliveries()
+}

@@ -33,7 +33,7 @@
 
 - `GROUP` is a Kafka consumer group for Kafka sources and a local checkpoint identity for file sources; workers share a named group. `GROUP = ONE_OFF` generates and logs an ID, runs one worker, and resumes through the named form; a successful file-source `ONE_OFF` run deletes its checkpoint, and Kafka `ONE_OFF` groups expire through broker offset retention.
 - Kafka workers share a group with no coordination and progress independently per assigned partition, using the classic group protocol with protected `cooperative-sticky` assignment. Why: nothing extra to run, and eager rebalancing would revoke every busy worker's partitions on each exit.
-- Before subscribing, a worker checks the group: invalid or foreign progress on the source topic fails, as do active members lacking the protected kafka-fwd2 `client.id` prefix or subscribed to another topic. An absent group passes; a check that cannot run fails. It guards against typos, not concurrent starts; positioning validates again.
+- Before subscribing, a worker checks the group: invalid/foreign progress fails, as do active members lacking the protected kafka-fwd2 `client.id` prefix or assigned to another topic. The pinned client cannot expose unassigned subscriptions; this Stage 0 limit is recorded in `client-compatibility.md`. An absent group passes; an unavailable check fails. This guards typos, not concurrent starts; positioning validates again.
 - A worker exits when all its assigned partitions have stopped; an empty assignment during a rebalance is not completion. In bounded runs a worker holding no partitions for `worker.idle_exit` (default 30 s) exits 0, logged as an idle exit; the timer starts only after a successful assignment (empty included). In follow mode it stays as a standby.
 - There is no group-wide done signal; all workers exiting 0 does not prove coverage, since an idle worker can leave while a partition is being handed to it. To confirm a bounded group, rerun the same statement and `GROUP` with one worker after previous members have left: as sole member it finishes orphaned work, and its completion (never an idle exit) is the confirmation. It is a real copy run, so tip-stopped partitions may copy late arrivals.
 - On revocation, a worker stops intake for the partition, commits its confirmed prefix, and releases it without waiting for in-flight deliveries. Their late outcomes are discarded and the new owner replays them, so a rebalance can duplicate up to a partition's uncommitted work.
@@ -42,7 +42,7 @@
 ## Identity
 
 - The query fingerprint hashes endpoint kinds, cluster ID + topic of each Kafka endpoint, the normalized `WHERE` (per bound: side, literal ms or `NOW()`, and the millisecond adjustment including the 1 ms normalization, with checked arithmetic), and `CUTOFF`. It excludes aliases, paths, file IDs, connection properties, `GROUP`, `START`, error policies (so a failed run can resume with `SKIP`), and tuning.
-- Kafka commit metadata is versioned `kfwd2:1` and on every partition carries `fp=<sha256>`, the source topic ID `tid`, `win=<lo>,<hi>` for `NOW()` queries (either side may be empty), and, for file outputs, the destination file ID and acknowledged output extent.
+- Kafka commit metadata is `kfwd2:1;` followed by compact JSON: `fp` SHA256, source topic ID `tid`, optional `win` with nullable `lower`/`upper` for `NOW()`, and, for file outputs, `fid` and `extent`.
 - Startup and positioning fail on a fingerprint mismatch, a commit without kafka-fwd2 metadata, `NOW()` progress without its window, and a `tid` that differs from the topic's current ID, naming both IDs. Topic IDs come from `AdminClient.DescribeTopics`; a missing or zero ID never bypasses the check. This detects recreation between runs, not deletion during one; destination recreation is not detected. A stored window stays authoritative after its offset leaves retention.
 - File identity is validated outside the fingerprint. File-source checkpoints store fingerprint, window, source file ID, last-frame CRC, next frame position, and, for file outputs, the destination file ID and acknowledged extent. Output headers store their own file ID and the fingerprint.
 
@@ -65,7 +65,7 @@
 - No copy is all-or-nothing: a later failure leaves earlier acknowledged output in place, and a restart revisits the failing record until the policy or conditions change.
 - Uncommitted work is capped at 5,000 records / 16 MiB per partition and 20,000 records / 128 MiB per worker; one oversized record may proceed alone; intake pauses at a cap until a commit succeeds. Record caps bound crash duplicates and byte caps bound memory; load tests set the defaults together with protected producer queue limits.
 - Each worker commits all its partitions in one request, at most one in flight: every second, at 50% of a worker cap or of any partition's cap, when intake is paused at a cap with confirmed progress, and on shutdown and revocation. Per-partition results decide which work is released.
-- Shutdown stops intake, drains for up to 10 s, and commits confirmed progress.
+- Shutdown stops intake, drains outstanding writes for up to 10 s, and commits confirmed progress. Blocking native commits, filesystem calls, and close can extend total shutdown; the client probe confirms socket timeout is not a total commit deadline.
 
 ## Errors
 
@@ -96,7 +96,7 @@
 ## Engineering
 
 - Single-purpose structs behind narrow interfaces. Fx wires replaceable components at the composition root; core logic is Fx-free.
-- `confluent-kafka-go` for Kafka I/O. Supported broker and client versions are a recorded Stage 0 result; known feature floors are Kafka 3.6 for timestamp acceptance bounds, Kafka 2.8 for topic IDs, and client 2.3.0 for `DescribeTopics`.
+- Kafka I/O: `confluent-kafka-go/v2 v2.15.0`, bundled librdkafka 2.15.0; verified Kafka baseline 3.9.0. Platform, API limits, probe results, and unverified deployment matrices: `client-compatibility.md`.
 - Tests at the cheapest useful layer: unit, mock, component, end-to-end, load, and targeted edge cases.
 - Keep code simple; lines of code and cyclomatic complexity are signals, not targets.
 - Priorities: correctness, simplicity, throughput, CI duration, binary size.
