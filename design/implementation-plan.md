@@ -64,11 +64,11 @@ Deliver file→file first to exercise the complete runner without a broker.
 - Implement a header carrying version, file ID, `GROUP`, and query fingerprint, and length/CBOR/CRC32C frames with bounded allocation. Preserve all named fields, duplicate headers, and null/empty distinctions.
 - Append in submission order and fsync once per confirmed batch. File→file retains input traversal order; there is no global ordering guarantee across Kafka partitions.
 - Implement safe group-derived checkpoint names, exclusive locks, query/source identity checks, atomic checkpoint replacement, and checkpoint-directory override.
-- Identify a source using its file ID and appropriate filesystem metadata, not path alone. Detect replacement or unexpected mutation and apply the chosen changed-source policy.
+- Identify a source by its header file ID, not path alone. Read only up to the size at open and treat a partial final frame there as end of input. Detect a changed file ID, truncation below the checkpoint, or a last-frame CRC mismatch and apply the changed-source policy; appends are not changes.
 - Guard against identical source/destination files, including aliases. Lock file output for single-process use and permit append only when the output header's `GROUP` and fingerprint match.
 - Recover an incomplete final output frame; fail on complete corruption. Coordinate output recovery and source checkpoint order so crashes may replay confirmed writes but cannot lose acknowledged records.
 
-Gate: component tests with real temporary files and injected write/fsync/rename failures; subprocess crash/resume tests; framing/decoder fuzzing. Check lock conflicts, source changes, corruption, oversized frames, EOF, and restart duplicates.
+Gate: component tests with real temporary files and injected write/fsync/rename failures; subprocess crash/resume tests; framing/decoder fuzzing. Check lock conflicts, source changes, sources still being appended, corruption, oversized frames, EOF, and restart duplicates.
 
 ## 4. Kafka adapters
 

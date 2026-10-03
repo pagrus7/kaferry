@@ -69,6 +69,8 @@
 - Preserve original source metadata through file copies; use it for diagnostics, never Kafka destination routing.
 - File header holds format marker, version, file ID, the writing query's `GROUP`, and its query fingerprint; frames are big-endian 32-bit payload length, CBOR payload, then CRC32C over length/payload. Enforce a configurable read-size limit; no file compression initially.
 - Use one process per file source or output; lock its file-source checkpoint exclusively.
+- A file source's EOF is its size at open; records appended later wait for another run. A partial frame at that point ends input and is not corruption.
+- File-source checkpoints store file ID, next frame position, and the CRC of the last consumed frame. A different file ID, a file shorter than the checkpoint, or a CRC mismatch counts as changed for `ON_SOURCE_FILE_CHANGED`; appends never do.
 - Store file-source checkpoints in `~/.kafka-fwd2/checkpoints`, overridable via TOML `worker.checkpoint_dir`; derive filenames safely from `GROUP`, validate source/query identity, and store the next frame position atomically.
 - Fsync file output before acknowledging its records; truncate an incomplete final frame on restart and fail on complete corruption.
 - Existing output files fail by default; append only when the header's `GROUP` and query fingerprint match the current query.
