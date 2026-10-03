@@ -30,6 +30,7 @@
 - For a destination that keeps CreateTime and deletes by time (`retention.ms` ≠ -1), compute the horizon `NOW() - retention.ms` from the stored window's `NOW()`. Fail at planning if the window's lower bound is older; during the copy, treat older records as destination-rejected timestamps. If topic configuration cannot be read, warn and skip the check.
 - Read committed source records; acknowledge output before committing source offsets.
 - Crashes between output and commit can duplicate records.
+- Records with the same key from one source partition reach the destination in source order. Crashes and rebalances may repeat an ordered run but never place an older record after a newer one, except a produce request already sent when a revocation purge runs.
 
 ## Workers
 
@@ -39,14 +40,14 @@
 - Store a query fingerprint and the resolved `[lo, hi)` window in every Kafka commit's metadata and every file-source checkpoint. The fingerprint hashes the normalized query (endpoints, `WHERE` expression text, semantic options), not resolved values. A mismatched fingerprint fails; a partition without a commit adopts the window from any committed sibling.
 - Workers stop assigned partitions locally and exit when all are stopped; rebalances may extend a run.
 - On a timestamp stop, commit at the trigger record so a new owner can reevaluate it; at a tip stop, commit the next offset.
-- On revocation, stop consuming that partition immediately, drain writes for up to 10 seconds, commit confirmed progress, then release it.
+- On revocation, stop consuming that partition immediately, drain writes for up to 10 seconds, purge and close that partition's producer, commit confirmed progress, then release it.
 - Rebalances pick up new source partitions while workers run; later additions need another run.
 - Do not seed from another consumer group's offsets.
 
 ## Delivery and limits
 
 - Submit bounded batches; track each record's result and commit only each partition's contiguous confirmed prefix. Batches are not atomic.
-- Kafka writes use normal asynchronous producer calls and delivery reports; librdkafka batches internally. The Go batch producer cannot preserve headers/timestamps.
+- Kafka writes use one idempotent producer per assigned source partition, with normal asynchronous calls and delivery reports; librdkafka batches internally. Size per-producer queues so their total stays within worker caps. The Go batch producer cannot preserve headers/timestamps.
 - Bound uncommitted work by records and bytes: defaults 5,000/16 MiB per partition and 20,000/128 MiB per worker; configurable, with one oversized record allowed alone. Defaults are provisional until the Stage 6 baseline.
 - Each worker commits all its partitions in one request, with at most one commit in flight: every second, when worker uncommitted records or bytes reach 50% of a worker cap, and on clean shutdown/revocation. Pause a partition or worker at its cap until a commit succeeds.
 - Retry destination outages for 60 seconds by default, configurable; then fail.

@@ -79,6 +79,7 @@ Integrate `confluent-kafka-go`; keep Kafka types inside the adapter packages.
 - Read commit metadata on assignment: fail on a fingerprint mismatch, adopt a stored window, or resolve the window and store it with the initial position. Partitions without commits adopt a committed sibling's window.
 - Resolve timestamp starts through the client timestamp lookup. If no qualifying record exists, establish the current readable end and follow/finish according to the time rule.
 - Determine the visible tip consistently with committed isolation. Verify client EOF/position behavior around open transactions before relying on it for termination.
+- Create one producer per assigned source partition with queue limits that sum within worker caps; on revocation drain, then purge and close it.
 - Produce asynchronously with original key bytes and partition unset; retain headers and timestamps. Default to `murmur2_random` unless the connection overrides it. Use delivery reports and librdkafka batching; enable idempotence and protect settings required by our guarantees.
 - Read destination timestamp type, cleanup policy, and retention; apply the retention-horizon check at planning and per record, warning when configuration access is denied.
 - Validate destination existence and prevent automatic topic creation. Monitor destination partition-count changes and log them without assigning source partitions.
@@ -91,6 +92,7 @@ Gate: adapter tests with a thin mocked client boundary plus component tests agai
 Exercise complete commands against real files and Kafka clusters.
 
 - Cover all four copy directions and byte-level record comparison, with only the documented destination timestamp exceptions.
+- Verify same-key source order at the destination across retries, crashes, and revocations whose drain times out.
 - Run two workers in one group; force reassignment, stop a completed worker, crash a worker, and verify independent local completion without done markers or a coordinator.
 - Demonstrate duplicate windows by killing the process after durable output but before source progress commit; verify no committed record is lost.
 - Test out-of-order timestamps, boundary equality, future timestamps, missing timestamps, timestamp rejection, records past destination retention, cutoff-trigger replay, and new source partitions.
@@ -106,7 +108,7 @@ Gate: end-to-end scenarios prove the recorded semantics. Retention/time/transact
 - Emit useful redacted logs: group ID, resolved window, source positions on skips, retries, committed progress, partition changes, and terminal failures. Maintain basic counts and queue/progress gauges without introducing an observability framework initially.
 - Provide reproducible builds and documented Go/CGO/librdkafka requirements for supported targets. Verify actual supported build targets before promising portable binaries.
 - Run race/static checks, dependency review, and malformed-input fuzzing. Review LOC and cyclomatic complexity as signals; avoid arbitrary gates or abstractions added solely to improve metrics.
-- Load-test keyed/unkeyed records, headers, small/large payloads, partition counts, and delayed sinks. Measure throughput, CPU, peak memory, commit lag, and shutdown duration; prove queues remain bounded before tuning throughput.
+- Load-test keyed/unkeyed records, headers, small/large payloads, partition counts, and delayed sinks. Measure throughput, CPU, peak memory, broker connections per worker, commit lag, and shutdown duration; prove queues remain bounded before tuning throughput.
 - Use fast unit/mock tests on every change, focused component/e2e CI jobs, and scheduled/on-demand load and extended fault runs. Keep meaningful correctness coverage before optimizing CI duration or binary size.
 
 Gate: reproducible release candidate, documented operating limits, bounded behavior under load, and no unexplained losses or premature commits in fault scenarios.
