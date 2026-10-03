@@ -71,11 +71,11 @@
 - Prefix statements with `WITH CONNECTION alias AS (...)` for inline librdkafka properties; TOML supplies named profiles. SQL properties override matching TOML keys.
 - `ENV('NAME')` resolves at startup, fails if unset, and is redacted in logs. Reject unknown or guarantee-breaking librdkafka settings.
 - TOML holds connection profiles and worker tuning; file paths use `FILE cbor('path')`.
-- CLI accepts SQL from a file, standard input, or an inline argument.
+- CLI uses `run --file/-f path`, `run --sql/-e statement`, or `run --file -` for stdin; require exactly one input. Load TOML with `--config/-c path`.
 
 ## Open
 
-- Remaining SQL grammar, CLI flag names, and exact OS state-folder path. CBOR may change; file segmentation can come later.
+- Remaining SQL grammar and exact OS state-folder path. CBOR may change; file segmentation can come later.
 
 ## Engineering
 
