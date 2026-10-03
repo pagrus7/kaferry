@@ -14,7 +14,7 @@
 
 - Kafka record time governs filters through the column `RECORD_TIMESTAMP`. Allow `>=`, `>`, `<`, `<=`, and inclusive `BETWEEN`, with at most one lower and one upper bound joined by `AND`; no `OR` or `NOT`.
 - Normalize every filter to a half-open millisecond range `[lo, hi)` and log it; reject sub-millisecond literals and empty ranges.
-- Support `NOW()` and basic timestamp/interval arithmetic with seconds, minutes, and hours; evaluate `NOW()` once, when a group first stores its window. Later workers and restarts of that group reuse the stored window; a new window needs a new group.
+- Support `NOW()` and basic timestamp/interval arithmetic in `SECOND`, `MINUTE`, `HOUR`, and `DAY` (fixed 86,400 s; no months or years); evaluate `NOW()` once, when a group first stores its window. Later workers and restarts of that group reuse the stored window; a new window needs a new group.
 - Spell time literals as `TIMESTAMP '2026-10-01T00:00:00Z'`; require RFC 3339 with `Z` or an explicit UTC offset.
 - A Kafka group's usable commit with a matching query fingerprint wins. Otherwise a time filter starts at its lower-bound timestamp, or at the earliest retained offset if it has only an upper bound; commit the initial position before copying.
 - Without a time filter, require `START = EARLIEST|LATEST` if no usable commit exists. Reject `START` with time filters; timestamp starts are expressed through `WHERE`. Allow follow mode.
