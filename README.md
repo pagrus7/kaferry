@@ -61,7 +61,7 @@ OPTIONS (GROUP='orders-dr-oct1');
 
 ## Examples
 
-Continuous archive from the earliest retained position:
+Continuous archive from the earliest retained position (restarts re-read the whole output):
 
 ```sql
 INSERT INTO FILE cbor('/data/audit.cbor')
@@ -92,7 +92,7 @@ Supports `>`, `<=`, lower/upper bounds joined by `AND`, `NOW()` ± integer SECON
 
 ## Progress and completion
 
-- Required `GROUP` dedicates one identity/query. `ONE_OFF` logs an ID usable for resume; file-source success deletes its checkpoint.
+- Required `GROUP` dedicates one identity/query. `ONE_OFF` logs an ID usable for resume; file-source success deletes its checkpoint, not its lock.
 - Kafka needs `WHERE` or `START=EARLIEST|LATEST`. Commits win; otherwise lower-bound timestamp lookup, upper-only earliest, or `START`. With group progress, new commitless partitions start earliest. No-match/`LATEST` use the read-committed end before open transactions.
 - `NOW()` persists per Kafka partition/file checkpoint. New partitions adopt the lowest-numbered saved window or resolve locally; concurrent workers may differ. Literal times give a shared window. New window needs a new group; expired offsets make it fresh again.
 - Stop on timestamp **> end + cutoff**, or read-committed tip after wall time passes it. Default one minute; override `CUTOFF=INTERVAL '5' MINUTE`. Tip completion samples H once and waits through transactions/control records up to `tip_wait`.
@@ -106,9 +106,9 @@ Null/empty bytes, ordered duplicate headers, nullable values, and timestamps sur
 
 Stable routing preserves source-partition→destination-partition submission order within one producer session. Files keep observed order; Kafka has no global order. Crash replay repeats records; old-owner writes may land after replay.
 
-At least once: acknowledgment precedes progress; a crash between them duplicates. Revocation releases immediately, potentially duplicating bounded uncommitted work. Later failures retain earlier output. Idempotence covers producer retries, not replay.
+At least once: acknowledgment precedes progress; a crash between them duplicates. Revocation releases immediately, possibly duplicating bounded uncommitted work. Later failures retain earlier output. Idempotence covers producer retries, not replay.
 
-Caps include acknowledged/uncommitted work; oversized records proceed alone. Lookahead/native buffers add memory beyond logical caps. Commit each second/half-cap; native queues are bounded. `delivery_timeout` covers producer/source recovery/queue-full; `message.timeout.ms` overrides producer timeout. Signals stop intake, drain writes ten seconds, commit the prefix. Native commits/filesystem/close calls can extend shutdown.
+Caps include acknowledged/uncommitted work; oversized records proceed alone. Lookahead/native buffers add memory beyond logical caps. Commit each second/half-cap; native queues are bounded. `delivery_timeout` covers producer delivery/queue-full; source outages retry indefinitely; `message.timeout.ms` overrides producer timeout. Signals stop intake, drain writes ten seconds, commit the prefix. Native commits/filesystem/close calls can extend shutdown.
 
 Default FAIL. Either `ON_ERROR=SKIP` or specific `ON_MISSING_TIMESTAMP=SKIP` / `ON_REJECTED_TIMESTAMP=SKIP`. Only attributable unsent validation errors skip. Batch rejection, authentication, exhausted recovery, corruption, changed source identity always fail. Change policy and resume the same group to revisit failures.
 
@@ -118,13 +118,13 @@ Client limits: Kafka header names must exclude NUL (consumption loses its suffix
 
 ## Files and exit codes
 
-Files require one process/query/machine, local locks/hard links/atomic rename/fsync. Locks are local. Input snapshots size at open; appends wait for rerun; partial final frames end input.
+Files require one process/query/machine, local locks/hard links/atomic rename/fsync. Input snapshots size at open; appends wait for rerun; partial final frames end input.
 
 Checkpoints: `~/.kafka-fwd2/checkpoints`, safe group-derived names. Keep progress/output together. Validate source ID/last-frame CRC, destination ID/fsynced extent. Changed input needs a new group. Missing/short output or damage before acknowledged extent fails. Broken unacknowledged tails truncate; complete frames remain and may duplicate, even above a lowered frame limit.
 
 Header publication before ID persistence can leave an unowned output: verify header-only, delete manually, rerun. No adoption without saved ownership. [File format](docs/file-format.md).
 
-Exit `0`: completion/skips/clean follow interruption; `1`: runtime/busy lock/drain/bounded interruption; `2`: usage/configuration/pre-copy identity conflict. JSON logs carry windows/stops/skips/counts.
+Exit `0`: completion/skips/clean follow interruption; `1`: runtime/busy lock/drain/bounded interruption/later conflict; `2`: usage/configuration/pre-copy identity conflict. JSON logs carry windows/stops/skips/counts.
 
 ## Verification
 

@@ -113,6 +113,12 @@ func (t *Tracker) Confirmed(partition int32) Cursor {
 	}
 	return Cursor{partition, position}
 }
+func (t *Tracker) Saved(partition int32) int64 {
+	if p := t.partitions[partition]; p != nil {
+		return p.committed
+	}
+	return -1
+}
 func (t *Tracker) HasProgress(partition int32) bool {
 	p := t.partitions[partition]
 	return p != nil && t.Confirmed(partition).Position > p.committed

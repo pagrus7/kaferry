@@ -52,6 +52,7 @@ type Runner struct {
 	assignmentSeen bool
 	idleSince      time.Time
 	failure        error
+	intake         bool
 }
 
 func NewRunner(source Source, sink Sink, store ProgressStore, clock Clock, logger *slog.Logger, p plan.Plan, limits config.Worker, tracker *Tracker) *Runner {
@@ -71,7 +72,7 @@ func (r *Runner) Assign(assignments []Assignment) error {
 }
 func (r *Runner) Revoke(partitions []int32, lost bool) error {
 	if !lost {
-		if err := r.commit(partitions); err != nil {
+		if err := r.save(partitions, true); err != nil {
 			r.failure = err
 		}
 	}
@@ -96,6 +97,27 @@ func (r *Runner) Run(ctx context.Context) error {
 	defer func() {
 		r.log.Info("copy summary", "submitted", r.submitted, "confirmed", r.confirmed, "filtered", r.filtered, "skipped", r.skipped, "timestamp_stops", r.timestampStops, "tip_stops", r.tipStops, "peak_uncommitted_records", r.peakRecords, "peak_uncommitted_bytes", r.peakBytes)
 	}()
+	if err := r.run(ctx); err != nil {
+		return r.exit(err)
+	}
+	return nil
+}
+
+// exit classifies by the first failure, not whichever coded error a join holds.
+func (r *Runner) exit(err error) error {
+	primary := r.failure
+	if primary == nil {
+		primary = err
+	}
+	code := 1
+	var coded interface{ ExitCode() int }
+	if !r.intake && errors.As(primary, &coded) {
+		code = coded.ExitCode()
+	}
+	return &Exit{Err: err, Code: code}
+}
+
+func (r *Runner) run(ctx context.Context) error {
 	if err := r.source.Start(r); err != nil {
 		return err
 	}
@@ -159,6 +181,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			continue
 		} // A signal during Poll must not submit its input.
 		if event.Input != nil {
+			r.intake = true // Filtered and skipped records count: intake has started.
 			if err = r.input(*event.Input); err != nil {
 				r.failure = err
 			}
@@ -369,7 +392,11 @@ func (r *Runner) ids() []int32 {
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	return ids
 }
-func (r *Runner) commit(ids []int32) error {
+func (r *Runner) commit(ids []int32) error { return r.save(ids, false) }
+
+// save commits confirmed progress. When releasing revoked partitions, a
+// recoverable failure only replays work, so the partition is released anyway.
+func (r *Runner) save(ids []int32, releasing bool) error {
 	r.lastCommit = r.clock.Now()
 	var cursors []Cursor
 	for _, id := range ids {
@@ -384,7 +411,10 @@ func (r *Runner) commit(ids []int32) error {
 	defer cancel()
 	results, err := r.store.Save(ctx, cursors)
 	if err != nil {
-		return err
+		if !r.released(releasing, cursors, err) {
+			return err
+		}
+		return nil
 	}
 	var failed error
 	for _, cursor := range cursors {
@@ -393,13 +423,25 @@ func (r *Runner) commit(ids []int32) error {
 			err = fmt.Errorf("missing commit result for partition %d", cursor.Partition)
 		}
 		if err != nil {
-			failed = errors.Join(failed, err)
+			if !r.released(releasing, []Cursor{cursor}, err) {
+				failed = errors.Join(failed, err)
+			}
 			continue
 		}
 		r.tracker.Committed(cursor)
 		r.log.Debug("progress committed", "partition", cursor.Partition, "position", cursor.Position)
 	}
 	return failed
+}
+func (r *Runner) released(releasing bool, cursors []Cursor, err error) bool {
+	var recoverable *Recoverable
+	if !releasing || !errors.As(err, &recoverable) {
+		return false
+	}
+	for _, cursor := range cursors {
+		r.log.Warn("revoked partition released without saving progress; the next owner replays", "partition", cursor.Partition, "saved", r.tracker.Saved(cursor.Partition), "confirmed", cursor.Position, "reason", err.Error())
+	}
+	return true
 }
 func (r *Runner) shouldCommit() bool {
 	if r.deferred != nil {

@@ -1,5 +1,7 @@
 # Implementation results — 2026-10-03
 
+Initial MVP measurements below describe `7ab6413`; subsequent review checks are recorded at the end.
+
 ## Delivered MVP
 
 - All four copy directions; agreed SQL grammar, TOML/native properties, SQL precedence and `ENV`.
@@ -55,3 +57,11 @@ Restricted ACL/SASL/TLS configurations, additional broker/platform versions, mul
 `make check build`; `make broker integration`; `make fault load benchmark metrics`; `make broker-down`.
 
 Build flags: `-trimpath -ldflags='-s -w -buildid='`. CGO and a C compiler are required. Test brokers use project `kafka-fwd2-compat` on loopback ports 39092/40092. Other Docker projects are untouched.
+
+## Implementation review verification
+
+- Reviewed permanent output I/O failure handling, unbounded transient consumer recovery, revocation-only commit recovery, batched positioning and execution-stage exit codes against the agreed rules.
+- Corrected two remaining edges: empty assignments make no offset requests, and poisoned output returns its original I/O error before validating another record. Added failing-then-passing regressions and Kafka durable-extent metadata checks.
+- `make check build` passed. Full broker integration/race suites passed on macOS ARM64 and Linux ARM64; Linux tested the final corrections.
+- Current production Go: 3,912 lines. Highest cyclomatic complexity: batched positioning 45; core runner 25. No complexity threshold is imposed.
+- User docs: 9,995 characters. Full-file restart CRC validation and stable checkpoint lock files remain in place.

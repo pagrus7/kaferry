@@ -25,6 +25,8 @@ type Output struct {
 	pending    []copy.Token
 	deliveries chan copy.Delivery
 	logger     *slog.Logger
+	sync       func() error
+	failed     error // A retried fsync can succeed after the kernel dropped failed pages.
 }
 
 func NewOutput(path, group, fp, expectedID string, extent int64, codec *Codec, capacity int, logger *slog.Logger) (*Output, error) {
@@ -107,7 +109,7 @@ func NewOutput(path, group, fp, expectedID string, extent int64, codec *Codec, c
 		f.Close()
 		return nil, err
 	}
-	return &Output{file: f, buffer: bufio.NewWriterSize(f, 65536), codec: codec, header: header, position: position, extent: extent, deliveries: make(chan copy.Delivery, capacity+1), logger: logger}, nil
+	return &Output{file: f, buffer: bufio.NewWriterSize(f, 65536), codec: codec, header: header, position: position, extent: extent, deliveries: make(chan copy.Delivery, capacity+1), logger: logger, sync: f.Sync}, nil
 }
 
 func createOutput(path, group, fp string, codec *Codec) (*os.File, bool, error) {
@@ -188,30 +190,36 @@ func cleanupTemporary(path string) error {
 	return nil
 }
 func (o *Output) Submit(record copy.Record, token copy.Token) error {
+	if o.failed != nil {
+		return o.failed
+	}
 	data, err := o.codec.EncodeRecord(record)
 	if err != nil {
 		return &copy.RecordError{Class: "validation", Err: err}
 	}
 	n, err := o.buffer.Write(data)
-	if err != nil {
-		return err
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
 	}
-	if n != len(data) {
-		return io.ErrShortWrite
+	if err != nil {
+		return o.fail(err)
 	}
 	o.position += int64(n)
 	o.pending = append(o.pending, token)
 	return nil
 }
 func (o *Output) Flush() error {
+	if o.failed != nil {
+		return o.failed
+	}
 	if len(o.pending) == 0 {
 		return nil
 	}
 	if err := o.buffer.Flush(); err != nil {
-		return err
+		return o.fail(err)
 	}
-	if err := o.file.Sync(); err != nil {
-		return err
+	if err := o.sync(); err != nil {
+		return o.fail(err)
 	}
 	o.extent = o.position
 	for _, token := range o.pending {
@@ -219,6 +227,11 @@ func (o *Output) Flush() error {
 	}
 	o.pending = nil
 	return nil
+}
+func (o *Output) fail(err error) error {
+	o.failed = err
+	o.pending = nil
+	return err
 }
 func (o *Output) Deliveries() <-chan copy.Delivery { return o.deliveries }
 func (o *Output) DurableOutput() (string, int64)   { return o.header.ID, o.extent }

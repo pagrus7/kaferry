@@ -391,3 +391,121 @@ func TestCapturedTipFinishesWithoutAnotherEOF(t *testing.T) {
 		})
 	}
 }
+
+func TestRevocationCommitFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		request bool
+		fails   bool
+	}{
+		{"recoverable partition error", &Recoverable{Err: errors.New("rebalance in progress")}, false, false},
+		{"recoverable request error", &Recoverable{Err: errors.New("coordinator unavailable")}, true, false},
+		{"terminal partition error", errors.New("group authorization failed"), false, true},
+		{"terminal request error", errors.New("group authorization failed"), true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _, _, _, _ := fixture(t)
+			store := &requestStore{err: tc.err, request: tc.request}
+			r.store = store
+			if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+				t.Fatal(err)
+			}
+			in := incoming(0, 0, 1)
+			token, _ := r.tracker.Observe(in.Cursor, in.Next, 1, false)
+			r.tracker.Resolve(token)
+			err := r.Revoke([]int32{0}, false)
+			if (err != nil) != tc.fails {
+				t.Fatalf("revoke error = %v, want failure=%v", err, tc.fails)
+			}
+			if len(r.partitions) != 0 || store.calls != 1 {
+				t.Fatalf("partition not released or commit retried: partitions=%d calls=%d", len(r.partitions), store.calls)
+			}
+		})
+	}
+	// Outside revocation a recoverable error still fails the commit.
+	r, _, _, _, _ := fixture(t)
+	r.store = &requestStore{err: &Recoverable{Err: errors.New("rebalance in progress")}}
+	_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}}})
+	token, _ := r.tracker.Observe(Cursor{0, 0}, 1, 1, false)
+	r.tracker.Resolve(token)
+	if err := r.commit([]int32{0}); err == nil {
+		t.Fatal("periodic commit must fail on a recoverable error")
+	}
+}
+
+type requestStore struct {
+	err     error
+	request bool
+	calls   int
+}
+
+func (s *requestStore) Save(_ context.Context, cursors []Cursor) (map[int32]error, error) {
+	s.calls++
+	if s.request {
+		return nil, s.err
+	}
+	out := make(map[int32]error)
+	for _, c := range cursors {
+		out[c.Partition] = s.err
+	}
+	return out, nil
+}
+
+type operatorConflict struct{}
+
+func (operatorConflict) Error() string { return "fingerprint mismatch" }
+func (operatorConflict) ExitCode() int { return 2 }
+
+func exitCode(err error) int {
+	var coded interface{ ExitCode() int }
+	if errors.As(err, &coded) {
+		return coded.ExitCode()
+	}
+	return 1
+}
+
+func TestExitCodeFollowsExecutionStage(t *testing.T) {
+	conflict, runtime := operatorConflict{}, errors.New("broker unavailable")
+
+	r, s, _, _, _ := fixture(t)
+	r.source = &failingStart{testSource: s, err: conflict}
+	if code := exitCode(r.Run(context.Background())); code != 2 {
+		t.Fatalf("conflict before intake exited %d", code)
+	}
+
+	r, s, _, _, _ = fixture(t)
+	in := incoming(0, 0, 1)
+	s.events = []Event{{Input: &in}}
+	r.source = &failingPoll{testSource: s, err: conflict}
+	if code := exitCode(r.Run(context.Background())); code != 1 {
+		t.Fatalf("conflict after intake exited %d", code)
+	}
+
+	for _, joined := range []error{errors.Join(runtime, conflict), errors.Join(conflict, runtime)} {
+		r, _, _, _, _ = fixture(t)
+		r.failure = runtime
+		if code := exitCode(r.exit(joined)); code != 1 {
+			t.Fatalf("runtime failure joined with cleanup conflict exited %d: %v", code, joined)
+		}
+	}
+}
+
+type failingStart struct {
+	*testSource
+	err error
+}
+
+func (s *failingStart) Start(Lifecycle) error { return s.err }
+
+type failingPoll struct {
+	*testSource
+	err error
+}
+
+func (s *failingPoll) Poll(d time.Duration) (Event, error) {
+	if len(s.events) == 0 {
+		return Event{}, s.err
+	}
+	return s.testSource.Poll(d)
+}

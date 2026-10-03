@@ -3,6 +3,9 @@ package kafka
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"strings"
@@ -11,6 +14,7 @@ import (
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	core "kafka-fwd2/internal/copy"
+	"kafka-fwd2/internal/plan"
 )
 
 func TestRetentionWarningOnFirstRetainedRecord(t *testing.T) {
@@ -44,7 +48,7 @@ func TestEmptyAssignmentDoesNotCommitNativeOffsets(t *testing.T) {
 func TestOffsetsMatchTopicIdentityNotPointerAddress(t *testing.T) {
 	requested, returned := "orders", "orders"
 	result := k.ListOffsetsResult{ResultInfos: map[k.TopicPartition]k.ListOffsetsResultInfo{{Topic: &returned, Partition: 3}: {Offset: 42}}}
-	info, ok := offsetInfo(result, requested, 3)
+	info, ok := partitionInfos(result, requested)[3]
 	if !ok || info.Offset != 42 {
 		t.Fatal("returned topic pointer prevented matching Kafka partition")
 	}
@@ -118,3 +122,189 @@ func TestDeterministicErrorsNeverRetry(t *testing.T) {
 		t.Fatal("transport error not classified")
 	}
 }
+
+type scriptedPoller struct{ events []k.Event }
+
+func (p *scriptedPoller) Poll(int) k.Event {
+	if len(p.events) == 0 {
+		return nil
+	}
+	event := p.events[0]
+	p.events = p.events[1:]
+	return event
+}
+
+// A quiet partition gives no recovery signal after a reconnect, so transient
+// outages must not fail the worker however long the quiet lasts.
+func TestTransientSourceErrorsHaveNoDeadline(t *testing.T) {
+	quiet := 30000 // Ten minutes of 20 ms polls, well past the 60 s delivery timeout.
+	events := []k.Event{k.NewError(k.ErrTransport, "disconnected", false), k.NewError(k.ErrAllBrokersDown, "down", false)}
+	events = append(events, make([]k.Event, quiet)...)
+	s := &Source{events: &scriptedPoller{events: events}, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	for n := 0; n < quiet+2; n++ {
+		if event, err := s.Poll(20 * time.Millisecond); err != nil || event.Input != nil || event.EOF != nil {
+			t.Fatalf("poll %d: event=%+v err=%v", n, event, err)
+		}
+	}
+	for _, terminal := range []k.Error{k.NewError(k.ErrTopicAuthorizationFailed, "denied", false), k.NewError(k.ErrTransport, "fatal", true)} {
+		s.events = &scriptedPoller{events: []k.Event{terminal}}
+		if _, err := s.Poll(20 * time.Millisecond); err == nil {
+			t.Fatalf("%v must fail the worker", terminal)
+		}
+	}
+}
+
+func TestCommitClassification(t *testing.T) {
+	var recoverable *core.Recoverable
+	for _, code := range []k.ErrorCode{k.ErrRebalanceInProgress, k.ErrIllegalGeneration, k.ErrUnknownMemberID, k.ErrCoordinatorNotAvailable, k.ErrNotCoordinator, k.ErrCoordinatorLoadInProgress, k.ErrRequestTimedOut, k.ErrTransport, k.ErrTimedOut, k.ErrWaitCoord, k.ErrAllBrokersDown} {
+		if err := classifyCommit(k.NewError(code, "", false)); !errors.As(err, &recoverable) {
+			t.Fatalf("%v should be recoverable on revocation", code)
+		}
+	}
+	for _, err := range []error{
+		k.NewError(k.ErrGroupAuthorizationFailed, "", false), k.NewError(k.ErrTopicAuthorizationFailed, "", false),
+		k.NewError(k.ErrOffsetMetadataTooLarge, "", false), k.NewError(k.ErrFencedInstanceID, "", false),
+		k.NewError(k.ErrTransport, "", true), k.NewError(k.ErrUnknown, "", false), errors.New("not a client error"),
+	} {
+		if classified := classifyCommit(err); errors.As(classified, &recoverable) {
+			t.Fatalf("%v must stay terminal", err)
+		}
+	}
+	if classifyCommit(nil) != nil {
+		t.Fatal("success must stay nil")
+	}
+}
+
+type capturedCommits struct{ parts []k.TopicPartition }
+
+func (c *capturedCommits) CommitOffsets(parts []k.TopicPartition) ([]k.TopicPartition, error) {
+	c.parts = append(c.parts, parts...)
+	return parts, nil
+}
+
+type durableExtent struct{ extent int64 }
+
+func (d *durableExtent) DurableOutput() (string, int64) { return "archive-id", d.extent }
+
+func TestKafkaFileCommitUsesDurableExtent(t *testing.T) {
+	native := &capturedCommits{}
+	output := &durableExtent{extent: 256}
+	store := &Committer{consumer: native, topic: "orders", output: output, metadata: map[int32]Progress{0: {Fingerprint: "fp", TopicID: "topic-id"}}}
+	for _, extent := range []int64{256, 1024, 1024} {
+		// Failed I/O cannot move DurableOutput; a later commit keeps the last E.
+		output.extent = extent
+		results, err := store.Save(context.Background(), []core.Cursor{{Partition: 0, Position: 5}})
+		if err != nil || results[0] != nil {
+			t.Fatalf("commit: results=%v err=%v", results, err)
+		}
+		part := native.parts[len(native.parts)-1]
+		progress, err := decodeProgress(part.Metadata, "fp", "topic-id", false)
+		if err != nil || progress.FileID != "archive-id" || progress.Extent != extent || part.Offset != 5 {
+			t.Fatalf("durable output identity/extent changed: part=%v progress=%+v err=%v", part, progress, err)
+		}
+	}
+}
+
+type countingOffsets struct {
+	calls     []string
+	low, high int64
+	stable    int64
+}
+
+func (o *countingOffsets) Offsets(partitions []int32, spec k.OffsetSpec, readCommitted bool) (map[int32]int64, error) {
+	o.calls = append(o.calls, fmt.Sprint(spec, readCommitted))
+	value := o.high
+	switch {
+	case spec == k.EarliestOffsetSpec:
+		value = o.low
+	case readCommitted:
+		value = o.stable
+	}
+	out := make(map[int32]int64, len(partitions))
+	for _, partition := range partitions {
+		out[partition] = value
+	}
+	return out, nil
+}
+
+type countingTimes struct {
+	calls int
+	topic string
+}
+
+func (c *countingTimes) OffsetsForTimes(parts []k.TopicPartition, _ int) ([]k.TopicPartition, error) {
+	c.calls++
+	out := make([]k.TopicPartition, len(parts))
+	for n, part := range parts {
+		out[n] = k.TopicPartition{Topic: &c.topic, Partition: part.Partition, Offset: 500}
+		if part.Partition%3 == 0 {
+			out[n].Offset = k.OffsetEnd // No match: start at the read-committed end.
+		}
+	}
+	return out, nil
+}
+
+func TestPositioningBatchesBrokerRequests(t *testing.T) {
+	topic := "orders"
+	hour := int64(3600000)
+	spec := plan.WindowSpec{Lower: &plan.Expression{Now: true, AdjustmentMS: -hour}}
+	clock := &fixedClock{now: time.UnixMilli(10 * hour)}
+	offsets := &countingOffsets{low: 100, high: 1000, stable: 900}
+	times := &countingTimes{topic: topic}
+	s := &Source{offsets: offsets, times: times, inspector: &Inspector{}, committer: &Committer{metadata: make(map[int32]Progress)}, plan: plan.Plan{Source: plan.Endpoint{Name: topic}, Window: spec}, clock: clock, log: slog.New(slog.NewTextHandler(io.Discard, nil)), retentionChecks: make(map[int32]retentionCheck)}
+	savedLower := 5 * hour
+	saved := map[int32]k.TopicPartition{}
+	metadata := map[int32]Progress{}
+	parts := make([]k.TopicPartition, 200)
+	for n := range parts {
+		id := int32(n)
+		parts[n] = k.TopicPartition{Topic: &topic, Partition: id}
+		if n >= 150 {
+			stored := int64(50) // Expired: below the log start.
+			if n >= 175 {
+				stored = 700
+			}
+			saved[id] = k.TopicPartition{Topic: &topic, Partition: id, Offset: k.Offset(stored)}
+			metadata[id] = Progress{Window: &plan.Window{Lower: &savedLower}}
+		}
+	}
+	assignments, err := s.locate(parts, saved, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(offsets.calls) != 3 || times.calls != 1 {
+		t.Fatalf("broker requests: offsets=%v timestamp lookups=%d", offsets.calls, times.calls)
+	}
+	for _, a := range assignments {
+		id := a.Cursor.Partition
+		want := int64(500)
+		switch {
+		case id >= 175:
+			want = 700
+		case id >= 150:
+			want = 100
+		case id%3 == 0:
+			want = 900
+		}
+		if a.Cursor.Position != want || int64(parts[id].Offset) != want {
+			t.Fatalf("partition %d positioned at %d, want %d", id, a.Cursor.Position, want)
+		}
+		if *a.Window.Lower != savedLower {
+			t.Fatalf("partition %d window %d did not adopt the lowest saved window", id, *a.Window.Lower)
+		}
+	}
+}
+
+func TestEmptyAssignmentNeedsNoOffsetRequests(t *testing.T) {
+	offsets := &countingOffsets{}
+	s := &Source{offsets: offsets, clock: &fixedClock{now: time.Unix(100, 0)}}
+	assignments, err := s.locate(nil, nil, nil)
+	if err != nil || len(assignments) != 0 || len(offsets.calls) != 0 {
+		t.Fatalf("empty assignment: assignments=%v requests=%v err=%v", assignments, offsets.calls, err)
+	}
+}
+
+type fixedClock struct{ now time.Time }
+
+func (c *fixedClock) Now() time.Time    { return c.now }
+func (*fixedClock) Sleep(time.Duration) {}

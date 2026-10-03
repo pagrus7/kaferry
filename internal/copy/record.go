@@ -103,6 +103,24 @@ type RecordError struct {
 func (e *RecordError) Error() string { return e.Err.Error() }
 func (e *RecordError) Unwrap() error { return e.Err }
 
+// Recoverable marks a progress-store failure after which releasing a revoked
+// partition only replays work from its last saved position.
+type Recoverable struct{ Err error }
+
+func (e *Recoverable) Error() string { return e.Err.Error() }
+func (e *Recoverable) Unwrap() error { return e.Err }
+
+// Exit carries the exit code implied by the stage a run failed in: conflicts
+// found before intake need operator action (2); anything after intake is 1.
+type Exit struct {
+	Err  error
+	Code int
+}
+
+func (e *Exit) Error() string { return e.Err.Error() }
+func (e *Exit) Unwrap() error { return e.Err }
+func (e *Exit) ExitCode() int { return e.Code }
+
 type Busy struct{}
 
 func (*Busy) Error() string { return "destination queue is full" }

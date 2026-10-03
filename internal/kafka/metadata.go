@@ -193,32 +193,47 @@ func (i *Inspector) CheckMembers(group string) error {
 	}
 	return nil
 }
-func (i *Inspector) End(partition int32) (int64, error) {
+
+// Offsets lists one offset kind for many partitions in a single request.
+func (i *Inspector) Offsets(partitions []int32, spec k.OffsetSpec, readCommitted bool) (map[int32]int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	key := k.TopicPartition{Topic: &i.topic, Partition: partition}
-	result, err := i.admin.ListOffsets(ctx, map[k.TopicPartition]k.OffsetSpec{key: k.LatestOffsetSpec}, k.SetAdminIsolationLevel(k.IsolationLevelReadCommitted))
+	request := make(map[k.TopicPartition]k.OffsetSpec, len(partitions))
+	for _, partition := range partitions {
+		request[k.TopicPartition{Topic: &i.topic, Partition: partition}] = spec
+	}
+	var options []k.ListOffsetsAdminOption
+	if readCommitted {
+		options = append(options, k.SetAdminIsolationLevel(k.IsolationLevelReadCommitted))
+	}
+	result, err := i.admin.ListOffsets(ctx, request, options...)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	info, ok := offsetInfo(result, i.topic, partition)
-	if !ok {
-		return 0, fmt.Errorf("missing read-committed end")
+	infos := partitionInfos(result, i.topic)
+	offsets := make(map[int32]int64, len(partitions))
+	for _, partition := range partitions {
+		info, ok := infos[partition]
+		if !ok {
+			return nil, fmt.Errorf("missing offset result for partition %d", partition)
+		}
+		if info.Error.Code() != k.ErrNoError {
+			return nil, info.Error
+		}
+		offsets[partition] = int64(info.Offset)
 	}
-	if info.Error.Code() != k.ErrNoError {
-		return 0, info.Error
-	}
-	return int64(info.Offset), nil
+	return offsets, nil
 }
 
 // Returned Topic pointers differ from request pointers; compare Kafka identity.
-func offsetInfo(result k.ListOffsetsResult, topic string, partition int32) (k.ListOffsetsResultInfo, bool) {
+func partitionInfos(result k.ListOffsetsResult, topic string) map[int32]k.ListOffsetsResultInfo {
+	infos := make(map[int32]k.ListOffsetsResultInfo, len(result.ResultInfos))
 	for key, info := range result.ResultInfos {
-		if key.Topic != nil && *key.Topic == topic && key.Partition == partition {
-			return info, true
+		if key.Topic != nil && *key.Topic == topic {
+			infos[key.Partition] = info
 		}
 	}
-	return k.ListOffsetsResultInfo{}, false
+	return infos
 }
 func (i *Inspector) Config() map[string]string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
