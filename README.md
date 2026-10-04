@@ -108,13 +108,13 @@ Stable routing preserves source-partition→destination-partition submission ord
 
 At least once: acknowledgment precedes progress; a crash between them duplicates. Revocation releases immediately, possibly duplicating bounded uncommitted work. Later failures retain earlier output. Idempotence covers producer retries, not replay.
 
-Caps include acknowledged/uncommitted work; oversized records proceed alone. Lookahead/native buffers add memory beyond logical caps. Commit each second/half-cap; native queues are bounded. `delivery_timeout` covers producer delivery/queue-full; source outages retry indefinitely; `message.timeout.ms` overrides producer timeout. Signals stop intake, drain writes ten seconds, commit the prefix. Native commits/filesystem/close calls can extend shutdown.
+Caps include acknowledged/uncommitted work; one oversized record proceeds alone. Lookahead/native buffers add memory. Commit each second/half-cap; native queues are bounded. `delivery_timeout` is 1–2147483647 ms for delivery/queue-full. `message.timeout.ms`/`delivery.timeout.ms` override delivery (0: infinite); conflicting aliases fail. Source outages retry indefinitely. Signals stop intake, drain writes ten seconds and commit the prefix. Native commit/filesystem/close can extend shutdown.
 
 Default FAIL. Either `ON_ERROR=SKIP` or specific `ON_MISSING_TIMESTAMP=SKIP` / `ON_REJECTED_TIMESTAMP=SKIP`. Only attributable unsent validation errors skip. Batch rejection, authentication, exhausted recovery, corruption, changed source identity always fail. Change policy and resume the same group to revisit failures.
 
 Ensure payload bytes/Schema Registry IDs are destination-compatible. No remapping. Retention is unchecked; old output may expire immediately. Saved topic IDs detect source recreation; destination recreation is undetected.
 
-Client limits: Kafka header names must exclude NUL (consumption loses its suffix); file input NUL names are rejected. Unpreservable CreateTime timestamps (zero/negative/beyond-nanosecond-range) follow timestamp-error policy. Pre-join checks see IDs/assignments, not unassigned subscriptions. [Compatibility](design/client-compatibility.md).
+Limits: Kafka drops NUL header-name suffixes; file→Kafka rejects NUL names. Invalid CreateTime timestamps (zero/negative/outside nanosecond range) use timestamp-error policy. Pre-join checks cannot see unassigned subscriptions. Native coordinator errors can abort/hang at startup: release blocked. [Compatibility](design/client-compatibility.md).
 
 ## Files and exit codes
 

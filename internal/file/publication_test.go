@@ -64,6 +64,7 @@ func (p *interruptedPublication) SyncDirectory(path string) error {
 }
 
 func TestPublicationFailuresNeverPermitUnownedOutput(t *testing.T) {
+	// Given
 	for _, stage := range []string{"temporary", "header-write", "short-write", "header-sync", "publish", "temporary-unlink", "directory-sync"} {
 		t.Run(stage, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "out.cbor")
@@ -72,7 +73,11 @@ func TestPublicationFailuresNeverPermitUnownedOutput(t *testing.T) {
 				failure = io.ErrShortWrite
 			}
 			fs := &interruptedPublication{stage: stage, failure: failure}
+
+			// When
 			out, err := NewOutput(&publisher{fs: fs}, path, "group", "fp", "", 0, codec(t), 10, logger())
+
+			// Then
 			if out != nil || !errors.Is(err, failure) {
 				t.Fatal("failed publication became writable", out, err)
 			}
@@ -139,6 +144,7 @@ func (w interruptedCheckpoint) SyncDirectory(path string) error {
 }
 
 func TestCrashAtEveryOutputInitializationBoundary(t *testing.T) {
+	// Given
 	if os.Getenv("KFWD_INITIALIZATION_CRASH") == "1" {
 		args := os.Args[len(os.Args)-4:]
 		stage, src, dst, directory := args[0], args[1], args[2], args[3]
@@ -180,7 +186,11 @@ func TestCrashAtEveryOutputInitializationBoundary(t *testing.T) {
 			fixture.Close()
 			child := exec.Command(os.Args[0], "-test.run=^TestCrashAtEveryOutputInitializationBoundary$", "--", stage, src, dst, cpdir)
 			child.Env = append(os.Environ(), "KFWD_INITIALIZATION_CRASH=1")
+
+			// When
 			data, err := child.CombinedOutput()
+
+			// Then
 			if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 99 {
 				t.Fatalf("initialization child: %v %s", err, data)
 			}
@@ -267,10 +277,15 @@ func outputValues(t *testing.T, path string) []string {
 }
 
 func TestZeroFilledOutputTailIsTruncatedOnlyBeyondDurableExtent(t *testing.T) {
+	// Given
 	for _, acknowledged := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unacknowledged", true: "acknowledged"}[acknowledged], func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "out.cbor")
+
+			// When
 			out, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, codec(t), 10, logger())
+
+			// Then
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -321,6 +336,7 @@ func (w blockedRename) Replace(_ string, data []byte) error {
 }
 
 func TestCheckpointRenameFailurePreservesSavedPositionAndPendingFrames(t *testing.T) {
+	// Given
 	dir := t.TempDir()
 	cp, err := NewCheckpoints(dir, "g", DurableWriter{})
 	if err != nil {
@@ -328,8 +344,13 @@ func TestCheckpointRenameFailurePreservesSavedPositionAndPendingFrames(t *testin
 	}
 	defer cp.Close()
 	cp.Initialize(Checkpoint{Version: 1, Fingerprint: "fp", SourceID: "source", Position: 0})
-	if _, err := cp.Save(context.Background(), []core.Cursor{{Partition: 0}}); err != nil {
-		t.Fatal(err)
+
+	// When
+	_, saveErr := cp.Save(context.Background(), []core.Cursor{{Partition: 0}})
+
+	// Then
+	if saveErr != nil {
+		t.Fatal(saveErr)
 	}
 	before, err := os.ReadFile(cp.path)
 	if err != nil {

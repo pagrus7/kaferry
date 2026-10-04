@@ -127,6 +127,7 @@ func enginePlan(source, destination string) plan.Plan {
 func engineLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func TestRuntimeCompositionAcceptsReplacementFactories(t *testing.T) {
+	// Given
 	for _, kinds := range [][2]string{{"TOPIC", "TOPIC"}, {"TOPIC", "FILE"}, {"FILE", "TOPIC"}, {"FILE", "FILE"}} {
 		t.Run(strings.Join(kinds[:], "-"), func(t *testing.T) {
 			f := newEngineFixture()
@@ -142,8 +143,13 @@ func TestRuntimeCompositionAcceptsReplacementFactories(t *testing.T) {
 			if err := graph.Err(); err != nil {
 				t.Fatal(err)
 			}
-			if err := engine.Run(context.Background(), enginePlan(kinds[0], kinds[1]), config.Worker{}); err != nil {
-				t.Fatal(err)
+
+			// When
+			runErr := engine.Run(context.Background(), enginePlan(kinds[0], kinds[1]), config.Worker{})
+
+			// Then
+			if runErr != nil {
+				t.Fatal(runErr)
 			}
 			if kinds[0] == "TOPIC" && kinds[1] == "FILE" && f.source.output != f.output {
 				t.Fatal("Kafka input did not receive durable output")
@@ -173,6 +179,7 @@ func TestRuntimeCompositionAcceptsReplacementFactories(t *testing.T) {
 }
 
 func TestEngineClosesOnlyAcquiredResourcesOnFailure(t *testing.T) {
+	// Given
 	cases := []struct {
 		source, destination, fail string
 		closed                    []string
@@ -195,8 +202,13 @@ func TestEngineClosesOnlyAcquiredResourcesOnFailure(t *testing.T) {
 			f := newEngineFixture()
 			f.fail, f.store = test.fail, f.input
 			engine := newEngine(f, f, f, engineLogger())
-			if err := engine.Run(context.Background(), enginePlan(test.source, test.destination), config.Worker{}); !errors.Is(err, f.failure) {
-				t.Fatal("original failure was lost", err)
+
+			// When
+			runErr := engine.Run(context.Background(), enginePlan(test.source, test.destination), config.Worker{})
+
+			// Then
+			if !errors.Is(runErr, f.failure) {
+				t.Fatal("original failure was lost", runErr)
 			}
 			var closed []string
 			for _, stage := range f.trace {
@@ -212,13 +224,18 @@ func TestEngineClosesOnlyAcquiredResourcesOnFailure(t *testing.T) {
 }
 
 func TestOneOffUsesOneGroupAndDeletesOnlyOnSuccess(t *testing.T) {
+	// Given
 	for _, fail := range []string{"", "run", "delete-checkpoint"} {
 		t.Run("failure-"+fail, func(t *testing.T) {
 			f := newEngineFixture()
 			f.fail = fail
 			p := enginePlan("FILE", "FILE")
 			p.OneOff = true
+
+			// When
 			err := newEngine(f, f, f, engineLogger()).Run(context.Background(), p, config.Worker{})
+
+			// Then
 			if (err != nil) != (fail != "") {
 				t.Fatal("incorrect completion result", err)
 			}
@@ -236,8 +253,13 @@ func TestOneOffUsesOneGroupAndDeletesOnlyOnSuccess(t *testing.T) {
 }
 
 func TestDestinationProgressRequiresConsistentFileIdentity(t *testing.T) {
+	// Given
 	saved := map[int32]kafka.Progress{0: {FileID: "archive", Extent: 100}, 1: {FileID: "archive", Extent: 200}}
+
+	// When
 	progress, err := destinationProgress(saved)
+
+	// Then
 	if err != nil || progress != (file.DestinationProgress{ID: "archive", Extent: 200, Exists: true}) {
 		t.Fatal("durable extent was lost", progress, err)
 	}

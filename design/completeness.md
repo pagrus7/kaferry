@@ -87,3 +87,21 @@ Maps `decisions.md` and `grammar.md` to implementation and executable evidence. 
 ## Accepted boundaries
 
 No transformation, Schema Registry remapping, topic auto-creation, external coordinator, done markers, segmented files or viewer. Completion may omit records after a timestamp cutoff; concurrent relative windows may differ. Unassigned subscriptions, deletion during consumption and destination recreation are not fully detectable. File locks are local. Native commit/close and filesystem calls can exceed the write-drain budget. These are recorded design limits, not unchecked claims of complete coverage.
+
+## Review regressions and test structure
+
+Functional `Test*` scenarios use Given/When/Then phases, with the existing assertions retained; fuzzers and benchmarks keep their native forms. No BDD framework was added.
+
+| Boundary | Evidence |
+| --- | --- |
+| Destination-derived size ceiling; deterministic native timeout aliases | `TestProducerSizeLimitUsesDestinationAndExplicitCeiling`, `TestProducerTimeoutAliasesHaveDeterministicPrecedence`, `TestCopyDestinationAcceptableRecordAboveNativeDefault` |
+| Independent legacy/directional timestamp fallback | `TestTimestampLimitsResolveDirectionsIndependently`, `TestLegacyTimestampLimitSkipsOnlyRejectedRecord` |
+| Saved/adopted mixed NOW/literal windows take precedence over fresh resolution | `TestSavedMixedWindowSurvivesClockAdvanceAndAdoption`, `TestFileSavedMixedWindowSurvivesClockAdvance` |
+| Runtime watermark/DNS retries; one watermark query per poll iteration; terminal errors fail | `TestWatermarkErrorsAndDNSRespectRuntimeRetryClassification`, `TestTipSamplingRetriesWithoutStartingWaitOrBlockingOtherPartitions`, `TestTipSamplingPermanentFailuresStopImmediately`, `TestTipSamplingBackoffCapsResetsAndLimitsLogs` |
+| Resume newly assigned partitions; retained pauses survive cooperative rebalance | `TestCooperativeReassignmentResumesOnlyNewPartitions`, `TestReassignedPartitionResumesWithFreshRunnerState` |
+| Clean-run churn qualification (3 cycles); fail-fast rule retained | `TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits` (`make fault`) |
+| Physical short reads fail under SKIP; device errors preserve cause | `TestPhysicalShortReadsCannotBecomeSnapshotEOF`, `TestOpenSourceTruncationFailsUnderSkipPolicy`, `TestFrameReadPreservesNonEOFFailure` |
+| Symbol-only SQL comparison operators; delivery timeout fits native range | `TestInvalidStatements`, `TestDeliveryTimeoutFitsNativeMillisecondRange` |
+| CBOR representation stays in file adapter; wire bytes unchanged | `TestProvenanceArchiveWireBytesAreStable` |
+
+Runtime assignment progress now uses consumer `Committed` (including unowned partitions and commit metadata), with metadata-only source identity discovery. `TestAssignmentReadsCommittedMetadataThroughConsumer` independently covers success, missing results, query/per-partition failure and foreign metadata. Startup admin coordinator operations retain the documented native-client release blocker.

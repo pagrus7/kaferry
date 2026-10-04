@@ -18,6 +18,7 @@ import (
 )
 
 func TestLogAppendTimeDestinationRestampsUnpreservableValues(t *testing.T) {
+	// Given
 	a := admin(t)
 	dst := topic(t, a, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -42,8 +43,12 @@ func TestLogAppendTimeDestinationRestampsUnpreservableValues(t *testing.T) {
 	}
 	o.Close()
 	before := time.Now().Add(-time.Second)
+
+	// When
 	execute(t, fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='%s-restore')", dst, path, dst), configuration(t))
 	c := consumer(t, dst+"-reader")
+
+	// Then
 	if err := c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}); err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +61,7 @@ func TestLogAppendTimeDestinationRestampsUnpreservableValues(t *testing.T) {
 }
 
 func TestTimestampLookupAcrossSegmentsAndPreEpochBound(t *testing.T) {
+	// Given
 	a := admin(t)
 	src := topic(t, a, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -83,8 +89,12 @@ func TestTimestampLookupAcrossSegmentsAndPreEpochBound(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "out.cbor")
 			statement := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s-%s',CUTOFF=INTERVAL '0' SECOND)", path, src, test.lower, stamp.Add(time.Second).Format(time.RFC3339Nano), src, test.name)
+
+			// When
 			execute(t, statement, cfg)
 			records := archiveRecords(t, path)
+
+			// Then
 			if len(records) != test.count {
 				t.Fatalf("timestamp lookup omitted matching records: got %d want %d", len(records), test.count)
 			}

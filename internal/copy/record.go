@@ -1,4 +1,4 @@
-// Package copy contains transport-independent delivery and progress logic.
+// Package copy runs delivery and progress logic through source and sink ports.
 package copy
 
 import (
@@ -9,21 +9,21 @@ import (
 )
 
 type Header struct {
-	Name  string `cbor:"name"`
-	Value []byte `cbor:"value"`
+	Name  string
+	Value []byte
 }
 type Provenance struct {
-	Topic     string `cbor:"topic"`
-	Partition int32  `cbor:"partition"`
-	Offset    int64  `cbor:"offset"`
+	Topic     string
+	Partition int32
+	Offset    int64
 }
 type Record struct {
-	Key           []byte      `cbor:"key"`
-	Value         []byte      `cbor:"value"`
-	Headers       []Header    `cbor:"headers"`
-	TimestampMS   *int64      `cbor:"timestamp_ms"`
-	TimestampType string      `cbor:"timestamp_type"`
-	Source        *Provenance `cbor:"source,omitempty"`
+	Key           []byte
+	Value         []byte
+	Headers       []Header
+	TimestampMS   *int64
+	TimestampType string
+	Source        *Provenance
 }
 
 func (r Record) Size() int64 {
@@ -103,8 +103,9 @@ type RecordError struct {
 func (e *RecordError) Error() string { return e.Err.Error() }
 func (e *RecordError) Unwrap() error { return e.Err }
 
-// Recoverable marks a progress-store failure after which releasing a revoked
-// partition only replays work from its last saved position.
+// Recoverable marks a classified transient operation error. The caller decides
+// whether to retry a tip query or release revoked progress for replay; initial
+// and periodic commit failures remain terminal.
 type Recoverable struct{ Err error }
 
 func (e *Recoverable) Error() string { return e.Err.Error() }

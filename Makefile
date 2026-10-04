@@ -18,7 +18,7 @@ broker-down:
 integration:
 	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_TEST_DEST_BROKERS=$(KAFKA_TEST_DEST_BROKERS) $(GO) test -race -tags=integration ./...
 fault:
-	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_FAULT_CONTAINER=kafka-fwd2-compat-kafka-1 $(GO) test -tags=integration,fault -run 'TestBlockingCommit|TestAssignmentLost' -v ./tests/compat
+	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_FAULT_CONTAINER=kafka-fwd2-compat-kafka-1 $(GO) test -tags=integration,fault -run 'TestBlockingCommit|TestAssignmentLost|TestRebalanceChurn' -v ./tests/compat
 load: build
 	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KFWD_TEST_BINARY=$(CURDIR)/bin/kafka-fwd2 $(GO) test -tags=integration,load -run TestLoadBoundedKafkaCopy -v ./tests/compat
 soak: build

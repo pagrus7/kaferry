@@ -78,6 +78,7 @@ func committedPartitions(t *testing.T, a *k.AdminClient, group, topic string, co
 }
 
 func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
+	// Given
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
 	p := producer(t, nil)
@@ -106,6 +107,7 @@ func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
+	waitTopicReady(t, a, src, 1)
 	replacement := producer(t, nil)
 	for range 2 {
 		publish(t, replacement, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: []byte("replacement"), Timestamp: time.Now()})
@@ -115,8 +117,13 @@ func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
 		t.Fatal("restore old progress", result, err)
 	}
 	var output bytes.Buffer
-	if code := app.Execute(ctx, []string{"run", "-e", statement}, nil, &output); code != 2 || !strings.Contains(output.String(), "source topic identity mismatch") {
-		t.Fatalf("recreation was not rejected before intake: exit=%d %s", code, output.String())
+
+	// When
+	executeCode := app.Execute(ctx, []string{"run", "-e", statement}, nil, &output)
+
+	// Then
+	if executeCode != 2 || !strings.Contains(output.String(), "source topic identity mismatch") {
+		t.Fatalf("recreation was not rejected before intake: exit=%d %s", executeCode, output.String())
 	}
 	description, err := a.DescribeConsumerGroups(ctx, []string{group})
 	if err != nil || len(description.ConsumerGroupDescriptions) != 1 || len(description.ConsumerGroupDescriptions[0].Members) != 0 {
@@ -130,6 +137,7 @@ func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
 }
 
 func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
+	// Given
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
 	group := src + "-excess-workers"
@@ -150,6 +158,8 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 	results := make(chan workerResult, 3)
 	for range 3 {
 		go func() {
+
+			// When
 			results <- loggedWorker(ctx, statement, cfg)
 		}()
 	}
@@ -157,6 +167,8 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 	for range 2 {
 		select {
 		case result := <-results:
+
+			// Then
 			if result.code != 0 || !strings.Contains(result.detail, "local idle exit") {
 				t.Fatalf("standby failed to idle-exit: %+v", result)
 			}
@@ -203,6 +215,7 @@ func relativeWindows(t *testing.T, parts []k.TopicPartition) map[int32]adapter.P
 }
 
 func TestConcurrentNowWindowsPersistAcrossWorkersAndRestart(t *testing.T) {
+	// Given
 	a := admin(t)
 	src, dst := topic(t, a, 2), topic(t, a, 1)
 	group := src + "-now-workers"
@@ -212,6 +225,8 @@ func TestConcurrentNowWindowsPersistAcrossWorkersAndRestart(t *testing.T) {
 	results := make(chan workerResult, 2)
 	for range 2 {
 		go func() {
+
+			// When
 			results <- loggedWorker(ctx, statement, "")
 		}()
 	}
@@ -225,6 +240,8 @@ func TestConcurrentNowWindowsPersistAcrossWorkersAndRestart(t *testing.T) {
 	for range 2 {
 		select {
 		case result := <-results:
+
+			// Then
 			if result.code != 0 || !strings.Contains(result.detail, "partition window positioned") {
 				t.Fatal("relative worker failed or did not log its windows", result)
 			}
@@ -259,6 +276,7 @@ func TestConcurrentNowWindowsPersistAcrossWorkersAndRestart(t *testing.T) {
 }
 
 func TestMissingTimestampWithoutFilterUsesProducerClockAndCountsIt(t *testing.T) {
+	// Given
 	a := admin(t)
 	dst := topic(t, a, 1)
 	path := filepath.Join(t.TempDir(), "source.cbor")
@@ -279,7 +297,11 @@ func TestMissingTimestampWithoutFilterUsesProducerClockAndCountsIt(t *testing.T)
 	out.Close()
 	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='unstamped')", dst, path)
 	before := time.Now().UnixMilli()
+
+	// When
 	result := loggedWorker(context.Background(), statement, configuration(t))
+
+	// Then
 	if result.code != 0 || !strings.Contains(result.detail, `"msg":"records received producer timestamps","count":1`) {
 		t.Fatal("producer timestamp was not counted and warned about", result)
 	}
@@ -322,6 +344,7 @@ func (p *crashingProducer) Events() chan k.Event {
 }
 
 func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
+	// Given
 	if os.Getenv("KFWD_KAFKA_CRASH_HELPER") == "1" {
 		var command app.Command
 		graph := fx.New(fx.NopLogger, app.RuntimeModules, fx.Decorate(func(clients adapter.Clients) adapter.Clients {
@@ -359,7 +382,11 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 	defer cancel()
 	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss$", "--", statement, cfg)
 	child.Env = append(os.Environ(), "KFWD_KAFKA_CRASH_HELPER=1")
+
+	// When
 	data, err := child.CombinedOutput()
+
+	// Then
 	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 99 {
 		t.Fatalf("crash helper: %v %s", err, data)
 	}
@@ -394,6 +421,7 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 }
 
 func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing.T) {
+	// Given
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
 	group := src + "-running-retention"
@@ -403,8 +431,13 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 	cmd := exec.CommandContext(ctx, testBinary(t), "run", "-e", statement)
 	var output bytes.Buffer
 	cmd.Stderr = &output
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
+
+	// When
+	startErr := cmd.Start()
+
+	// Then
+	if startErr != nil {
+		t.Fatal(startErr)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()

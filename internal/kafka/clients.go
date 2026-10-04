@@ -27,6 +27,7 @@ type ConsumerClient interface {
 	poller
 	offsetCommitter
 	TimeReader
+	Committed([]k.TopicPartition, int) ([]k.TopicPartition, error)
 	Subscribe(string, k.RebalanceCb) error
 	IncrementalAssign([]k.TopicPartition) error
 	IncrementalUnassign([]k.TopicPartition) error

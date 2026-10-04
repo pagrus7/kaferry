@@ -22,23 +22,34 @@ func (*failingProgress) Work(int32) (int, int64) { return 0, 0 }
 func (*failingProgress) HasProgress(int32) bool  { return false }
 func (*failingProgress) InFlight() bool          { return false }
 func TestRunnerStopsBeforePublishingWhenProgressRejectsInput(t *testing.T) {
+	// Given
 	r, source, sink, store, _ := fixture(t)
 	progress := &failingProgress{failure: errors.New("invalid cursor")}
 	r.tracker = progress
 	input := incoming(0, 0, 1)
 	source.events = []Event{{Input: &input}}
-	if err := r.Run(context.Background()); !errors.Is(err, progress.failure) {
-		t.Fatal("progress failure lost", err)
+
+	// When
+	runErr := r.Run(context.Background())
+
+	// Then
+	if !errors.Is(runErr, progress.failure) {
+		t.Fatal("progress failure lost", runErr)
 	}
 	if len(progress.observed) != 1 || len(sink.writes) != 0 || len(store.saves) != 0 {
 		t.Fatal("rejected input was published or committed")
 	}
 }
 func TestProgressFactoryDoesNotShareWorkBetweenQueries(t *testing.T) {
+	// Given
 	factory := NewProgressFactory()
 	first, second := factory.New(), factory.New()
 	first.Assign(Cursor{Partition: 0, Position: 5})
+
+	// When
 	token, err := first.Observe(Cursor{Partition: 0, Position: 5}, 6, 100, false)
+
+	// Then
 	if err != nil {
 		t.Fatal(err)
 	}

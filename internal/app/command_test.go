@@ -55,12 +55,17 @@ func (m *commandMocks) Run(ctx context.Context, p plan.Plan, worker config.Worke
 	return m.stage("execute")
 }
 func TestCommandPlansBeforeExecutingAndStopsOnFailure(t *testing.T) {
+	// Given
 	stages := []string{"parse", "load", "build", "execute"}
 	for index, fail := range append(append([]string{}, stages...), "") {
 		t.Run("failure-"+fail, func(t *testing.T) {
 			m := &commandMocks{t: t, fail: fail, failure: errors.New("failure"), ctx: context.Background(), cfg: config.Defaults("home"), ast: sql.Statement{Source: sql.Endpoint{Name: "input"}}, plan: enginePlan("FILE", "FILE")}
+
+			// When
 			err := newCommand(m, m, m, m).Run(m.ctx, "statement", "config.toml")
 			wanted := stages
+
+			// Then
 			if fail != "" {
 				wanted = stages[:index+1]
 				if !errors.Is(err, m.failure) {
@@ -83,11 +88,17 @@ func TestCommandPlansBeforeExecutingAndStopsOnFailure(t *testing.T) {
 	}
 }
 func TestCommandPreservesExecutionExitCode(t *testing.T) {
+	// Given
 	for _, code := range []int{1, 2} {
 		failure := &core.Exit{Code: code, Err: errors.New("execution failure")}
 		m := &commandMocks{t: t, fail: "execute", failure: failure, ctx: context.Background()}
-		if err := newCommand(m, m, m, m).Run(m.ctx, "statement", "config.toml"); err != failure {
-			t.Fatal("execution classification lost", err)
+
+		// When
+		runErr := newCommand(m, m, m, m).Run(m.ctx, "statement", "config.toml")
+
+		// Then
+		if runErr != failure {
+			t.Fatal("execution classification lost", runErr)
 		}
 	}
 }
@@ -119,6 +130,7 @@ func (s assignmentSource) Start(lifecycle core.Lifecycle) error {
 	return s.failure
 }
 func TestRunnerFactoryInjectsFreshProgressPerExecution(t *testing.T) {
+	// Given
 	progress := &mockProgressFactory{}
 	factory := newRunnerFactory(core.RealClock{}, engineLogger(), progress)
 	stop := errors.New("stop after assignment")
@@ -128,8 +140,13 @@ func TestRunnerFactoryInjectsFreshProgressPerExecution(t *testing.T) {
 	if len(progress.made) != 2 || progress.made[0] == progress.made[1] {
 		t.Fatal("progress state shared between executions")
 	}
-	if err := first.Run(context.Background()); !errors.Is(err, stop) {
-		t.Fatal(err)
+
+	// When
+	runErr := first.Run(context.Background())
+
+	// Then
+	if !errors.Is(runErr, stop) {
+		t.Fatal(runErr)
 	}
 	if progress.made[0].assignments != 1 || progress.made[1].assignments != 0 {
 		t.Fatal("first execution used wrong tracker")

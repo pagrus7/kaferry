@@ -9,6 +9,7 @@ import (
 )
 
 func TestPlanningComposition(t *testing.T) {
+	// Given
 	var parser sql.Parser
 	var planner plan.Builder
 	var loader config.Reader
@@ -24,7 +25,12 @@ func TestPlanningComposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := planner.Build(statement, cfg.Connections); err != nil {
-		t.Fatal(err)
+
+	// When
+	_, buildErr := planner.Build(statement, cfg.Connections)
+
+	// Then
+	if buildErr != nil {
+		t.Fatal(buildErr)
 	}
 }

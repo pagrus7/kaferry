@@ -11,11 +11,16 @@ import (
 )
 
 func TestSourceCheckpointDetectsChangedLastFrameAndShortenedSource(t *testing.T) {
+	// Given
 	for _, change := range []string{"last-frame", "shortened"} {
 		t.Run(change, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "source.cbor")
+
+			// When
 			out, err := NewOutput(NewPublisher(), path, "fixture", "fixture", "", 0, codec(t), 10, logger())
+
+			// Then
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -73,8 +78,14 @@ func TestSourceCheckpointDetectsChangedLastFrameAndShortenedSource(t *testing.T)
 }
 
 func TestOutputRequiresExistingIdentityAndFrameBoundaryExtent(t *testing.T) {
+	// Given
 	path := filepath.Join(t.TempDir(), "out.cbor")
-	if out, err := NewOutput(NewPublisher(), path, "g", "fp", "missing-id", 100, codec(t), 10, logger()); out != nil || err == nil {
+
+	// When
+	newOutputOut, newOutputErr := NewOutput(NewPublisher(), path, "g", "fp", "missing-id", 100, codec(t), 10, logger())
+
+	// Then
+	if newOutputOut != nil || newOutputErr == nil {
 		t.Fatal("missing output with stored progress was recreated")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -114,6 +125,7 @@ func (c simultaneousHeader) EncodeHeader(header Header) ([]byte, error) {
 }
 
 func TestSimultaneousOutputCreatorsCannotReplaceWinner(t *testing.T) {
+	// Given
 	path := filepath.Join(t.TempDir(), "out.cbor")
 	ready, release := make(chan struct{}, 2), make(chan struct{})
 	type result struct {
@@ -123,6 +135,8 @@ func TestSimultaneousOutputCreatorsCannotReplaceWinner(t *testing.T) {
 	results := make(chan result, 2)
 	for range 2 {
 		go func() {
+
+			// When
 			out, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, simultaneousHeader{codec(t), ready, release}, 10, logger())
 			results <- result{out, err}
 		}()
@@ -140,6 +154,8 @@ func TestSimultaneousOutputCreatorsCannotReplaceWinner(t *testing.T) {
 		defer result.out.Close()
 		id, extent := result.out.DurableOutput()
 		f, err := os.Open(path)
+
+		// Then
 		if err != nil {
 			t.Fatal(err)
 		}

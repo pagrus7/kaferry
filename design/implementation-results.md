@@ -172,3 +172,50 @@ Stripped binaries: macOS ARM64 15,075,170 bytes; Linux ARM64 15,273,376; Linux A
 Hosted CI needs a Git remote. Additional broker versions, SCRAM/mTLS/other authentication providers, encrypted broker/controller traffic, physical AMD64 hosts, hours-long/high-latency load and realistic retention need deployment-specific qualification. Recorded timestamp/subscription/identity/locking/shutdown limits remain accepted boundaries.
 
 Reproduce: `make check build`; `make broker integration`; `make fault load soak qualification fuzz benchmark metrics`; `make broker-down`. Heavy suites run on scheduled/manual CI; unit and broker integration gates remain on every change. Qualification owns only `kafka-fwd2-qualification` on ports 41092/42092/43092; its public fixture credentials are never production defaults.
+
+## Review fixes — 2026-10-04
+
+Twelve agreed review items are implemented without changing fail-fast commit policy or query semantics. File wire tags now stay inside the archive adapter. Focused regression tests reproduce the former failures against the previous commit; the corrected implementation passes. Four new real-broker regressions (large records, legacy timestamp limits, paused cooperative reassignment and repeated worker churn) passed with the race detector in 45.386 s. Final evidence is recorded below.
+
+All functional tests now have Given/When/Then phases using standard Go tests. Existing assertions and test names are retained; regression cases add boundary coverage. No runtime or test-framework dependency was added.
+
+### Extended soak fixture
+
+The new soak uses 1024 worker/256 partition record caps (default byte caps), a controlled stream, 2048-record bursts once/minute, and optional one-second destination-broker stalls once/minute. This differs from the earlier default-cap workload. A 30-minute cross-cluster run passed: 1,172,464 records, 30 bursts/30 stalls, no loss or duplicates; peak 1024 uncommitted records/4,560,756 logical bytes, peak RSS 91.4 MiB, warm/final median RSS 59.4/85.8 MiB, maximum sampled commit lag 1731 records and shutdown 276 ms. The controlled 651 records/s is not maximum throughput or proof of long-term leak freedom. The long soak used an intermediate binary before wire relocation, retry refinements and consumer-based assignment progress. Its Kafka→Kafka follow workload did not exercise archive encoding or bounded-tip retries; the final assignment path was subsequently verified by ownership/NOW/restart/churn suites. This is not final-candidate long-soak qualification.
+
+### Native dependency finding
+
+The first corrected fresh security run aborted in librdkafka's coordinator-admin error path. [Client limits](client-compatibility.md#native-coordinator-timeout-defect-observed--2026-10-04) records the reproduction, upstream report and release blocker. Priming the disposable fixture's coordinators is a test prerequisite, not a production remedy. No claim of complete production qualification follows from passing warm security/failover tests.
+
+## Candidate verification after fixes — 2026-10-04
+
+Candidate `v0.1.0-rc.2`: reviewed with Claude Code **Opus 5.5, high effort**. Agreement covers 18 findings/dispositions; the native startup release blocker remains explicit. Functional tests use standard Go Given/When/Then phases (144 functions), retaining assertions and adding independent mocked regressions. No runtime dependency was added or substituted.
+
+| Final gate | Evidence |
+| --- | --- |
+| macOS ARM64 / Go 1.27.1 | Full vet/unit/component race and Kafka integration race pass; compat 105.328 s |
+| Linux ARM64 / Go 1.26 | Same gates including independent destination cluster pass; compat 87.561 s; stripped build succeeds |
+| Linux AMD64 / Go 1.26, emulated | Same gates pass; compat 93.749 s; stripped build succeeds |
+| Fault/churn | Three join/leave cycles retain all 288 records and both offset144 commits; paused commit/ownership-loss probes pass; suite41.112 s |
+| TLS/SASL/ACL/failover | Fresh disposable fixture with Java coordinator warmup and copier ACL readiness passes30.560 s; resources removed |
+| Fuzz | Parser72,752; window518,956; framing367,292; decoder341,894 executions; no failures. These unchanged parser/codec paths preceded the final assignment-only mitigation |
+| Packaging | Formatting, diff, shell syntax and BDD phase audit pass; user docs9,994 Unicode characters |
+| Reproducibility | Empty-cache build byte-identical; macOS SHA256 `ac39f573a3a6cd3906d722050563c051263a53be3e020b01ebac9e044084e0d7` |
+| Hosted CI | Unrun: no Git remote configured |
+
+Final binary load (local shared brokers, four source/five destination partitions):
+
+| Workload | Records | Elapsed | Records/s | Child CPU | Peak RSS | Peak uncommitted records / logical bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Default bounded copy | 16,000 | 2.404 s | 6,656 | 259 ms | 121.0 MiB | 9,280 / 28,851,286 |
+| 32/8 record caps,100ms linger | 128 | 4.685 s | 27 | 78 ms | 33.0 MiB | 32 / 43,082 |
+
+Both verified fidelity, no loss/duplicates and configured caps. Rates are local measurements, not maximum throughput guarantees. A later intermediate-binary two-minute cross-cluster soak passed73,632 records with two bursts/two stalls, RSS66.7MiB peak and61.6/63.0MiB warm/final medians, offset lag512, shutdown333ms, caps894records/2,985,975bytes; it preceded the final assignment mitigation.
+
+Production Go4,769 lines; test Go8,247 (includes BDD headings and fixture/regression additions). Maximum production cyclomatic complexity18. Stripped binaries: macOS ARM64 15,091,714 bytes; Linux ARM64 15,273,376; Linux AMD64 16,924,408. No additional framework/component layer was introduced.
+
+### Remaining blocker and recorded failures
+
+The initial Linux ARM64 regressions raced newly created topic visibility; corrected readiness passed the final suite. Fresh qualification1 hung during native admin cleanup; qualification2 aborted in the pinned native coordinator path; qualification3 passed restricted copying/auth failures but failed failover startup before copier ACL readiness. Qualification4 passed after fixture corrections. Failed evidence is retained locally; a warm fixture does not repair the native defect.
+
+[Client compatibility](client-compatibility.md#native-coordinator-timeout-defect-observed--2026-10-04) documents startup coordinator-admin abort/hang exposure. Runtime assignments now use consumer `Committed`, preserving identity/window/metadata checks while removing that admin path. Production release remains blocked pending a fixed official native release or a user-approved, independently qualified native patch. Broker/auth/platform/workload qualification and hosted CI limits recorded above still apply.

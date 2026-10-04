@@ -31,16 +31,30 @@ func build(t *testing.T, input string) Plan {
 }
 
 func TestDocumentedExamples(t *testing.T) {
+	// Given
 	data, err := os.ReadFile("../../design/grammar.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, part := range strings.Split(string(data), "```sql\n")[1:] {
-		build(t, strings.SplitN(part, "```", 2)[0])
+		statement, err := sql.NewParser().Parse(strings.SplitN(part, "```", 2)[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// When planning a documented example with its connection profiles.
+		_, err = NewPlanner(environment{"DR_PASSWORD": "secret"}).Build(statement, profiles)
+
+		// Then the example is valid under the documented rules.
+		if err != nil {
+			t.Fatal(err)
+		}
+
 	}
 }
 
 func TestInvalidPlanning(t *testing.T) {
+	// Given
 	cases := []string{
 		"INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' OPTIONS(GROUP='g')",
 		"INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' WHERE RECORD_TIMESTAMP >= NOW() OPTIONS(GROUP='g', START=EARLIEST)",
@@ -61,8 +75,12 @@ func TestInvalidPlanning(t *testing.T) {
 	for i, input := range cases {
 		statement, err := sql.NewParser().Parse(input)
 		if err == nil {
+
+			// When
 			_, err = NewPlanner(environment{}).Build(statement, profiles)
 		}
+
+		// Then invalid syntax or semantics are rejected.
 		if err == nil {
 			t.Errorf("case %d accepted invalid plan", i)
 		}
@@ -70,6 +88,7 @@ func TestInvalidPlanning(t *testing.T) {
 }
 
 func TestWindowBoundaries(t *testing.T) {
+	// Given
 	p := build(t, "INSERT INTO FILE cbor('b') SELECT * FROM FILE cbor('a') WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z' AND TIMESTAMP '2026-10-01T09:30:00Z' OPTIONS(GROUP=ONE_OFF)")
 	w, err := p.Window.Resolve(time.Time{})
 	if err != nil {
@@ -81,8 +100,13 @@ func TestWindowBoundaries(t *testing.T) {
 		timestamp int64
 		wanted    bool
 	}{{lo - 1, false}, {lo, true}, {hi, true}, {hi + 1, false}} {
-		if got := w.Contains(test.timestamp); got != test.wanted {
-			t.Errorf("Contains(%d) = %v", test.timestamp, got)
+
+		// When
+		containsGot := w.Contains(test.timestamp)
+
+		// Then
+		if containsGot != test.wanted {
+			t.Errorf("Contains(%d) = %v", test.timestamp, containsGot)
 		}
 	}
 	if !p.OneOff {
@@ -91,12 +115,17 @@ func TestWindowBoundaries(t *testing.T) {
 }
 
 func TestNowRemainsSymbolicAndUsesOneInstant(t *testing.T) {
+	// Given
 	p := build(t, "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' WHERE RECORD_TIMESTAMP > NOW() - INTERVAL '1' HOUR AND RECORD_TIMESTAMP <= NOW() OPTIONS(GROUP='g', CUTOFF=INTERVAL '0' SECOND)")
 	if !p.Window.Relative() || p.CutoffMS != 0 {
 		t.Fatal("relative window or explicit zero cutoff lost")
 	}
 	now := time.Date(2026, 10, 3, 0, 0, 0, 123000000, time.UTC)
+
+	// When
 	w, err := p.Window.Resolve(now)
+
+	// Then
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +135,7 @@ func TestNowRemainsSymbolicAndUsesOneInstant(t *testing.T) {
 }
 
 func TestInvalidTimeExpressions(t *testing.T) {
+	// Given
 	filters := []string{
 		"RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00'",
 		"RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00.0000Z'",
@@ -122,7 +152,12 @@ func TestInvalidTimeExpressions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := NewPlanner(environment{}).Build(statement, nil); err == nil {
+
+		// When
+		_, buildErr := NewPlanner(environment{}).Build(statement, nil)
+
+		// Then
+		if buildErr == nil {
 			t.Errorf("accepted invalid filter: %s", filter)
 		}
 	}
@@ -135,12 +170,17 @@ func TestInvalidTimeExpressions(t *testing.T) {
 }
 
 func TestInlinePrecedenceAndSecretRedaction(t *testing.T) {
+	// Given
 	statement, err := sql.NewParser().Parse("WITH CONNECTION prod AS ('bootstrap.servers'='override:9092', 'sasl.password'=ENV('PASSWORD')) INSERT INTO TOPIC 'b@prod' SELECT * FROM TOPIC 'a@prod' OPTIONS(GROUP='g', START=EARLIEST)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	secret := "unique-secret-marker"
+
+	// When
 	p, err := NewPlanner(environment{"PASSWORD": secret}).Build(statement, profiles)
+
+	// Then
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,9 +204,14 @@ func TestInlinePrecedenceAndSecretRedaction(t *testing.T) {
 }
 
 func TestFingerprintIdentity(t *testing.T) {
+	// Given
 	base := "INSERT INTO TOPIC 'b@staging' SELECT * FROM TOPIC 'a@prod' WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS(GROUP='g')"
 	p := build(t, base)
+
+	// When
 	want, err := p.Fingerprint("source-cluster", "destination-cluster")
+
+	// Then
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,6 +259,7 @@ func FuzzWindowNormalization(f *testing.F) {
 }
 
 func TestStrictRFC3339AndPersistedWindow(t *testing.T) {
+	// Given
 	for _, literal := range []string{"2026-10-01T9:00:00Z", "2026-10-01T09:00:00+24:00", "2026-10-01T09:00:00+01:60", "2026-10-01T09:00:00.0000Z"} {
 		if _, err := expression(sql.Time{Literal: literal}); err == nil {
 			t.Fatal("accepted relaxed timestamp", literal)
@@ -222,7 +268,12 @@ func TestStrictRFC3339AndPersistedWindow(t *testing.T) {
 	lo, hi := int64(100), int64(200)
 	spec := WindowSpec{Lower: &Expression{LiteralMS: lo}, Upper: &Expression{Now: true}}
 	for _, window := range []Window{{Upper: &hi}, {Lower: &lo}, {Lower: &hi, Upper: &lo}} {
-		if err := spec.ValidateStored(window, 0); err == nil {
+
+		// When
+		validateStoredErr := spec.ValidateStored(window, 0)
+
+		// Then
+		if validateStoredErr == nil {
 			t.Fatal("accepted incompatible persisted window")
 		}
 	}

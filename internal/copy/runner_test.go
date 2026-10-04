@@ -107,6 +107,7 @@ func incoming(id int32, position int64, size int) Input {
 }
 
 func TestRunnerDoesNotCommitPastFailedWrite(t *testing.T) {
+	// Given
 	r, s, d, p, _ := fixture(t)
 	for i := range 3 {
 		in := incoming(0, int64(i), 1)
@@ -122,7 +123,12 @@ func TestRunnerDoesNotCommitPastFailedWrite(t *testing.T) {
 		}
 		return nil
 	}
-	if err := r.Run(context.Background()); err == nil {
+
+	// When
+	runErr := r.Run(context.Background())
+
+	// Then
+	if runErr == nil {
 		t.Fatal("failed write was accepted")
 	}
 	if len(p.saves) != 1 || p.saves[0][0].Position != 1 {
@@ -131,12 +137,18 @@ func TestRunnerDoesNotCommitPastFailedWrite(t *testing.T) {
 }
 
 func TestRunnerCapsIncludeConfirmedWorkAndOversizedAlone(t *testing.T) {
+	// Given
 	r, _, d, p, _ := fixture(t)
 	r.limits.ByteCap = 150
 	r.limits.PartitionByteCap = 150
 	_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}}})
-	if err := r.input(incoming(0, 0, 30)); err != nil {
-		t.Fatal(err)
+
+	// When
+	inputErr := r.input(incoming(0, 0, 30))
+
+	// Then
+	if inputErr != nil {
+		t.Fatal(inputErr)
 	}
 	d.reports <- Delivery{Token: d.writes[0]}
 	_ = r.deliveries()
@@ -165,6 +177,7 @@ func TestRunnerCapsIncludeConfirmedWorkAndOversizedAlone(t *testing.T) {
 }
 
 func TestRunnerQueueFullPreservesSubmissionOrder(t *testing.T) {
+	// Given
 	r, s, d, _, _ := fixture(t)
 	in := incoming(0, 0, 1)
 	s.events = []Event{{Input: &in}, {EOF: &Cursor{0, 1}}}
@@ -177,8 +190,13 @@ func TestRunnerQueueFullPreservesSubmissionOrder(t *testing.T) {
 		d.reports <- Delivery{Token: tok}
 		return nil
 	}
-	if err := r.Run(context.Background()); err != nil {
-		t.Fatal(err)
+
+	// When
+	runErr := r.Run(context.Background())
+
+	// Then
+	if runErr != nil {
+		t.Fatal(runErr)
 	}
 	if tries != 3 || len(d.writes) != 1 {
 		t.Fatalf("tries=%d submitted=%d", tries, len(d.writes))
@@ -186,14 +204,20 @@ func TestRunnerQueueFullPreservesSubmissionOrder(t *testing.T) {
 }
 
 func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
+	// Given
 	for _, lost := range []bool{false, true} {
 		t.Run(map[bool]string{false: "revoked", true: "lost"}[lost], func(t *testing.T) {
 			r, _, d, p, _ := fixture(t)
 			_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}}})
 			_ = r.input(incoming(0, 0, 1))
 			old := d.writes[0]
-			if err := r.Revoke([]int32{0}, lost); err != nil {
-				t.Fatal(err)
+
+			// When
+			revokeErr := r.Revoke([]int32{0}, lost)
+
+			// Then
+			if revokeErr != nil {
+				t.Fatal(revokeErr)
 			}
 			_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}}})
 			_ = r.input(incoming(0, 0, 1))
@@ -218,6 +242,7 @@ func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 }
 
 func TestPartialCommitReleasesSuccessfulPartitionsOnly(t *testing.T) {
+	// Given
 	r, _, d, p, _ := fixture(t)
 	_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}}, {Cursor: Cursor{1, 0}}})
 	for _, id := range []int32{0, 1} {
@@ -228,7 +253,12 @@ func TestPartialCommitReleasesSuccessfulPartitionsOnly(t *testing.T) {
 	}
 	_ = r.deliveries()
 	p.fail = map[int32]error{1: errors.New("commit failed")}
-	if err := r.commit(r.ids()); err == nil {
+
+	// When
+	commitErr := r.commit(r.ids())
+
+	// Then
+	if commitErr == nil {
 		t.Fatal("partial commit accepted")
 	}
 	n0, _ := r.tracker.Work(0)
@@ -239,13 +269,19 @@ func TestPartialCommitReleasesSuccessfulPartitionsOnly(t *testing.T) {
 }
 
 func TestShutdownDrainDeadlineCommitsConfirmedPrefix(t *testing.T) {
+	// Given
 	r, _, d, p, c := fixture(t)
 	_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}}})
 	_ = r.input(incoming(0, 0, 1))
 	_ = r.input(incoming(0, 1, 1))
 	d.reports <- Delivery{Token: d.writes[0]}
 	start := c.Now()
-	if err := r.drain(); err == nil {
+
+	// When
+	drainErr := r.drain()
+
+	// Then
+	if drainErr == nil {
 		t.Fatal("unacknowledged write treated as drained")
 	}
 	if c.Now().Sub(start) < 10*time.Second || c.Now().Sub(start) > 10*time.Second+10*time.Millisecond {
@@ -257,6 +293,7 @@ func TestShutdownDrainDeadlineCommitsConfirmedPrefix(t *testing.T) {
 }
 
 func TestTimestampTriggerReplaysTriggerOffset(t *testing.T) {
+	// Given
 	r, s, d, p, _ := fixture(t)
 	hi := int64(1000)
 	stamp := int64(2001)
@@ -267,8 +304,13 @@ func TestTimestampTriggerReplaysTriggerOffset(t *testing.T) {
 	in := incoming(0, 0, 1)
 	in.Record.TimestampMS = &stamp
 	s.events = []Event{{Input: &in}}
-	if err := r.Run(context.Background()); err != nil {
-		t.Fatal(err)
+
+	// When
+	runErr := r.Run(context.Background())
+
+	// Then
+	if runErr != nil {
+		t.Fatal(runErr)
 	}
 	if len(d.writes) != 0 || len(p.saves) != 0 {
 		t.Fatal("trigger record was written or checkpointed past")
@@ -276,6 +318,7 @@ func TestTimestampTriggerReplaysTriggerOffset(t *testing.T) {
 }
 
 func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
+	// Given
 	r, s, _, _, c := fixture(t)
 	hi := int64(1000)
 	r.plan.Source.Kind = "TOPIC"
@@ -284,8 +327,13 @@ func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 	_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}, Window: plan.Window{Upper: &hi}}})
 	s.high = 2
 	_ = r.eof(Cursor{0, 0})
-	if err := r.tips(); err != nil {
-		t.Fatal(err)
+
+	// When
+	tipsErr := r.tips()
+
+	// Then
+	if tipsErr != nil {
+		t.Fatal(tipsErr)
 	}
 	s.high = 999 // Once sampled, a growing log does not move the boundary.
 	if *r.partitions[0].high != 2 {
@@ -298,10 +346,16 @@ func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 }
 
 func TestEmptyAssignmentIdleExitRequiresCompletedAssignment(t *testing.T) {
+	// Given a bounded worker that has never received an assignment.
 	r, _, _, _, c := fixture(t)
 	r.limits.IdleExit = "1s"
 	c.Sleep(time.Hour)
-	if r.finished() {
+
+	// When its idle deadline elapses before assignment.
+	finished := r.finished()
+
+	// Then it remains available for a first assignment.
+	if finished {
 		t.Fatal("exited before assignment")
 	}
 	_ = r.Assign(nil)
@@ -318,6 +372,7 @@ func TestEmptyAssignmentIdleExitRequiresCompletedAssignment(t *testing.T) {
 }
 
 func TestSignalDuringPollDoesNotSubmitReturnedRecord(t *testing.T) {
+	// Given
 	r, s, d, _, c := fixture(t)
 	r.plan.Source.Kind = "TOPIC"
 	ctx, cancel := context.WithCancel(context.Background())
@@ -327,8 +382,13 @@ func TestSignalDuringPollDoesNotSubmitReturnedRecord(t *testing.T) {
 	s.events = []Event{{Input: &in}}
 	pausedBeforeFlush := false
 	d.flush = func() error { pausedBeforeFlush = s.paused[0]; return nil }
-	if err := r.Run(ctx); err != nil {
-		t.Fatal(err)
+
+	// When
+	runErr := r.Run(ctx)
+
+	// Then
+	if runErr != nil {
+		t.Fatal(runErr)
 	}
 	if len(d.writes) != 0 || !pausedBeforeFlush {
 		t.Fatal("signal submitted new input or flushed before pausing intake")
@@ -336,18 +396,25 @@ func TestSignalDuringPollDoesNotSubmitReturnedRecord(t *testing.T) {
 }
 
 func TestSignalCannotHideKnownFailure(t *testing.T) {
+	// Given
 	r, _, _, _, _ := fixture(t)
 	r.plan.Source.Kind = "TOPIC"
 	failure := errors.New("destination failed")
 	r.failure = failure
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := r.Run(ctx); !errors.Is(err, failure) {
-		t.Fatal("signal hid a known failure", err)
+
+	// When
+	runErr := r.Run(ctx)
+
+	// Then
+	if !errors.Is(runErr, failure) {
+		t.Fatal("signal hid a known failure", runErr)
 	}
 }
 
 func TestCapturedTipFinishesWithoutAnotherEOF(t *testing.T) {
+	// Given
 	for _, gap := range []bool{false, true} {
 		t.Run(map[bool]string{false: "records", true: "control gap"}[gap], func(t *testing.T) {
 			r, s, d, p, _ := fixture(t)
@@ -378,8 +445,13 @@ func TestCapturedTipFinishesWithoutAnotherEOF(t *testing.T) {
 				}
 				return nil
 			}
-			if err := r.Run(context.Background()); err != nil {
-				t.Fatal("sampled H incorrectly required another EOF", err)
+
+			// When
+			runErr := r.Run(context.Background())
+
+			// Then
+			if runErr != nil {
+				t.Fatal("sampled H incorrectly required another EOF", runErr)
 			}
 			want := 2
 			if gap {
@@ -393,6 +465,7 @@ func TestCapturedTipFinishesWithoutAnotherEOF(t *testing.T) {
 }
 
 func TestRevocationCommitFailures(t *testing.T) {
+	// Given
 	for _, tc := range []struct {
 		name    string
 		err     error
@@ -414,7 +487,11 @@ func TestRevocationCommitFailures(t *testing.T) {
 			in := incoming(0, 0, 1)
 			token, _ := r.tracker.Observe(in.Cursor, in.Next, 1, false)
 			r.tracker.Resolve(token)
+
+			// When
 			err := r.Revoke([]int32{0}, false)
+
+			// Then
 			if (err != nil) != tc.fails {
 				t.Fatalf("revoke error = %v, want failure=%v", err, tc.fails)
 			}
@@ -466,6 +543,7 @@ func exitCode(err error) int {
 }
 
 func TestExitCodeFollowsExecutionStage(t *testing.T) {
+	// Given
 	conflict, runtime := operatorConflict{}, errors.New("broker unavailable")
 
 	r, s, _, _, _ := fixture(t)
@@ -485,8 +563,13 @@ func TestExitCodeFollowsExecutionStage(t *testing.T) {
 	for _, joined := range []error{errors.Join(runtime, conflict), errors.Join(conflict, runtime)} {
 		r, _, _, _, _ = fixture(t)
 		r.failure = runtime
-		if code := exitCode(r.exit(joined)); code != 1 {
-			t.Fatalf("runtime failure joined with cleanup conflict exited %d: %v", code, joined)
+
+		// When
+		exitCode2 := exitCode(r.exit(joined))
+
+		// Then
+		if exitCode2 != 1 {
+			t.Fatalf("runtime failure joined with cleanup conflict exited %d: %v", exitCode2, joined)
 		}
 	}
 }

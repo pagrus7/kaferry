@@ -115,10 +115,7 @@ func adoptedWindow(metadata map[int32]Progress) *plan.Window {
 }
 
 func (p *positioner) window(id int32, saved map[int32]k.TopicPartition, metadata map[int32]Progress, adopted *plan.Window, now time.Time) (plan.Window, Progress, int64, error) {
-	window, err := p.plan.Window.Resolve(now)
-	if err != nil {
-		return window, Progress{}, 0, conflict("invalid resolved time window: %v", err)
-	}
+	var window plan.Window
 	progress := Progress{Fingerprint: p.fingerprint, TopicID: p.topicID}
 	position, origin := int64(-1), "resolved"
 	if stored, ok := saved[id]; ok {
@@ -128,6 +125,13 @@ func (p *positioner) window(id int32, saved map[int32]k.TopicPartition, metadata
 		}
 	} else if adopted != nil && p.plan.Window.Relative() {
 		window, origin = *adopted, "adopted"
+	}
+	if progress.Window == nil && origin != "adopted" {
+		var err error
+		window, err = p.plan.Window.Resolve(now)
+		if err != nil {
+			return window, progress, position, conflict("invalid resolved time window: %v", err)
+		}
 	}
 	if err := p.plan.Window.ValidateStored(window, p.plan.CutoffMS); err != nil {
 		return window, progress, position, conflict("invalid time window: %v", err)

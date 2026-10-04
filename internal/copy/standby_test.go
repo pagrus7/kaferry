@@ -8,6 +8,7 @@ import (
 
 // Follow-mode standbys and quiet partitions stay up; only a signal ends them.
 func TestFollowStandbySurvivesLongQuiet(t *testing.T) {
+	// Given
 	for _, assigned := range []bool{false, true} {
 		r, s, _, _, c := fixture(t)
 		r.plan.Source.Kind = "TOPIC"
@@ -21,8 +22,13 @@ func TestFollowStandbySurvivesLongQuiet(t *testing.T) {
 				cancel()
 			}
 		}
-		if err := r.Run(ctx); err != nil {
-			t.Fatalf("assigned=%v: follow worker failed during quiet: %v", assigned, err)
+
+		// When
+		runErr := r.Run(ctx)
+
+		// Then
+		if runErr != nil {
+			t.Fatalf("assigned=%v: follow worker failed during quiet: %v", assigned, runErr)
 		}
 	}
 }

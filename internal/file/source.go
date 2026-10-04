@@ -42,11 +42,7 @@ func NewSource(path, fp string, window plan.WindowSpec, codec ArchiveDecoder, ch
 		f.Close()
 		return nil, conflict("%v", err)
 	}
-	resolved, err := window.Resolve(clock.Now())
-	if err != nil {
-		f.Close()
-		return nil, conflict("%v", err)
-	}
+	var resolved plan.Window
 	position := start
 	if saved := checkpoints.Existing(); saved != nil {
 		if saved.Fingerprint != fp {
@@ -78,6 +74,11 @@ func NewSource(path, fp string, window plan.WindowSpec, codec ArchiveDecoder, ch
 			return nil, conflict("%v", err)
 		}
 	} else {
+		resolved, err = window.Resolve(clock.Now())
+		if err != nil {
+			f.Close()
+			return nil, conflict("%v", err)
+		}
 		checkpoints.Initialize(Checkpoint{Version: 1, Fingerprint: fp, SourceID: header.ID, Position: start, Window: resolved})
 	}
 	return &Source{file: f, codec: codec, checkpoints: checkpoints, size: info.Size(), position: position, window: resolved}, nil

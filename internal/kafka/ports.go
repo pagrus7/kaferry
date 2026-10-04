@@ -20,7 +20,7 @@ type TimeReader interface {
 type SourceMetadata interface {
 	OffsetReader
 	TopicID() string
-	Progress(string) ([]k.TopicPartition, error)
+	CurrentPartitions() ([]k.TopicPartition, error)
 }
 type DestinationMetadata interface {
 	Config() map[string]string
@@ -28,6 +28,7 @@ type DestinationMetadata interface {
 }
 type Metadata interface {
 	SourceMetadata
+	Progress(string) ([]k.TopicPartition, error)
 	DestinationMetadata
 	ClusterID() (string, error)
 	CheckMembers(string) error

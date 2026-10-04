@@ -29,6 +29,9 @@ type Sink struct {
 
 func NewSink(clients Clients, inspector DestinationMetadata, endpoint plan.Endpoint, limits config.Worker, clock copy.Clock, logger *slog.Logger) (*Sink, error) {
 	properties := native(endpoint.Properties)
+	if err := canonicalTimeout(properties); err != nil {
+		return nil, err
+	}
 	for key, value := range map[string]any{"go.delivery.reports": true, "go.batch.producer": false, "allow.auto.create.topics": false} {
 		if old, ok := properties[key]; ok && fmt.Sprint(old) != fmt.Sprint(value) {
 			return nil, conflict("protected Kafka property %q cannot be overridden", key)
@@ -53,16 +56,9 @@ func NewSink(clients Clients, inspector DestinationMetadata, endpoint plan.Endpo
 		properties["message.timeout.ms"] = strconv.FormatInt(delivery.Milliseconds(), 10)
 	}
 	topicConfig := inspector.Config()
-	messageLimit := int64(1000000)
-	if value, ok := properties["message.max.bytes"]; ok {
-		parsed, err := strconv.ParseInt(fmt.Sprint(value), 10, 64)
-		if err != nil {
-			return nil, conflict("invalid message.max.bytes")
-		}
-		messageLimit = parsed
-	}
-	if limit, err := strconv.ParseInt(topicConfig["max.message.bytes"], 10, 64); err == nil && limit < messageLimit {
-		messageLimit = limit
+	messageLimit, err := producerLimit(properties, topicConfig)
+	if err != nil {
+		return nil, err
 	}
 	properties["message.max.bytes"] = strconv.FormatInt(messageLimit, 10)
 	if err := boundQueue(properties, "queue.buffering.max.messages", int64(limits.RecordCap)); err != nil {
@@ -85,6 +81,39 @@ func NewSink(clients Clients, inspector DestinationMetadata, endpoint plan.Endpo
 	logger.Info("producer configured", "topic", s.topic, "message.max.bytes", messageLimit, "partitioner", properties["partitioner"])
 	go s.reports()
 	return s, nil
+}
+
+func canonicalTimeout(properties k.ConfigMap) error {
+	alias, present := properties["delivery.timeout.ms"]
+	if !present {
+		return nil
+	}
+	if value, present := properties["message.timeout.ms"]; present && fmt.Sprint(value) != fmt.Sprint(alias) {
+		left, leftErr := strconv.ParseInt(fmt.Sprint(value), 10, 64)
+		right, rightErr := strconv.ParseInt(fmt.Sprint(alias), 10, 64)
+		if leftErr != nil || rightErr != nil || left != right {
+			return conflict("conflicting message.timeout.ms and delivery.timeout.ms")
+		}
+	}
+	properties["message.timeout.ms"] = alias
+	delete(properties, "delivery.timeout.ms")
+	return nil
+}
+
+func producerLimit(properties k.ConfigMap, configuration map[string]string) (int64, error) {
+	limit := int64(1000000)
+	value, explicit := properties["message.max.bytes"]
+	if explicit {
+		parsed, err := strconv.ParseInt(fmt.Sprint(value), 10, 64)
+		if err != nil || parsed < 1000 || parsed > 1000000000 {
+			return 0, conflict("message.max.bytes must be between 1000 and 1000000000")
+		}
+		limit = parsed
+	}
+	if topic, err := strconv.ParseInt(configuration["max.message.bytes"], 10, 64); err == nil && topic >= 0 && (!explicit || topic < limit) {
+		limit = topic
+	}
+	return max(1000, min(limit, 1000000000)), nil
 }
 
 func boundQueue(properties k.ConfigMap, key string, limit int64) error {
@@ -171,19 +200,20 @@ func (s *Sink) validate(record copy.Record) error {
 		return nil
 	}
 	now := s.clock.Now().UnixMilli()
-	before, beforeErr := strconv.ParseInt(s.configuration["message.timestamp.before.max.ms"], 10, 64)
-	after, afterErr := strconv.ParseInt(s.configuration["message.timestamp.after.max.ms"], 10, 64)
-	if beforeErr != nil || afterErr != nil {
-		legacy, err := strconv.ParseInt(s.configuration["message.timestamp.difference.max.ms"], 10, 64)
-		if err != nil {
-			return nil
-		}
-		before, after = legacy, legacy
-	}
-	if ts < now && now-ts > before || ts > now && ts-now > after {
+	before, beforeKnown := timestampLimit(s.configuration, "before")
+	after, afterKnown := timestampLimit(s.configuration, "after")
+	if ts < now && beforeKnown && now-ts > before || ts > now && afterKnown && ts-now > after {
 		return &copy.RecordError{Class: "rejected_timestamp", Err: fmt.Errorf("timestamp exceeds destination acceptance bounds")}
 	}
 	return nil
+}
+
+func timestampLimit(configuration map[string]string, direction string) (int64, bool) {
+	value, err := strconv.ParseInt(configuration["message.timestamp."+direction+".max.ms"], 10, 64)
+	if err != nil || value == math.MaxInt64 {
+		value, err = strconv.ParseInt(configuration["message.timestamp.difference.max.ms"], 10, 64)
+	}
+	return value, err == nil && value >= 0
 }
 func (s *Sink) reports() {
 	for event := range s.producer.Events() {

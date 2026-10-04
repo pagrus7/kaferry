@@ -8,8 +8,13 @@ import (
 )
 
 func TestConfiguration(t *testing.T) {
+	// Given
 	input := "[connections.prod]\n'bootstrap.servers'='prod:9092'\n'sasl.password'='secret'\n[worker]\npartition_record_cap=100\nidle_exit='5s'\n"
+
+	// When
 	c, err := Decode(strings.NewReader(input), "/home/test")
+
+	// Then
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,10 +40,16 @@ func (r *readerMock) ReadFile(path string) ([]byte, error) {
 	return r.data, r.err
 }
 func TestLoaderUsesInjectedReaderAndAvoidsReadsForDefaults(t *testing.T) {
+	// Given
 	files := &readerMock{data: []byte("[worker]\nrecord_cap=17\n")}
 	var loader Reader = NewLoader(files, "home")
-	if _, err := loader.Load(""); err != nil || len(files.paths) != 0 {
-		t.Fatal("defaults unexpectedly read a file", err)
+
+	// When
+	_, loadErr := loader.Load("")
+
+	// Then
+	if loadErr != nil || len(files.paths) != 0 {
+		t.Fatal("defaults unexpectedly read a file", loadErr)
 	}
 	cfg, err := loader.Load("chosen.toml")
 	if err != nil || cfg.Worker.RecordCap != 17 || len(files.paths) != 1 || files.paths[0] != "chosen.toml" {
@@ -47,5 +58,29 @@ func TestLoaderUsesInjectedReaderAndAvoidsReadsForDefaults(t *testing.T) {
 	files.err = io.ErrUnexpectedEOF
 	if _, err := loader.Load("chosen.toml"); !errors.Is(err, files.err) {
 		t.Fatal("read failure lost", err)
+	}
+}
+
+func TestDeliveryTimeoutFitsNativeMillisecondRange(t *testing.T) {
+	for _, scenario := range []struct {
+		value string
+		valid bool
+	}{
+		{"500us", false}, {"1ms", true}, {"60s", true},
+		{"2147483647ms", true}, {"2147483648ms", false},
+	} {
+		t.Run(scenario.value, func(t *testing.T) {
+			// Given a worker duration at a native producer boundary.
+			worker := Defaults("home").Worker
+			worker.DeliveryTimeout = scenario.value
+
+			// When validating worker tuning.
+			err := worker.Validate()
+
+			// Then positive sub-millisecond and overflowing deadlines fail.
+			if (err == nil) != scenario.valid {
+				t.Fatal("incorrect timeout validation", err)
+			}
+		})
 	}
 }

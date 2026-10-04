@@ -52,6 +52,7 @@ func waitEnd(t *testing.T, a *k.AdminClient, topic string, end int64) {
 	}
 }
 func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
+	// Given
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
 	p := producer(t, nil)
@@ -84,8 +85,13 @@ func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 		})
 		waitMembers(t, a, group, 1, 1, nil)
 		if run == 1 {
-			if err := cmd.Process.Signal(syscall.SIGSTOP); err != nil {
-				t.Fatal(err)
+
+			// When
+			signalErr := cmd.Process.Signal(syscall.SIGSTOP)
+
+			// Then
+			if signalErr != nil {
+				t.Fatal(signalErr)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			results, err := a.CreatePartitions(ctx, []k.PartitionsSpecification{{Topic: src, IncreaseTo: 2}})

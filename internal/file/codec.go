@@ -3,6 +3,7 @@ package file
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -70,7 +71,7 @@ func readFrame(reader io.ReaderAt, position, size, limit int64) ([]byte, int64, 
 	if size-position < 4 {
 		return nil, position, 0, io.EOF
 	}
-	if _, err := reader.ReadAt(prefix[:], position); err != nil {
+	if err := readFrameBytes(reader, prefix[:], position); err != nil {
 		return nil, position, 0, err
 	}
 	length := int64(binary.BigEndian.Uint32(prefix[:]))
@@ -86,7 +87,7 @@ func readFrame(reader io.ReaderAt, position, size, limit int64) ([]byte, int64, 
 	next := position + length + 8
 	data := make([]byte, length+8)
 	copy(data[:4], prefix[:])
-	if _, err := reader.ReadAt(data[4:], position+4); err != nil {
+	if err := readFrameBytes(reader, data[4:], position+4); err != nil {
 		return nil, position, 0, err
 	}
 	crc := binary.BigEndian.Uint32(data[len(data)-4:])
@@ -94,6 +95,14 @@ func readFrame(reader io.ReaderAt, position, size, limit int64) ([]byte, int64, 
 		return nil, position, 0, fmt.Errorf("frame CRC32C mismatch at %d", position)
 	}
 	return data[4 : len(data)-4], next, crc, nil
+}
+
+func readFrameBytes(reader io.ReaderAt, data []byte, position int64) error {
+	count, err := reader.ReadAt(data, position)
+	if err == nil && count != len(data) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return conflict("source file changed: short read at %d", position)
+	}
+	return err
 }
 func (c *Codec) Header(reader io.ReaderAt, size int64) (Header, int64, error) {
 	var header Header
@@ -129,6 +138,12 @@ type wireHeader struct {
 	Value []byte `cbor:"value"`
 }
 
+type wireProvenance struct {
+	Topic     string `cbor:"topic"`
+	Partition int32  `cbor:"partition"`
+	Offset    int64  `cbor:"offset"`
+}
+
 type decodedHeader struct {
 	Name  cbor.RawMessage `cbor:"name"`
 	Value cbor.RawMessage `cbor:"value"`
@@ -144,7 +159,7 @@ func (c *Codec) EncodeRecord(record core.Record) ([]byte, error) {
 	}
 	values := map[string]any{"key": record.Key, "value": record.Value, "headers": headers, "timestamp_ms": record.TimestampMS, "timestamp_type": record.TimestampType}
 	if record.Source != nil {
-		values["source"] = record.Source
+		values["source"] = &wireProvenance{Topic: record.Source.Topic, Partition: record.Source.Partition, Offset: record.Source.Offset}
 	}
 	payload, err := c.encoder.Marshal(values)
 	if err != nil {
@@ -166,8 +181,12 @@ func (c *Codec) DecodeRecord(payload []byte) (core.Record, error) {
 		return record, err
 	}
 	if raw, present := fields["source"]; present {
-		if err := c.decoder.Unmarshal(raw, &record.Source); err != nil {
+		var source *wireProvenance
+		if err := c.decoder.Unmarshal(raw, &source); err != nil {
 			return record, fmt.Errorf("invalid record provenance")
+		}
+		if source != nil {
+			record.Source = &core.Provenance{Topic: source.Topic, Partition: source.Partition, Offset: source.Offset}
 		}
 	}
 	switch record.TimestampType {

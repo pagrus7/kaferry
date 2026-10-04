@@ -15,6 +15,7 @@ import (
 )
 
 func TestFileCrashAfterFsyncBeforeCheckpoint(t *testing.T) {
+	// Given
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	c := codec(t)
 	if os.Getenv("KFWD_FILE_CRASH_HELPER") == "1" {
@@ -80,7 +81,11 @@ func TestFileCrashAfterFsyncBeforeCheckpoint(t *testing.T) {
 	cp.Close()
 	child := exec.Command(os.Args[0], "-test.run=^TestFileCrashAfterFsyncBeforeCheckpoint$", "--", src, dst, cpdir)
 	child.Env = append(os.Environ(), "KFWD_FILE_CRASH_HELPER=1")
+
+	// When
 	data, err := child.CombinedOutput()
+
+	// Then
 	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 99 {
 		t.Fatalf("crash helper: %v %s", err, data)
 	}
@@ -134,6 +139,7 @@ func TestFileCrashAfterFsyncBeforeCheckpoint(t *testing.T) {
 }
 
 func TestOutputWriteFailureCannotAcknowledge(t *testing.T) {
+	// Given
 	path := filepath.Join(t.TempDir(), "out.cbor")
 	o, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, codec(t), 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -144,7 +150,12 @@ func TestOutputWriteFailureCannotAcknowledge(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = o.file.Close()
-	if err := o.Flush(); err == nil {
+
+	// When
+	flushErr := o.Flush()
+
+	// Then
+	if flushErr == nil {
 		t.Fatal("write to closed file succeeded")
 	}
 	_, after := o.DurableOutput()

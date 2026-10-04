@@ -16,6 +16,7 @@ import (
 // A failed fsync must never be retried into an acknowledgment: after Linux
 // writeback errors a later fsync can succeed although the data was dropped.
 func TestFailedSyncIsNeverAcknowledged(t *testing.T) {
+	// Given
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	c := codec(t)
 	dir := t.TempDir()
@@ -29,8 +30,13 @@ func TestFailedSyncIsNeverAcknowledged(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := fixture.Flush(); err != nil {
-		t.Fatal(err)
+
+	// When
+	flushErr := fixture.Flush()
+
+	// Then
+	if flushErr != nil {
+		t.Fatal(flushErr)
 	}
 	fixture.Close()
 

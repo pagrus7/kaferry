@@ -13,14 +13,18 @@ import (
 )
 
 type partition struct {
-	window      plan.Window
-	stopped     bool
-	paused      bool
-	position    int64
-	stable      int64
-	atTip       bool
-	high        *int64
-	waitStarted time.Time
+	window         plan.Window
+	stopped        bool
+	paused         bool
+	position       int64
+	stable         int64
+	atTip          bool
+	high           *int64
+	waitStarted    time.Time
+	nextSample     time.Time
+	sampleDelay    time.Duration
+	sampleLog      time.Time
+	sampleAttempts int
 }
 type submission struct {
 	input     Input
@@ -391,6 +395,7 @@ func stopThreshold(window plan.Window, cutoff int64) (int64, error) {
 }
 func (r *Runner) tips() error {
 	wait, _ := time.ParseDuration(r.limits.TipWait)
+	sampled := false // Interleave native watermark queries with consumer polling.
 	for id, p := range r.partitions {
 		if p.stopped || p.window.Upper == nil || r.plan.Source.Kind != "TOPIC" {
 			continue
@@ -400,15 +405,16 @@ func (r *Runner) tips() error {
 			return err
 		}
 		if p.high == nil {
-			if !p.atTip || r.clock.Now().UnixMilli() <= threshold {
+			if sampled || !p.atTip || r.clock.Now().UnixMilli() <= threshold || r.clock.Now().Before(p.nextSample) {
 				continue
 			}
-			high, err := r.source.HighWatermark(id)
-			if err != nil {
+			sampled = true
+			if err := r.sampleHigh(id, p); err != nil {
 				return err
 			}
-			p.high = &high
-			p.waitStarted = r.clock.Now()
+			if p.high == nil {
+				continue
+			}
 		}
 		if p.position >= *p.high {
 			p.stopped = true
@@ -418,6 +424,32 @@ func (r *Runner) tips() error {
 			return fmt.Errorf("partition %d tip wait exceeded: H=%d stable=%d consumed=%d", id, *p.high, p.stable, p.position)
 		}
 	}
+	return nil
+}
+
+func (r *Runner) sampleHigh(id int32, p *partition) error {
+	high, err := r.source.HighWatermark(id)
+	if err != nil {
+		var recoverable *Recoverable
+		if !errors.As(err, &recoverable) {
+			return err
+		}
+		p.sampleAttempts++
+		if p.sampleLog.IsZero() || r.clock.Now().Sub(p.sampleLog) >= time.Minute {
+			r.log.Warn("tip watermark query retrying", "partition", id, "attempt", p.sampleAttempts, "reason", err)
+			p.sampleLog = r.clock.Now()
+		}
+		p.sampleDelay = min(30*time.Second, max(time.Second, 2*p.sampleDelay))
+		p.nextSample = r.clock.Now().Add(p.sampleDelay)
+		return nil
+	}
+	if p.sampleAttempts > 0 {
+		r.log.Info("tip watermark query recovered", "partition", id, "attempts", p.sampleAttempts)
+	}
+	p.nextSample, p.sampleLog = time.Time{}, time.Time{}
+	p.sampleDelay, p.sampleAttempts = 0, 0
+	p.high = &high
+	p.waitStarted = r.clock.Now()
 	return nil
 }
 func (r *Runner) ids() []int32 {

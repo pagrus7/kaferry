@@ -26,6 +26,7 @@ func ownedContainer(t *testing.T) string {
 	return name
 }
 func TestBlockingCommitAcrossBrokerOutage(t *testing.T) {
+	// Given
 	container := ownedContainer(t)
 	a := admin(t)
 	name := topic(t, a, 1)
@@ -54,8 +55,13 @@ func TestBlockingCommitAcrossBrokerOutage(t *testing.T) {
 	if !assigned {
 		t.Fatal("assignment timed out")
 	}
-	if data, err := exec.Command("docker", "pause", container).CombinedOutput(); err != nil {
-		t.Fatalf("pause: %v %s", err, data)
+
+	// When
+	combinedOutputData, combinedOutputErr := exec.Command("docker", "pause", container).CombinedOutput()
+
+	// Then
+	if combinedOutputErr != nil {
+		t.Fatalf("pause: %v %s", combinedOutputErr, combinedOutputData)
 	}
 	unpaused := false
 	defer func() {
@@ -105,6 +111,7 @@ func TestBlockingCommitAcrossBrokerOutage(t *testing.T) {
 }
 
 func TestAssignmentLostOnPollDeadline(t *testing.T) {
+	// Given
 	a := admin(t)
 	name := topic(t, a, 1)
 	c, err := k.NewConsumer(&k.ConfigMap{"bootstrap.servers": broker(t), "group.id": name + "-lost", "enable.auto.commit": false, "session.timeout.ms": 6000, "max.poll.interval.ms": 6000, "partition.assignment.strategy": "cooperative-sticky"})
@@ -126,8 +133,12 @@ func TestAssignmentLostOnPollDeadline(t *testing.T) {
 	})
 	deadline := time.Now().Add(10 * time.Second)
 	for !assigned && time.Now().Before(deadline) {
+
+		// When
 		c.Poll(20)
 	}
+
+	// Then
 	if !assigned {
 		t.Fatal("assignment timed out")
 	}

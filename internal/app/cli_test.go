@@ -15,10 +15,16 @@ import (
 )
 
 func TestCLIInputsAndExitCodes(t *testing.T) {
+	// Given
 	for _, args := range [][]string{{}, {"bad"}, {"run"}, {"run", "--sql", "SELECT *", "--file", "x"}, {"run", "--sql", "SELECT *"}, {"run", "--file", "-"}, {"run", "--unknown"}} {
 		var out bytes.Buffer
-		if code := Execute(context.Background(), args, nil, &out); code != 2 {
-			t.Fatalf("args=%v code=%d", args, code)
+
+		// When
+		executeCode := Execute(context.Background(), args, nil, &out)
+
+		// Then
+		if executeCode != 2 {
+			t.Fatalf("args=%v code=%d", args, executeCode)
 		}
 	}
 	var out bytes.Buffer
@@ -27,6 +33,7 @@ func TestCLIInputsAndExitCodes(t *testing.T) {
 	}
 }
 func TestFileCLIAndOneOffCleanup(t *testing.T) {
+	// Given
 	dir := t.TempDir()
 	src, dst := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "destination.cbor")
 	codec, err := file.NewCodec(1 << 20)
@@ -51,8 +58,13 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 	}
 	statement := "INSERT INTO FILE cbor('" + dst + "') SELECT * FROM FILE cbor('" + src + "') OPTIONS(GROUP=ONE_OFF)"
 	var out bytes.Buffer
-	if code := Execute(context.Background(), []string{"run", "-f", "-", "-c", cfg}, strings.NewReader(statement), &out); code != 0 {
-		t.Fatalf("exit=%d: %s", code, out.String())
+
+	// When
+	executeCode := Execute(context.Background(), []string{"run", "-f", "-", "-c", cfg}, strings.NewReader(statement), &out)
+
+	// Then
+	if executeCode != 0 {
+		t.Fatalf("exit=%d: %s", executeCode, out.String())
 	}
 	files, err := filepath.Glob(filepath.Join(cpdir, "*.json"))
 	if err != nil || len(files) != 0 {

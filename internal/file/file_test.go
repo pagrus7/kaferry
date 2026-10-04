@@ -30,9 +30,14 @@ func sample() core.Record {
 }
 
 func TestRecordCodecFullFidelity(t *testing.T) {
+	// Given
 	c := codec(t)
 	input := sample()
+
+	// When
 	data, err := c.EncodeRecord(input)
+
+	// Then
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +62,7 @@ func TestRecordCodecFullFidelity(t *testing.T) {
 }
 
 func TestOutputAcknowledgmentAndRecovery(t *testing.T) {
+	// Given
 	c := codec(t)
 	path := filepath.Join(t.TempDir(), "archive.cbor")
 	out, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, c, 10, logger())
@@ -64,7 +70,12 @@ func TestOutputAcknowledgmentAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	id, headerEnd := out.DurableOutput()
-	if err = out.Submit(sample(), core.Token{Partition: 0, Generation: 1, Sequence: 1}); err != nil {
+
+	// When
+	err = out.Submit(sample(), core.Token{Partition: 0, Generation: 1, Sequence: 1})
+
+	// Then
+	if err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -72,7 +83,12 @@ func TestOutputAcknowledgmentAndRecovery(t *testing.T) {
 		t.Fatal("acknowledged before fsync")
 	default:
 	}
-	if err = out.Flush(); err != nil {
+
+	// When flushing the pending record.
+	err = out.Flush()
+
+	// Then its acknowledgment follows successful durability.
+	if err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -93,7 +109,11 @@ func TestOutputAcknowledgmentAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
+
+	// When reopening after an unacknowledged partial tail.
 	out, err = NewOutput(NewPublisher(), path, "g", "fp", id, extent, c, 10, logger())
+
+	// Then recovery truncates only the unacknowledged tail.
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,9 +136,14 @@ func TestOutputAcknowledgmentAndRecovery(t *testing.T) {
 }
 
 func TestOutputLocksAndUnownedHeader(t *testing.T) {
+	// Given
 	c := codec(t)
 	path := filepath.Join(t.TempDir(), "archive.cbor")
+
+	// When
 	out, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, c, 10, logger())
+
+	// Then
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,6 +173,7 @@ func (l *lifecycle) Assign(a []core.Assignment) error { l.assignments = a; retur
 func (*lifecycle) Revoke([]int32, bool) error         { return nil }
 
 func TestCheckpointAndSourceSnapshot(t *testing.T) {
+	// Given
 	c := codec(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "input.cbor")
@@ -190,7 +216,11 @@ func TestCheckpointAndSourceSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
+
+	// When
 	event, err := source.Poll(0)
+
+	// Then
 	if err != nil || event.Input == nil {
 		t.Fatalf("source read: %v", err)
 	}
@@ -228,6 +258,7 @@ func TestCheckpointAndSourceSnapshot(t *testing.T) {
 }
 
 func TestSourceReplacementFails(t *testing.T) {
+	// Given
 	c := codec(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "input")
@@ -249,7 +280,12 @@ func TestSourceReplacementFails(t *testing.T) {
 	}
 	source.Close()
 	cp.Close()
-	if err = os.Remove(path); err != nil {
+
+	// When
+	err = os.Remove(path)
+
+	// Then
+	if err != nil {
 		t.Fatal(err)
 	}
 	out, err = NewOutput(NewPublisher(), path, "archive", "fp", "", 0, c, 10, logger())
@@ -275,9 +311,14 @@ func FuzzFraming(f *testing.F) {
 	})
 }
 func TestTimestampNull(t *testing.T) {
+	// Given
 	c := codec(t)
 	record := core.Record{TimestampType: "unknown", Value: []byte("x")}
+
+	// When
 	data, err := c.EncodeRecord(record)
+
+	// Then
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,6 +18,7 @@ import (
 )
 
 func TestRetentionWarningOnFirstRetainedRecord(t *testing.T) {
+	// Given
 	for _, newer := range []bool{false, true} {
 		var output bytes.Buffer
 		s := &Source{retentionChecks: map[int32]RetentionCheck{0: {Low: 5, Lower: 100}}, log: slog.New(slog.NewTextHandler(&output, nil))}
@@ -25,12 +26,16 @@ func TestRetentionWarningOnFirstRetainedRecord(t *testing.T) {
 		if newer {
 			stamp = 101
 		}
+
+		// When
 		s.checkRetention(0, &stamp)
 		s.checkRetention(0, &stamp)
 		want := 0
 		if newer {
 			want = 1
 		}
+
+		// Then
 		if got := strings.Count(output.String(), "time window may begin before retained data"); got != want {
 			t.Fatalf("retention warnings=%d want=%d", got, want)
 		}
@@ -38,26 +43,42 @@ func TestRetentionWarningOnFirstRetainedRecord(t *testing.T) {
 }
 
 func TestEmptyAssignmentDoesNotCommitNativeOffsets(t *testing.T) {
+	// Given
 	store := &Committer{}
+
+	// When
 	results, err := store.Save(context.Background(), nil)
+
+	// Then
 	if err != nil || len(results) != 0 {
 		t.Fatal("empty assignment needs no native commit", results, err)
 	}
 }
 
 func TestOffsetsMatchTopicIdentityNotPointerAddress(t *testing.T) {
+	// Given
 	requested, returned := "orders", "orders"
 	result := k.ListOffsetsResult{ResultInfos: map[k.TopicPartition]k.ListOffsetsResultInfo{{Topic: &returned, Partition: 3}: {Offset: 42}}}
+
+	// When
 	info, ok := partitionInfos(result, requested)[3]
+
+	// Then
 	if !ok || info.Offset != 42 {
 		t.Fatal("returned topic pointer prevented matching Kafka partition")
 	}
 }
 
 func TestInvalidProgressNeverBecomesAStartFallback(t *testing.T) {
+	// Given
 	valid := Progress{Fingerprint: "fingerprint", TopicID: "topic"}.Encode()
-	if _, err := decodeProgress(&valid, "fingerprint", "topic", false); err != nil {
-		t.Fatal(err)
+
+	// When
+	_, decodeProgressErr := decodeProgress(&valid, "fingerprint", "topic", false)
+
+	// Then
+	if decodeProgressErr != nil {
+		t.Fatal(decodeProgressErr)
 	}
 	for _, text := range []string{"", "foreign", valid + "{}", `kfwd2:1;{"fp":"fingerprint","tid":"topic","unknown":1}`, Progress{Fingerprint: "other", TopicID: "topic"}.Encode(), Progress{Fingerprint: "fingerprint", TopicID: "recreated"}.Encode(), Progress{Fingerprint: "fingerprint", TopicID: "topic", FileID: "file", Extent: -1}.Encode()} {
 		if _, err := decodeProgress(&text, "fingerprint", "topic", false); err == nil {
@@ -69,10 +90,16 @@ func TestInvalidProgressNeverBecomesAStartFallback(t *testing.T) {
 	}
 }
 func TestNativeQueueBoundsAndGoPropertyTypes(t *testing.T) {
+	// Given
 	for _, key := range []string{"queue.buffering.max.messages", "queue.buffering.max.kbytes", "go.events.channel.size"} {
 		for _, value := range []string{"0", "-1", "101", "oops"} {
 			p := k.ConfigMap{key: value}
-			if err := boundQueue(p, key, 100); err == nil {
+
+			// When
+			boundQueueErr := boundQueue(p, key, 100)
+
+			// Then
+			if boundQueueErr == nil {
 				t.Fatal("accepted invalid queue bound", key, value)
 			}
 		}
@@ -88,10 +115,16 @@ func TestNativeQueueBoundsAndGoPropertyTypes(t *testing.T) {
 	}
 }
 func TestTimestampAndHeaderPreflightAreRecordAttributable(t *testing.T) {
+	// Given
 	s := &Sink{clock: core.RealClock{}, configuration: map[string]string{"message.timestamp.type": "CreateTime", "message.timestamp.before.max.ms": "1000", "message.timestamp.after.max.ms": "1000"}}
 	now := time.Now().UnixMilli()
 	for _, stamp := range []int64{0, -1, math.MaxInt64, now - 10000, now + 10000} {
-		if err := s.validate(core.Record{TimestampMS: &stamp}); err == nil {
+
+		// When
+		validateErr := s.validate(core.Record{TimestampMS: &stamp})
+
+		// Then
+		if validateErr == nil {
 			t.Fatal("unpreservable timestamp accepted", stamp)
 		}
 	}
@@ -113,8 +146,14 @@ func TestTimestampAndHeaderPreflightAreRecordAttributable(t *testing.T) {
 	}
 }
 func TestDeterministicErrorsNeverRetry(t *testing.T) {
+	// Given deterministic authentication, authorization, position and size errors.
 	for _, code := range []k.ErrorCode{k.ErrAuthentication, k.ErrTopicAuthorizationFailed, k.ErrGroupAuthorizationFailed, k.ErrAutoOffsetReset, k.ErrMsgSizeTooLarge} {
-		if transient(k.NewError(code, "failure", false)) {
+
+		// When classifying a source error for runtime retry.
+		retry := transient(k.NewError(code, "failure", false))
+
+		// Then permanent failures are never retried.
+		if retry {
 			t.Fatal("retrying permanent error", code)
 		}
 	}
@@ -137,13 +176,19 @@ func (p *scriptedPoller) Poll(int) k.Event {
 // A quiet partition gives no recovery signal after a reconnect, so transient
 // outages must not fail the worker however long the quiet lasts.
 func TestTransientSourceErrorsHaveNoDeadline(t *testing.T) {
+	// Given
 	quiet := 30000 // Ten minutes of 20 ms polls, well past the 60 s delivery timeout.
 	events := []k.Event{k.NewError(k.ErrTransport, "disconnected", false), k.NewError(k.ErrAllBrokersDown, "down", false)}
 	events = append(events, make([]k.Event, quiet)...)
 	s := &Source{events: &scriptedPoller{events: events}, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	for n := 0; n < quiet+2; n++ {
-		if event, err := s.Poll(20 * time.Millisecond); err != nil || event.Input != nil || event.EOF != nil {
-			t.Fatalf("poll %d: event=%+v err=%v", n, event, err)
+
+		// When
+		pollEvent, pollErr := s.Poll(20 * time.Millisecond)
+
+		// Then
+		if pollErr != nil || pollEvent.Input != nil || pollEvent.EOF != nil {
+			t.Fatalf("poll %d: event=%+v err=%v", n, pollEvent, pollErr)
 		}
 	}
 	for _, terminal := range []k.Error{k.NewError(k.ErrTopicAuthorizationFailed, "denied", false), k.NewError(k.ErrTransport, "fatal", true)} {
@@ -155,9 +200,15 @@ func TestTransientSourceErrorsHaveNoDeadline(t *testing.T) {
 }
 
 func TestCommitClassification(t *testing.T) {
+	// Given
 	var recoverable *core.Recoverable
 	for _, code := range []k.ErrorCode{k.ErrRebalanceInProgress, k.ErrIllegalGeneration, k.ErrUnknownMemberID, k.ErrCoordinatorNotAvailable, k.ErrNotCoordinator, k.ErrCoordinatorLoadInProgress, k.ErrRequestTimedOut, k.ErrTransport, k.ErrTimedOut, k.ErrWaitCoord, k.ErrAllBrokersDown} {
-		if err := classifyCommit(k.NewError(code, "", false)); !errors.As(err, &recoverable) {
+
+		// When
+		classifyCommitErr := classifyCommit(k.NewError(code, "", false))
+
+		// Then
+		if !errors.As(classifyCommitErr, &recoverable) {
 			t.Fatalf("%v should be recoverable on revocation", code)
 		}
 	}
@@ -187,13 +238,18 @@ type durableExtent struct{ extent int64 }
 func (d *durableExtent) DurableOutput() (string, int64) { return "archive-id", d.extent }
 
 func TestKafkaFileCommitUsesDurableExtent(t *testing.T) {
+	// Given
 	native := &capturedCommits{}
 	output := &durableExtent{extent: 256}
 	store := &Committer{consumer: native, topic: "orders", output: output, metadata: map[int32]Progress{0: {Fingerprint: "fp", TopicID: "topic-id"}}}
 	for _, extent := range []int64{256, 1024, 1024} {
 		// Failed I/O cannot move DurableOutput; a later commit keeps the last E.
 		output.extent = extent
+
+		// When
 		results, err := store.Save(context.Background(), []core.Cursor{{Partition: 0, Position: 5}})
+
+		// Then
 		if err != nil || results[0] != nil {
 			t.Fatalf("commit: results=%v err=%v", results, err)
 		}
@@ -245,6 +301,7 @@ func (c *countingTimes) OffsetsForTimes(parts []k.TopicPartition, _ int) ([]k.To
 }
 
 func TestPositioningBatchesBrokerRequests(t *testing.T) {
+	// Given
 	topic := "orders"
 	hour := int64(3600000)
 	spec := plan.WindowSpec{Lower: &plan.Expression{Now: true, AdjustmentMS: -hour}}
@@ -268,7 +325,11 @@ func TestPositioningBatchesBrokerRequests(t *testing.T) {
 			metadata[id] = Progress{Window: &plan.Window{Lower: &savedLower}}
 		}
 	}
+
+	// When
 	positioned, err := positioner.Locate(parts, saved, metadata)
+
+	// Then
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,9 +357,14 @@ func TestPositioningBatchesBrokerRequests(t *testing.T) {
 }
 
 func TestEmptyAssignmentNeedsNoOffsetRequests(t *testing.T) {
+	// Given
 	offsets := &countingOffsets{}
 	s := &Source{offsets: offsets}
+
+	// When
 	assignments, err := s.locate(nil, nil, nil)
+
+	// Then
 	if err != nil || len(assignments) != 0 || len(offsets.calls) != 0 {
 		t.Fatalf("empty assignment: assignments=%v requests=%v err=%v", assignments, offsets.calls, err)
 	}

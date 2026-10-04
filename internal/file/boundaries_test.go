@@ -42,6 +42,7 @@ func (c *checkpointsMock) RememberFrame(position int64, identity FrameIdentity) 
 	c.remembered[position] = identity
 }
 func TestFileSourceUsesDecoderAndRemembersOnlyDecodedFrames(t *testing.T) {
+	// Given
 	for _, fail := range []bool{false, true} {
 		t.Run(map[bool]string{false: "success", true: "decode-failure"}[fail], func(t *testing.T) {
 			payload := []byte("opaque payload")
@@ -52,7 +53,11 @@ func TestFileSourceUsesDecoderAndRemembersOnlyDecodedFrames(t *testing.T) {
 			}
 			checkpoints := &checkpointsMock{remembered: make(map[int64]FrameIdentity)}
 			source := &Source{file: readerCloser{bytes.NewReader(data)}, codec: decoder, checkpoints: checkpoints, size: int64(len(data))}
+
+			// When
 			event, err := source.Poll(0)
+
+			// Then
 			if fail {
 				if !errors.Is(err, decoder.err) || source.position != 0 || len(checkpoints.remembered) != 0 {
 					t.Fatal("failed decode advanced source progress", err)
@@ -70,11 +75,17 @@ func TestFileSourceUsesDecoderAndRemembersOnlyDecodedFrames(t *testing.T) {
 	}
 }
 func TestFileSourceCannotAssignBeforeInitialCheckpoint(t *testing.T) {
+	// Given
 	checkpoints := &checkpointsMock{err: errors.New("checkpoint failure")}
 	source := &Source{position: 100, checkpoints: checkpoints}
 	lifecycle := &lifecycle{}
-	if err := source.Start(lifecycle); !errors.Is(err, checkpoints.err) || len(lifecycle.assignments) != 0 || len(checkpoints.saved) != 1 || checkpoints.saved[0].Position != 100 {
-		t.Fatal("intake began without initial progress", err)
+
+	// When
+	startErr := source.Start(lifecycle)
+
+	// Then
+	if !errors.Is(startErr, checkpoints.err) || len(lifecycle.assignments) != 0 || len(checkpoints.saved) != 1 || checkpoints.saved[0].Position != 100 {
+		t.Fatal("intake began without initial progress", startErr)
 	}
 }
 
@@ -96,6 +107,7 @@ func (b *bufferMock) Write(data []byte) (int, error) {
 }
 func (b *bufferMock) Flush() error { b.flushes++; return b.flushErr }
 func TestFileOutputAcknowledgesOnlyAfterBufferAndSyncSucceed(t *testing.T) {
+	// Given
 	for _, stage := range []string{"encode", "write", "short", "flush", "sync", "success"} {
 		t.Run(stage, func(t *testing.T) {
 			failure := errors.New("I/O failure")
@@ -125,8 +137,12 @@ func TestFileOutputAcknowledgesOnlyAfterBufferAndSyncSucceed(t *testing.T) {
 				t.Fatal("acknowledged before durability")
 			}
 			if err == nil {
+
+				// When
 				err = output.Flush()
 			}
+
+			// Then
 			if stage == "success" {
 				if err != nil || output.extent != 105 || syncs != 1 || buffer.flushes != 1 || len(output.deliveries) != 1 || (<-output.deliveries).Token != token {
 					t.Fatal("durable acknowledgment missing", err)

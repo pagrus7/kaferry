@@ -15,6 +15,7 @@ import (
 )
 
 func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
+	// Given
 	for _, abort := range []bool{false, true} {
 		t.Run(map[bool]string{false: "commit", true: "abort"}[abort], func(t *testing.T) {
 			a := admin(t)
@@ -37,6 +38,8 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 			result := make(chan workerResult, 1)
 			go func() {
 				var output bytes.Buffer
+
+				// When
 				code := app.Execute(ctx, []string{"run", "-e", statement, "-c", cfg}, nil, &output)
 				result <- workerResult{code, output.String()}
 			}()
@@ -67,6 +70,8 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 				case <-time.After(20 * time.Millisecond):
 				}
 			}
+
+			// Then
 			if !initialized {
 				t.Fatal("no-match lookup did not initialize at LSO")
 			}

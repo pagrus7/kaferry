@@ -25,6 +25,7 @@ func broker(t *testing.T) string {
 }
 
 func TestTopicToTopicSlice(t *testing.T) {
+	// Given
 	a := admin(t)
 	source := topic(t, a, 2)
 	destination := topic(t, a, 3)
@@ -37,8 +38,13 @@ func TestTopicToTopicSlice(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	var output bytes.Buffer
-	if code := app.Execute(ctx, []string{"run", "--sql", statement}, nil, &output); code != 0 {
-		t.Fatalf("copy exit=%d: %s", code, output.String())
+
+	// When
+	executeCode := app.Execute(ctx, []string{"run", "--sql", statement}, nil, &output)
+
+	// Then
+	if executeCode != 0 {
+		t.Fatalf("copy exit=%d: %s", executeCode, output.String())
 	}
 	c := consumer(t, destination+"-reader")
 	parts := make([]k.TopicPartition, 3)
@@ -71,7 +77,7 @@ func admin(t *testing.T) *k.AdminClient {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(a.Close)
+	t.Cleanup(func() { closeAdmin(t, a) })
 	return a
 }
 
@@ -89,7 +95,78 @@ func topic(t *testing.T, a *k.AdminClient, partitions int) string {
 		defer cancel()
 		_, _ = a.DeleteTopics(ctx, []string{name})
 	})
+	waitTopicReady(t, a, name, partitions)
 	return name
+}
+
+// Topic creation acknowledgement can precede visibility to a new client.
+func waitTopicReady(t *testing.T, a *k.AdminClient, name string, partitions int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	var last string
+	for {
+		request, done := context.WithTimeout(ctx, 5*time.Second)
+		result, err := a.DescribeTopics(request, k.NewTopicCollectionOfTopicNames([]string{name}), k.SetAdminRequestTimeout(4*time.Second))
+		done()
+		ready := err == nil && len(result.TopicDescriptions) == 1
+		for _, topic := range result.TopicDescriptions {
+			ready = ready && topic.Error.Code() == k.ErrNoError && len(topic.Partitions) == partitions
+			for _, partition := range topic.Partitions {
+				ready = ready && partition.Leader != nil && partition.Leader.ID >= 0
+			}
+		}
+		if ready {
+			return
+		}
+		last = fmt.Sprintf("error=%v description=%+v", err, result.TopicDescriptions)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("topic %s did not become ready: %s", name, last)
+		case <-tick.C:
+		}
+	}
+}
+
+func waitTopicConfig(t *testing.T, a *k.AdminClient, name, key, value string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	var lastErr error
+	var observed string
+	for {
+		request, done := context.WithTimeout(ctx, 5*time.Second)
+		result, err := a.DescribeConfigs(request, []k.ConfigResource{{Type: k.ResourceTopic, Name: name}}, k.SetAdminRequestTimeout(4*time.Second))
+		done()
+		lastErr = err
+		if err == nil && len(result) == 1 && result[0].Error.Code() == k.ErrNoError {
+			observed = result[0].Config[key].Value
+			if observed == value {
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("topic %s config %s not visible: got=%q want=%q error=%v", name, key, observed, value, lastErr)
+		case <-tick.C:
+		}
+	}
+}
+
+// Context cancellation does not cancel native admin requests; contain fixture cleanup.
+func closeAdmin(t *testing.T, a *k.AdminClient) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { a.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Error("native fixture AdminClient.Close exceeded 30s; client may leak until test process exits")
+	}
 }
 
 func producer(t *testing.T, extra k.ConfigMap) *k.Producer {
@@ -151,6 +228,7 @@ func read(t *testing.T, c *k.Consumer) *k.Message {
 }
 
 func TestRecordFidelityAndTopicID(t *testing.T) {
+	// Given
 	a := admin(t)
 	name := topic(t, a, 1)
 	p := producer(t, nil)
@@ -170,7 +248,11 @@ func TestRecordFidelityAndTopicID(t *testing.T) {
 	for _, data := range []struct{ key, value []byte }{{nil, nil}, {[]byte{}, []byte{}}, {[]byte{0, 255}, []byte{1, 0, 255}}} {
 		m := &k.Message{TopicPartition: k.TopicPartition{Topic: &name, Partition: 0}, Key: data.key, Value: data.value, Timestamp: time.UnixMilli(1791000000123), Headers: []k.Header{{Key: "x", Value: nil}, {Key: "x", Value: []byte{}}, {Key: "x", Value: []byte{0, 255}}}}
 		publish(t, p, m)
+
+		// When
 		got := read(t, c)
+
+		// Then
 		if !reflect.DeepEqual(got.Key, m.Key) || !reflect.DeepEqual(got.Value, m.Value) || !reflect.DeepEqual(got.Headers, m.Headers) || !got.Timestamp.Equal(m.Timestamp) {
 			t.Fatalf("fidelity mismatch: key nil=%v/%v, value nil=%v/%v, headers=%v/%v, timestamp=%v/%v", got.Key == nil, m.Key == nil, got.Value == nil, m.Value == nil, got.Headers, m.Headers, got.Timestamp, m.Timestamp)
 		}
@@ -178,6 +260,7 @@ func TestRecordFidelityAndTopicID(t *testing.T) {
 }
 
 func TestTransactionalTailAndTimestampLookup(t *testing.T) {
+	// Given
 	for _, abort := range []bool{false, true} {
 		t.Run(fmt.Sprintf("abort=%v", abort), func(t *testing.T) {
 			a := admin(t)
@@ -193,7 +276,11 @@ func TestTransactionalTailAndTimestampLookup(t *testing.T) {
 			}
 			publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &name, Partition: 0}, Value: []byte("txn"), Timestamp: time.UnixMilli(1791000000000)})
 			c := consumer(t, name+"-g")
+
+			// When
 			lookup, err := c.OffsetsForTimes([]k.TopicPartition{{Topic: &name, Partition: 0, Offset: k.Offset(1791000000000)}}, 5000)
+
+			// Then
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -257,6 +344,7 @@ func TestTransactionalTailAndTimestampLookup(t *testing.T) {
 }
 
 func TestTimestampLookupOutOfOrder(t *testing.T) {
+	// Given
 	a := admin(t)
 	name := topic(t, a, 1)
 	p := producer(t, nil)
@@ -266,7 +354,11 @@ func TestTimestampLookupOutOfOrder(t *testing.T) {
 	}
 	c := consumer(t, name+"-g")
 	for _, delta := range []int64{0, 1000, 2000, 3000} {
+
+		// When
 		positions, err := c.OffsetsForTimes([]k.TopicPartition{{Topic: &name, Partition: 0, Offset: k.Offset(base + delta)}}, 5000)
+
+		// Then
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -278,16 +370,23 @@ func TestTimestampLookupOutOfOrder(t *testing.T) {
 }
 
 func TestSynchronousSizeLimit(t *testing.T) {
+	// Given
 	p := producer(t, k.ConfigMap{"message.max.bytes": 1000})
 	name := "not-published-size-probe"
-	if err := p.Produce(&k.Message{TopicPartition: k.TopicPartition{Topic: &name, Partition: k.PartitionAny}, Value: bytes.Repeat([]byte{1}, 1100)}, nil); err == nil {
+
+	// When
+	produceErr := p.Produce(&k.Message{TopicPartition: k.TopicPartition{Topic: &name, Partition: k.PartitionAny}, Value: bytes.Repeat([]byte{1}, 1100)}, nil)
+
+	// Then
+	if produceErr == nil {
 		t.Fatal("oversized record did not fail synchronously")
 	} else {
-		t.Logf("synchronous oversized rejection=%v", err)
+		t.Logf("synchronous oversized rejection=%v", produceErr)
 	}
 }
 
 func TestCooperativeRevocationCommitAndGroupInspection(t *testing.T) {
+	// Given
 	a := admin(t)
 	name := topic(t, a, 2)
 	group := name + "-group"
@@ -331,8 +430,11 @@ func TestCooperativeRevocationCommitAndGroupInspection(t *testing.T) {
 		}
 		return nil
 	}
-	if err := c1.Subscribe(name, callback); err != nil {
-		t.Fatal(err)
+
+	subscribeErr := c1.Subscribe(name, callback)
+
+	if subscribeErr != nil {
+		t.Fatal(subscribeErr)
 	}
 	deadline := time.Now().Add(15 * time.Second)
 	for !assigned && time.Now().Before(deadline) {
@@ -348,6 +450,8 @@ func TestCooperativeRevocationCommitAndGroupInspection(t *testing.T) {
 		t.Fatalf("group description: %v", err)
 	}
 	t.Logf("group members=%+v", description.ConsumerGroupDescriptions[0].Members)
+
+	// When a second consumer joins the existing cooperative group.
 	if err = c2.Subscribe(name, func(c *k.Consumer, event k.Event) error {
 		switch event := event.(type) {
 		case k.AssignedPartitions:
@@ -367,6 +471,8 @@ func TestCooperativeRevocationCommitAndGroupInspection(t *testing.T) {
 		c1.Poll(50)
 		c2.Poll(50)
 	}
+
+	// Then revocation occurs and its synchronous commit can be inspected.
 	if !revoked {
 		t.Fatal("cooperative revocation timed out")
 	}
@@ -378,19 +484,26 @@ func TestCooperativeRevocationCommitAndGroupInspection(t *testing.T) {
 }
 
 func TestMixedTimestampBatchHasNoRecordAttribution(t *testing.T) {
+	// Given
 	a := admin(t)
 	name := topic(t, a, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	result, err := a.AlterConfigs(ctx, []k.ConfigResource{{Type: k.ResourceTopic, Name: name, Config: []k.ConfigEntry{{Name: "message.timestamp.after.max.ms", Value: "1000"}}}})
+	result, err := a.IncrementalAlterConfigs(ctx, []k.ConfigResource{{Type: k.ResourceTopic, Name: name, Config: []k.ConfigEntry{{Name: "message.timestamp.after.max.ms", Value: "1000", IncrementalOperation: k.AlterConfigOpTypeSet}}}})
 	if err != nil || result[0].Error.Code() != k.ErrNoError {
 		t.Fatalf("configure timestamp bound: %v %+v", err, result)
 	}
+	waitTopicConfig(t, a, name, "message.timestamp.after.max.ms", "1000")
 	p := producer(t, k.ConfigMap{"linger.ms": 500})
 	reports := make(chan k.Event, 2)
 	for i, when := range []time.Time{time.Now(), time.Now().Add(time.Hour)} {
-		if err := p.Produce(&k.Message{TopicPartition: k.TopicPartition{Topic: &name, Partition: 0}, Value: []byte("x"), Timestamp: when, Opaque: i}, reports); err != nil {
-			t.Fatal(err)
+
+		// When
+		produceErr := p.Produce(&k.Message{TopicPartition: k.TopicPartition{Topic: &name, Partition: 0}, Value: []byte("x"), Timestamp: when, Opaque: i}, reports)
+
+		// Then
+		if produceErr != nil {
+			t.Fatal(produceErr)
 		}
 	}
 	for range 2 {
@@ -408,6 +521,7 @@ func TestMixedTimestampBatchHasNoRecordAttribution(t *testing.T) {
 }
 
 func TestOutOfRangeFailsInsteadOfResetting(t *testing.T) {
+	// Given
 	a := admin(t)
 	name := topic(t, a, 1)
 	c := consumer(t, name+"-g")
@@ -416,9 +530,14 @@ func TestOutOfRangeFailsInsteadOfResetting(t *testing.T) {
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if event, ok := c.Poll(100).(k.Error); ok {
-			t.Logf("out-of-range error=%v", event)
-			if event.Code() != k.ErrAutoOffsetReset {
+
+		// When
+		pollEvent, pollOk := c.Poll(100).(k.Error)
+
+		// Then
+		if pollOk {
+			t.Logf("out-of-range error=%v", pollEvent)
+			if pollEvent.Code() != k.ErrAutoOffsetReset {
 				t.Fatal("unexpected error class")
 			}
 			return
@@ -428,16 +547,18 @@ func TestOutOfRangeFailsInsteadOfResetting(t *testing.T) {
 }
 
 func TestSizeBoundariesWithCompression(t *testing.T) {
+	// Given
 	for _, codec := range []string{"none", "gzip", "snappy", "lz4", "zstd"} {
 		t.Run(codec, func(t *testing.T) {
 			a := admin(t)
 			name := topic(t, a, 1)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			_, err := a.AlterConfigs(ctx, []k.ConfigResource{{Type: k.ResourceTopic, Name: name, Config: []k.ConfigEntry{{Name: "max.message.bytes", Value: "2048"}}}})
+			_, err := a.IncrementalAlterConfigs(ctx, []k.ConfigResource{{Type: k.ResourceTopic, Name: name, Config: []k.ConfigEntry{{Name: "max.message.bytes", Value: "2048", IncrementalOperation: k.AlterConfigOpTypeSet}}}})
 			if err != nil {
 				t.Fatal(err)
 			}
+			waitTopicConfig(t, a, name, "max.message.bytes", "2048")
 			p := producer(t, k.ConfigMap{"message.max.bytes": 2048, "compression.type": codec, "linger.ms": 100})
 			reports := make(chan k.Event, 8)
 			for i := range 8 {
@@ -445,8 +566,13 @@ func TestSizeBoundariesWithCompression(t *testing.T) {
 				for j := range value {
 					value[j] = byte(j*31 + i)
 				}
-				if err := p.Produce(&k.Message{TopicPartition: k.TopicPartition{Topic: &name, Partition: 0}, Key: []byte("key"), Value: value, Headers: []k.Header{{Key: "h", Value: []byte("v")}}}, reports); err != nil {
-					t.Fatal(err)
+
+				// When
+				produceErr := p.Produce(&k.Message{TopicPartition: k.TopicPartition{Topic: &name, Partition: 0}, Key: []byte("key"), Value: value, Headers: []k.Header{{Key: "h", Value: []byte("v")}}}, reports)
+
+				// Then
+				if produceErr != nil {
+					t.Fatal(produceErr)
 				}
 			}
 			for range 8 {

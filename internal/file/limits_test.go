@@ -11,10 +11,13 @@ import (
 )
 
 func TestLowerFrameLimitCannotTruncateCompleteUnacknowledgedData(t *testing.T) {
+	// Given
 	path := filepath.Join(t.TempDir(), "out.cbor")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	large, _ := NewCodec(1 << 20)
+
 	o, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, large, 10, logger)
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +31,12 @@ func TestLowerFrameLimitCannotTruncateCompleteUnacknowledgedData(t *testing.T) {
 	o.Close()
 	before, _ := os.Stat(path)
 	small, _ := NewCodec(1000)
-	if out, err := NewOutput(NewPublisher(), path, "g", "fp", id, headerEnd, small, 10, logger); err == nil {
+
+	// When reopening with a smaller frame limit.
+	out, err := NewOutput(NewPublisher(), path, "g", "fp", id, headerEnd, small, 10, logger)
+
+	// Then complete unacknowledged data is rejected without truncation.
+	if err == nil {
 		out.Close()
 		t.Fatal("complete oversized frame was adopted")
 	}
@@ -38,6 +46,7 @@ func TestLowerFrameLimitCannotTruncateCompleteUnacknowledgedData(t *testing.T) {
 	}
 }
 func TestTemporaryCleanupRespectsActiveLocks(t *testing.T) {
+	// Given
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.cbor")
 	active, err := os.CreateTemp(dir, temporaryPrefix(path))
@@ -53,8 +62,13 @@ func TestTemporaryCleanupRespectsActiveLocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	stale.Close()
-	if err := cleanupTemporary(path); err != nil {
-		t.Fatal(err)
+
+	// When
+	cleanupTemporaryErr := cleanupTemporary(path)
+
+	// Then
+	if cleanupTemporaryErr != nil {
+		t.Fatal(cleanupTemporaryErr)
 	}
 	if _, err := os.Stat(active.Name()); err != nil {
 		t.Fatal("active temporary file was removed")
@@ -64,9 +78,15 @@ func TestTemporaryCleanupRespectsActiveLocks(t *testing.T) {
 	}
 }
 func TestEncoderDoesNotCreateUnreadableHeaderArrays(t *testing.T) {
+	// Given
 	c, _ := NewCodec(512)
 	headers := make([]core.Header, c.maxHeaders+1)
-	if _, err := c.EncodeRecord(core.Record{Headers: headers, TimestampType: "unknown"}); err == nil {
+
+	// When
+	_, encodeRecordErr := c.EncodeRecord(core.Record{Headers: headers, TimestampType: "unknown"})
+
+	// Then
+	if encodeRecordErr == nil {
 		t.Fatal("writer exceeded its reader's structural bound")
 	}
 }
@@ -84,13 +104,19 @@ func FuzzRecordDecoder(f *testing.F) {
 }
 
 func TestHeadersRequireNameAndValue(t *testing.T) {
+	// Given
 	c := codec(t)
 	for _, h := range []map[string]any{{"name": []byte("header")}, {"value": nil}, {"name": "text", "value": nil}} {
 		payload, err := c.encoder.Marshal(map[string]any{"key": nil, "value": nil, "headers": []map[string]any{h}, "timestamp_ms": nil, "timestamp_type": "unknown"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := c.DecodeRecord(payload); err == nil {
+
+		// When
+		_, decodeRecordErr := c.DecodeRecord(payload)
+
+		// Then
+		if decodeRecordErr == nil {
 			t.Fatal("malformed header was normalized silently")
 		}
 	}

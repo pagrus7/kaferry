@@ -83,6 +83,9 @@ func (w Worker) Validate() error {
 		if err != nil || duration <= 0 {
 			return fmt.Errorf("worker.%s must be a positive duration", setting.name)
 		}
+		if setting.name == "delivery_timeout" && (duration < time.Millisecond || duration > 2147483647*time.Millisecond) {
+			return fmt.Errorf("worker.delivery_timeout must be between 1ms and 2147483647ms")
+		}
 	}
 	if w.CheckpointDir == "" {
 		return fmt.Errorf("worker.checkpoint_dir must not be empty")

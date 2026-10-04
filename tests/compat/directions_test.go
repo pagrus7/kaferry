@@ -71,6 +71,7 @@ func archiveRecords(t *testing.T, path string) []core.Record {
 	return records
 }
 func TestAllFileDirectionsAndResume(t *testing.T) {
+	// Given
 	a := admin(t)
 	src := topic(t, a, 1)
 	dst := topic(t, a, 3)
@@ -100,7 +101,11 @@ func TestAllFileDirectionsAndResume(t *testing.T) {
 	archive, clone := filepath.Join(dir, "archive.cbor"), filepath.Join(dir, "clone.cbor")
 	cfg := configuration(t)
 	statement := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", archive, src, stamp.Add(time.Second).Format(time.RFC3339Nano), src+"-archive")
+
+	// When
 	execute(t, statement, cfg)
+
+	// Then
 	if actual := archiveRecords(t, archive); !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("topic→file changed records\nactual=%+v\nexpected=%+v", actual, expected)
 	}

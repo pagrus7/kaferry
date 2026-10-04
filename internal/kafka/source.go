@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -82,6 +83,14 @@ func (s *Source) rebalance(_ *k.Consumer, event k.Event) error {
 			s.err = err
 			return err
 		}
+		// Application pauses survive unassignment in librdkafka. New assignments
+		// start unpaused; the runner reapplies its current caps before the next Poll.
+		if len(event.Partitions) > 0 {
+			if err = c.Resume(event.Partitions); err != nil {
+				s.err = err
+				return err
+			}
+		}
 		s.err = s.lifecycle.Assign(assignments)
 	case k.RevokedPartitions:
 		ids := make([]int32, len(event.Partitions))
@@ -101,13 +110,23 @@ func (s *Source) rebalance(_ *k.Consumer, event k.Event) error {
 	return s.err
 }
 func (s *Source) saved() (map[int32]k.TopicPartition, map[int32]Progress, error) {
-	parts, err := s.inspector.Progress(s.plan.Group)
+	requested, err := s.inspector.CurrentPartitions()
 	if err != nil {
 		return nil, nil, err
+	}
+	parts, err := s.consumer.Committed(requested, 10000)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(parts) != len(requested) {
+		return nil, nil, fmt.Errorf("missing committed partition results")
 	}
 	saved := make(map[int32]k.TopicPartition)
 	metadata := make(map[int32]Progress)
 	for _, part := range parts {
+		if part.Error != nil {
+			return nil, nil, part.Error
+		}
 		if part.Offset < 0 {
 			continue
 		}
@@ -238,7 +257,7 @@ func transient(err k.Error) bool {
 		return false
 	}
 	switch err.Code() {
-	case k.ErrTransport, k.ErrAllBrokersDown, k.ErrTimedOut, k.ErrTimedOutQueue, k.ErrCoordinatorLoadInProgress, k.ErrCoordinatorNotAvailable, k.ErrNotCoordinator, k.ErrRequestTimedOut, k.ErrNetworkException:
+	case k.ErrTransport, k.ErrResolve, k.ErrAllBrokersDown, k.ErrTimedOut, k.ErrTimedOutQueue, k.ErrCoordinatorLoadInProgress, k.ErrCoordinatorNotAvailable, k.ErrNotCoordinator, k.ErrRequestTimedOut, k.ErrNetworkException:
 		return true
 	}
 	return false
@@ -252,6 +271,26 @@ func (s *Source) Pause(partition int32, pause bool) error {
 }
 func (s *Source) HighWatermark(partition int32) (int64, error) {
 	_, high, err := s.consumer.QueryWatermarkOffsets(s.plan.Source.Name, partition, 5000)
+	var native k.Error
+	if errors.As(err, &native) && watermarkTransient(native) {
+		return 0, &copy.Recoverable{Err: err}
+	}
 	return high, err
+}
+
+// Watermark queries return leader-change errors that ordinary Poll handles internally.
+func watermarkTransient(err k.Error) bool {
+	if err.IsFatal() {
+		return false
+	}
+	if transient(err) {
+		return true
+	}
+	switch err.Code() {
+	case k.ErrNotLeaderForPartition, k.ErrLeaderNotAvailable, k.ErrReplicaNotAvailable,
+		k.ErrKafkaStorageError, k.ErrOffsetNotAvailable, k.ErrFencedLeaderEpoch, k.ErrUnknownLeaderEpoch:
+		return true
+	}
+	return false
 }
 func (s *Source) Close() error { return s.consumer.Close() }

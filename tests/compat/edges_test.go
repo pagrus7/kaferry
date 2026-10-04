@@ -19,6 +19,7 @@ import (
 )
 
 func TestTimeBoundariesOutOfOrderAndTriggerReplay(t *testing.T) {
+	// Given
 	a := admin(t)
 	src := topic(t, a, 1)
 	p := producer(t, nil)
@@ -35,9 +36,13 @@ func TestTimeBoundariesOutOfOrderAndTriggerReplay(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "out.cbor")
 			statement := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM TOPIC '%s' WHERE %s OPTIONS(GROUP='%s-%s',CUTOFF=INTERVAL '0' SECOND)", path, src, test.filter, src, test.name)
+
+			// When
 			execute(t, statement, cfg)
 			execute(t, statement, cfg)
 			records := archiveRecords(t, path)
+
+			// Then
 			if len(records) != len(test.want) {
 				t.Fatalf("records=%d want=%d", len(records), len(test.want))
 			}
@@ -51,6 +56,7 @@ func TestTimeBoundariesOutOfOrderAndTriggerReplay(t *testing.T) {
 }
 
 func TestForeignProgressAndSelfCopyFailBeforeJoining(t *testing.T) {
+	// Given
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
 	group := src + "-foreign"
@@ -63,8 +69,13 @@ func TestForeignProgressAndSelfCopyFailBeforeJoining(t *testing.T) {
 	}
 	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", broker(t), dst, src, group)
 	var out bytes.Buffer
-	if code := app.Execute(ctx, []string{"run", "-e", statement}, nil, &out); code != 2 {
-		t.Fatalf("foreign progress exit=%d: %s", code, out.String())
+
+	// When
+	executeCode := app.Execute(ctx, []string{"run", "-e", statement}, nil, &out)
+
+	// Then
+	if executeCode != 2 {
+		t.Fatalf("foreign progress exit=%d: %s", executeCode, out.String())
 	}
 	description, err := a.DescribeConsumerGroups(ctx, []string{group})
 	if err != nil {
@@ -80,6 +91,7 @@ func TestForeignProgressAndSelfCopyFailBeforeJoining(t *testing.T) {
 }
 
 func TestExpiredAndAboveEndCommits(t *testing.T) {
+	// Given
 	a := admin(t)
 	src := topic(t, a, 1)
 	p := producer(t, nil)
@@ -91,10 +103,14 @@ func TestExpiredAndAboveEndCommits(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "out.cbor")
 	group := src + "-expired"
 	statement := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", path, src, stamp.Add(-time.Millisecond).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano), group)
+
+	// When
 	execute(t, statement, cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	positions, err := a.ListConsumerGroupOffsets(ctx, []k.ConsumerGroupTopicPartitions{{Group: group, Partitions: []k.TopicPartition{{Topic: &src, Partition: 0}}}})
+
+	// Then
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,6 +137,7 @@ func TestExpiredAndAboveEndCommits(t *testing.T) {
 }
 
 func TestMissingTimestampSkipAndResumeWithDifferentPolicy(t *testing.T) {
+	// Given
 	// File records can lack timestamps; modern Kafka records normally cannot.
 	dir := t.TempDir()
 	src, dst := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "copy.cbor")
@@ -150,8 +167,13 @@ func TestMissingTimestampSkipAndResumeWithDifferentPolicy(t *testing.T) {
 	cfg := configuration(t)
 	prefix := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM FILE cbor('%s') WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' ", dst, src, stamp.Add(-time.Second).Format(time.RFC3339Nano))
 	var output bytes.Buffer
-	if code := app.Execute(context.Background(), []string{"run", "-e", prefix + "OPTIONS(GROUP='missing')", "-c", cfg}, nil, &output); code != 1 {
-		t.Fatalf("missing timestamp exit=%d: %s", code, output.String())
+
+	// When
+	executeCode := app.Execute(context.Background(), []string{"run", "-e", prefix + "OPTIONS(GROUP='missing')", "-c", cfg}, nil, &output)
+
+	// Then
+	if executeCode != 1 {
+		t.Fatalf("missing timestamp exit=%d: %s", executeCode, output.String())
 	}
 	execute(t, prefix+"OPTIONS(GROUP='missing',ON_MISSING_TIMESTAMP=SKIP)", cfg)
 	records := archiveRecords(t, dst)

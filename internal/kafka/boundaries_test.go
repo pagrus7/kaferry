@@ -44,8 +44,8 @@ type sourceMetadataMock struct {
 	err   error
 }
 
-func (*sourceMetadataMock) TopicID() string                               { return "topic-id" }
-func (m *sourceMetadataMock) Progress(string) ([]k.TopicPartition, error) { return m.parts, m.err }
+func (*sourceMetadataMock) TopicID() string                                  { return "topic-id" }
+func (m *sourceMetadataMock) CurrentPartitions() ([]k.TopicPartition, error) { return m.parts, m.err }
 
 type destinationMetadataMock struct {
 	cfg   map[string]string
@@ -69,12 +69,19 @@ func (m *positioningMock) Locate([]k.TopicPartition, map[int32]k.TopicPartition,
 
 type consumerMock struct {
 	ConsumerClient
-	callback             k.RebalanceCb
-	actions              *[]string
-	events               []k.Event
-	commitErr, assignErr error
-	commits              []k.TopicPartition
-	lost, closed         bool
+	callback                k.RebalanceCb
+	actions                 *[]string
+	events                  []k.Event
+	commitErr, assignErr    error
+	resumeErr, watermarkErr error
+	resumed                 []k.TopicPartition
+	high                    int64
+	commits                 []k.TopicPartition
+	committed               []k.TopicPartition
+	committedErr            error
+	committedRequests       []k.TopicPartition
+	committedTimeout        int
+	lost, closed            bool
 }
 
 func (c *consumerMock) action(name string) {
@@ -102,6 +109,30 @@ func (c *consumerMock) IncrementalAssign(parts []k.TopicPartition) error {
 func (c *consumerMock) IncrementalUnassign([]k.TopicPartition) error {
 	c.action("unassign")
 	return nil
+}
+func (c *consumerMock) Resume(parts []k.TopicPartition) error {
+	c.action("resume")
+	c.resumed = append(c.resumed, parts...)
+	return c.resumeErr
+}
+func (c *consumerMock) QueryWatermarkOffsets(string, int32, int) (int64, int64, error) {
+	return 0, c.high, c.watermarkErr
+}
+func (c *consumerMock) Committed(parts []k.TopicPartition, timeout int) ([]k.TopicPartition, error) {
+	c.committedRequests = append([]k.TopicPartition(nil), parts...)
+	c.committedTimeout = timeout
+	if c.committedErr != nil {
+		return nil, c.committedErr
+	}
+	if c.committed != nil {
+		return c.committed, nil
+	}
+	out := append([]k.TopicPartition(nil), parts...)
+	for n := range out {
+		out[n].Offset = k.OffsetInvalid
+		out[n].Metadata = nil
+	}
+	return out, nil
 }
 func (c *consumerMock) AssignmentLost() bool { return c.lost }
 func (c *consumerMock) Poll(int) k.Event {
@@ -131,6 +162,7 @@ func (l *lifecycleMock) Revoke(_ []int32, lost bool) error {
 
 func sourceWithMocks(t *testing.T, consumer *consumerMock, metadata *sourceMetadataMock, positioning PositionerFactory) (*Source, *mockClients) {
 	t.Helper()
+	consumer.committed = metadata.parts
 	clients := &mockClients{consumer: consumer}
 	p := plan.Plan{Source: plan.Endpoint{Name: "orders"}, Group: "group", Start: "EARLIEST"}
 	source, _, err := NewSource(clients, metadata, positioning, p, "fp", config.Defaults("home").Worker, quietLogger(), nil)
@@ -141,8 +173,9 @@ func sourceWithMocks(t *testing.T, consumer *consumerMock, metadata *sourceMetad
 	return source, clients
 }
 func TestSourceCommitsInitialIdentityBeforeAssigningAndStopsOnFailure(t *testing.T) {
+	// Given
 	failure := errors.New("failure")
-	for _, fail := range []string{"", "progress", "position", "commit", "assign"} {
+	for _, fail := range []string{"", "progress", "position", "commit", "assign", "resume"} {
 		t.Run("failure-"+fail, func(t *testing.T) {
 			var actions []string
 			consumer := &consumerMock{actions: &actions}
@@ -157,6 +190,8 @@ func TestSourceCommitsInitialIdentityBeforeAssigningAndStopsOnFailure(t *testing
 				consumer.commitErr = failure
 			case "assign":
 				consumer.assignErr = failure
+			case "resume":
+				consumer.resumeErr = failure
 			}
 			source, clients := sourceWithMocks(t, consumer, metadata, positioning)
 			if clients.cfg["enable.auto.commit"] != false || clients.cfg["enable.auto.offset.store"] != false || clients.cfg["isolation.level"] != "read_committed" {
@@ -165,13 +200,20 @@ func TestSourceCommitsInitialIdentityBeforeAssigningAndStopsOnFailure(t *testing
 			if err := source.Start(&lifecycleMock{actions: &actions}); err != nil {
 				t.Fatal(err)
 			}
+
+			// When
 			err := consumer.callback(nil, k.AssignedPartitions{Partitions: []k.TopicPartition{{Topic: &source.plan.Source.Name, Partition: 0}}})
+
+			// Then
 			if fail != "" && !errors.Is(err, failure) {
 				t.Fatal("failure lost", err)
 			}
 			if fail == "" {
-				if err != nil || !reflect.DeepEqual(actions, []string{"subscribe", "commit", "assign", "assigned"}) {
+				if err != nil || !reflect.DeepEqual(actions, []string{"subscribe", "commit", "assign", "resume", "assigned"}) {
 					t.Fatal("ownership acquired before initial progress", actions, err)
+				}
+				if len(consumer.resumed) != 1 || consumer.resumed[0].Partition != 0 {
+					t.Fatal("assignment did not clear only the newly acquired pause", consumer.resumed)
 				}
 				saved, err := decodeProgress(consumer.commits[0].Metadata, "fp", "topic-id", false)
 				if err != nil || saved.TopicID != "topic-id" || consumer.commits[0].Offset != 7 {
@@ -189,6 +231,7 @@ func TestSourceCommitsInitialIdentityBeforeAssigningAndStopsOnFailure(t *testing
 	}
 }
 func TestSourceReleasesLostOwnershipThroughInjectedConsumer(t *testing.T) {
+	// Given
 	actions := []string{}
 	consumer := &consumerMock{actions: &actions, lost: true}
 	source, _ := sourceWithMocks(t, consumer, &sourceMetadataMock{}, nil)
@@ -196,8 +239,13 @@ func TestSourceReleasesLostOwnershipThroughInjectedConsumer(t *testing.T) {
 	if err := source.Start(lifecycle); err != nil {
 		t.Fatal(err)
 	}
-	if err := consumer.callback(nil, k.RevokedPartitions{Partitions: []k.TopicPartition{{Partition: 2}}}); err != nil {
-		t.Fatal(err)
+
+	// When
+	callbackErr := consumer.callback(nil, k.RevokedPartitions{Partitions: []k.TopicPartition{{Partition: 2}}})
+
+	// Then
+	if callbackErr != nil {
+		t.Fatal(callbackErr)
 	}
 	if !lifecycle.lost || !reflect.DeepEqual(actions, []string{"subscribe", "revoked", "unassign"}) || len(consumer.commits) != 0 {
 		t.Fatal("lost ownership was committed or retained", actions)
@@ -217,6 +265,7 @@ func (s *assignmentStoreMock) Save(_ context.Context, cursors []core.Cursor) (ma
 	return s.results, s.err
 }
 func TestSourceAppliesPositioningAndRequiresEveryInitialCommitResult(t *testing.T) {
+	// Given
 	failure := errors.New("commit failure")
 	for _, stage := range []string{"success", "request-failure", "partition-failure", "missing-result"} {
 		t.Run(stage, func(t *testing.T) {
@@ -237,9 +286,13 @@ func TestSourceAppliesPositioningAndRequiresEveryInitialCommitResult(t *testing.
 				Progress:    map[int32]Progress{0: progress},
 				Retention:   map[int32]RetentionCheck{0: check},
 			}}
-			source := &Source{inspector: &sourceMetadataMock{}, positioning: positioning, committer: store, retentionChecks: make(map[int32]RetentionCheck)}
+			source := &Source{consumer: &consumerMock{}, inspector: &sourceMetadataMock{}, positioning: positioning, committer: store, retentionChecks: make(map[int32]RetentionCheck)}
 			parts := []k.TopicPartition{{Partition: 0, Offset: k.OffsetInvalid}}
+
+			// When
 			assigned, err := source.position(parts)
+
+			// Then
 			if !reflect.DeepEqual(store.cursors, []core.Cursor{cursor}) || !reflect.DeepEqual(store.metadata[0], progress) || parts[0].Offset != 7 || source.retentionChecks[0] != check {
 				t.Fatal("resolved position, metadata or retention check lost")
 			}
@@ -255,10 +308,15 @@ func TestSourceAppliesPositioningAndRequiresEveryInitialCommitResult(t *testing.
 }
 
 func TestSourceDecodesFullRecordWithoutNativeClient(t *testing.T) {
+	// Given
 	timestamp := time.UnixMilli(12345)
 	message := &k.Message{TopicPartition: k.TopicPartition{Partition: 3, Offset: 42}, Key: nil, Value: []byte{}, Timestamp: timestamp, TimestampType: k.TimestampLogAppendTime, Headers: []k.Header{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}}
 	source, _ := sourceWithMocks(t, &consumerMock{events: []k.Event{message}}, &sourceMetadataMock{}, nil)
+
+	// When
 	event, err := source.Poll(0)
+
+	// Then
 	if err != nil || event.Input == nil {
 		t.Fatal("record missing", err)
 	}
@@ -288,6 +346,7 @@ func (p *producerMock) GetMetadata(*string, bool, int) (*k.Metadata, error) {
 	return p.metadata, p.metadataErr
 }
 func TestSinkRoutesRawRecordsAndAttributesDeliveryFailures(t *testing.T) {
+	// Given
 	producer := &producerMock{events: make(chan k.Event, 4)}
 	clients := &mockClients{producer: producer}
 	clock := &fixedClock{now: time.UnixMilli(12345)}
@@ -303,8 +362,13 @@ func TestSinkRoutesRawRecordsAndAttributesDeliveryFailures(t *testing.T) {
 	timestamp := int64(12345)
 	token := core.Token{Partition: 2, Generation: 3, Sequence: 4}
 	record := core.Record{Key: []byte{0, 255}, Value: nil, TimestampMS: &timestamp, Headers: []core.Header{{Name: "dup", Value: nil}, {Name: "dup", Value: []byte{}}}}
-	if err := sink.Submit(record, token); err != nil {
-		t.Fatal(err)
+
+	// When
+	submitErr := sink.Submit(record, token)
+
+	// Then
+	if submitErr != nil {
+		t.Fatal(submitErr)
 	}
 	message := producer.messages[0]
 	if message.TopicPartition.Partition != k.PartitionAny || !bytes.Equal(message.Key, record.Key) || message.Value != nil || message.Opaque != token || !message.Timestamp.Equal(clock.Now()) || !reflect.DeepEqual(message.Headers, []k.Header{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}) {
@@ -332,6 +396,7 @@ func TestSinkRoutesRawRecordsAndAttributesDeliveryFailures(t *testing.T) {
 }
 
 func TestDestinationPartitionChangeWarnsWithoutChangingRecordRouting(t *testing.T) {
+	// Given
 	producer := &producerMock{events: make(chan k.Event), metadata: &k.Metadata{Topics: map[string]k.TopicMetadata{"orders": {Partitions: make([]k.PartitionMetadata, 7)}}}}
 	clock := &fixedClock{now: time.UnixMilli(12345)}
 	var logs bytes.Buffer
@@ -342,8 +407,13 @@ func TestDestinationPartitionChangeWarnsWithoutChangingRecordRouting(t *testing.
 	defer sink.Close()
 	clock.now = clock.now.Add(31 * time.Second)
 	record := core.Record{Key: []byte{0, 255}, Value: []byte("opaque")}
-	if err := sink.Submit(record, core.Token{}); err != nil {
-		t.Fatal(err)
+
+	// When
+	submitErr := sink.Submit(record, core.Token{})
+
+	// Then
+	if submitErr != nil {
+		t.Fatal(submitErr)
 	}
 	message := producer.messages[0]
 	if sink.partitionCount != 7 || !strings.Contains(logs.String(), "destination partition count changed; key routing may change") || !bytes.Equal(message.Key, record.Key) || message.TopicPartition.Partition != k.PartitionAny {
@@ -382,27 +452,43 @@ func (a *adminMock) DescribeConsumerGroups(context.Context, []string, ...k.Descr
 }
 func (a *adminMock) Close() { a.closed = true }
 func TestInspectorClosesAdminWhenPreflightFails(t *testing.T) {
+	// Given
 	for _, result := range []k.DescribeTopicsResult{{}, {TopicDescriptions: []k.TopicDescription{{Name: "orders"}}}} {
 		admin := &adminMock{described: result}
-		if _, err := NewInspector(&mockClients{admin: admin}, plan.Properties{}, "orders", quietLogger()); err == nil || !admin.closed {
-			t.Fatal("invalid topic identity accepted or admin leaked", err)
+
+		// When
+		_, newInspectorErr := NewInspector(&mockClients{admin: admin}, plan.Properties{}, "orders", quietLogger())
+
+		// Then
+		if newInspectorErr == nil || !admin.closed {
+			t.Fatal("invalid topic identity accepted or admin leaked", newInspectorErr)
 		}
 	}
 }
 func TestInspectorRequestsCurrentPartitions(t *testing.T) {
+	// Given
 	description := k.TopicDescription{Name: "orders", Partitions: []k.TopicPartitionInfo{{Partition: 0}, {Partition: 2}}}
 	admin := &adminMock{described: k.DescribeTopicsResult{TopicDescriptions: []k.TopicDescription{description}}, groupOffsets: k.ListConsumerGroupOffsetsResult{ConsumerGroupsTopicPartitions: []k.ConsumerGroupTopicPartitions{{Partitions: []k.TopicPartition{{Partition: 0, Offset: 10}, {Partition: 2, Offset: k.OffsetInvalid}}}}}}
 	inspector := &Inspector{admin: admin, topic: "orders", description: description, log: quietLogger()}
+
+	// When
 	parts, err := inspector.Progress("group")
+
+	// Then
 	if err != nil || len(parts) != 2 || len(admin.requested) != 1 || admin.requested[0].Group != "group" || len(admin.requested[0].Partitions) != 2 || admin.requested[0].Partitions[1].Partition != 2 {
 		t.Fatal("current partition discovery failed", parts, admin.requested, err)
 	}
 }
 func TestSourceValidatesProgressThroughMetadataInterface(t *testing.T) {
+	// Given
 	valid := Progress{Fingerprint: "fp", TopicID: "topic-id"}.Encode()
 	metadata := &sourceMetadataMock{parts: []k.TopicPartition{{Partition: 0, Offset: 10, Metadata: &valid}, {Partition: 2, Offset: k.OffsetInvalid}}}
-	source := &Source{inspector: metadata, fingerprint: "fp", plan: plan.Plan{Group: "group"}}
+	source := &Source{consumer: &consumerMock{committed: metadata.parts}, inspector: metadata, fingerprint: "fp", plan: plan.Plan{Group: "group"}}
+
+	// When
 	positions, progress, err := source.saved()
+
+	// Then
 	if err != nil || len(progress) != 1 || len(positions) != 1 || positions[0].Offset != 10 {
 		t.Fatal("valid progress lost", progress, err)
 	}
@@ -413,9 +499,15 @@ func TestSourceValidatesProgressThroughMetadataInterface(t *testing.T) {
 	}
 }
 func TestInspectorRejectsMissingOffsetResultsAndForeignMembers(t *testing.T) {
+	// Given
 	admin := &adminMock{offsetResult: k.ListOffsetsResult{ResultInfos: map[k.TopicPartition]k.ListOffsetsResultInfo{}}}
 	inspector := &Inspector{admin: admin, topic: "orders", log: quietLogger()}
-	if _, err := inspector.Offsets([]int32{0}, k.LatestOffsetSpec, true); err == nil {
+
+	// When
+	_, offsetsErr := inspector.Offsets([]int32{0}, k.LatestOffsetSpec, true)
+
+	// Then
+	if offsetsErr == nil {
 		t.Fatal("missing offset accepted")
 	}
 	admin.groups = k.DescribeConsumerGroupsResult{ConsumerGroupDescriptions: []k.ConsumerGroupDescription{{Members: []k.MemberDescription{{ClientID: "another-app"}}}}}

@@ -3,11 +3,16 @@ package copy
 import "testing"
 
 func TestConfirmedPrefixIncludesNumericGaps(t *testing.T) {
+	// Given
 	tk := NewTracker()
 	tk.Assign(Cursor{0, 100})
+
+	// When
 	a, _ := tk.Observe(Cursor{0, 100}, 101, 10, false)
 	b, _ := tk.Observe(Cursor{0, 105}, 106, 20, false)
 	tk.Resolve(b)
+
+	// Then
 	if tk.Confirmed(0).Position != 100 {
 		t.Fatal("committed past unresolved record")
 	}
@@ -29,24 +34,40 @@ func TestConfirmedPrefixIncludesNumericGaps(t *testing.T) {
 }
 
 func TestOldGenerationDeliveryCannotAdvanceNewOwner(t *testing.T) {
+	// Given a new assignment after the previous generation was revoked.
 	tk := NewTracker()
 	tk.Assign(Cursor{0, 0})
 	old, _ := tk.Observe(Cursor{0, 0}, 1, 1, false)
 	tk.Revoke(0)
 	tk.Assign(Cursor{0, 0})
 	current, _ := tk.Observe(Cursor{0, 0}, 1, 1, false)
-	if tk.Resolve(old) || tk.Confirmed(0).Position != 0 {
+
+	// When an old delivery arrives late.
+	resolved := tk.Resolve(old)
+
+	// Then it cannot advance the new owner's confirmed prefix.
+	if resolved || tk.Confirmed(0).Position != 0 {
 		t.Fatal("late delivery advanced new assignment")
 	}
-	if !tk.Resolve(current) || tk.Confirmed(0).Position != 1 {
+
+	// When the current generation's delivery arrives.
+	resolved = tk.Resolve(current)
+
+	// Then its progress is confirmed.
+	if !resolved || tk.Confirmed(0).Position != 1 {
 		t.Fatal("current delivery not confirmed")
 	}
 }
 
 func TestControlRecordCursorAndTimestampStop(t *testing.T) {
+	// Given
 	tk := NewTracker()
 	tk.Assign(Cursor{0, 0})
+
+	// When
 	_, err := tk.Observe(Cursor{0, 0}, 2, 0, true)
+
+	// Then
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -47,6 +47,7 @@ func waitMembers(t *testing.T, a *k.AdminClient, group string, members int, part
 }
 
 func TestDistributedWorkersFinishAndSoleWorkerConfirms(t *testing.T) {
+	// Given
 	a := admin(t)
 	source := topic(t, a, 2)
 	destination := topic(t, a, 3)
@@ -59,6 +60,8 @@ func TestDistributedWorkersFinishAndSoleWorkerConfirms(t *testing.T) {
 	for range 2 {
 		go func() {
 			var output bytes.Buffer
+
+			// When
 			code := app.Execute(ctx, []string{"run", "--sql", statement}, nil, &output)
 			results <- workerResult{code, output.String()}
 		}()
@@ -74,6 +77,8 @@ func TestDistributedWorkersFinishAndSoleWorkerConfirms(t *testing.T) {
 	for range 2 {
 		select {
 		case r := <-results:
+
+			// Then
 			if r.code != 0 {
 				t.Fatalf("worker exit=%d: %s", r.code, r.detail)
 			}

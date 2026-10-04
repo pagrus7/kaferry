@@ -7,6 +7,7 @@ import (
 )
 
 func TestDocumentedExamples(t *testing.T) {
+	// Given
 	data, err := os.ReadFile("../../design/grammar.md")
 	if err != nil {
 		t.Fatal(err)
@@ -17,15 +18,25 @@ func TestDocumentedExamples(t *testing.T) {
 	}
 	for _, example := range examples {
 		statement := strings.SplitN(example, "```", 2)[0]
-		if _, err := NewParser().Parse(statement); err != nil {
-			t.Fatalf("documented example failed: %v", err)
+
+		// When
+		_, parseErr := NewParser().Parse(statement)
+
+		// Then
+		if parseErr != nil {
+			t.Fatalf("documented example failed: %v", parseErr)
 		}
 	}
 }
 
 func TestLexicalRules(t *testing.T) {
+	// Given
 	input := "-- header\ninsert /* block */ into file CBOR('a''b.cbor') select * from file cbor('源.cbor') options(group='ONE_OFF'); -- tail"
+
+	// When
 	s, err := NewParser().Parse(input)
+
+	// Then
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,6 +46,7 @@ func TestLexicalRules(t *testing.T) {
 }
 
 func TestInvalidStatements(t *testing.T) {
+	// Given
 	base := "INSERT INTO FILE cbor('b') SELECT * FROM FILE cbor('a') OPTIONS (GROUP = 'g')"
 	cases := []string{
 		"", base + ";" + base, base + ";;", strings.Replace(base, "SELECT *", "SELECT key", 1),
@@ -43,16 +55,28 @@ func TestInvalidStatements(t *testing.T) {
 		base + " /* unfinished", "/* nested /* comment */ */ " + base, base + " '\n", base + " \x00", base + "\xff",
 		strings.Replace(base, "GROUP = 'g'", "ON_SOURCE_FILE_CHANGED = CONTINUE", 1),
 		strings.Replace(base, "GROUP = 'g'", "CUTOFF = INTERVAL '1' WEEK", 1),
+		strings.Replace(base, "OPTIONS", "WHERE RECORD_TIMESTAMP '>=' NOW() OPTIONS", 1),
+		strings.Replace(base, "OPTIONS", "WHERE RECORD_TIMESTAMP '<' NOW() OPTIONS", 1),
 	}
 	for i, input := range cases {
-		if _, err := NewParser().Parse(input); err == nil {
+
+		// When
+		_, parseErr := NewParser().Parse(input)
+
+		// Then
+		if parseErr == nil {
 			t.Errorf("case %d accepted invalid syntax", i)
 		}
 	}
 }
 
 func TestErrorsHavePositionsAndDoNotEchoSecrets(t *testing.T) {
+	// Given
+
+	// When
 	_, err := NewParser().Parse("INSERT\nINTO TOPIC 'secret-value' SELECT 'password' FROM TOPIC 'a' OPTIONS(GROUP='g')")
+
+	// Then
 	if err == nil || !strings.Contains(err.Error(), "line 2, column") || strings.Contains(err.Error(), "password") || strings.Contains(err.Error(), "secret-value") {
 		t.Fatalf("unsafe or missing diagnostic: %v", err)
 	}

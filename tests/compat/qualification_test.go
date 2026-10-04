@@ -52,7 +52,7 @@ func secureFixture(t *testing.T) (*k.AdminClient, *k.Producer, string, string, s
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(a.Close)
+	t.Cleanup(func() { closeAdmin(t, a) })
 	prefix := fmt.Sprintf("kfwd2-security-%d", time.Now().UnixNano())
 	src, dst, group := prefix+"-src", prefix+"-dst", prefix+"-copy"
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -90,6 +90,9 @@ func secureFixture(t *testing.T) (*k.AdminClient, *k.Producer, string, string, s
 			t.Fatal(result)
 		}
 	}
+	waitTopicReady(t, a, src, 1)
+	waitTopicReady(t, a, dst, 1)
+	waitCopierPermissions(t, src, dst)
 	waitSecureFixture(t, a, src, dst, group)
 	cfg["enable.idempotence"] = true
 	cfg["message.timeout.ms"] = 20000
@@ -104,25 +107,75 @@ func secureFixture(t *testing.T) (*k.AdminClient, *k.Producer, string, string, s
 // Listening sockets precede topic replication and cold group-coordinator loading.
 func waitSecureFixture(t *testing.T, a *k.AdminClient, src, dst, group string) {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	cfg := secureProperties(t, "copier", "fixture-copy-secret")
+	cfg["group.id"], cfg["enable.auto.commit"] = group, false
+	reader, err := k.NewConsumer(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	var last string
+	for {
+		request, done := context.WithTimeout(ctx, 5*time.Second)
+		topics, topicErr := a.DescribeTopics(request, k.NewTopicCollectionOfTopicNames([]string{src, dst}), k.SetAdminRequestTimeout(4*time.Second))
+		done()
+		ready := topicErr == nil && len(topics.TopicDescriptions) == 2
+		for _, topic := range topics.TopicDescriptions {
+			ready = ready && topic.Error.Code() == k.ErrNoError && len(topic.Partitions) == 1 && len(topic.Partitions[0].Isr) == 3
+		}
+		progress, offsetErr := reader.Committed([]k.TopicPartition{{Topic: &src, Partition: 0}}, 4000)
+		groupReady := offsetErr == nil && len(progress) == 1 && progress[0].Error == nil
+		if ready && groupReady {
+			return
+		}
+		last = fmt.Sprintf("replicated=%v group_ready=%v topic_error=%v offset_error=%v progress=%+v", ready, groupReady, topicErr, offsetErr, progress)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("secure fixture did not become ready: %s", last)
+		case <-tick.C:
+		}
+	}
+}
+
+// CreateACLs acknowledges controller state before all metadata-serving brokers apply it.
+func waitCopierPermissions(t *testing.T, src, dst string) {
+	t.Helper()
+	cfg := secureProperties(t, "copier", "fixture-copy-secret")
+	a, err := k.NewAdminClient(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAdmin(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
+	consecutive := 0
+	var last string
 	for {
-		request, cancel := context.WithTimeout(ctx, 2*time.Second)
-		topics, err := a.DescribeTopics(request, k.NewTopicCollectionOfTopicNames([]string{src, dst}))
-		ready := err == nil && len(topics.TopicDescriptions) == 2
-		for _, topic := range topics.TopicDescriptions {
-			ready = ready && topic.Error.Code() == k.ErrNoError && len(topic.Partitions) == 1 && len(topic.Partitions[0].Isr) == 3
+		request, done := context.WithTimeout(ctx, 5*time.Second)
+		result, err := a.DescribeTopics(request, k.NewTopicCollectionOfTopicNames([]string{src, dst}), k.SetAdminRequestTimeout(4*time.Second))
+		done()
+		ready := err == nil && len(result.TopicDescriptions) == 2
+		for _, topic := range result.TopicDescriptions {
+			ready = ready && topic.Error.Code() == k.ErrNoError && len(topic.Partitions) == 1
 		}
-		progress, err := a.ListConsumerGroupOffsets(request, []k.ConsumerGroupTopicPartitions{{Group: group, Partitions: []k.TopicPartition{{Topic: &src, Partition: 0}}}})
-		cancel()
-		if ready && err == nil && len(progress.ConsumerGroupsTopicPartitions) == 1 && len(progress.ConsumerGroupsTopicPartitions[0].Partitions) == 1 && progress.ConsumerGroupsTopicPartitions[0].Partitions[0].Error == nil {
+		if ready {
+			consecutive++
+		} else {
+			consecutive = 0
+		}
+		if consecutive == 3 {
 			return
 		}
+		last = fmt.Sprintf("error=%v topics=%+v", err, result.TopicDescriptions)
 		select {
 		case <-ctx.Done():
-			t.Fatal("secure fixture did not replicate or load its coordinator", err)
+			t.Fatalf("copier permissions did not become ready: %s", last)
 		case <-tick.C:
 		}
 	}
@@ -183,13 +236,18 @@ func secureRead(t *testing.T, reader *k.Consumer) *k.Message {
 }
 
 func TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
+	// Given
 	_, p, src, dst, group := secureFixture(t)
 	stamp := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
 	publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Key: []byte{0, 255}, Value: []byte{}, Headers: []k.Header{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, Timestamp: stamp})
 	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), group)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
+
+	// When
 	result := loggedWorker(ctx, statement, secureConfig(t, secureProperties(t, "copier", "fixture-copy-secret")))
+
+	// Then
 	if result.code != 0 || !strings.Contains(result.detail, "topic configuration unreadable; dependent preflight checks disabled") || strings.Contains(result.detail, "fixture-copy-secret") {
 		t.Fatal("restricted TLS copy failed, omitted config warning or leaked credential", result)
 	}
@@ -220,6 +278,7 @@ func TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 }
 
 func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
+	// Given
 	a, p, src, dst, group := secureFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -263,6 +322,8 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 		publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Key: []byte("stable"), Value: []byte(fmt.Sprint(i)), Timestamp: stamp})
 	}
 	waitEnd(t, a, dst, 16)
+
+	// When the destination leader stops while the copy is running.
 	if data, err := exec.Command("docker", "stop", "-t", "1", container).CombinedOutput(); err != nil {
 		t.Fatalf("stop owned leader: %v %s", err, data)
 	}
@@ -275,14 +336,19 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 		publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Key: []byte("stable"), Value: []byte(fmt.Sprint(i)), Timestamp: stamp})
 	}
 	waitSecureEnd(t, dst, 64)
-	if err := cmd.Process.Signal(os.Interrupt); err != nil {
-		t.Fatal(err)
+
+	signalErr := cmd.Process.Signal(os.Interrupt)
+
+	if signalErr != nil {
+		t.Fatal(signalErr)
 	}
 	if err := <-done; err != nil {
 		finished = true
 		t.Fatalf("copy failed on broker failover: %v %s", err, output.String())
 	}
 	finished = true
+
+	// Then remaining replicas delivered every record and shutdown committed the stream.
 	reader := secureReader(t, dst)
 	for i := range 64 {
 		message := secureRead(t, reader)

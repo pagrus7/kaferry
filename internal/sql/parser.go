@@ -157,7 +157,7 @@ func (p *parser) bounds() []Bound {
 
 func (p *parser) bound() Bound {
 	op := p.current.text
-	if op != ">" && op != ">=" && op != "<" && op != "<=" {
+	if p.current.kind != "symbol" || (op != ">" && op != ">=" && op != "<" && op != "<=") {
 		p.fail("timestamp comparison")
 		return Bound{}
 	}

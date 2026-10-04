@@ -78,9 +78,13 @@ func NewInspector(clients Clients, properties plan.Properties, topic string, log
 		a.Close()
 		return nil, err
 	}
-	if len(result.TopicDescriptions) != 1 || result.TopicDescriptions[0].Error.Code() != k.ErrNoError {
+	if len(result.TopicDescriptions) != 1 {
 		a.Close()
 		return nil, conflict("topic %q does not exist or cannot be described", topic)
+	}
+	if result.TopicDescriptions[0].Error.Code() != k.ErrNoError {
+		a.Close()
+		return nil, conflict("topic %q does not exist or cannot be described: %v", topic, result.TopicDescriptions[0].Error)
 	}
 	i.description = result.TopicDescriptions[0]
 	if i.description.TopicID.GetMostSignificantBits() == 0 && i.description.TopicID.GetLeastSignificantBits() == 0 {
@@ -104,9 +108,12 @@ func (i *Inspector) Parts() []k.TopicPartition {
 	}
 	return parts
 }
-func (i *Inspector) Progress(group string) ([]k.TopicPartition, error) {
+func (i *Inspector) CurrentPartitions() ([]k.TopicPartition, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	return i.currentPartitions(ctx)
+}
+func (i *Inspector) currentPartitions(ctx context.Context) ([]k.TopicPartition, error) {
 	described, err := i.admin.DescribeTopics(ctx, k.NewTopicCollectionOfTopicNames([]string{i.topic}))
 	if err != nil {
 		return nil, err
@@ -122,14 +129,23 @@ func (i *Inspector) Progress(group string) ([]k.TopicPartition, error) {
 		i.log.Info("source partition count changed", "topic", i.topic, "previous", len(i.description.Partitions), "current", len(current.Partitions))
 	}
 	i.description = current
-	result, err := i.admin.ListConsumerGroupOffsets(ctx, []k.ConsumerGroupTopicPartitions{{Group: group, Partitions: i.Parts()}})
+	return i.Parts(), nil
+}
+func (i *Inspector) Progress(group string) ([]k.TopicPartition, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	parts, err := i.currentPartitions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := i.admin.ListConsumerGroupOffsets(ctx, []k.ConsumerGroupTopicPartitions{{Group: group, Partitions: parts}})
 	if err != nil {
 		return nil, err
 	}
 	if len(result.ConsumerGroupsTopicPartitions) != 1 {
 		return nil, fmt.Errorf("missing group offset result")
 	}
-	parts := result.ConsumerGroupsTopicPartitions[0].Partitions
+	parts = result.ConsumerGroupsTopicPartitions[0].Partitions
 	for _, part := range parts {
 		if part.Error != nil {
 			return nil, part.Error
