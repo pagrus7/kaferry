@@ -2,8 +2,8 @@
 
 ## Verified baseline
 
-- Kafka `apache/kafka:3.9.0`, single KRaft broker; `confluent-kafka-go/v2 v2.15.0`, bundled librdkafka `2.15.0`.
-- macOS ARM64 with Go 1.27.1; Linux ARM64 with Go 1.26, CGO, bundled static library. Linux AMD64 is a CI target, not locally verified.
+- Kafka `apache/kafka:3.9.0`, independent single-broker KRaft clusters and a three-broker/controller replicated cluster; `confluent-kafka-go/v2 v2.15.0`, bundled librdkafka `2.15.0`.
+- macOS ARM64 with Go 1.27.1; Linux ARM64 and AMD64 with Go 1.26, CGO, bundled static library. AMD64 ran under Docker emulation. Hosted CI remains unrun.
 - Lowest verified broker version: 3.9.0. Earlier feature introduction dates do not establish support.
 
 ## Probe results
@@ -33,8 +33,12 @@ The [Confluent API](https://docs.confluent.io/platform/current/clients/confluent
 - The subscription guard uses the available client-ID/assignment checks and repeats progress validation at positioning. No protocol extension/client fork was introduced. This does not verify unassigned subscriptions.
 - A ten-second write-drain budget does not bound blocking commits, filesystem calls, or native close. Never launch a commit goroutine and release ownership while it may still succeed.
 
-## Permissions and remaining qualification
+## Permissions and deployment qualification
 
-Integration runs used an unrestricted plaintext test broker. Source requires read/topic description, group description and offset fetch/commit; destination requires write/topic description. Topic configuration description is optional: denied/unreadable config warns and disables dependent checks. Cluster-ID discovery must succeed. This permission inventory has not been tested against a restricted ACL broker.
+The disposable qualification cluster uses SASL/PLAIN over TLS with a generated CA. Its copier has only source-topic READ, destination-topic WRITE and prefixed-group READ ACLs (Kafka grants the associated DESCRIBE operations). Cluster-ID discovery, group inspection, offset fetch/commit and copying passed. Denied topic configuration description warned and disabled dependent checks. Wrong credentials, an unauthorized identity and an untrusted CA failed under `ON_ERROR=SKIP`, without exposing the supplied passwords in command diagnostics.
 
-Before qualifying additional deployments: restricted ACL/SASL/TLS matrices, additional broker versions, multiple brokers with failover, and sustained load/soak with realistic latency and retention. No broader platform/version qualification is implied.
+A destination-leader broker/controller stop passed with replication factor 3 and minimum ISR 2: 64 records retained order/bytes/timestamp, shutdown succeeded and committed all 64. Fixture clients must tolerate transient connections to the stopped broker; a stale admin-offset request is not a useful failover deadline. Internal broker/controller listeners are private Docker plaintext listeners with an anonymous superuser; this fixture does not qualify encrypted internal traffic.
+
+The two-minute streaming soak verified 74,816 records, sampled commit lag/RSS and graceful shutdown. See [measurements](implementation-results.md#completeness-and-candidate-verification).
+
+Additional broker versions, SCRAM/mTLS/other authentication providers, physical AMD64 deployments, longer production workloads and realistic latency/retention still require deployment-specific qualification. No broader platform/version claim is implied.

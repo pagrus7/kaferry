@@ -29,6 +29,6 @@ jobs:
           cache: true
       - run: make broker integration
       - if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        run: make fault load benchmark
+        run: make fault load soak qualification fuzz benchmark
       - if: always()
         run: make broker-down

@@ -15,7 +15,7 @@ import (
 )
 
 type Sink struct {
-	producer       *k.Producer
+	producer       ProducerClient
 	topic          string
 	configuration  map[string]string
 	clock          copy.Clock
@@ -27,7 +27,7 @@ type Sink struct {
 	lastMetadata   time.Time
 }
 
-func NewSink(inspector *Inspector, endpoint plan.Endpoint, limits config.Worker, clock copy.Clock, logger *slog.Logger) (*Sink, error) {
+func NewSink(clients Clients, inspector DestinationMetadata, endpoint plan.Endpoint, limits config.Worker, clock copy.Clock, logger *slog.Logger) (*Sink, error) {
 	properties := native(endpoint.Properties)
 	for key, value := range map[string]any{"go.delivery.reports": true, "go.batch.producer": false, "allow.auto.create.topics": false} {
 		if old, ok := properties[key]; ok && fmt.Sprint(old) != fmt.Sprint(value) {
@@ -75,12 +75,12 @@ func NewSink(inspector *Inspector, endpoint plan.Endpoint, limits config.Worker,
 	if err := boundQueue(properties, "queue.buffering.max.kbytes", (queueBytes+1023)/1024); err != nil {
 		return nil, err
 	}
-	p, err := k.NewProducer(&properties)
+	p, err := clients.Producer(properties)
 	if err != nil {
 		return nil, conflict("invalid Kafka producer configuration")
 	}
 	s := &Sink{producer: p, topic: endpoint.Name, configuration: topicConfig, clock: clock, log: logger, deliveries: make(chan copy.Delivery, limits.RecordCap+1), done: make(chan struct{})}
-	s.partitionCount = len(inspector.description.Partitions)
+	s.partitionCount = inspector.PartitionCount()
 	s.lastMetadata = clock.Now()
 	logger.Info("producer configured", "topic", s.topic, "message.max.bytes", messageLimit, "partitioner", properties["partitioner"])
 	go s.reports()

@@ -28,7 +28,7 @@ func TestLogAppendTimeDestinationRestampsUnpreservableValues(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "source.cbor")
 	codec, _ := file.NewCodec(1 << 20)
-	o, err := file.NewOutput(path, "fixture", "fixture", "", 0, codec, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	o, err := file.NewOutput(file.NewPublisher(), path, "fixture", "fixture", "", 0, codec, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

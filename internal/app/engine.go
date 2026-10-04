@@ -5,172 +5,175 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
+
 	"kafka-fwd2/internal/config"
 	copy "kafka-fwd2/internal/copy"
 	"kafka-fwd2/internal/file"
 	"kafka-fwd2/internal/kafka"
 	"kafka-fwd2/internal/plan"
-	"log/slog"
-	"os"
 )
 
 type Engine interface {
 	Run(context.Context, plan.Plan, config.Worker) error
 }
-type KafkaFactory struct {
-	clock  copy.Clock
-	logger *slog.Logger
+type KafkaFactory interface {
+	Open(plan.Endpoint) (kafka.Connection, error)
 }
-
-func NewKafkaFactory(clock copy.Clock, logger *slog.Logger) *KafkaFactory {
-	return &KafkaFactory{clock: clock, logger: logger}
+type FileFactory interface {
+	OpenSource(plan.Plan, string, config.Worker) (file.Input, error)
+	OpenOutput(plan.Plan, string, file.DestinationProgress, config.Worker) (file.OutputSink, error)
+}
+type Execution interface{ Run(context.Context) error }
+type RunnerFactory interface {
+	New(copy.Source, copy.Sink, copy.ProgressStore, plan.Plan, config.Worker) Execution
 }
 
 type runtimeEngine struct {
-	kafka   *KafkaFactory
-	files   *FileFactory
-	tracker *copy.Tracker
+	kafka  KafkaFactory
+	files  FileFactory
+	runner RunnerFactory
+	log    *slog.Logger
 }
 
-func newEngine(factory *KafkaFactory, files *FileFactory, tracker *copy.Tracker) Engine {
-	return &runtimeEngine{kafka: factory, files: files, tracker: tracker}
+func newEngine(kafka KafkaFactory, files FileFactory, runner RunnerFactory, logger *slog.Logger) Engine {
+	return &runtimeEngine{kafka: kafka, files: files, runner: runner, log: logger}
 }
+
 func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Worker) error {
 	if p.OneOff {
-		var id [16]byte
-		if _, err := rand.Read(id[:]); err != nil {
-			return err
-		}
-		p.Group = "kafka-fwd2-" + hex.EncodeToString(id[:])
-		e.kafka.logger.Info("one-off group generated", "group", p.Group)
-	}
-	if p.Source.Kind == "FILE" && p.Destination.Kind == "FILE" {
-		source, sourceErr := os.Stat(p.Source.Name)
-		destination, destinationErr := os.Stat(p.Destination.Name)
-		if sourceErr == nil && destinationErr == nil && os.SameFile(source, destination) {
-			return &file.Conflict{Err: fmt.Errorf("source and destination are the same file")}
-		}
-	}
-	var sourceInspector, destinationInspector *kafka.Inspector
-	var sourceCluster, destinationCluster string
-	var err error
-	if p.Source.Kind == "TOPIC" {
-		sourceInspector, err = kafka.NewInspector(p.Source.Properties, p.Source.Name, e.kafka.logger)
+		var err error
+		p.Group, err = oneOffGroup()
 		if err != nil {
 			return err
 		}
-		defer sourceInspector.Close()
-		sourceCluster, err = sourceInspector.ClusterID()
-		if err != nil {
-			return err
-		}
+		e.log.Info("one-off group generated", "group", p.Group)
 	}
-	if p.Destination.Kind == "TOPIC" {
-		destinationInspector, err = kafka.NewInspector(p.Destination.Properties, p.Destination.Name, e.kafka.logger)
-		if err != nil {
-			return err
-		}
-		defer destinationInspector.Close()
-		destinationCluster, err = destinationInspector.ClusterID()
-		if err != nil {
-			return err
-		}
+	sourceEndpoint, err := e.inspect(p.Source)
+	if err != nil {
+		return err
 	}
-	fp, err := p.Fingerprint(sourceCluster, destinationCluster)
+	defer sourceEndpoint.close()
+	destinationEndpoint, err := e.inspect(p.Destination)
+	if err != nil {
+		return err
+	}
+	defer destinationEndpoint.close()
+	fp, err := p.Fingerprint(sourceEndpoint.clusterID, destinationEndpoint.clusterID)
 	if err != nil {
 		return &kafka.Conflict{Err: err}
 	}
-	var source copy.Source
-	var sink copy.Sink
-	var store copy.ProgressStore
-	var checkpoints *file.Checkpoints
-	codec, err := file.NewCodec(limits.MaxFrameBytes)
+	input, progress, err := e.sourceProgress(p, fp, limits, sourceEndpoint.connection)
 	if err != nil {
 		return err
 	}
-	var expectedID string
-	var extent int64
-	var existingProgress bool
-	if p.Source.Kind == "FILE" {
-		checkpoints, err = file.NewCheckpoints(limits.CheckpointDir, p.Group, e.files.writer)
-		if err != nil {
-			return err
-		}
-		defer checkpoints.Close()
-		reader, err := file.NewSource(p.Source.Name, fp, p.Window, codec, checkpoints, e.files.clock)
-		if err != nil {
-			return err
-		}
-		source = reader
-		defer reader.Close()
-		store = checkpoints
-		e.files.logger.Info("source progress inspected", "group", p.Group, "exists", checkpoints.Existing() != nil)
-		if saved := checkpoints.Existing(); saved != nil {
-			existingProgress = true
-			expectedID, extent = saved.DestinationID, saved.Extent
-		}
-	} else {
-		if err = sourceInspector.CheckMembers(p.Group); err != nil {
-			return err
-		}
-		progress, err := sourceInspector.ReadProgress(p.Group, fp, p.Window, p.CutoffMS)
-		if err != nil {
-			return err
-		}
-		e.kafka.logger.Info("source progress inspected", "group", p.Group, "partitions_with_progress", len(progress))
-		for _, saved := range progress {
-			existingProgress = true
-			if saved.FileID != "" {
-				if expectedID != "" && expectedID != saved.FileID {
-					return &file.Conflict{Err: fmt.Errorf("commits name different destination files")}
-				}
-				expectedID = saved.FileID
-			}
-			if saved.Extent > extent {
-				extent = saved.Extent
-			}
-		}
+	if input != nil {
+		defer input.Close()
 	}
-	var output copy.OutputProgress
-	if p.Destination.Kind == "FILE" {
-		if existingProgress && expectedID == "" {
-			return &file.Conflict{Err: fmt.Errorf("existing progress has no destination file identity; use a new GROUP and output")}
-		}
-		destination, err := file.NewOutput(p.Destination.Name, p.Group, fp, expectedID, extent, codec, limits.RecordCap, e.files.logger)
-		if err != nil {
-			return err
-		}
-		sink = destination
-		output = destination
-		defer destination.Close()
-	} else {
-		destination, err := kafka.NewSink(destinationInspector, p.Destination, limits, e.kafka.clock, e.kafka.logger)
-		if err != nil {
-			return err
-		}
-		sink = destination
-		defer destination.Close()
-	}
-	if p.Source.Kind == "TOPIC" {
-		if p.Window.Upper != nil {
-			e.kafka.logger.Warn("bounded copy can omit late and out-of-order timestamps after a cutoff stop")
-		}
-		reader, committer, err := kafka.NewSource(sourceInspector, p, fp, limits, e.kafka.clock, e.kafka.logger, output)
-		if err != nil {
-			return err
-		}
-		source = reader
-		store = committer
-		defer reader.Close()
-	} else {
-		checkpoints.BindOutput(output)
-	}
-	runner := copy.NewRunner(source, sink, store, e.kafka.clock, e.kafka.logger, p, limits, e.tracker)
-	if err = runner.Run(ctx); err != nil {
+	sink, output, err := e.openSink(p, fp, limits, destinationEndpoint.connection, progress)
+	if err != nil {
 		return err
 	}
-	if p.OneOff && checkpoints != nil {
-		return checkpoints.Delete()
+	defer sink.Close()
+	var source copy.Source
+	var store copy.ProgressStore
+	if input != nil {
+		input.BindOutput(output)
+		source, store = input, input
+	} else {
+		if p.Window.Upper != nil {
+			e.log.Warn("bounded copy can omit late and out-of-order timestamps after a cutoff stop")
+		}
+		source, store, err = sourceEndpoint.connection.Source(p, fp, limits, output)
+		if err != nil {
+			return err
+		}
+		defer source.Close()
+	}
+	if err := e.runner.New(source, sink, store, p, limits).Run(ctx); err != nil {
+		return err
+	}
+	if p.OneOff && input != nil {
+		return input.DeleteCheckpoint()
 	}
 	return nil
+}
+
+func oneOffGroup() (string, error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "", err
+	}
+	return "kafka-fwd2-" + hex.EncodeToString(id[:]), nil
+}
+
+type inspectedEndpoint struct {
+	connection kafka.Connection
+	clusterID  string
+}
+
+func (e *runtimeEngine) inspect(endpoint plan.Endpoint) (inspectedEndpoint, error) {
+	if endpoint.Kind != "TOPIC" {
+		return inspectedEndpoint{}, nil
+	}
+	connection, err := e.kafka.Open(endpoint)
+	if err != nil {
+		return inspectedEndpoint{}, err
+	}
+	id, err := connection.ClusterID()
+	if err != nil {
+		connection.Close()
+		return inspectedEndpoint{}, err
+	}
+	return inspectedEndpoint{connection: connection, clusterID: id}, nil
+}
+func (e inspectedEndpoint) close() {
+	if e.connection != nil {
+		e.connection.Close()
+	}
+}
+
+func (e *runtimeEngine) sourceProgress(p plan.Plan, fp string, limits config.Worker, connection kafka.Connection) (file.Input, file.DestinationProgress, error) {
+	if p.Source.Kind == "FILE" {
+		input, err := e.files.OpenSource(p, fp, limits)
+		if err != nil {
+			return nil, file.DestinationProgress{}, err
+		}
+		progress := input.Progress()
+		e.log.Info("source progress inspected", "group", p.Group, "exists", progress.Exists)
+		return input, progress, nil
+	}
+	if err := connection.CheckMembers(p.Group); err != nil {
+		return nil, file.DestinationProgress{}, err
+	}
+	saved, err := connection.ReadProgress(p.Group, fp, p.Window, p.CutoffMS)
+	if err != nil {
+		return nil, file.DestinationProgress{}, err
+	}
+	e.log.Info("source progress inspected", "group", p.Group, "partitions_with_progress", len(saved))
+	progress, err := destinationProgress(saved)
+	return nil, progress, err
+}
+
+func destinationProgress(saved map[int32]kafka.Progress) (file.DestinationProgress, error) {
+	progress := file.DestinationProgress{Exists: len(saved) > 0}
+	for _, partition := range saved {
+		if partition.FileID != "" {
+			if progress.ID != "" && progress.ID != partition.FileID {
+				return progress, &file.Conflict{Err: fmt.Errorf("commits name different destination files")}
+			}
+			progress.ID = partition.FileID
+		}
+		progress.Extent = max(progress.Extent, partition.Extent)
+	}
+	return progress, nil
+}
+
+func (e *runtimeEngine) openSink(p plan.Plan, fp string, limits config.Worker, connection kafka.Connection, progress file.DestinationProgress) (copy.Sink, copy.OutputProgress, error) {
+	if p.Destination.Kind == "FILE" {
+		output, err := e.files.OpenOutput(p, fp, progress, limits)
+		return output, output, err
+	}
+	sink, err := connection.Sink(limits)
+	return sink, nil, err
 }

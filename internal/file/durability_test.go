@@ -20,7 +20,7 @@ func TestFailedSyncIsNeverAcknowledged(t *testing.T) {
 	c := codec(t)
 	dir := t.TempDir()
 	src, dst := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "output.cbor")
-	fixture, err := NewOutput(src, "fixture", "fixture", "", 0, c, 10, logger)
+	fixture, err := NewOutput(NewPublisher(), src, "fixture", "fixture", "", 0, c, 10, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestFailedSyncIsNeverAcknowledged(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer source.Close()
-	out, err := NewOutput(dst, "durable", "fp", "", 0, c, limits.RecordCap, logger)
+	out, err := NewOutput(NewPublisher(), dst, "durable", "fp", "", 0, c, limits.RecordCap, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

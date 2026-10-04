@@ -2,10 +2,8 @@ package kafka
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -14,98 +12,31 @@ import (
 	"kafka-fwd2/internal/plan"
 )
 
-type offsetCommitter interface {
-	CommitOffsets([]k.TopicPartition) ([]k.TopicPartition, error)
-}
-
-type Committer struct {
-	consumer offsetCommitter
-	topic    string
-	metadata map[int32]Progress
-	output   copy.OutputProgress
-}
-
-func (c *Committer) Save(ctx context.Context, cursors []copy.Cursor) (map[int32]error, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if len(cursors) == 0 {
-		return map[int32]error{}, nil
-	}
-	parts := make([]k.TopicPartition, len(cursors))
-	for n, cursor := range cursors {
-		progress := c.metadata[cursor.Partition]
-		if c.output != nil {
-			id, extent := c.output.DurableOutput()
-			if progress.FileID != "" && progress.FileID != id {
-				return nil, conflict("destination file identity mismatch")
-			}
-			progress.FileID = id
-			progress.Extent = extent
-			c.metadata[cursor.Partition] = progress
-		}
-		metadata := progress.Encode()
-		parts[n] = k.TopicPartition{Topic: &c.topic, Partition: cursor.Partition, Offset: k.Offset(cursor.Position), Metadata: &metadata}
-	}
-	result, err := c.consumer.CommitOffsets(parts)
-	if err != nil {
-		return nil, classifyCommit(err)
-	}
-	failures := make(map[int32]error, len(result))
-	for _, part := range result {
-		failures[part.Partition] = classifyCommit(part.Error)
-	}
-	return failures, nil
-}
-
-// Commit failures that only mean the group moved on or the coordinator is
-// unreachable; releasing a revoked partition after one of them replays work.
-// Authorization, metadata size, fencing, fatal and unknown errors stay terminal.
-var recoverableCommit = map[k.ErrorCode]bool{
-	k.ErrRebalanceInProgress: true, k.ErrIllegalGeneration: true, k.ErrUnknownMemberID: true,
-	k.ErrCoordinatorNotAvailable: true, k.ErrNotCoordinator: true, k.ErrCoordinatorLoadInProgress: true,
-	k.ErrRequestTimedOut: true, k.ErrTransport: true, k.ErrTimedOut: true, k.ErrWaitCoord: true, k.ErrAllBrokersDown: true,
-}
-
-func classifyCommit(err error) error {
-	var native k.Error
-	if errors.As(err, &native) && !native.IsFatal() && recoverableCommit[native.Code()] {
-		return &copy.Recoverable{Err: err}
-	}
-	return err
-}
-
 type poller interface{ Poll(int) k.Event }
-type offsetReader interface {
-	Offsets(partitions []int32, spec k.OffsetSpec, readCommitted bool) (map[int32]int64, error)
-}
-type timeReader interface {
-	OffsetsForTimes([]k.TopicPartition, int) ([]k.TopicPartition, error)
-}
 
 type Source struct {
-	consumer        *k.Consumer
+	consumer        ConsumerClient
 	events          poller
-	offsets         offsetReader
-	times           timeReader
-	inspector       *Inspector
-	committer       *Committer
+	offsets         OffsetReader
+	times           TimeReader
+	inspector       SourceMetadata
+	positioning     PositionerFactory
+	committer       AssignmentStore
 	plan            plan.Plan
 	fingerprint     string
-	clock           copy.Clock
 	log             *slog.Logger
 	lifecycle       copy.Lifecycle
 	err             error
 	retrying        bool
-	retentionChecks map[int32]retentionCheck
+	retentionChecks map[int32]RetentionCheck
 }
 
-type retentionCheck struct {
-	low   int64
-	lower int64
+type RetentionCheck struct {
+	Low   int64
+	Lower int64
 }
 
-func NewSource(inspector *Inspector, p plan.Plan, fp string, limits config.Worker, clock copy.Clock, logger *slog.Logger, output copy.OutputProgress) (*Source, *Committer, error) {
+func NewSource(clients Clients, inspector SourceMetadata, positioning PositionerFactory, p plan.Plan, fp string, limits config.Worker, logger *slog.Logger, output copy.OutputProgress) (*Source, copy.ProgressStore, error) {
 	cfg := native(p.Source.Properties)
 	queueKB := (limits.ByteCap + 1023) / 1024
 	if existing, ok := cfg["queued.max.messages.kbytes"]; !ok {
@@ -123,19 +54,20 @@ func NewSource(inspector *Inspector, p plan.Plan, fp string, limits config.Worke
 		}
 		cfg[key] = value
 	}
-	c, err := k.NewConsumer(&cfg)
+	c, err := clients.Consumer(cfg)
 	if err != nil {
 		return nil, nil, conflict("invalid Kafka consumer configuration")
 	}
 	store := &Committer{consumer: c, topic: p.Source.Name, metadata: make(map[int32]Progress), output: output}
-	s := &Source{consumer: c, events: c, offsets: inspector, times: c, inspector: inspector, committer: store, plan: p, fingerprint: fp, clock: clock, log: logger, retentionChecks: make(map[int32]retentionCheck)}
+	s := &Source{consumer: c, events: c, offsets: inspector, times: c, inspector: inspector, positioning: positioning, committer: store, plan: p, fingerprint: fp, log: logger, retentionChecks: make(map[int32]RetentionCheck)}
 	return s, store, nil
 }
 func (s *Source) Start(lifecycle copy.Lifecycle) error {
 	s.lifecycle = lifecycle
 	return s.consumer.Subscribe(s.plan.Source.Name, s.rebalance)
 }
-func (s *Source) rebalance(c *k.Consumer, event k.Event) error {
+func (s *Source) rebalance(_ *k.Consumer, event k.Event) error {
+	c := s.consumer
 	if s.err != nil {
 		return s.err
 	}
@@ -221,135 +153,25 @@ func (s *Source) position(parts []k.TopicPartition) ([]copy.Assignment, error) {
 	return assignments, nil
 }
 
-// locate resolves windows and start offsets for an assignment with one broker
-// request per offset kind rather than per partition.
+// locate applies the positions resolved by the assignment positioner.
 func (s *Source) locate(parts []k.TopicPartition, saved map[int32]k.TopicPartition, metadata map[int32]Progress) ([]copy.Assignment, error) {
 	if len(parts) == 0 {
 		return nil, nil
 	}
-	var adopted *plan.Window
-	ids := make([]int, 0, len(metadata))
-	for id := range metadata {
-		ids = append(ids, int(id))
-	}
-	sort.Ints(ids)
-	if len(ids) > 0 {
-		adopted = metadata[int32(ids[0])].Window
-	}
-	assigned := make([]int32, len(parts))
-	for n, part := range parts {
-		assigned[n] = part.Partition
-	}
-	low, err := s.offsets.Offsets(assigned, k.EarliestOffsetSpec, false)
+	positioner := s.positioning.New(s.offsets, s.times, s.plan, s.fingerprint, s.inspector.TopicID())
+	positioned, err := positioner.Locate(parts, saved, metadata)
 	if err != nil {
 		return nil, err
 	}
-	high, err := s.offsets.Offsets(assigned, k.LatestOffsetSpec, false)
-	if err != nil {
-		return nil, err
-	}
-	now := s.clock.Now()
-	assignments := make([]copy.Assignment, len(parts))
-	index := make(map[int32]int, len(parts))
-	var lookups []k.TopicPartition
-	var ends []int32
-	for n, part := range parts {
-		index[part.Partition] = n
-		origin := "resolved"
-		window, err := s.plan.Window.Resolve(now)
-		if err != nil {
-			return nil, conflict("invalid resolved time window: %v", err)
-		}
-		progress := Progress{Fingerprint: s.fingerprint, TopicID: s.inspector.TopicID()}
-		position := int64(-1)
-		if stored, ok := saved[part.Partition]; ok {
-			origin = "saved"
-			position = int64(stored.Offset)
-			progress = metadata[part.Partition]
-			if progress.Window != nil {
-				window = *progress.Window
-			}
-		} else if adopted != nil && s.plan.Window.Relative() {
-			origin = "adopted"
-			window = *adopted
-		}
-		if s.plan.Window.Relative() {
-			progress.Window = &window
-		}
-		if err := s.plan.Window.ValidateStored(window, s.plan.CutoffMS); err != nil {
-			return nil, conflict("invalid time window: %v", err)
-		}
-		if s.plan.Window.Relative() {
-			s.log.Info("partition window positioned", "partition", part.Partition, "origin", origin, "window", window)
-		}
-		if position > high[part.Partition] {
-			return nil, conflict("partition %d committed offset %d exceeds log end %d", part.Partition, position, high[part.Partition])
-		}
-		if position >= 0 && position < low[part.Partition] {
-			s.log.Warn("expired source position", "partition", part.Partition, "saved", position, "log_start", low[part.Partition], "offset_gap", low[part.Partition]-position)
-			position = low[part.Partition]
-		}
-		if position < 0 {
-			switch {
-			case window.Lower != nil && *window.Lower > 0:
-				lookups = append(lookups, k.TopicPartition{Topic: &s.plan.Source.Name, Partition: part.Partition, Offset: k.Offset(*window.Lower)})
-			case window.Lower != nil || window.Upper != nil || len(saved) > 0 || s.plan.Start == "EARLIEST":
-				// Negative timestamps are reserved offset specs in Kafka, so they start at the log start.
-				if window.Lower == nil && window.Upper == nil && len(saved) > 0 {
-					s.log.Info("new partition starts at earliest retained offset", "partition", part.Partition)
-				}
-				position = low[part.Partition]
-			default:
-				ends = append(ends, part.Partition)
-			}
-		}
-		s.committer.metadata[part.Partition] = progress
-		assignments[n] = copy.Assignment{Cursor: copy.Cursor{Partition: part.Partition, Position: position}, Window: window}
-	}
-	if len(lookups) > 0 {
-		result, err := s.times.OffsetsForTimes(lookups, 5000)
-		if err != nil {
-			return nil, err
-		}
-		found := make(map[int32]int64, len(result))
-		for _, part := range result {
-			if part.Topic == nil || *part.Topic != s.plan.Source.Name {
-				continue
-			}
-			if part.Error != nil {
-				return nil, part.Error
-			}
-			found[part.Partition] = int64(part.Offset)
-		}
-		for _, lookup := range lookups {
-			offset, ok := found[lookup.Partition]
-			if !ok {
-				return nil, fmt.Errorf("missing timestamp lookup result for partition %d", lookup.Partition)
-			}
-			if offset < 0 {
-				ends = append(ends, lookup.Partition) // No match starts at the read-committed end.
-				continue
-			}
-			assignments[index[lookup.Partition]].Cursor.Position = offset
-		}
-	}
-	if len(ends) > 0 {
-		stable, err := s.offsets.Offsets(ends, k.LatestOffsetSpec, true)
-		if err != nil {
-			return nil, err
-		}
-		for _, id := range ends {
-			assignments[index[id]].Cursor.Position = stable[id]
-		}
-	}
-	for n, assignment := range assignments {
+	for n, assignment := range positioned.Assignments {
 		id, position := assignment.Cursor.Partition, assignment.Cursor.Position
 		parts[n].Offset = k.Offset(position)
-		if low[id] > 0 && position == low[id] && assignment.Window.Lower != nil {
-			s.retentionChecks[id] = retentionCheck{low: low[id], lower: *assignment.Window.Lower}
-		}
+		s.committer.SetMetadata(id, positioned.Progress[id])
 	}
-	return assignments, nil
+	for id, check := range positioned.Retention {
+		s.retentionChecks[id] = check
+	}
+	return positioned.Assignments, nil
 }
 func (s *Source) Poll(timeout time.Duration) (copy.Event, error) {
 	if s.err != nil {
@@ -406,8 +228,8 @@ func (s *Source) checkRetention(partition int32, timestamp *int64) {
 		return
 	}
 	delete(s.retentionChecks, partition)
-	if timestamp != nil && *timestamp > check.lower {
-		s.log.Warn("time window may begin before retained data", "partition", partition, "log_start", check.low, "first_retained_timestamp", *timestamp, "lower", check.lower)
+	if timestamp != nil && *timestamp > check.Lower {
+		s.log.Warn("time window may begin before retained data", "partition", partition, "log_start", check.Low, "first_retained_timestamp", *timestamp, "lower", check.Lower)
 	}
 }
 

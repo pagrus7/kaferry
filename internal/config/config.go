@@ -31,6 +31,7 @@ type Config struct {
 }
 
 type FileReader interface{ ReadFile(string) ([]byte, error) }
+type Reader interface{ Load(string) (Config, error) }
 type Loader struct {
 	files FileReader
 	home  string

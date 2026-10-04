@@ -2,6 +2,31 @@ package copy
 
 import "fmt"
 
+// ProgressTracker owns consumed positions, delivery outcomes and work accounting.
+type ProgressTracker interface {
+	Assign(Cursor)
+	Revoke(int32)
+	Observe(Cursor, int64, int64, bool) (Token, error)
+	Resolve(Token) bool
+	Submitted(Token)
+	InFlight() bool
+	PositionOf(Token) int64
+	ResolveIfOwned(Token, bool) bool
+	Confirmed(int32) Cursor
+	Saved(int32) int64
+	HasProgress(int32) bool
+	Committed(Cursor)
+	Work(int32) (int, int64)
+	Total() (int, int64)
+	Resolved(int32) bool
+}
+
+type ProgressFactory interface{ New() ProgressTracker }
+type trackerFactory struct{}
+
+func NewProgressFactory() ProgressFactory   { return trackerFactory{} }
+func (trackerFactory) New() ProgressTracker { return NewTracker() }
+
 type entry struct {
 	token     Token
 	next      int64

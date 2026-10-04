@@ -6,12 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"kafka-fwd2/internal/sql"
 )
 
 type Environment interface{ LookupEnv(string) (string, bool) }
+type Builder interface {
+	Build(sql.Statement, Profiles) (Plan, error)
+}
 
 type Planner struct{ environment Environment }
 
@@ -152,113 +154,6 @@ func validAlias(alias string) bool {
 		return false
 	}
 	return true
-}
-
-func endpoint(source sql.Endpoint, profiles Profiles) (Endpoint, error) {
-	e := Endpoint{Kind: source.Kind, Name: source.Name, Format: source.Format}
-	if e.Name == "" {
-		return Endpoint{}, fmt.Errorf("endpoint name is empty")
-	}
-	if e.Kind == "FILE" {
-		if e.Format != "cbor" {
-			return Endpoint{}, fmt.Errorf("unsupported file format")
-		}
-		return e, nil
-	}
-	if e.Kind != "TOPIC" {
-		return Endpoint{}, fmt.Errorf("unsupported endpoint kind")
-	}
-	e.Alias = "default"
-	if strings.Contains(e.Name, "@") {
-		if strings.Count(e.Name, "@") != 1 {
-			return Endpoint{}, fmt.Errorf("topic endpoint must be topic@alias")
-		}
-		e.Name, e.Alias, _ = strings.Cut(e.Name, "@")
-	}
-	if e.Name == "" || !validAlias(e.Alias) {
-		return Endpoint{}, fmt.Errorf("invalid topic endpoint")
-	}
-	for _, c := range e.Name {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-' || c == '.') {
-			return Endpoint{}, fmt.Errorf("invalid Kafka topic name")
-		}
-	}
-	if len(e.Name) > 249 || e.Name == "." || e.Name == ".." {
-		return Endpoint{}, fmt.Errorf("invalid Kafka topic name")
-	}
-	values, exists := profiles[e.Alias]
-	if !exists || values["bootstrap.servers"] == "" {
-		return Endpoint{}, fmt.Errorf("connection %q requires bootstrap.servers", e.Alias)
-	}
-	e.Properties = Properties{values: values}
-	return e, nil
-}
-
-func (p *Plan) options(options []sql.Option) error {
-	p.Policies = Policies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}
-	p.CutoffMS = 60000
-	seen := make(map[string]bool)
-	for _, option := range options {
-		if seen[option.Name] {
-			return fmt.Errorf("option %s repeats", option.Name)
-		}
-		seen[option.Name] = true
-		switch option.Name {
-		case "GROUP":
-			p.Group = option.Value
-			p.OneOff = !option.Quoted && option.Value == "ONE_OFF"
-			if p.Group == "" || strings.TrimSpace(p.Group) == "" {
-				return fmt.Errorf("GROUP must not be empty")
-			}
-		case "START":
-			if option.Value != "EARLIEST" && option.Value != "LATEST" {
-				return fmt.Errorf("START must be EARLIEST or LATEST")
-			}
-			p.Start = option.Value
-		case "CUTOFF":
-			if p.Source.Kind != "TOPIC" || p.Window.Upper == nil {
-				return fmt.Errorf("CUTOFF requires a topic source with an upper bound")
-			}
-			if option.Interval == nil {
-				return fmt.Errorf("CUTOFF requires an interval")
-			}
-			var err error
-			p.CutoffMS, err = intervalMS(*option.Interval)
-			if err != nil {
-				return err
-			}
-		case "ON_ERROR", "ON_MISSING_TIMESTAMP", "ON_REJECTED_TIMESTAMP":
-			if option.Value != "FAIL" && option.Value != "SKIP" {
-				return fmt.Errorf("error policy must be FAIL or SKIP")
-			}
-			if option.Name == "ON_MISSING_TIMESTAMP" && p.Window.Lower == nil && p.Window.Upper == nil {
-				return fmt.Errorf("ON_MISSING_TIMESTAMP requires WHERE")
-			}
-			if option.Name == "ON_REJECTED_TIMESTAMP" && p.Destination.Kind != "TOPIC" {
-				return fmt.Errorf("ON_REJECTED_TIMESTAMP requires a topic destination")
-			}
-			switch option.Name {
-			case "ON_ERROR":
-				p.Policies = Policies{option.Value, option.Value, option.Value}
-			case "ON_MISSING_TIMESTAMP":
-				p.Policies.MissingTimestamp = option.Value
-			case "ON_REJECTED_TIMESTAMP":
-				p.Policies.RejectedTimestamp = option.Value
-			}
-		default:
-			return fmt.Errorf("unsupported option")
-		}
-	}
-	if !seen["GROUP"] {
-		return fmt.Errorf("GROUP is required")
-	}
-	if seen["ON_ERROR"] && (seen["ON_MISSING_TIMESTAMP"] || seen["ON_REJECTED_TIMESTAMP"]) {
-		return fmt.Errorf("ON_ERROR cannot be combined with specific error policies")
-	}
-	if p.Source.Kind != "TOPIC" || p.Window.Upper == nil {
-		p.CutoffMS = 0
-	}
-	return nil
 }
 
 // Fingerprint receives verified cluster IDs at startup. File identities stay in

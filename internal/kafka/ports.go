@@ -1,0 +1,36 @@
+package kafka
+
+import (
+	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	copy "kafka-fwd2/internal/copy"
+	"kafka-fwd2/internal/plan"
+)
+
+type AssignmentStore interface {
+	copy.ProgressStore
+	SetMetadata(int32, Progress)
+}
+
+type OffsetReader interface {
+	Offsets([]int32, k.OffsetSpec, bool) (map[int32]int64, error)
+}
+type TimeReader interface {
+	OffsetsForTimes([]k.TopicPartition, int) ([]k.TopicPartition, error)
+}
+type SourceMetadata interface {
+	OffsetReader
+	TopicID() string
+	Progress(string) ([]k.TopicPartition, error)
+}
+type DestinationMetadata interface {
+	Config() map[string]string
+	PartitionCount() int
+}
+type Metadata interface {
+	SourceMetadata
+	DestinationMetadata
+	ClusterID() (string, error)
+	CheckMembers(string) error
+	ReadProgress(string, string, plan.WindowSpec, int64) (map[int32]Progress, error)
+	Close()
+}

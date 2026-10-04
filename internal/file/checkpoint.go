@@ -33,27 +33,43 @@ type AtomicWriter interface{ Replace(string, []byte) error }
 type DurableWriter struct{}
 
 func (DurableWriter) Replace(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".checkpoint-*")
+	return replaceCheckpoint(nativeReplacement{}, path, data)
+}
+
+type replacementFS interface {
+	CreateTemp(string, string) (*os.File, error)
+	Write(*os.File, []byte) error
+	Sync(*os.File) error
+	Rename(string, string) error
+	Remove(string) error
+	SyncDirectory(string) error
+}
+type nativeReplacement struct{ nativePublication }
+
+func (nativeReplacement) Rename(old, new string) error { return os.Rename(old, new) }
+
+func replaceCheckpoint(files replacementFS, path string, data []byte) error {
+	f, err := files.CreateTemp(filepath.Dir(path), ".checkpoint-*")
 	if err != nil {
 		return err
 	}
 	name := f.Name()
-	defer os.Remove(name)
-	if _, err = f.Write(data); err != nil {
+	defer files.Remove(name)
+	if err = files.Write(f, data); err != nil {
 		f.Close()
 		return err
 	}
-	if err = f.Sync(); err != nil {
+	if err = files.Sync(f); err != nil {
 		f.Close()
 		return err
 	}
 	if err = f.Close(); err != nil {
 		return err
 	}
-	if err = os.Rename(name, path); err != nil {
+	if err = files.Rename(name, path); err != nil {
 		return err
 	}
-	return syncDirectory(path)
+	return files.SyncDirectory(path)
 }
 
 type Checkpoints struct {
@@ -70,6 +86,25 @@ func NewCheckpoints(directory, group string, writer AtomicWriter) (*Checkpoints,
 	if err := createDirectory(directory); err != nil {
 		return nil, err
 	}
+	path := checkpointPath(directory, group)
+	f, err := openCheckpointLock(path)
+	if err != nil {
+		return nil, err
+	}
+	saved, err := readCheckpoint(path)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	c := &Checkpoints{path: path, lock: f, writer: writer, saved: saved, frames: make(map[int64]*FrameIdentity)}
+	if saved != nil {
+		c.current = *saved
+		c.frames[saved.Position] = saved.LastFrame
+	}
+	return c, nil
+}
+
+func checkpointPath(directory, group string) string {
 	var slug strings.Builder
 	for _, r := range group {
 		if slug.Len() >= 48 {
@@ -82,45 +117,61 @@ func NewCheckpoints(directory, group string, writer AtomicWriter) (*Checkpoints,
 		}
 	}
 	hash := sha256.Sum256([]byte(group))
-	path := filepath.Join(directory, slug.String()+"-"+hex.EncodeToString(hash[:8])+".json")
+	return filepath.Join(directory, slug.String()+"-"+hex.EncodeToString(hash[:8])+".json")
+}
+
+func openCheckpointLock(path string) (*os.File, error) {
 	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
-	if err = lock(f); err != nil {
-		f.Close()
-		return nil, err
-	}
-	if err = syncDirectory(path + ".lock"); err != nil {
-		f.Close()
-		return nil, err
-	}
-	c := &Checkpoints{path: path, lock: f, writer: writer, frames: make(map[int64]*FrameIdentity)}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return c, nil
+	if err = lock(f); err == nil {
+		err = syncDirectory(path + ".lock")
 	}
 	if err != nil {
 		f.Close()
 		return nil, err
 	}
+	return f, nil
+}
+
+func readCheckpoint(path string) (*Checkpoint, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
 	if len(data) > 65536 {
-		f.Close()
 		return nil, conflict("checkpoint too large")
 	}
 	var saved Checkpoint
 	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&saved); err != nil || decoder.Decode(new(any)) != io.EOF || saved.Version != 1 || saved.Fingerprint == "" || saved.SourceID == "" || saved.Position < 0 || saved.Extent < 0 || (saved.DestinationID == "") != (saved.Extent == 0) {
-		f.Close()
+	if err = decoder.Decode(&saved); err != nil || decoder.Decode(new(any)) != io.EOF {
 		return nil, conflict("invalid checkpoint")
 	}
-	c.saved = &saved
-	c.current = saved
-	c.frames[saved.Position] = saved.LastFrame
-	return c, nil
+	if err := saved.validate(); err != nil {
+		return nil, err
+	}
+	return &saved, nil
 }
-func (c *Checkpoints) Existing() *Checkpoint                 { return c.saved }
+
+func (c Checkpoint) validate() error {
+	if c.Version != 1 || c.Fingerprint == "" || c.SourceID == "" || c.Position < 0 || c.Extent < 0 || (c.DestinationID == "") != (c.Extent == 0) {
+		return conflict("invalid checkpoint")
+	}
+	return nil
+}
+func (c *Checkpoints) Existing() *Checkpoint { return c.saved }
+func (c *Checkpoints) Initialize(checkpoint Checkpoint) {
+	c.current = checkpoint
+	c.frames[checkpoint.Position] = nil
+}
+func (c *Checkpoints) RememberFrame(position int64, frame FrameIdentity) {
+	c.frames[position] = &frame
+}
 func (c *Checkpoints) BindOutput(output copy.OutputProgress) { c.output = output }
 func (c *Checkpoints) Save(ctx context.Context, cursors []copy.Cursor) (map[int32]error, error) {
 	if err := ctx.Err(); err != nil {

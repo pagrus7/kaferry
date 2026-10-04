@@ -1,0 +1,220 @@
+package kafka
+
+import (
+	"fmt"
+	"log/slog"
+	"time"
+
+	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	copy "kafka-fwd2/internal/copy"
+	"kafka-fwd2/internal/plan"
+)
+
+// positioner resolves one assignment, batching broker requests by offset kind.
+type positioner struct {
+	offsets     OffsetReader
+	times       TimeReader
+	plan        plan.Plan
+	fingerprint string
+	topicID     string
+	clock       copy.Clock
+	log         *slog.Logger
+	low, high   map[int32]int64
+	index       map[int32]int
+	lookups     []k.TopicPartition
+	ends        []int32
+}
+
+type Positioning struct {
+	Assignments []copy.Assignment
+	Progress    map[int32]Progress
+	Retention   map[int32]RetentionCheck
+}
+type AssignmentPositioner interface {
+	Locate([]k.TopicPartition, map[int32]k.TopicPartition, map[int32]Progress) (Positioning, error)
+}
+type PositionerFactory interface {
+	New(OffsetReader, TimeReader, plan.Plan, string, string) AssignmentPositioner
+}
+type positionerFactory struct {
+	clock copy.Clock
+	log   *slog.Logger
+}
+
+func NewPositionerFactory(clock copy.Clock, logger *slog.Logger) PositionerFactory {
+	return &positionerFactory{clock: clock, log: logger}
+}
+func (f *positionerFactory) New(offsets OffsetReader, times TimeReader, p plan.Plan, fingerprint, topicID string) AssignmentPositioner {
+	return &positioner{offsets: offsets, times: times, plan: p, fingerprint: fingerprint, topicID: topicID, clock: f.clock, log: f.log}
+}
+
+func (p *positioner) Locate(parts []k.TopicPartition, saved map[int32]k.TopicPartition, metadata map[int32]Progress) (Positioning, error) {
+	if len(parts) == 0 {
+		return Positioning{}, nil
+	}
+	ids := make([]int32, len(parts))
+	for n, part := range parts {
+		ids[n] = part.Partition
+	}
+	if err := p.watermarks(ids); err != nil {
+		return Positioning{}, err
+	}
+	now, adopted := p.clock.Now(), adoptedWindow(metadata)
+	assignments := make([]copy.Assignment, len(parts))
+	progress := make(map[int32]Progress, len(parts))
+	p.index = make(map[int32]int, len(parts))
+	for n, part := range parts {
+		p.index[part.Partition] = n
+		window, stored, position, err := p.window(part.Partition, saved, metadata, adopted, now)
+		if err != nil {
+			return Positioning{}, err
+		}
+		position, err = p.start(part.Partition, position, window, len(saved) > 0)
+		if err != nil {
+			return Positioning{}, err
+		}
+		progress[part.Partition] = stored
+		assignments[n] = copy.Assignment{Cursor: copy.Cursor{Partition: part.Partition, Position: position}, Window: window}
+	}
+	if err := p.resolveTimes(assignments); err != nil {
+		return Positioning{}, err
+	}
+	if err := p.resolveEnds(assignments); err != nil {
+		return Positioning{}, err
+	}
+	retention := make(map[int32]RetentionCheck)
+	for _, assignment := range assignments {
+		id := assignment.Cursor.Partition
+		if p.low[id] > 0 && assignment.Cursor.Position == p.low[id] && assignment.Window.Lower != nil {
+			retention[id] = RetentionCheck{Low: p.low[id], Lower: *assignment.Window.Lower}
+		}
+	}
+	return Positioning{Assignments: assignments, Progress: progress, Retention: retention}, nil
+}
+
+func (p *positioner) watermarks(ids []int32) error {
+	var err error
+	p.low, err = p.offsets.Offsets(ids, k.EarliestOffsetSpec, false)
+	if err != nil {
+		return err
+	}
+	p.high, err = p.offsets.Offsets(ids, k.LatestOffsetSpec, false)
+	return err
+}
+
+func adoptedWindow(metadata map[int32]Progress) *plan.Window {
+	var window *plan.Window
+	var lowest int32
+	first := true
+	for id, progress := range metadata {
+		if first || id < lowest {
+			lowest, window, first = id, progress.Window, false
+		}
+	}
+	return window
+}
+
+func (p *positioner) window(id int32, saved map[int32]k.TopicPartition, metadata map[int32]Progress, adopted *plan.Window, now time.Time) (plan.Window, Progress, int64, error) {
+	window, err := p.plan.Window.Resolve(now)
+	if err != nil {
+		return window, Progress{}, 0, conflict("invalid resolved time window: %v", err)
+	}
+	progress := Progress{Fingerprint: p.fingerprint, TopicID: p.topicID}
+	position, origin := int64(-1), "resolved"
+	if stored, ok := saved[id]; ok {
+		position, progress, origin = int64(stored.Offset), metadata[id], "saved"
+		if progress.Window != nil {
+			window = *progress.Window
+		}
+	} else if adopted != nil && p.plan.Window.Relative() {
+		window, origin = *adopted, "adopted"
+	}
+	if err := p.plan.Window.ValidateStored(window, p.plan.CutoffMS); err != nil {
+		return window, progress, position, conflict("invalid time window: %v", err)
+	}
+	if p.plan.Window.Relative() {
+		progress.Window = &window
+		p.log.Info("partition window positioned", "partition", id, "origin", origin, "window", window)
+	}
+	return window, progress, position, nil
+}
+
+func (p *positioner) start(id int32, position int64, window plan.Window, hasSaved bool) (int64, error) {
+	if position > p.high[id] {
+		return 0, conflict("partition %d committed offset %d exceeds log end %d", id, position, p.high[id])
+	}
+	if position >= 0 {
+		if position < p.low[id] {
+			p.log.Warn("expired source position", "partition", id, "saved", position, "log_start", p.low[id], "offset_gap", p.low[id]-position)
+			return p.low[id], nil
+		}
+		return position, nil
+	}
+	switch {
+	case window.Lower != nil && *window.Lower > 0:
+		p.lookups = append(p.lookups, k.TopicPartition{Topic: &p.plan.Source.Name, Partition: id, Offset: k.Offset(*window.Lower)})
+	case window.Lower != nil || window.Upper != nil || hasSaved || p.plan.Start == "EARLIEST":
+		// Negative timestamps are reserved offset specs in Kafka.
+		if window.Lower == nil && window.Upper == nil && hasSaved {
+			p.log.Info("new partition starts at earliest retained offset", "partition", id)
+		}
+		return p.low[id], nil
+	default:
+		p.ends = append(p.ends, id)
+	}
+	return position, nil
+}
+
+func (p *positioner) resolveTimes(assignments []copy.Assignment) error {
+	if len(p.lookups) == 0 {
+		return nil
+	}
+	result, err := p.times.OffsetsForTimes(p.lookups, 5000)
+	if err != nil {
+		return err
+	}
+	found, err := timestampOffsets(result, p.plan.Source.Name)
+	if err != nil {
+		return err
+	}
+	for _, lookup := range p.lookups {
+		offset, ok := found[lookup.Partition]
+		if !ok {
+			return fmt.Errorf("missing timestamp lookup result for partition %d", lookup.Partition)
+		}
+		if offset < 0 {
+			p.ends = append(p.ends, lookup.Partition) // No match starts at the read-committed end.
+			continue
+		}
+		assignments[p.index[lookup.Partition]].Cursor.Position = offset
+	}
+	return nil
+}
+
+func timestampOffsets(parts []k.TopicPartition, topic string) (map[int32]int64, error) {
+	found := make(map[int32]int64, len(parts))
+	for _, part := range parts {
+		if part.Topic == nil || *part.Topic != topic {
+			continue
+		}
+		if part.Error != nil {
+			return nil, part.Error
+		}
+		found[part.Partition] = int64(part.Offset)
+	}
+	return found, nil
+}
+
+func (p *positioner) resolveEnds(assignments []copy.Assignment) error {
+	if len(p.ends) == 0 {
+		return nil
+	}
+	stable, err := p.offsets.Offsets(p.ends, k.LatestOffsetSpec, true)
+	if err != nil {
+		return err
+	}
+	for _, id := range p.ends {
+		assignments[p.index[id]].Cursor.Position = stable[id]
+	}
+	return nil
+}

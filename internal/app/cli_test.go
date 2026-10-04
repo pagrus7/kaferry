@@ -33,7 +33,7 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	o, err := file.NewOutput(src, "fixture", "fixture", "", 0, codec, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	o, err := file.NewOutput(file.NewPublisher(), src, "fixture", "fixture", "", 0, codec, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

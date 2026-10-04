@@ -2,7 +2,6 @@ package file
 
 import (
 	"bufio"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -16,9 +15,9 @@ import (
 )
 
 type Output struct {
-	file       *os.File
-	buffer     *bufio.Writer
-	codec      *Codec
+	file       io.Closer
+	buffer     outputBuffer
+	codec      RecordEncoder
 	header     Header
 	position   int64
 	extent     int64
@@ -29,129 +28,101 @@ type Output struct {
 	failed     error // A retried fsync can succeed after the kernel dropped failed pages.
 }
 
-func NewOutput(path, group, fp, expectedID string, extent int64, codec *Codec, capacity int, logger *slog.Logger) (*Output, error) {
-	if err := cleanupTemporary(path); err != nil {
-		return nil, err
-	}
-	created := false
-	f, err := os.OpenFile(path, os.O_RDWR, 0600)
-	if os.IsNotExist(err) {
-		if expectedID != "" {
-			return nil, conflict("output is missing while progress names it")
-		}
-		f, created, err = createOutput(path, group, fp, codec)
-	}
+func NewOutput(publisher Publisher, path, group, fp, expectedID string, extent int64, codec ArchiveEncoder, capacity int, logger *slog.Logger) (*Output, error) {
+	f, created, err := openOutput(publisher, path, group, fp, expectedID, codec)
 	if err != nil {
 		return nil, err
 	}
-	if err = lock(f); err != nil {
+	output, err := initializeOutput(f, created, group, fp, expectedID, extent, codec, capacity, logger)
+	if err != nil {
 		f.Close()
+	}
+	return output, err
+}
+
+func openOutput(publisher Publisher, path, group, fp, expectedID string, codec ArchiveEncoder) (*os.File, bool, error) {
+	if err := cleanupTemporary(path); err != nil {
+		return nil, false, err
+	}
+	f, err := os.OpenFile(path, os.O_RDWR, 0600)
+	if !os.IsNotExist(err) {
+		return f, false, err
+	}
+	if expectedID != "" {
+		return nil, false, conflict("output is missing while progress names it")
+	}
+	return publisher.Create(path, group, fp, codec)
+}
+
+func initializeOutput(f *os.File, created bool, group, fp, expectedID string, extent int64, codec ArchiveEncoder, capacity int, logger *slog.Logger) (*Output, error) {
+	if err := lock(f); err != nil {
 		return nil, err
 	}
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
 		return nil, err
 	}
 	header, start, err := codec.Header(f, info.Size())
 	if err != nil {
-		f.Close()
 		return nil, conflict("%v", err)
 	}
-	if header.Fingerprint != fp || header.Group != group {
-		f.Close()
-		return nil, conflict("output query identity mismatch")
+	extent, err = outputIdentity(header, start, info.Size(), created, group, fp, expectedID, extent)
+	if err != nil {
+		return nil, err
 	}
-	if expectedID == "" {
-		// A newly created file is identifiable by its creation result below.
-		if info.Size() != start || !created {
-			f.Close()
-			return nil, conflict("output has no stored destination identity; delete the unowned output")
-		}
-		expectedID = header.ID
-		extent = start
-	}
-	if header.ID != expectedID || extent < start || info.Size() < extent {
-		f.Close()
-		return nil, conflict("output identity or acknowledged extent mismatch")
-	}
-	position := start
-	for position < info.Size() {
-		_, next, _, err := readFrame(f, position, info.Size(), codec.limit)
-		if err != nil {
-			var limit *FrameLimit
-			if errors.As(err, &limit) {
-				f.Close()
-				return nil, conflict("%v; raise worker.max_frame_bytes", err)
-			}
-			if position < extent {
-				f.Close()
-				return nil, conflict("acknowledged output damaged: %v", err)
-			}
-			if err = f.Truncate(position); err != nil {
-				f.Close()
-				return nil, err
-			}
-			if err = f.Sync(); err != nil {
-				f.Close()
-				return nil, err
-			}
-			logger.Warn("unacknowledged output tail truncated", "bytes", info.Size()-position)
-			break
-		}
-		if position < extent && next > extent {
-			f.Close()
-			return nil, conflict("acknowledged extent is not a frame boundary")
-		}
-		position = next
+	position, err := recoverOutput(f, start, info.Size(), extent, codec.FrameLimit(), logger)
+	if err != nil {
+		return nil, err
 	}
 	if _, err = f.Seek(position, io.SeekStart); err != nil {
-		f.Close()
 		return nil, err
 	}
 	return &Output{file: f, buffer: bufio.NewWriterSize(f, 65536), codec: codec, header: header, position: position, extent: extent, deliveries: make(chan copy.Delivery, capacity+1), logger: logger, sync: f.Sync}, nil
 }
 
-func createOutput(path, group, fp string, codec *Codec) (*os.File, bool, error) {
-	var id [16]byte
-	if _, err := rand.Read(id[:]); err != nil {
-		return nil, false, err
+func outputIdentity(header Header, start, size int64, created bool, group, fp, expectedID string, extent int64) (int64, error) {
+	if header.Fingerprint != fp || header.Group != group {
+		return 0, conflict("output query identity mismatch")
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), temporaryPrefix(path)+"*")
-	if err != nil {
-		return nil, false, err
-	}
-	name := temporary.Name()
-	defer os.Remove(name)
-	fail := func(err error) (*os.File, bool, error) { temporary.Close(); return nil, false, err }
-	if err = lock(temporary); err != nil {
-		return fail(err)
-	}
-	data, err := codec.EncodeHeader(Header{Version: 1, ID: hex.EncodeToString(id[:]), Group: group, Fingerprint: fp})
-	if err != nil {
-		return fail(err)
-	}
-	if _, err = temporary.Write(data); err != nil {
-		return fail(err)
-	}
-	if err = temporary.Sync(); err != nil {
-		return fail(err)
-	}
-	if err = os.Link(name, path); err != nil {
-		temporary.Close()
-		if errors.Is(err, os.ErrExist) {
-			existing, err := os.OpenFile(path, os.O_RDWR, 0600)
-			return existing, false, err
+	if expectedID == "" {
+		if size != start || !created {
+			return 0, conflict("output has no stored destination identity; delete the unowned output")
 		}
-		return nil, false, err
+		expectedID, extent = header.ID, start
 	}
-	if err = os.Remove(name); err != nil {
-		return fail(err)
+	if header.ID != expectedID || extent < start || size < extent {
+		return 0, conflict("output identity or acknowledged extent mismatch")
 	}
-	if err = syncDirectory(path); err != nil {
-		return fail(err)
+	return extent, nil
+}
+
+func recoverOutput(f *os.File, start, size, extent, limit int64, logger *slog.Logger) (int64, error) {
+	position := start
+	for position < size {
+		_, next, _, err := readFrame(f, position, size, limit)
+		if err != nil {
+			var frameLimit *FrameLimit
+			if errors.As(err, &frameLimit) {
+				return 0, conflict("%v; raise worker.max_frame_bytes", err)
+			}
+			if position < extent {
+				return 0, conflict("acknowledged output damaged: %v", err)
+			}
+			if err = f.Truncate(position); err != nil {
+				return 0, err
+			}
+			if err = f.Sync(); err != nil {
+				return 0, err
+			}
+			logger.Warn("unacknowledged output tail truncated", "bytes", size-position)
+			break
+		}
+		if position < extent && next > extent {
+			return 0, conflict("acknowledged extent is not a frame boundary")
+		}
+		position = next
 	}
-	return temporary, true, nil
+	return position, nil
 }
 
 func temporaryPrefix(path string) string {

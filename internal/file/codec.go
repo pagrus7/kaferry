@@ -29,6 +29,8 @@ type Codec struct {
 	maxHeaders int
 }
 
+func (c *Codec) FrameLimit() int64 { return c.limit }
+
 func NewCodec(limit int64) (*Codec, error) {
 	encoder, err := cbor.CanonicalEncOptions().EncMode()
 	if err != nil {
@@ -159,45 +161,65 @@ func (c *Codec) DecodeRecord(payload []byte) (core.Record, error) {
 	if err := c.decoder.Unmarshal(payload, &fields); err != nil {
 		return record, fmt.Errorf("invalid record CBOR")
 	}
-	var headers []decodedHeader
-	required := map[string]any{"key": &record.Key, "value": &record.Value, "headers": &headers, "timestamp_ms": &record.TimestampMS, "timestamp_type": &record.TimestampType}
-	for key, target := range required {
-		raw, present := fields[key]
-		if !present {
-			return record, fmt.Errorf("record missing %s", key)
-		}
-		if len(raw) == 1 && (raw[0] == 0xf7 || key == "headers" && raw[0] == 0xf6) {
-			return record, fmt.Errorf("invalid record field %s", key)
-		}
-		if err := c.decoder.Unmarshal(raw, target); err != nil {
-			return record, fmt.Errorf("invalid record field %s", key)
-		}
-	}
-	for key := range fields {
-		if _, ok := required[key]; !ok && key != "source" {
-			return record, fmt.Errorf("unknown record field")
-		}
+	headers, err := c.recordFields(fields, &record)
+	if err != nil {
+		return record, err
 	}
 	if raw, present := fields["source"]; present {
 		if err := c.decoder.Unmarshal(raw, &record.Source); err != nil {
 			return record, fmt.Errorf("invalid record provenance")
 		}
 	}
-	if record.TimestampType != "create_time" && record.TimestampType != "log_append_time" && record.TimestampType != "unknown" {
+	switch record.TimestampType {
+	case "create_time", "log_append_time", "unknown":
+	default:
 		return record, fmt.Errorf("invalid timestamp type")
 	}
 	for _, header := range headers {
-		if len(header.Name) == 0 || len(header.Value) == 0 || header.Name[0]>>5 != 2 || !(header.Value[0]>>5 == 2 || len(header.Value) == 1 && header.Value[0] == 0xf6) {
-			return record, fmt.Errorf("header requires byte-string name and nullable byte-string value")
+		decoded, err := c.decodeHeader(header)
+		if err != nil {
+			return record, err
 		}
-		var name, value []byte
-		if err := c.decoder.Unmarshal(header.Name, &name); err != nil {
-			return record, fmt.Errorf("invalid header name")
-		}
-		if err := c.decoder.Unmarshal(header.Value, &value); err != nil {
-			return record, fmt.Errorf("invalid header value")
-		}
-		record.Headers = append(record.Headers, core.Header{Name: string(name), Value: value})
+		record.Headers = append(record.Headers, decoded)
 	}
 	return record, nil
 }
+
+func (c *Codec) recordFields(fields map[string]cbor.RawMessage, record *core.Record) ([]decodedHeader, error) {
+	var headers []decodedHeader
+	required := map[string]any{"key": &record.Key, "value": &record.Value, "headers": &headers, "timestamp_ms": &record.TimestampMS, "timestamp_type": &record.TimestampType}
+	for key, target := range required {
+		raw, present := fields[key]
+		if !present {
+			return nil, fmt.Errorf("record missing %s", key)
+		}
+		if len(raw) == 1 && (raw[0] == 0xf7 || key == "headers" && raw[0] == 0xf6) {
+			return nil, fmt.Errorf("invalid record field %s", key)
+		}
+		if err := c.decoder.Unmarshal(raw, target); err != nil {
+			return nil, fmt.Errorf("invalid record field %s", key)
+		}
+	}
+	for key := range fields {
+		if _, ok := required[key]; !ok && key != "source" {
+			return nil, fmt.Errorf("unknown record field")
+		}
+	}
+	return headers, nil
+}
+
+func (c *Codec) decodeHeader(header decodedHeader) (core.Header, error) {
+	var name, value []byte
+	if !byteString(header.Name) || !(byteString(header.Value) || len(header.Value) == 1 && header.Value[0] == 0xf6) {
+		return core.Header{}, fmt.Errorf("header requires byte-string name and nullable byte-string value")
+	}
+	if err := c.decoder.Unmarshal(header.Name, &name); err != nil {
+		return core.Header{}, fmt.Errorf("invalid header name")
+	}
+	if err := c.decoder.Unmarshal(header.Value, &value); err != nil {
+		return core.Header{}, fmt.Errorf("invalid header value")
+	}
+	return core.Header{Name: string(name), Value: value}, nil
+}
+
+func byteString(raw cbor.RawMessage) bool { return len(raw) > 0 && raw[0]>>5 == 2 }

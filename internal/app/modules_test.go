@@ -10,8 +10,8 @@ import (
 
 func TestPlanningComposition(t *testing.T) {
 	var parser sql.Parser
-	var planner *plan.Planner
-	var loader *config.Loader
+	var planner plan.Builder
+	var loader config.Reader
 	app := fx.New(fx.NopLogger, PlanningModules, fx.Populate(&parser, &planner, &loader))
 	if err := app.Err(); err != nil {
 		t.Fatal(err)

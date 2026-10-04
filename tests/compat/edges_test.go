@@ -128,7 +128,7 @@ func TestMissingTimestampSkipAndResumeWithDifferentPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer, err := file.NewOutput(src, "fixture", "fixture", "", 0, codec, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	writer, err := file.NewOutput(file.NewPublisher(), src, "fixture", "fixture", "", 0, codec, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

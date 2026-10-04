@@ -14,7 +14,7 @@ func TestLowerFrameLimitCannotTruncateCompleteUnacknowledgedData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "out.cbor")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	large, _ := NewCodec(1 << 20)
-	o, err := NewOutput(path, "g", "fp", "", 0, large, 10, logger)
+	o, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, large, 10, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestLowerFrameLimitCannotTruncateCompleteUnacknowledgedData(t *testing.T) {
 	o.Close()
 	before, _ := os.Stat(path)
 	small, _ := NewCodec(1000)
-	if out, err := NewOutput(path, "g", "fp", id, headerEnd, small, 10, logger); err == nil {
+	if out, err := NewOutput(NewPublisher(), path, "g", "fp", id, headerEnd, small, 10, logger); err == nil {
 		out.Close()
 		t.Fatal("complete oversized frame was adopted")
 	}

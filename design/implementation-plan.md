@@ -4,20 +4,41 @@ Stages for building `decisions.md` and `grammar.md`; semantics live there, not h
 
 ## Structure
 
-Constructor injection; Fx wires subsystems at the composition root only. No interfaces for passive data, no plugin framework.
+Constructor injection; Fx wires components at the composition root only. No interfaces for passive data, no plugin framework.
+
+Fx injects component interfaces and Kafka, file, runner and progress factories. Factories construct per-query resources after planning; every runner and assignment gets fresh mutable state. File inputs own their checkpoint locks. The engine acquires resources and closes them in reverse order. Polling depends on positioning and commit interfaces; file adapters depend on codec and checkpoint interfaces. Native clients stay behind replaceable ports.
 
 | Component | Responsibility | Boundary |
 | --- | --- | --- |
 | SQL | Tokenize and parse; report input positions | Parser returning an AST |
-| Configuration | Load TOML, merge inline properties, resolve `ENV`, redact secrets | Loader, environment lookup |
-| Planner | Validate semantics, normalize the window, produce an immutable plan | Planner, injected clock |
-| Runner | Consume, filter, submit bounded batches, handle lifecycle events | Source, sink, progress store |
-| Progress | Ordered consumed positions, per-record outcomes, ownership, caps | Tracker, free of Kafka types |
-| Kafka adapters | Poll/assign/pause/commit, produce, delivery outcomes, metadata | Source, sink, commit adapters |
-| File adapters | Snapshot input, durable output, framing, checkpoints, locks | Source, sink, codec, checkpoint |
+| Configuration | Load TOML and defaults | Reader, injected FileReader |
+| Planner | Validate, merge properties, resolve `ENV`, normalize window expressions | Builder, injected Environment |
+| Command | Parse/load/plan before execution; classify planning errors | Parser, Reader, Builder, Engine |
+| Runner | Consume, filter, submit bounded batches, handle lifecycle events | Source, Sink, ProgressStore, ProgressTracker, Clock |
+| Progress | Ordered consumed positions, per-record outcomes, ownership, caps | ProgressTracker; fresh instance via ProgressFactory |
+| Kafka metadata | Inspect identities, partitions, group and topic configuration | SourceMetadata, DestinationMetadata, AdminClient |
+| Kafka positioning | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetReader, TimeReader |
+| Kafka adapters | Poll/assign/pause, produce/deliver, persist commits | ConsumerClient, ProducerClient, AssignmentStore |
+| File adapters | Snapshot input, durable output, framing, checkpoints, locks | ArchiveDecoder/Encoder, CheckpointStore, AtomicWriter, I/O ports |
+| File publication | Durable header creation without replacing another creator; directory sync | Publisher, private filesystem port |
 | CLI/composition | Flags, adapter selection, Fx wiring, signals, exit codes | Start, run, stop |
 
 Packages: `cmd/kafka-fwd2`, `internal/sql`, `internal/config`, `internal/plan`, `internal/copy`, `internal/kafka`, `internal/file`, `internal/app`. Split further only when responsibilities or dependencies justify it.
+
+## Testing pyramid
+
+Most tests run without brokers: pure functions directly, components with handwritten mocks for dependencies. Real-file and Fx component tests verify composition and durability. Fewer real-broker and CLI tests verify the complete paths; load and disruptive faults run separately.
+
+| Area | Independent unit/mock checks | Component/integration checks |
+| --- | --- | --- |
+| Parser/config/planner/command | Grammar, reader/environment failures, precedence, stage ordering and exit codes | Real Fx planning graph and file CLI |
+| Engine/factories | Replace factories; startup failures, resource cleanup, fresh progress per query | Fx runtime replacement in all four directions; real file factories |
+| Runner/progress | Mock source/sink/store/clock/tracker; caps, delivery/commit failures, ownership fencing | Actual tracker/runner compositions; broker workers and CLI interrupt/resume |
+| Kafka source/positioner/committer | Mock metadata, positioning, commit store and native consumer; initial commits, missing results, lost ownership, batched lookups | Broker assignment/rebalance, transactional tails and saved metadata |
+| Kafka metadata/sink | Mock admin/producer; invalid identities, foreign groups, raw routing and delivery attribution | Real topic identities, keyed routing, timestamps and cross-cluster fidelity |
+| File codec/source/output/checkpoints | Mock decoder/encoder/checkpoint/buffer/fsync/atomic writer; no advance or acknowledgment on failure | Real files, locks, simultaneous creators, recovery, corruption and 13 initialization crash boundaries |
+
+`make check build` runs vet and the package race suite; `make integration` adds real brokers, four directions and physical CLI tests. CI runs both on changes; fault/load/soak/security/benchmark jobs are scheduled or manual. Pure helpers remain inside their owning components rather than gaining interfaces only for tests. The [completeness matrix](completeness.md) maps agreed rules to named executable evidence.
 
 ## Core contracts
 

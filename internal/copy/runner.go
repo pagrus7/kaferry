@@ -35,7 +35,7 @@ type Runner struct {
 	log            *slog.Logger
 	plan           plan.Plan
 	limits         config.Worker
-	tracker        *Tracker
+	tracker        ProgressTracker
 	partitions     map[int32]*partition
 	pending        *submission
 	deferred       *Input
@@ -55,7 +55,7 @@ type Runner struct {
 	intake         bool
 }
 
-func NewRunner(source Source, sink Sink, store ProgressStore, clock Clock, logger *slog.Logger, p plan.Plan, limits config.Worker, tracker *Tracker) *Runner {
+func NewRunner(source Source, sink Sink, store ProgressStore, clock Clock, logger *slog.Logger, p plan.Plan, limits config.Worker, tracker ProgressTracker) *Runner {
 	return &Runner{source: source, sink: sink, store: store, clock: clock, log: logger, plan: p, limits: limits, tracker: tracker, partitions: make(map[int32]*partition)}
 }
 func (r *Runner) Assign(assignments []Assignment) error {
@@ -123,80 +123,100 @@ func (r *Runner) run(ctx context.Context) error {
 	}
 	for {
 		if ctx.Err() != nil {
-			err := r.drain()
-			if r.failure != nil {
-				return errors.Join(r.failure, err)
-			}
-			if err != nil {
-				return err
-			}
-			if r.bounded() {
-				return fmt.Errorf("bounded copy interrupted before completion")
-			}
-			return nil
+			return r.interrupted()
 		}
 		if r.failure != nil {
 			_ = r.drain()
 			return r.failure
 		}
-		if err := r.deliveries(); err != nil {
-			r.failure = err
-			continue
+		done, err := r.step(ctx)
+		if done {
+			return err
 		}
-		if err := r.admitDeferred(); err != nil {
-			r.failure = err
-			continue
-		}
-		if err := r.submitPending(); err != nil {
-			r.failure = err
-			continue
-		}
-		if err := r.tips(); err != nil {
-			r.failure = err
-			continue
-		}
-		if r.finished() {
-			return r.commit(r.ids())
-		}
-		if r.shouldCommit() {
-			if err := r.flush(); err != nil {
-				r.failure = err
-				continue
-			}
-			if err := r.commit(r.ids()); err != nil {
-				r.failure = err
-				continue
-			}
-		}
-		if err := r.pause(); err != nil {
-			r.failure = err
-			continue
-		}
-		event, err := r.source.Poll(20 * time.Millisecond)
 		if err != nil {
 			r.failure = err
 			continue
 		}
-		if ctx.Err() != nil {
-			continue
-		} // A signal during Poll must not submit its input.
-		if event.Input != nil {
-			r.intake = true // Filtered and skipped records count: intake has started.
-			if err = r.input(*event.Input); err != nil {
-				r.failure = err
-			}
-		}
-		if event.EOF != nil {
-			if err = r.eof(*event.EOF); err != nil {
-				r.failure = err
-			}
-		}
-		if event.Input == nil {
-			if err := r.flush(); err != nil {
-				r.failure = err
-			}
+	}
+}
+
+func (r *Runner) interrupted() error {
+	err := r.drain()
+	if r.failure != nil {
+		return errors.Join(r.failure, err)
+	}
+	if err != nil {
+		return err
+	}
+	if r.bounded() {
+		return fmt.Errorf("bounded copy interrupted before completion")
+	}
+	return nil
+}
+
+func (r *Runner) step(ctx context.Context) (bool, error) {
+	if err := r.advance(); err != nil {
+		return false, err
+	}
+	if r.finished() {
+		return true, r.commit(r.ids())
+	}
+	if err := r.checkpoint(); err != nil {
+		return false, err
+	}
+	if err := r.pause(); err != nil {
+		return false, err
+	}
+	event, err := r.source.Poll(20 * time.Millisecond)
+	if err != nil {
+		return false, err
+	}
+	if ctx.Err() != nil {
+		return false, nil
+	} // A signal during Poll must not submit its input.
+	return false, r.accept(event)
+}
+
+func (r *Runner) advance() error {
+	if err := r.deliveries(); err != nil {
+		return err
+	}
+	if err := r.admitDeferred(); err != nil {
+		return err
+	}
+	if err := r.submitPending(); err != nil {
+		return err
+	}
+	return r.tips()
+}
+
+func (r *Runner) checkpoint() error {
+	if !r.shouldCommit() {
+		return nil
+	}
+	if err := r.flush(); err != nil {
+		return err
+	}
+	return r.commit(r.ids())
+}
+
+func (r *Runner) accept(event Event) error {
+	var failed error
+	if event.Input != nil {
+		r.intake = true // Filtered and skipped records count: intake has started.
+		failed = r.input(*event.Input)
+	}
+	if event.EOF != nil {
+		if err := r.eof(*event.EOF); err != nil {
+			failed = err
 		}
 	}
+	if event.Input == nil {
+		if err := r.flush(); err != nil {
+			failed = err
+		}
+	}
+	return failed
 }
 
 func (r *Runner) input(input Input) error {
@@ -218,22 +238,10 @@ func (r *Runner) input(input Input) error {
 		r.deferred = &input
 		return nil
 	}
-	if input.Record.TimestampMS != nil && p.window.Upper != nil && r.plan.Source.Kind == "TOPIC" {
-		threshold, err := stopThreshold(p.window, r.plan.CutoffMS)
-		if err != nil {
-			return err
-		}
-		if *input.Record.TimestampMS > threshold {
-			_, err = r.tracker.Observe(input.Cursor, input.Cursor.Position, 0, true)
-			if err != nil {
-				return err
-			}
-			p.stopped = true
-			r.timestampStops++
-			r.log.Info("partition stopped", "reason", "timestamp", "partition", input.Cursor.Partition, "position", input.Cursor.Position, "timestamp", *input.Record.TimestampMS, "upper", *p.window.Upper, "past_upper_ms", *input.Record.TimestampMS-*p.window.Upper, "future_dated", *input.Record.TimestampMS > r.clock.Now().Add(time.Minute).UnixMilli())
-			return nil
-		}
+	if stopped, err := r.stopAtTimestamp(p, input); stopped || err != nil {
+		return err
 	}
+
 	token, err := r.tracker.Observe(input.Cursor, input.Next, input.Record.Size(), false)
 	if err != nil {
 		return err
@@ -246,17 +254,45 @@ func (r *Runner) input(input Input) error {
 	if b > r.peakBytes {
 		r.peakBytes = b
 	}
-	if input.Record.TimestampMS == nil && (p.window.Lower != nil || p.window.Upper != nil) {
-		return r.recordError(token, &RecordError{Class: "missing_timestamp", Err: fmt.Errorf("record lacks required timestamp")})
+	if filtered, err := r.filter(p.window, input.Record, token); filtered || err != nil {
+		return err
 	}
-	if input.Record.TimestampMS != nil && !p.window.Contains(*input.Record.TimestampMS) {
-		r.tracker.Resolve(token)
-		r.filtered++
-		return nil
-	}
+
 	r.pending = &submission{input: input, token: token}
 	return r.submitPending()
 }
+func (r *Runner) stopAtTimestamp(p *partition, input Input) (bool, error) {
+	if input.Record.TimestampMS == nil || p.window.Upper == nil || r.plan.Source.Kind != "TOPIC" {
+		return false, nil
+	}
+	threshold, err := stopThreshold(p.window, r.plan.CutoffMS)
+	if err != nil {
+		return false, err
+	}
+	if *input.Record.TimestampMS <= threshold {
+		return false, nil
+	}
+	if _, err := r.tracker.Observe(input.Cursor, input.Cursor.Position, 0, true); err != nil {
+		return false, err
+	}
+	p.stopped = true
+	r.timestampStops++
+	r.log.Info("partition stopped", "reason", "timestamp", "partition", input.Cursor.Partition, "position", input.Cursor.Position, "timestamp", *input.Record.TimestampMS, "upper", *p.window.Upper, "past_upper_ms", *input.Record.TimestampMS-*p.window.Upper, "future_dated", *input.Record.TimestampMS > r.clock.Now().Add(time.Minute).UnixMilli())
+	return true, nil
+}
+
+func (r *Runner) filter(window plan.Window, record Record, token Token) (bool, error) {
+	if record.TimestampMS == nil && (window.Lower != nil || window.Upper != nil) {
+		return true, r.recordError(token, &RecordError{Class: "missing_timestamp", Err: fmt.Errorf("record lacks required timestamp")})
+	}
+	if record.TimestampMS != nil && !window.Contains(*record.TimestampMS) {
+		r.tracker.Resolve(token)
+		r.filtered++
+		return true, nil
+	}
+	return false, nil
+}
+
 func (r *Runner) submitPending() error {
 	if r.pending == nil {
 		return nil

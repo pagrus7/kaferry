@@ -2,7 +2,7 @@ GO ?= go
 KAFKA_TEST_BROKERS ?= 127.0.0.1:39092
 KAFKA_TEST_DEST_BROKERS ?= 127.0.0.1:40092
 
-.PHONY: build test check integration fault load benchmark metrics broker broker-down
+.PHONY: build test check integration fault load soak qualification fuzz benchmark metrics broker broker-down
 build:
 	mkdir -p bin
 	$(GO) build -trimpath -ldflags='-s -w -buildid=' -o bin/kafka-fwd2 ./cmd/kafka-fwd2
@@ -21,6 +21,15 @@ fault:
 	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_FAULT_CONTAINER=kafka-fwd2-compat-kafka-1 $(GO) test -tags=integration,fault -run 'TestBlockingCommit|TestAssignmentLost' -v ./tests/compat
 load: build
 	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KFWD_TEST_BINARY=$(CURDIR)/bin/kafka-fwd2 $(GO) test -tags=integration,load -run TestLoadBoundedKafkaCopy -v ./tests/compat
+soak: build
+	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KFWD_TEST_BINARY=$(CURDIR)/bin/kafka-fwd2 $(GO) test -tags=integration,load -run TestStreamingSoak -v ./tests/compat
+qualification: build
+	GO=$(GO) KFWD_TEST_BINARY=$(CURDIR)/bin/kafka-fwd2 sh tests/qualification/run.sh
+fuzz:
+	$(GO) test -run '^$$' -fuzz FuzzParse -fuzztime=5s -parallel=2 ./internal/sql
+	$(GO) test -run '^$$' -fuzz FuzzWindowNormalization -fuzztime=5s -parallel=2 ./internal/plan
+	$(GO) test -run '^$$' -fuzz FuzzFraming -fuzztime=5s -parallel=2 ./internal/file
+	$(GO) test -run '^$$' -fuzz FuzzRecordDecoder -fuzztime=5s -parallel=2 ./internal/file
 benchmark:
 	$(GO) test -run '^$$' -bench BenchmarkRecordFraming -benchmem ./internal/file
 metrics:

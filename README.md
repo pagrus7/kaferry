@@ -4,7 +4,7 @@ Copy opaque Kafka records between topics and CBOR files. No transformations or S
 
 ## Build and run
 
-Requires Go 1.26+, C compiler, CGO; librdkafka is bundled. Verified: macOS/Linux ARM64, Kafka 3.9.0. Linux AMD64 has a CI job; earlier brokers are unverified.
+Requires Go 1.26+, C compiler, CGO; bundled librdkafka. Verified: macOS ARM64, Linux ARM64/AMD64 (AMD64 emulated), Kafka 3.9.0. Earlier brokers are unverified.
 
 ```sh
 make build
@@ -61,7 +61,7 @@ OPTIONS (GROUP='orders-dr-oct1');
 
 ## Examples
 
-Continuous archive from the earliest retained position (restarts re-read the whole output):
+Archive from the earliest retained position:
 
 ```sql
 INSERT INTO FILE cbor('/data/audit.cbor')
@@ -131,8 +131,8 @@ Exit `0`: completion/skips/clean follow interruption; `1`: runtime/busy lock/dra
 ```sh
 make check
 make broker integration
-make fault load benchmark
+make fault load soak qualification fuzz benchmark
 make broker-down
 ```
 
-Unit/mock/component tests need no Docker. Integration/faults use the project broker. CI schedules fault/load runs. Local runs: 16,000 records without loss/duplicates; [measurements](design/implementation-results.md).
+Unit/mock/component tests need no Docker. CI schedules fault/load/soak/security tests. Qualification starts and removes its TLS/SASL cluster. [Measurements](design/implementation-results.md).

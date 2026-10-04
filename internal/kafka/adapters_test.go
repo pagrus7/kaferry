@@ -20,7 +20,7 @@ import (
 func TestRetentionWarningOnFirstRetainedRecord(t *testing.T) {
 	for _, newer := range []bool{false, true} {
 		var output bytes.Buffer
-		s := &Source{retentionChecks: map[int32]retentionCheck{0: {low: 5, lower: 100}}, log: slog.New(slog.NewTextHandler(&output, nil))}
+		s := &Source{retentionChecks: map[int32]RetentionCheck{0: {Low: 5, Lower: 100}}, log: slog.New(slog.NewTextHandler(&output, nil))}
 		stamp := int64(99)
 		if newer {
 			stamp = 101
@@ -251,7 +251,7 @@ func TestPositioningBatchesBrokerRequests(t *testing.T) {
 	clock := &fixedClock{now: time.UnixMilli(10 * hour)}
 	offsets := &countingOffsets{low: 100, high: 1000, stable: 900}
 	times := &countingTimes{topic: topic}
-	s := &Source{offsets: offsets, times: times, inspector: &Inspector{}, committer: &Committer{metadata: make(map[int32]Progress)}, plan: plan.Plan{Source: plan.Endpoint{Name: topic}, Window: spec}, clock: clock, log: slog.New(slog.NewTextHandler(io.Discard, nil)), retentionChecks: make(map[int32]retentionCheck)}
+	positioner := NewPositionerFactory(clock, quietLogger()).New(offsets, times, plan.Plan{Source: plan.Endpoint{Name: topic}, Window: spec}, "fp", "topic-id")
 	savedLower := 5 * hour
 	saved := map[int32]k.TopicPartition{}
 	metadata := map[int32]Progress{}
@@ -268,14 +268,14 @@ func TestPositioningBatchesBrokerRequests(t *testing.T) {
 			metadata[id] = Progress{Window: &plan.Window{Lower: &savedLower}}
 		}
 	}
-	assignments, err := s.locate(parts, saved, metadata)
+	positioned, err := positioner.Locate(parts, saved, metadata)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(offsets.calls) != 3 || times.calls != 1 {
 		t.Fatalf("broker requests: offsets=%v timestamp lookups=%d", offsets.calls, times.calls)
 	}
-	for _, a := range assignments {
+	for _, a := range positioned.Assignments {
 		id := a.Cursor.Partition
 		want := int64(500)
 		switch {
@@ -286,7 +286,7 @@ func TestPositioningBatchesBrokerRequests(t *testing.T) {
 		case id%3 == 0:
 			want = 900
 		}
-		if a.Cursor.Position != want || int64(parts[id].Offset) != want {
+		if a.Cursor.Position != want {
 			t.Fatalf("partition %d positioned at %d, want %d", id, a.Cursor.Position, want)
 		}
 		if *a.Window.Lower != savedLower {
@@ -297,7 +297,7 @@ func TestPositioningBatchesBrokerRequests(t *testing.T) {
 
 func TestEmptyAssignmentNeedsNoOffsetRequests(t *testing.T) {
 	offsets := &countingOffsets{}
-	s := &Source{offsets: offsets, clock: &fixedClock{now: time.Unix(100, 0)}}
+	s := &Source{offsets: offsets}
 	assignments, err := s.locate(nil, nil, nil)
 	if err != nil || len(assignments) != 0 || len(offsets.calls) != 0 {
 		t.Fatalf("empty assignment: assignments=%v requests=%v err=%v", assignments, offsets.calls, err)

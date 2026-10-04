@@ -13,9 +13,9 @@ import (
 )
 
 type Source struct {
-	file        *os.File
-	codec       *Codec
-	checkpoints *Checkpoints
+	file        sourceFile
+	codec       ArchiveDecoder
+	checkpoints SourceCheckpoints
 	size        int64
 	position    int64
 	window      plan.Window
@@ -23,7 +23,7 @@ type Source struct {
 	ended       bool
 }
 
-func NewSource(path, fp string, window plan.WindowSpec, codec *Codec, checkpoints *Checkpoints, clock copy.Clock) (*Source, error) {
+func NewSource(path, fp string, window plan.WindowSpec, codec ArchiveDecoder, checkpoints SourceCheckpoints, clock copy.Clock) (*Source, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -62,7 +62,7 @@ func NewSource(path, fp string, window plan.WindowSpec, codec *Codec, checkpoint
 			return nil, conflict("checkpoint precedes source records")
 		}
 		if saved.LastFrame != nil {
-			_, next, crc, err := readFrame(f, saved.LastFrame.Position, info.Size(), codec.limit)
+			_, next, crc, err := readFrame(f, saved.LastFrame.Position, info.Size(), codec.FrameLimit())
 			if err != nil || next != saved.Position || crc != saved.LastFrame.CRC {
 				f.Close()
 				return nil, conflict("source file changed: last checkpointed frame differs")
@@ -78,8 +78,7 @@ func NewSource(path, fp string, window plan.WindowSpec, codec *Codec, checkpoint
 			return nil, conflict("%v", err)
 		}
 	} else {
-		checkpoints.current = Checkpoint{Version: 1, Fingerprint: fp, SourceID: header.ID, Position: start, Window: resolved}
-		checkpoints.frames[start] = nil
+		checkpoints.Initialize(Checkpoint{Version: 1, Fingerprint: fp, SourceID: header.ID, Position: start, Window: resolved})
 	}
 	return &Source{file: f, codec: codec, checkpoints: checkpoints, size: info.Size(), position: position, window: resolved}, nil
 }
@@ -98,7 +97,7 @@ func (s *Source) Poll(timeout time.Duration) (copy.Event, error) {
 		return copy.Event{}, nil
 	}
 	position := s.position
-	data, next, crc, err := readFrame(s.file, position, s.size, s.codec.limit)
+	data, next, crc, err := readFrame(s.file, position, s.size, s.codec.FrameLimit())
 	if errors.Is(err, io.EOF) {
 		s.ended = true
 		cursor := copy.Cursor{Partition: 0, Position: position}
@@ -112,7 +111,7 @@ func (s *Source) Poll(timeout time.Duration) (copy.Event, error) {
 		return copy.Event{}, fmt.Errorf("frame at %d: %w", position, err)
 	}
 	s.position = next
-	s.checkpoints.frames[next] = &FrameIdentity{Position: position, CRC: crc}
+	s.checkpoints.RememberFrame(next, FrameIdentity{Position: position, CRC: crc})
 	return copy.Event{Input: &copy.Input{Cursor: copy.Cursor{Partition: 0, Position: position}, Next: next, Record: record}}, nil
 }
 func (s *Source) Pause(_ int32, pause bool) error    { s.paused = pause; return nil }

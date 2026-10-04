@@ -58,15 +58,15 @@ func decodeProgress(metadata *string, fp, topicID string, relative bool) (Progre
 }
 
 type Inspector struct {
-	admin       *k.AdminClient
+	admin       AdminClient
 	topic       string
 	description k.TopicDescription
 	log         *slog.Logger
 }
 
-func NewInspector(properties plan.Properties, topic string, logger *slog.Logger) (*Inspector, error) {
+func NewInspector(clients Clients, properties plan.Properties, topic string, logger *slog.Logger) (Metadata, error) {
 	cfg := native(properties)
-	a, err := k.NewAdminClient(&cfg)
+	a, err := clients.Admin(cfg)
 	if err != nil {
 		return nil, conflict("invalid Kafka connection configuration")
 	}
@@ -95,7 +95,8 @@ func (i *Inspector) ClusterID() (string, error) {
 	defer cancel()
 	return i.admin.ClusterID(ctx)
 }
-func (i *Inspector) TopicID() string { return i.description.TopicID.String() }
+func (i *Inspector) TopicID() string     { return i.description.TopicID.String() }
+func (i *Inspector) PartitionCount() int { return len(i.description.Partitions) }
 func (i *Inspector) Parts() []k.TopicPartition {
 	parts := make([]k.TopicPartition, len(i.description.Partitions))
 	for n, p := range i.description.Partitions {

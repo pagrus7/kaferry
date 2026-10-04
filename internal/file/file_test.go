@@ -59,7 +59,7 @@ func TestRecordCodecFullFidelity(t *testing.T) {
 func TestOutputAcknowledgmentAndRecovery(t *testing.T) {
 	c := codec(t)
 	path := filepath.Join(t.TempDir(), "archive.cbor")
-	out, err := NewOutput(path, "g", "fp", "", 0, c, 10, logger())
+	out, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, c, 10, logger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestOutputAcknowledgmentAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err = NewOutput(path, "g", "fp", id, extent, c, 10, logger())
+	out, err = NewOutput(NewPublisher(), path, "g", "fp", id, extent, c, 10, logger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestOutputAcknowledgmentAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	if _, err = NewOutput(path, "g", "fp", id, extent, c, 10, logger()); err == nil {
+	if _, err = NewOutput(NewPublisher(), path, "g", "fp", id, extent, c, 10, logger()); err == nil {
 		t.Fatal("acknowledged corruption accepted")
 	}
 }
@@ -118,22 +118,22 @@ func TestOutputAcknowledgmentAndRecovery(t *testing.T) {
 func TestOutputLocksAndUnownedHeader(t *testing.T) {
 	c := codec(t)
 	path := filepath.Join(t.TempDir(), "archive.cbor")
-	out, err := NewOutput(path, "g", "fp", "", 0, c, 10, logger())
+	out, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, c, 10, logger())
 	if err != nil {
 		t.Fatal(err)
 	}
 	id, extent := out.DurableOutput()
-	if _, err = NewOutput(path, "g", "fp", id, extent, c, 10, logger()); err == nil {
+	if _, err = NewOutput(NewPublisher(), path, "g", "fp", id, extent, c, 10, logger()); err == nil {
 		t.Fatal("two output writers admitted")
 	}
 	out.Close()
-	if _, err = NewOutput(path, "g", "fp", "", 0, c, 10, logger()); err == nil {
+	if _, err = NewOutput(NewPublisher(), path, "g", "fp", "", 0, c, 10, logger()); err == nil {
 		t.Fatal("unowned header-only output adopted")
 	}
 	if err = os.Truncate(path, extent-1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = NewOutput(path, "g", "fp", id, extent, c, 10, logger()); err == nil {
+	if _, err = NewOutput(NewPublisher(), path, "g", "fp", id, extent, c, 10, logger()); err == nil {
 		t.Fatal("output shorter than durable extent accepted")
 	}
 }
@@ -151,7 +151,7 @@ func TestCheckpointAndSourceSnapshot(t *testing.T) {
 	c := codec(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "input.cbor")
-	out, err := NewOutput(path, "archive", "original-query", "", 0, c, 10, logger())
+	out, err := NewOutput(NewPublisher(), path, "archive", "original-query", "", 0, c, 10, logger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestSourceReplacementFails(t *testing.T) {
 	c := codec(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "input")
-	out, err := NewOutput(path, "archive", "fp", "", 0, c, 10, logger())
+	out, err := NewOutput(NewPublisher(), path, "archive", "fp", "", 0, c, 10, logger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestSourceReplacementFails(t *testing.T) {
 	if err = os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	out, err = NewOutput(path, "archive", "fp", "", 0, c, 10, logger())
+	out, err = NewOutput(NewPublisher(), path, "archive", "fp", "", 0, c, 10, logger())
 	if err != nil {
 		t.Fatal(err)
 	}

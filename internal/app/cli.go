@@ -9,92 +9,28 @@ import (
 	"os"
 
 	"go.uber.org/fx"
-	"kafka-fwd2/internal/config"
-	"kafka-fwd2/internal/plan"
-	"kafka-fwd2/internal/sql"
 )
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "run" {
-		fmt.Fprintln(stderr, "usage: kafka-fwd2 run (--sql statement | --file path | --file -) [--config path]")
-		return 2
-	}
-	flags := flag.NewFlagSet("run", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	var statement, file, configPath string
-	flags.StringVar(&statement, "sql", "", "copy statement")
-	flags.StringVar(&statement, "e", "", "copy statement")
-	flags.StringVar(&file, "file", "", "statement file; - reads stdin")
-	flags.StringVar(&file, "f", "", "statement file; - reads stdin")
-	flags.StringVar(&configPath, "config", "", "TOML configuration")
-	flags.StringVar(&configPath, "c", "", "TOML configuration")
-	if err := flags.Parse(args[1:]); err != nil {
+	options, err := parseArgs(args, stderr)
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2
 	}
-	inputs := 0
-	flags.Visit(func(f *flag.Flag) {
-		if f.Name == "sql" || f.Name == "e" || f.Name == "file" || f.Name == "f" {
-			inputs++
-		}
-	})
-	if inputs != 1 || flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "exactly one statement input is required")
+	statement, err := readStatement(options, stdin)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	if file != "" {
-		reader := stdin
-		if file == "-" && reader == nil {
-			fmt.Fprintln(stderr, "stdin is unavailable")
-			return 2
-		}
-		if file != "-" {
-			opened, err := os.Open(file)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 2
-			}
-			defer opened.Close()
-			reader = opened
-		}
-		data, err := io.ReadAll(io.LimitReader(reader, (1<<20)+1))
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 2
-		}
-		statement = string(data)
-	}
-	if len(statement) > 1<<20 {
-		fmt.Fprintln(stderr, "statement exceeds 1 MiB")
-		return 2
-	}
-	var parser sql.Parser
-	var planner *plan.Planner
-	var loader *config.Loader
-	var engine Engine
-	graph := fx.New(fx.NopLogger, RuntimeModules, fx.Populate(&parser, &planner, &loader, &engine))
+	var command Command
+	graph := fx.New(fx.NopLogger, RuntimeModules, fx.Populate(&command))
 	if err := graph.Err(); err != nil {
 		fmt.Fprintln(stderr, "component composition failed")
 		return 2
 	}
-	ast, err := parser.Parse(statement)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
-	cfg, err := loader.Load(configPath)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
-	p, err := planner.Build(ast, cfg.Connections)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
-	if err = engine.Run(ctx, p, cfg.Worker); err != nil {
+	if err = command.Run(ctx, statement, options.configPath); err != nil {
 		fmt.Fprintln(stderr, err)
 		var coded interface{ ExitCode() int }
 		if errors.As(err, &coded) {
@@ -103,4 +39,70 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stderr io.Writ
 		return 1
 	}
 	return 0
+}
+
+type commandOptions struct {
+	statement  string
+	file       string
+	configPath string
+}
+
+func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
+	var options commandOptions
+	if len(args) == 0 || args[0] != "run" {
+		err := fmt.Errorf("usage: kafka-fwd2 run (--sql statement | --file path | --file -) [--config path]")
+		fmt.Fprintln(stderr, err)
+		return options, err
+	}
+	flags := flag.NewFlagSet("run", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&options.statement, "sql", "", "copy statement")
+	flags.StringVar(&options.statement, "e", "", "copy statement")
+	flags.StringVar(&options.file, "file", "", "statement file; - reads stdin")
+	flags.StringVar(&options.file, "f", "", "statement file; - reads stdin")
+	flags.StringVar(&options.configPath, "config", "", "TOML configuration")
+	flags.StringVar(&options.configPath, "c", "", "TOML configuration")
+	if err := flags.Parse(args[1:]); err != nil {
+		return options, err
+	}
+	inputs := 0
+	flags.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "sql", "e", "file", "f":
+			inputs++
+		}
+	})
+	if inputs != 1 || flags.NArg() != 0 {
+		err := fmt.Errorf("exactly one statement input is required")
+		fmt.Fprintln(stderr, err)
+		return options, err
+	}
+	return options, nil
+}
+
+func readStatement(options commandOptions, stdin io.Reader) (string, error) {
+	statement := options.statement
+	if options.file != "" {
+		reader := stdin
+		if options.file == "-" && reader == nil {
+			return "", fmt.Errorf("stdin is unavailable")
+		}
+		if options.file != "-" {
+			opened, err := os.Open(options.file)
+			if err != nil {
+				return "", err
+			}
+			defer opened.Close()
+			reader = opened
+		}
+		data, err := io.ReadAll(io.LimitReader(reader, (1<<20)+1))
+		if err != nil {
+			return "", err
+		}
+		statement = string(data)
+	}
+	if len(statement) > 1<<20 {
+		return "", fmt.Errorf("statement exceeds 1 MiB")
+	}
+	return statement, nil
 }

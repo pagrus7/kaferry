@@ -28,7 +28,7 @@ func TestFileCrashAfterFsyncBeforeCheckpoint(t *testing.T) {
 			t.Fatal(err)
 		}
 		saved := cp.Existing()
-		out, err := NewOutput(args[1], "crash", "fp", saved.DestinationID, saved.Extent, c, 10, logger)
+		out, err := NewOutput(NewPublisher(), args[1], "crash", "fp", saved.DestinationID, saved.Extent, c, 10, logger)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -46,7 +46,7 @@ func TestFileCrashAfterFsyncBeforeCheckpoint(t *testing.T) {
 	}
 	dir := t.TempDir()
 	src, dst, cpdir := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "output.cbor"), filepath.Join(dir, "checkpoints")
-	o, err := NewOutput(src, "fixture", "fixture", "", 0, c, 10, logger)
+	o, err := NewOutput(NewPublisher(), src, "fixture", "fixture", "", 0, c, 10, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestFileCrashAfterFsyncBeforeCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := NewOutput(dst, "crash", "fp", "", 0, c, 10, logger)
+	out, err := NewOutput(NewPublisher(), dst, "crash", "fp", "", 0, c, 10, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestFileCrashAfterFsyncBeforeCheckpoint(t *testing.T) {
 	}
 	defer source.Close()
 	saved := cp.Existing()
-	out, err = NewOutput(dst, "crash", "fp", saved.DestinationID, saved.Extent, c, 10, logger)
+	out, err = NewOutput(NewPublisher(), dst, "crash", "fp", saved.DestinationID, saved.Extent, c, 10, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestFileCrashAfterFsyncBeforeCheckpoint(t *testing.T) {
 
 func TestOutputWriteFailureCannotAcknowledge(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "out.cbor")
-	o, err := NewOutput(path, "g", "fp", "", 0, codec(t), 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	o, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, codec(t), 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
