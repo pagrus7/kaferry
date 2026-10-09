@@ -3,16 +3,10 @@
 package compat
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -39,17 +33,8 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			p := producer(t, nil)
 			reports := make(chan k.Event, count)
 			stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
-			for i := range count {
-				payload := make([]byte, 1024+i%4096)
-				binary.BigEndian.PutUint32(payload, uint32(i))
-				key := []byte(fmt.Sprintf("key-%d", i%257))
-				if i%7 == 0 {
-					key = nil
-				}
-				if err := p.Produce(&k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: int32(i % 4)}, Key: key, Value: payload, Timestamp: stamp, Headers: []k.Header{{Key: "trace", Value: []byte{0, 255}}, {Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}}, reports); err != nil {
-					t.Fatal(err)
-				}
-			}
+			records := newStreamRecords(src, stamp)
+			records.publish(t, p, reports, count)
 			for range count {
 				select {
 				case e := <-reports:
@@ -60,14 +45,7 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 					t.Fatal("fixture delivery timed out")
 				}
 			}
-			binaryPath := os.Getenv("KFWD_TEST_BINARY")
-			if binaryPath == "" {
-				binaryPath = filepath.Join(t.TempDir(), "kafka-fwd2")
-				command := exec.Command("go", "build", "-trimpath", "-o", binaryPath, "../../cmd/kafka-fwd2")
-				if data, err := command.CombinedOutput(); err != nil {
-					t.Fatalf("build: %v %s", err, data)
-				}
-			}
+			binaryPath := testBinary(t)
 			statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", broker(t), dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), src+"-load")
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
@@ -80,59 +58,20 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 				args = append(args, "--config", path)
 				statement = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'), CONNECTION slow AS ('bootstrap.servers'='%s','linger.ms'='100') INSERT INTO TOPIC '%s@slow' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", broker(t), broker(t), dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), src+"-load")
 			}
-			command := exec.CommandContext(ctx, binaryPath, args...)
-			command.Stdin = strings.NewReader(statement)
-			var output bytes.Buffer
-			command.Stderr = &output
-
 			// When executing the bounded copy and sampling its memory.
 			start := time.Now()
-			if err := command.Start(); err != nil {
-				t.Fatal(err)
-			}
-			stop := make(chan struct{})
-			peakResult := make(chan int64, 1)
-			go func() {
-				var peak int64
-				tick := time.NewTicker(50 * time.Millisecond)
-				defer tick.Stop()
-				for {
-					select {
-					case <-stop:
-						peakResult <- peak
-						return
-					case <-tick.C:
-						data, err := exec.Command("ps", "-o", "rss=", "-p", strconv.Itoa(command.Process.Pid)).Output()
-						if err == nil {
-							rss, _ := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
-							if rss > peak {
-								peak = rss
-							}
-						}
-					}
-				}
-			}()
-			err := command.Wait()
+			process := startCLI(t, ctx, binaryPath, statement, args...)
+			stopSampling := watchRSS(process)
+			err := process.wait()
 			elapsed := time.Since(start)
-			close(stop)
-			peak := <-peakResult
+			memory := stopSampling()
 			if err != nil {
-				t.Fatalf("load copy: %v %s", err, output.String())
+				t.Fatalf("load copy: %v %s", err, process.logs())
 			}
-			var summary struct {
-				Submitted   int   `json:"submitted"`
-				Confirmed   int   `json:"confirmed"`
-				PeakRecords int   `json:"peak_uncommitted_records"`
-				PeakBytes   int64 `json:"peak_uncommitted_bytes"`
+			if memory.samples == 0 {
+				t.Fatalf("no RSS samples; failures=%d", memory.failures)
 			}
-			for _, line := range strings.Split(output.String(), "\n") {
-				var event map[string]json.RawMessage
-				if json.Unmarshal([]byte(line), &event) == nil && string(event["msg"]) == `"copy summary"` {
-					if err := json.Unmarshal([]byte(line), &summary); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
+			summary := summaryFrom(t, process.logs())
 
 			// Then the CLI resolves every record within its work caps and preserves output.
 			if summary.Submitted != count || summary.Confirmed != count || summary.PeakRecords > recordCap || summary.PeakBytes > byteCap {
@@ -146,23 +85,11 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			if err := c.Assign(parts); err != nil {
 				t.Fatal(err)
 			}
-			seen := make([]bool, count)
 			for range count {
-				r := read(t, c)
-				if len(r.Value) < 4 {
-					t.Fatal("truncated record")
-				}
-				i := int(binary.BigEndian.Uint32(r.Value))
-				if i >= count || seen[i] {
-					t.Fatal("lost or duplicate record")
-				}
-				seen[i] = true
-				if len(r.Value) != 1024+i%4096 || !r.Timestamp.Equal(stamp) || len(r.Headers) != 3 || r.Headers[1].Value != nil || r.Headers[2].Value == nil {
-					t.Fatal("load copy changed record")
-				}
+				records.verify(t, read(t, c))
 			}
-			cpu := command.ProcessState.UserTime() + command.ProcessState.SystemTime()
-			t.Logf("records=%d elapsed=%s records/s=%.0f child_cpu=%s sampled_peak_rss_MiB=%.1f peak_uncommitted_records=%d peak_uncommitted_bytes=%d", count, elapsed, float64(count)/elapsed.Seconds(), cpu, float64(peak)/1024, summary.PeakRecords, summary.PeakBytes)
+			cpu := process.cpu()
+			t.Logf("records=%d elapsed=%s records/s=%.0f child_cpu=%s sampled_peak_rss_MiB=%.1f peak_uncommitted_records=%d peak_uncommitted_bytes=%d", count, elapsed, float64(count)/elapsed.Seconds(), cpu, float64(memory.peak)/1024, summary.PeakRecords, summary.PeakBytes)
 		})
 	}
 }

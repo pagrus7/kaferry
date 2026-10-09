@@ -1,0 +1,73 @@
+package kafka
+
+import (
+	"context"
+	"errors"
+	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	core "kafka-fwd2/internal/copy"
+	"testing"
+)
+
+func TestEmptyAssignmentDoesNotCommitNativeOffsets(t *testing.T) {
+	// Given
+	store := &Committer{}
+
+	// When
+	results, err := store.Save(context.Background(), nil)
+
+	// Then
+	if err != nil || len(results) != 0 {
+		t.Fatal("empty assignment needs no native commit", results, err)
+	}
+}
+
+func TestCommitClassification(t *testing.T) {
+	// Given
+	var recoverable *core.Recoverable
+	for _, code := range []k.ErrorCode{k.ErrRebalanceInProgress, k.ErrIllegalGeneration, k.ErrUnknownMemberID, k.ErrCoordinatorNotAvailable, k.ErrNotCoordinator, k.ErrCoordinatorLoadInProgress, k.ErrRequestTimedOut, k.ErrTransport, k.ErrTimedOut, k.ErrWaitCoord, k.ErrAllBrokersDown} {
+
+		// When
+		classifyCommitErr := classifyCommit(k.NewError(code, "", false))
+
+		// Then
+		if !errors.As(classifyCommitErr, &recoverable) {
+			t.Fatalf("%v should be recoverable on revocation", code)
+		}
+	}
+	for _, err := range []error{
+		k.NewError(k.ErrGroupAuthorizationFailed, "", false), k.NewError(k.ErrTopicAuthorizationFailed, "", false),
+		k.NewError(k.ErrOffsetMetadataTooLarge, "", false), k.NewError(k.ErrFencedInstanceID, "", false),
+		k.NewError(k.ErrTransport, "", true), k.NewError(k.ErrUnknown, "", false), errors.New("not a client error"),
+	} {
+		if classified := classifyCommit(err); errors.As(classified, &recoverable) {
+			t.Fatalf("%v must stay terminal", err)
+		}
+	}
+	if classifyCommit(nil) != nil {
+		t.Fatal("success must stay nil")
+	}
+}
+
+func TestKafkaFileCommitUsesDurableExtent(t *testing.T) {
+	// Given
+	native := &capturedCommits{}
+	output := &durableExtent{extent: 256}
+	store := &Committer{consumer: native, topic: "orders", output: output, metadata: map[int32]Progress{0: {Fingerprint: "fp", TopicID: "topic-id"}}}
+	for _, extent := range []int64{256, 1024, 1024} {
+		// Failed I/O cannot move DurableOutput; a later commit keeps the last E.
+		output.extent = extent
+
+		// When
+		results, err := store.Save(context.Background(), []core.Cursor{{Partition: 0, Position: 5}})
+
+		// Then
+		if err != nil || results[0] != nil {
+			t.Fatalf("commit: results=%v err=%v", results, err)
+		}
+		part := native.parts[len(native.parts)-1]
+		progress, err := decodeProgress(part.Metadata, "fp", "topic-id", false)
+		if err != nil || progress.FileID != "archive-id" || progress.Extent != extent || part.Offset != 5 {
+			t.Fatalf("durable output identity/extent changed: part=%v progress=%+v err=%v", part, progress, err)
+		}
+	}
+}

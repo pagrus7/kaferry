@@ -45,6 +45,64 @@ Additional broker versions, SCRAM/mTLS/other authentication providers, physical 
 
 ## Native coordinator timeout defect observed — 2026-10-04
 
-Fresh security qualification exposed an `AdminClient.Close` hang after repeatedly cancelled coordinator requests, then a native assertion abort (`rd_kafka_enq_once_del_source_return`) with explicit four-second admin deadlines. The pinned v2.15.0 source retains the premature worker destruction reported in [upstream issue 4605](https://github.com/confluentinc/librdkafka/issues/4605) and the still-open [native fix proposal 5397](https://github.com/confluentinc/librdkafka/pull/5397). This matches the observed assertion; exact causal identity has not been independently proved.
+Fresh security qualification exposed an `AdminClient.Close` hang after repeatedly cancelled coordinator requests, then a native assertion abort (`rd_kafka_enq_once_del_source_return`) with explicit four-second admin deadlines. The abort matches [upstream issue 4605](https://github.com/confluentinc/librdkafka/issues/4605); exact causal identity remains unproved. Codex and Opus 5.5 source review identified a candidate: the native admin timer expires before coordinator discovery, then late discovery consumes a freed callback reference. The coordinator cleanup changes in [proposal 5397](https://github.com/confluentinc/librdkafka/pull/5397) address that path; the proposal is unmerged and unqualified here. The close hang is a separate observation requiring native stacks; an ignored FindCoordinator retry result is an untested reference-leak hypothesis. Neither current stock 2.15.1 source nor its release notes establishes a fix. The abort run's intermediate fixture source was not archived; logs and recorded timeout changes are retained.
 
-The security fixture now primes cold coordinator partitions using Kafka's Java CLI, bounds native readiness requests and cleanup, and has a five-minute test timeout. This permits security/failover testing; it does not fix the native defect. Startup uses coordinator-targeted `Inspector.CheckMembers` (`DescribeConsumerGroups`) and `Inspector.Progress` (`ListConsumerGroupOffsets`). Their ten-second Go contexts do not cancel native requests; abandoned work may delay the inspector's deferred Close. This remains a release blocker for reliable recovery from coordinator errors/timeouts. Assignment callbacks now use the joined consumer's `Committed` for all source partitions, retaining topic-ID/partition-count checks through metadata-only discovery. That removes this admin-coordinator path from copying and rebalances; startup exposure remains. A fixed official native release or an explicitly approved, independently qualified native patch is needed to close it. No native fork/client substitution was introduced.
+The security fixture now primes cold coordinator partitions using Kafka's Java CLI, bounds native readiness requests and cleanup, and has a five-minute test timeout. This permits security/failover testing; it does not fix the native defect. Startup uses coordinator-targeted `Inspector.CheckMembers` (`DescribeConsumerGroups`) and `Inspector.Progress` (`ListConsumerGroupOffsets`). Their ten-second Go contexts do not cancel native requests; abandoned work may delay the inspector's deferred Close. This remains a release blocker for reliable recovery from coordinator errors/timeouts. Assignment callbacks now use the joined consumer's `Committed` for all source partitions, retaining topic-ID/partition-count checks through metadata-only discovery. That removes this admin-coordinator path from copying and rebalances; startup exposure remains. Closing it requires qualified recovery and shutdown behavior for both observations, with the startup checks preserved. A stock-API mitigation or native fix remains to be evaluated; no native fork/client substitution was introduced.
+
+
+## Permission baseline and admin inventory — 2026-10-04
+
+For existing topics and a named consumer group under Kafka 3.9 StandardAuthorizer, a normal grouped consumer/nontransactional producer and this tool need the same grants: source topic READ, exact source group READ, destination topic WRITE. READ/WRITE imply DESCRIBE. Source/destination credentials can be scoped separately. Destination DESCRIBE_CONFIGS is optional; no source-config, destination-READ or cluster-DESCRIBE grant is needed by these paths. [Kafka authorization](https://kafka.apache.org/39/security/authorization-and-acls/).
+
+The copier passed a focused SASL/TLS fixture using only those three LITERAL grants and the real candidate CLI; denied-config warning and key/value/null/header/timestamp fidelity were asserted. Parent test: 4.47 s; Go run: 6.059 s; fixture setup/run/cleanup: 22.836 s. Child authentication-negative tests were filtered for this run. A Go overlay changed only the fixture's group ACL; shipped code stayed unchanged. Same-cluster/one-version evidence does not qualify other authorizers or split-cluster credentials.
+
+ONE_OFF needs authorization covering generated `kafka-fwd2-<hex>` group IDs, usually a prefix grant. Named GROUP allows an exact grant. A groupless reader that never commits can omit group READ; this tool's agreed grouped/resumable semantics retain it. Nontransactional idempotence needs only topic WRITE on standard Kafka >=2.8; older/custom authorizers may require cluster IDEMPOTENT_WRITE ([KIP-679](https://cwiki.apache.org/confluence/display/KAFKA/KIP-679%3A+Producer+will+enable+the+strongest+delivery+guarantee+by+default)); older brokers are unqualified here.
+
+### Production
+
+Factory.Open creates one Inspector/admin handle per Kafka endpoint; files create none. All direct runtime admin calls are in `internal/kafka/metadata.go`, constructed through `internal/kafka/clients.go`; `internal/app/engine.go` orchestrates endpoint and progress checks. Interfaces in clients.go/ports.go/factory.go support injection.
+
+| Inspector method / API | Purpose / timing |
+| --- | --- |
+| NewInspector / DescribeTopics | Startup: require existing topic, nonzero topic ID and partition topology; source and destination |
+| ClusterID / rd_kafka_clusterid | Startup: cluster identity for query fingerprint; cached Metadata header, no DescribeCluster RPC |
+| currentPartitions / DescribeTopics | Source startup/progress and assignments: detect topic replacement and partition growth |
+| Progress / ListConsumerGroupOffsets | Source pre-join: saved offsets and commit metadata for query/topic/window/file-progress checks |
+| CheckMembers / DescribeConsumerGroups | Source pre-join: reject foreign active members or assignment to another topic |
+| Offsets / ListOffsets | Source positioning: earliest/latest bounds, expired/out-of-range checks and read-committed end resolution |
+| Config / DescribeConfigs | Destination startup only: optional topic size and timestamp preflight |
+| Close / AdminClient.Close | Release each endpoint's native handle, including startup failure cleanup |
+
+Group progress and membership APIs use the suspect coordinator path. DescribeTopics, DescribeConfigs and ListOffsets use other native admin paths. Consumer operations handle runtime committed-position fetches, commits, timestamp lookup and live watermarks; the producer refreshes destination routing metadata.
+
+### DescribeConfigs choice — pending
+
+It reads destination `max.message.bytes`, timestamp type and before/after timestamp bounds (with legacy difference fallback). Size config sets the producer record/batch ceiling and queue budget. Known LogAppendTime permits unset/restamped timestamps; known CreateTime permits pre-submit age checks under ON_REJECTED_TIMESTAMP.
+
+Removing the call is possible but saves no required ACL. Without it, producer size is the default 1,000,000 or explicit `message.max.bytes`; operators should align that with destination limits. Small valid records can form a broker-rejected oversized batch. Timestamp-bound violations can reject mixed batches; unattributed asynchronous failures always stop, including under SKIP. Unknown LogAppendTime also conservatively rejects SDK-unpreservable timestamps that a known LogAppendTime destination could restamp. Native NUL/header and conversion validations remain.
+
+Inspection is a one-time best-effort check. Changed config or client/broker clock skew can cause disagreement in either direction, including local SKIP of a broker-acceptable timestamp. Codex/Opus recommendation: retain automatic optional inspection, explain fallback behavior; user may choose removal with narrower behavior. No implementation change made. Removing DescribeConfigs would leave the coordinator startup calls.
+
+### Tests
+
+Tests use separate fixture administrators for setup/assertions; these grants are not CLI runtime requirements.
+
+| tests/compat file | Admin purpose, directly or through shared helpers |
+| --- | --- |
+| client_test.go | Shared client creation/close, topic setup/removal and readiness; config visibility, topic-ID, group/offset, transaction-end and size probes |
+| acceptance_test.go | Resume/commit checks, topic recreation, commit seeding, group inspection/deletion and retention truncation |
+| churn_test.go | Topic fixtures, group readiness, committed progress and destination-end assertions during churn |
+| clusters_test.go | Source/destination fixture admins, cluster IDs and cross-cluster topic lifecycle |
+| directions_test.go | Topic fixtures and destination end assertions for file/topic permutations |
+| edges_test.go | Foreign metadata/commit seeding, membership/offset assertions and retention truncation |
+| fault_test.go | Topic/group readiness around broker outages and ownership loss |
+| load_test.go | Topic fixtures and worker/group readiness for bounded load |
+| qualification_test.go | TLS/SASL topic/ACL setup, restricted-principal topic visibility, replication/leader discovery and cleanup |
+| review_test.go | Topic fixtures and legacy timestamp-setting changes |
+| signal_test.go | Topic fixtures, partition creation, group commits and log-end assertions |
+| soak_test.go | Source/destination fixture admins, topic lifecycle, group readiness and progress/lag assertions |
+| timestamps_test.go | LogAppendTime and timestamp-index fixture configuration |
+| transactions_test.go | Topic fixtures and committed-position assertions across transaction/control-record tails |
+| workers_test.go | Group member/assignment readiness and shared fixtures |
+
+`internal/kafka/fixtures_test.go` supplies mocked AdminClient/Clients implementations for independent component tests. Test setup can create/alter/delete resources; production uses only the inspection operations listed above.

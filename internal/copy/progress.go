@@ -6,12 +6,12 @@ import "fmt"
 type ProgressTracker interface {
 	Assign(Cursor)
 	Revoke(int32)
-	Observe(Cursor, int64, int64, bool) (Token, error)
-	Resolve(Token) bool
+	Observe(Cursor, int64, int64) (Token, error)
+	Advance(Cursor) error
 	Submitted(Token)
 	InFlight() bool
 	PositionOf(Token) int64
-	ResolveIfOwned(Token, bool) bool
+	Settle(Token, bool) bool
 	Confirmed(int32) Cursor
 	Saved(int32) int64
 	HasProgress(int32) bool
@@ -54,7 +54,18 @@ func (t *Tracker) Assign(cursor Cursor) {
 	t.partitions[cursor.Partition] = &partitionProgress{generation: t.generation, committed: cursor.Position, pending: make(map[uint64]*entry)}
 }
 func (t *Tracker) Revoke(partition int32) { delete(t.partitions, partition) }
-func (t *Tracker) Observe(cursor Cursor, next, bytes int64, resolved bool) (Token, error) {
+
+// Observe admits a record; Settle records its eventual outcome.
+func (t *Tracker) Observe(cursor Cursor, next, bytes int64) (Token, error) {
+	return t.observe(cursor, next, bytes, false)
+}
+
+// Advance records an already consumed position without a destination write.
+func (t *Tracker) Advance(cursor Cursor) error {
+	_, err := t.observe(cursor, cursor.Position, 0, true)
+	return err
+}
+func (t *Tracker) observe(cursor Cursor, next, bytes int64, resolved bool) (Token, error) {
 	p := t.partitions[cursor.Partition]
 	if p == nil {
 		return Token{}, fmt.Errorf("record for an unassigned partition")
@@ -76,19 +87,6 @@ func (t *Tracker) Observe(cursor Cursor, next, bytes int64, resolved bool) (Toke
 	p.pending[token.Sequence] = e
 	p.bytes += bytes
 	return token, nil
-}
-func (t *Tracker) Resolve(token Token) bool {
-	p := t.partitions[token.Partition]
-	if p == nil || p.generation != token.Generation {
-		return false
-	}
-	e := p.pending[token.Sequence]
-	if e == nil {
-		return false
-	}
-	e.resolved = true
-	e.submitted = false
-	return true
 }
 func (t *Tracker) Submitted(token Token) {
 	if p := t.partitions[token.Partition]; p != nil && p.generation == token.Generation {
@@ -115,14 +113,14 @@ func (t *Tracker) PositionOf(token Token) int64 {
 	}
 	return -1
 }
-func (t *Tracker) ResolveIfOwned(token Token, resolve bool) bool {
+func (t *Tracker) Settle(token Token, success bool) bool {
 	p := t.partitions[token.Partition]
 	if p == nil || p.generation != token.Generation || p.pending[token.Sequence] == nil {
 		return false
 	}
 	e := p.pending[token.Sequence]
 	e.submitted = false
-	if resolve {
+	if success {
 		e.resolved = true
 	}
 	return true

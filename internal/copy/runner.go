@@ -13,18 +13,15 @@ import (
 )
 
 type partition struct {
-	window         plan.Window
-	stopped        bool
-	paused         bool
-	position       int64
-	stable         int64
-	atTip          bool
-	high           *int64
-	waitStarted    time.Time
-	nextSample     time.Time
-	sampleDelay    time.Duration
-	sampleLog      time.Time
-	sampleAttempts int
+	window      plan.Window
+	stopped     bool
+	paused      bool
+	position    int64
+	stable      int64
+	atTip       bool
+	high        *int64
+	waitStarted time.Time
+	sampling    retrySchedule
 }
 type submission struct {
 	input     Input
@@ -234,7 +231,7 @@ func (r *Runner) input(input Input) error {
 	p.atTip = false
 	if p.high != nil && input.Cursor.Position >= *p.high {
 		cursor := Cursor{Partition: input.Cursor.Partition, Position: *p.high}
-		_, err := r.tracker.Observe(cursor, cursor.Position, 0, true)
+		err := r.tracker.Advance(cursor)
 		p.position = cursor.Position
 		return err // A later visible record proves control/aborted gaps reached H.
 	}
@@ -246,7 +243,7 @@ func (r *Runner) input(input Input) error {
 		return err
 	}
 
-	token, err := r.tracker.Observe(input.Cursor, input.Next, input.Record.Size(), false)
+	token, err := r.tracker.Observe(input.Cursor, input.Next, input.Record.Size())
 	if err != nil {
 		return err
 	}
@@ -276,7 +273,7 @@ func (r *Runner) stopAtTimestamp(p *partition, input Input) (bool, error) {
 	if *input.Record.TimestampMS <= threshold {
 		return false, nil
 	}
-	if _, err := r.tracker.Observe(input.Cursor, input.Cursor.Position, 0, true); err != nil {
+	if err := r.tracker.Advance(input.Cursor); err != nil {
 		return false, err
 	}
 	p.stopped = true
@@ -290,7 +287,7 @@ func (r *Runner) filter(window plan.Window, record Record, token Token) (bool, e
 		return true, r.recordError(token, &RecordError{Class: "missing_timestamp", Err: fmt.Errorf("record lacks required timestamp")})
 	}
 	if record.TimestampMS != nil && !window.Contains(*record.TimestampMS) {
-		r.tracker.Resolve(token)
+		r.tracker.Settle(token, true)
 		r.filtered++
 		return true, nil
 	}
@@ -338,7 +335,7 @@ func (r *Runner) recordError(token Token, err error) error {
 	if policy != "SKIP" {
 		return fmt.Errorf("partition %d: %w", token.Partition, err)
 	}
-	r.tracker.Resolve(token)
+	r.tracker.Settle(token, true)
 	r.skipped++
 	r.log.Warn("record skipped", "partition", token.Partition, "position", r.tracker.PositionOf(token), "class", record.Class, "reason", record.Error())
 	return nil
@@ -353,7 +350,7 @@ func (r *Runner) deliveries() error {
 			if delivery.Fatal {
 				return delivery.Err
 			}
-			if !r.tracker.ResolveIfOwned(delivery.Token, delivery.Err == nil) {
+			if !r.tracker.Settle(delivery.Token, delivery.Err == nil) {
 				continue
 			}
 			if delivery.Err != nil {
@@ -374,7 +371,7 @@ func (r *Runner) eof(cursor Cursor) error {
 		r.deferredEOF = &cursor
 		return nil
 	}
-	_, err := r.tracker.Observe(cursor, cursor.Position, 0, true)
+	err := r.tracker.Advance(cursor)
 	if err != nil {
 		return err
 	}
@@ -405,7 +402,7 @@ func (r *Runner) tips() error {
 			return err
 		}
 		if p.high == nil {
-			if sampled || !p.atTip || r.clock.Now().UnixMilli() <= threshold || r.clock.Now().Before(p.nextSample) {
+			if sampled || !p.atTip || r.clock.Now().UnixMilli() <= threshold || !p.sampling.due(r.clock.Now()) {
 				continue
 			}
 			sampled = true
@@ -434,20 +431,14 @@ func (r *Runner) sampleHigh(id int32, p *partition) error {
 		if !errors.As(err, &recoverable) {
 			return err
 		}
-		p.sampleAttempts++
-		if p.sampleLog.IsZero() || r.clock.Now().Sub(p.sampleLog) >= time.Minute {
-			r.log.Warn("tip watermark query retrying", "partition", id, "attempt", p.sampleAttempts, "reason", err)
-			p.sampleLog = r.clock.Now()
+		if p.sampling.failed(r.clock.Now()) {
+			r.log.Warn("tip watermark query retrying", "partition", id, "attempt", p.sampling.attempts, "reason", err)
 		}
-		p.sampleDelay = min(30*time.Second, max(time.Second, 2*p.sampleDelay))
-		p.nextSample = r.clock.Now().Add(p.sampleDelay)
 		return nil
 	}
-	if p.sampleAttempts > 0 {
-		r.log.Info("tip watermark query recovered", "partition", id, "attempts", p.sampleAttempts)
+	if attempts := p.sampling.recovered(); attempts > 0 {
+		r.log.Info("tip watermark query recovered", "partition", id, "attempts", attempts)
 	}
-	p.nextSample, p.sampleLog = time.Time{}, time.Time{}
-	p.sampleDelay, p.sampleAttempts = 0, 0
 	p.high = &high
 	p.waitStarted = r.clock.Now()
 	return nil

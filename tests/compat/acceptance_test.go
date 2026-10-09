@@ -428,29 +428,10 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", broker(t), dst, src, group)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, testBinary(t), "run", "-e", statement)
-	var output bytes.Buffer
-	cmd.Stderr = &output
-
-	// When
-	startErr := cmd.Start()
-
-	// Then
-	if startErr != nil {
-		t.Fatal(startErr)
-	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	finished := false
-	t.Cleanup(func() {
-		cancel()
-		if !finished {
-			_ = cmd.Process.Kill()
-			<-done
-		}
-	})
+	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement)
 	committedPartitions(t, a, group, src, 1)
-	if err := cmd.Process.Signal(syscall.SIGSTOP); err != nil {
+	// When retention deletes records while the consumer is stopped.
+	if err := process.signal(syscall.SIGSTOP); err != nil {
 		t.Fatal(err)
 	}
 	p := producer(t, nil)
@@ -461,41 +442,35 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 	if err != nil || len(deleted.DeleteRecordsResults) != 1 || deleted.DeleteRecordsResults[0].TopicPartition.Error != nil {
 		t.Fatal("delete unread records", deleted, err)
 	}
-	if err := cmd.Process.Signal(syscall.SIGCONT); err != nil {
+	if err := process.signal(syscall.SIGCONT); err != nil {
 		t.Fatal(err)
 	}
+	// Then the running consumer fails instead of silently resetting its offset.
 	select {
-	case err := <-done:
-		finished = true
+	case <-process.done:
+		err := process.wait()
 		if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
-			t.Fatalf("running offset loss did not fail: %v %s", err, output.String())
+			t.Fatalf("running offset loss did not fail: %v %s", err, process.logs())
 		}
 	case <-ctx.Done():
 		t.Fatal("retention overtook the consumer without a failure")
 	}
-	if !strings.Contains(output.String(), "offset") {
-		t.Fatal("offset failure has no diagnostic", output.String())
+	if !strings.Contains(process.logs(), "offset") {
+		t.Fatal("offset failure has no diagnostic", process.logs())
 	}
 	// Restart the same query and group; cancel only after retained output is durable.
-	cmd = exec.CommandContext(ctx, testBinary(t), "run", "-e", statement)
-	output.Reset()
-	cmd.Stderr = &output
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	finished = false
-	done = make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	// When restarting the same query after retention has removed its saved position.
+	process = startCLI(t, ctx, testBinary(t), "", "run", "-e", statement)
 	waitEnd(t, a, dst, 5)
-	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+	if err := process.signal(os.Interrupt); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-done; err != nil {
-		finished = true
-		t.Fatalf("retention restart: %v %s", err, output.String())
+	if err := process.wait(); err != nil {
+		t.Fatalf("retention restart: %v %s", err, process.logs())
 	}
-	finished = true
-	if !strings.Contains(output.String(), "expired source position") {
-		t.Fatal("restart did not log the retention gap", output.String())
+
+	// Then retained records are copied and the retention gap is logged.
+	if !strings.Contains(process.logs(), "expired source position") {
+		t.Fatal("restart did not log the retention gap", process.logs())
 	}
 }

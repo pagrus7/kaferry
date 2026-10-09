@@ -297,25 +297,7 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	properties["socket.timeout.ms"] = "5000"
 	properties["session.timeout.ms"] = "6000"
 	config := secureConfig(t, properties)
-	cmd := exec.CommandContext(ctx, testBinary(t), "run", "-e", statement, "-c", config)
-	var output bytes.Buffer
-	cmd.Stderr = &output
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	finished := false
-	t.Cleanup(func() {
-		cancel()
-		if !finished {
-			_ = cmd.Process.Kill()
-			<-done
-		}
-		if t.Failed() {
-			t.Logf("copy process stderr: %s", output.String())
-		}
-	})
+	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
 	committedPartitions(t, a, group, src, 1)
 	stamp := time.Now().Truncate(time.Millisecond)
 	for i := range 16 {
@@ -337,16 +319,14 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	}
 	waitSecureEnd(t, dst, 64)
 
-	signalErr := cmd.Process.Signal(os.Interrupt)
+	signalErr := process.signal(os.Interrupt)
 
 	if signalErr != nil {
 		t.Fatal(signalErr)
 	}
-	if err := <-done; err != nil {
-		finished = true
-		t.Fatalf("copy failed on broker failover: %v %s", err, output.String())
+	if err := process.wait(); err != nil {
+		t.Fatalf("copy failed on broker failover: %v %s", err, process.logs())
 	}
-	finished = true
 
 	// Then remaining replicas delivered every record and shutdown committed the stream.
 	reader := secureReader(t, dst)

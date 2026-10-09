@@ -67,7 +67,11 @@ func TestFileSourceUsesDecoderAndRemembersOnlyDecodedFrames(t *testing.T) {
 			if err != nil || event.Input == nil || !bytes.Equal(decoder.payload, payload) || event.Input.Record.Value == nil || event.Input.Record.Key != nil || len(checkpoints.remembered) != 1 || checkpoints.remembered[event.Input.Next].Position != 0 {
 				t.Fatal("decoded record or frame identity lost", event, err)
 			}
+
+			// When polling the partial trailing frame.
 			event, err = source.Poll(0)
+
+			// Then it ends the snapshot without recording a decoded frame.
 			if err != nil || event.EOF == nil || len(checkpoints.remembered) != 1 {
 				t.Fatal("partial tail was emitted or remembered", event, err)
 			}

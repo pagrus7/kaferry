@@ -8,26 +8,38 @@ func TestConfirmedPrefixIncludesNumericGaps(t *testing.T) {
 	tk.Assign(Cursor{0, 100})
 
 	// When
-	a, _ := tk.Observe(Cursor{0, 100}, 101, 10, false)
-	b, _ := tk.Observe(Cursor{0, 105}, 106, 20, false)
-	tk.Resolve(b)
+	a, _ := tk.Observe(Cursor{0, 100}, 101, 10)
+	b, _ := tk.Observe(Cursor{0, 105}, 106, 20)
+	tk.Settle(b, true)
 
 	// Then
 	if tk.Confirmed(0).Position != 100 {
 		t.Fatal("committed past unresolved record")
 	}
-	tk.Resolve(a)
+
+	// When the missing earlier delivery succeeds.
+	tk.Settle(a, true)
+
+	// Then the consumed prefix includes numeric offset gaps.
 	if tk.Confirmed(0).Position != 106 {
 		t.Fatal("numeric offset gaps blocked consumed prefix")
 	}
 	if records, bytes := tk.Total(); records != 2 || bytes != 30 {
 		t.Fatal("confirmed work was released before commit")
 	}
+
+	// When only the first confirmed position is committed.
 	tk.Committed(Cursor{0, 101})
+
+	// Then later confirmed work still counts against the caps.
 	if records, bytes := tk.Total(); records != 1 || bytes != 20 {
 		t.Fatal("partial commit released the wrong work")
 	}
+
+	// When the remaining confirmed position is committed.
 	tk.Committed(Cursor{0, 106})
+
+	// Then its work is released.
 	if records, bytes := tk.Total(); records != 0 || bytes != 0 {
 		t.Fatal("committed work retained")
 	}
@@ -37,13 +49,13 @@ func TestOldGenerationDeliveryCannotAdvanceNewOwner(t *testing.T) {
 	// Given a new assignment after the previous generation was revoked.
 	tk := NewTracker()
 	tk.Assign(Cursor{0, 0})
-	old, _ := tk.Observe(Cursor{0, 0}, 1, 1, false)
+	old, _ := tk.Observe(Cursor{0, 0}, 1, 1)
 	tk.Revoke(0)
 	tk.Assign(Cursor{0, 0})
-	current, _ := tk.Observe(Cursor{0, 0}, 1, 1, false)
+	current, _ := tk.Observe(Cursor{0, 0}, 1, 1)
 
 	// When an old delivery arrives late.
-	resolved := tk.Resolve(old)
+	resolved := tk.Settle(old, true)
 
 	// Then it cannot advance the new owner's confirmed prefix.
 	if resolved || tk.Confirmed(0).Position != 0 {
@@ -51,7 +63,7 @@ func TestOldGenerationDeliveryCannotAdvanceNewOwner(t *testing.T) {
 	}
 
 	// When the current generation's delivery arrives.
-	resolved = tk.Resolve(current)
+	resolved = tk.Settle(current, true)
 
 	// Then its progress is confirmed.
 	if !resolved || tk.Confirmed(0).Position != 1 {
@@ -65,7 +77,7 @@ func TestControlRecordCursorAndTimestampStop(t *testing.T) {
 	tk.Assign(Cursor{0, 0})
 
 	// When
-	_, err := tk.Observe(Cursor{0, 0}, 2, 0, true)
+	err := tk.Advance(Cursor{0, 2})
 
 	// Then
 	if err != nil {
@@ -74,7 +86,11 @@ func TestControlRecordCursorAndTimestampStop(t *testing.T) {
 	if tk.Confirmed(0).Position != 2 {
 		t.Fatal("control cursor did not advance")
 	}
-	_, err = tk.Observe(Cursor{0, 2}, 2, 0, true)
+
+	// When an unchanged position marker follows the control cursor.
+	err = tk.Advance(Cursor{0, 2})
+
+	// Then it adds no unresolved work.
 	if err != nil {
 		t.Fatal(err)
 	}

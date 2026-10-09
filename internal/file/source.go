@@ -23,65 +23,69 @@ type Source struct {
 	ended       bool
 }
 
-func NewSource(path, fp string, window plan.WindowSpec, codec ArchiveDecoder, checkpoints SourceCheckpoints, clock copy.Clock) (*Source, error) {
+func NewSource(path, fp string, window plan.WindowSpec, codec ArchiveDecoder, checkpoints SourceCheckpoints, clock copy.Clock) (source *Source, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if source == nil {
+			_ = f.Close()
+		}
+	}()
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
-		f.Close()
 		return nil, conflict("file source must be a regular file")
 	}
 	header, start, err := codec.Header(f, info.Size())
 	if err != nil {
-		f.Close()
 		return nil, conflict("%v", err)
 	}
 	var resolved plan.Window
 	position := start
 	if saved := checkpoints.Existing(); saved != nil {
-		if saved.Fingerprint != fp {
-			f.Close()
-			return nil, conflict("checkpoint query fingerprint mismatch")
-		}
-		if saved.SourceID != header.ID || saved.Position > info.Size() {
-			f.Close()
-			return nil, conflict("source file changed: saved=%s current=%s", saved.SourceID, header.ID)
-		}
-		if saved.Position < start {
-			f.Close()
-			return nil, conflict("checkpoint precedes source records")
-		}
-		if saved.LastFrame != nil {
-			_, next, crc, err := readFrame(f, saved.LastFrame.Position, info.Size(), codec.FrameLimit())
-			if err != nil || next != saved.Position || crc != saved.LastFrame.CRC {
-				f.Close()
-				return nil, conflict("source file changed: last checkpointed frame differs")
-			}
-		} else if saved.Position != start {
-			f.Close()
-			return nil, conflict("checkpoint has no source frame identity")
-		}
-		position = saved.Position
-		resolved = saved.Window
-		if err := window.ValidateStored(resolved, 0); err != nil {
-			f.Close()
-			return nil, conflict("%v", err)
+		position, resolved, err = resumePoint(f, info.Size(), start, header.ID, saved, fp, window, codec.FrameLimit())
+		if err != nil {
+			return nil, err
 		}
 	} else {
 		resolved, err = window.Resolve(clock.Now())
 		if err != nil {
-			f.Close()
 			return nil, conflict("%v", err)
 		}
 		checkpoints.Initialize(Checkpoint{Version: 1, Fingerprint: fp, SourceID: header.ID, Position: start, Window: resolved})
 	}
 	return &Source{file: f, codec: codec, checkpoints: checkpoints, size: info.Size(), position: position, window: resolved}, nil
+}
+
+// resumePoint validates persisted file identity without owning the file handle.
+func resumePoint(reader io.ReaderAt, size, start int64, sourceID string, saved *Checkpoint, fp string, window plan.WindowSpec, frameLimit int64) (int64, plan.Window, error) {
+	if saved.Fingerprint != fp {
+		return 0, plan.Window{}, conflict("checkpoint query fingerprint mismatch")
+	}
+	if saved.SourceID != sourceID || saved.Position > size {
+		return 0, plan.Window{}, conflict("source file changed: saved=%s current=%s", saved.SourceID, sourceID)
+	}
+	if saved.Position < start {
+		return 0, plan.Window{}, conflict("checkpoint precedes source records")
+	}
+	if saved.LastFrame != nil {
+		_, next, crc, err := readFrame(reader, saved.LastFrame.Position, size, frameLimit)
+		if err != nil || next != saved.Position || crc != saved.LastFrame.CRC {
+			return 0, plan.Window{}, conflict("source file changed: last checkpointed frame differs")
+		}
+	} else if saved.Position != start {
+		return 0, plan.Window{}, conflict("checkpoint has no source frame identity")
+	}
+	position := saved.Position
+	resolved := saved.Window
+	if err := window.ValidateStored(resolved, 0); err != nil {
+		return 0, plan.Window{}, conflict("%v", err)
+	}
+	return position, resolved, nil
 }
 func (s *Source) Start(lifecycle copy.Lifecycle) error {
 	cursor := copy.Cursor{Partition: 0, Position: s.position}

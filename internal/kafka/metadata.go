@@ -158,21 +158,32 @@ func (i *Inspector) ReadProgress(group, fp string, window plan.WindowSpec, cutof
 	if err != nil {
 		return nil, err
 	}
-	result := make(map[int32]Progress)
+	_, result, err := decodeCommitted(parts, fp, i.TopicID(), window, cutoff)
+	return result, err
+}
+
+// decodeCommitted validates the same persisted contract at startup and assignment.
+func decodeCommitted(parts []k.TopicPartition, fp, topicID string, window plan.WindowSpec, cutoff int64) (map[int32]k.TopicPartition, map[int32]Progress, error) {
+	positions := make(map[int32]k.TopicPartition)
+	progress := make(map[int32]Progress)
 	for _, part := range parts {
+		if part.Error != nil {
+			return nil, nil, part.Error
+		}
 		if part.Offset < 0 {
 			continue
 		}
-		progress, err := decodeProgress(part.Metadata, fp, i.TopicID(), window.Relative())
+		saved, err := decodeProgress(part.Metadata, fp, topicID, window.Relative())
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if err := validateWindow(progress, window, cutoff); err != nil {
-			return nil, err
+		if err := validateWindow(saved, window, cutoff); err != nil {
+			return nil, nil, err
 		}
-		result[part.Partition] = progress
+		positions[part.Partition] = part
+		progress[part.Partition] = saved
 	}
-	return result, nil
+	return positions, progress, nil
 }
 
 func validateWindow(progress Progress, spec plan.WindowSpec, cutoff int64) error {

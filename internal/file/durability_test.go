@@ -31,12 +31,8 @@ func TestFailedSyncIsNeverAcknowledged(t *testing.T) {
 		}
 	}
 
-	// When
-	flushErr := fixture.Flush()
-
-	// Then
-	if flushErr != nil {
-		t.Fatal(flushErr)
+	if err := fixture.Flush(); err != nil {
+		t.Fatal(err)
 	}
 	fixture.Close()
 
@@ -69,7 +65,12 @@ func TestFailedSyncIsNeverAcknowledged(t *testing.T) {
 	cp.BindOutput(out)
 	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE"}, Destination: plan.Endpoint{Kind: "FILE"}}
 	runner := core.NewRunner(source, out, cp, core.RealClock{}, logger, p, limits, core.NewTracker())
-	if err := runner.Run(context.Background()); !errors.Is(err, failure) {
+
+	// When copying records to an output whose first fsync fails.
+	runErr := runner.Run(context.Background())
+
+	// Then the failure stays latched and no progress acknowledges those records.
+	if err := runErr; !errors.Is(err, failure) {
 		t.Fatalf("run error = %v, want the fsync failure", err)
 	}
 	if syncs != 1 {
@@ -82,10 +83,20 @@ func TestFailedSyncIsNeverAcknowledged(t *testing.T) {
 	if saved.LastFrame != nil || saved.Extent != initial {
 		t.Fatalf("checkpoint advanced past failed fsync: %+v", saved)
 	}
-	if err := out.Submit(core.Record{Value: []byte("d"), TimestampType: "unknown"}, core.Token{}); !errors.Is(err, failure) {
+
+	// When another record is submitted after the failure.
+	submitErr := out.Submit(core.Record{Value: []byte("d"), TimestampType: "unknown"}, core.Token{})
+
+	// Then the original I/O failure is returned.
+	if err := submitErr; !errors.Is(err, failure) {
 		t.Fatalf("submit after failure = %v", err)
 	}
-	if err := out.Submit(core.Record{Value: make([]byte, c.limit+1), TimestampType: "unknown"}, core.Token{}); !errors.Is(err, failure) {
+
+	// When a record that also fails validation is submitted.
+	validationErr := out.Submit(core.Record{Value: make([]byte, c.limit+1), TimestampType: "unknown"}, core.Token{})
+
+	// Then validation cannot hide the latched I/O failure.
+	if err := validationErr; !errors.Is(err, failure) {
 		t.Fatalf("validation masked the original I/O failure: %v", err)
 	}
 }

@@ -13,7 +13,7 @@ type failingProgress struct {
 }
 
 func (*failingProgress) Assign(Cursor) {}
-func (p *failingProgress) Observe(cursor Cursor, _, _ int64, _ bool) (Token, error) {
+func (p *failingProgress) Observe(cursor Cursor, _, _ int64) (Token, error) {
 	p.observed = append(p.observed, cursor)
 	return Token{}, p.failure
 }
@@ -47,7 +47,7 @@ func TestProgressFactoryDoesNotShareWorkBetweenQueries(t *testing.T) {
 	first.Assign(Cursor{Partition: 0, Position: 5})
 
 	// When
-	token, err := first.Observe(Cursor{Partition: 0, Position: 5}, 6, 100, false)
+	token, err := first.Observe(Cursor{Partition: 0, Position: 5}, 6, 100)
 
 	// Then
 	if err != nil {
@@ -57,7 +57,7 @@ func TestProgressFactoryDoesNotShareWorkBetweenQueries(t *testing.T) {
 		t.Fatal("query state leaked")
 	}
 	second.Assign(Cursor{Partition: 0, Position: 20})
-	if first.Saved(0) != 5 || second.Saved(0) != 20 || !first.Resolve(token) {
+	if first.Saved(0) != 5 || second.Saved(0) != 20 || !first.Settle(token, true) {
 		t.Fatal("query ownership shared")
 	}
 }

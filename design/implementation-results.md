@@ -219,3 +219,36 @@ Production Go4,769 lines; test Go8,247 (includes BDD headings and fixture/regres
 The initial Linux ARM64 regressions raced newly created topic visibility; corrected readiness passed the final suite. Fresh qualification1 hung during native admin cleanup; qualification2 aborted in the pinned native coordinator path; qualification3 passed restricted copying/auth failures but failed failover startup before copier ACL readiness. Qualification4 passed after fixture corrections. Failed evidence is retained locally; a warm fixture does not repair the native defect.
 
 [Client compatibility](client-compatibility.md#native-coordinator-timeout-defect-observed--2026-10-04) documents startup coordinator-admin abort/hang exposure. Runtime assignments now use consumer `Committed`, preserving identity/window/metadata checks while removing that admin path. Production release remains blocked pending a fixed official native release or a user-approved, independently qualified native patch. Broker/auth/platform/workload qualification and hosted CI limits recorded above still apply.
+
+## Simplicity follow-up — 2026-10-08
+
+- Tracker now exposes record `Observe`, consumed-position `Advance`, and generation-checked `Settle`. A private retry value owns delay/log frequency; runner retains partition completion and polling.
+- Kafka configuration policy is derived independently, with deterministic protected-property errors and producer checks before optional metadata lookup. Startup and assignment share strict saved-progress validation.
+- File source has one failure-cleanup owner and an independently tested resume validator. Durability, publication, checkpoint ordering, interfaces and Fx modules are preserved.
+- Tests are grouped by component/behavior; all previous test names remain. Added policy, deferred-EOF, persisted-fingerprint, progress, retry, resume and configuration guards. Corrected BDD phases around caps, timeouts, durability and exit classification.
+- Load/soak tests share an owned CLI process, summary decoding, RSS sampling and full-record verifier. Soak separates publishing, verification, destination stalls and monitoring; load reuses the prebuilt binary.
+
+| Function | Before | After |
+| --- | ---: | ---: |
+| Kafka `NewSink` | 17 | 4 |
+| Kafka `NewSource` | 9 | 3 |
+| File `NewSource` | 17 | 9 |
+| Kafka `ReadProgress` | 6 | 2 |
+| Assignment `saved` | 9 | 4 |
+| Load scenario | 40 | 18 |
+| Soak scenario | 84 | 30 |
+
+Largest extracted production helpers: file resume 11, producer policy 10; maximum production complexity remains 18. Production Go: 4,769 → 4,839 lines (+70); tests: 8,247 → 8,869 (+622, including stronger guards and explicit BDD phases). No dependencies added; user docs remain 9,994 characters.
+
+Verification on macOS ARM64: vet/unit/race checks, full Kafka integration/race suite (95.866 s), and both bounded load cases passed. Internal unit/race statement coverage: 84.1% → 87.1%; policy/filter, retry, resume, producer policy and shared saved-progress validation helpers reach 100%. Coverage is evidence of exercised paths, not a correctness guarantee.
+
+| Load setting | Records | Elapsed | Records/s | Child CPU | Peak RSS | Peak uncommitted records / logical bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Default caps | 16,000 | 2.733 s | 5,854 | 232 ms | 110.4 MiB | 9,709 / 29,924,274 |
+| Small caps / slow destination | 128 | 5.368 s | 24 | 90 ms | 32.8 MiB | 32 / 43,082 |
+
+Both load cases verify payload bytes, keys/nulls, ordered headers, timestamps, duplicates and per-source/destination partition order. These short local measurements include process startup; they are not throughput guarantees. Linux and hosted CI were not rerun. The native startup crash and native shutdown hang remain separate qualification gaps.
+
+The final binary passed a ten-minute cross-cluster streaming soak under the race detector: 412,896 records, ten bursts and ten one-second destination stalls, with no loss, duplicates, record changes or order violations. Average fixture rate: 688 records/s; child CPU: 70.448 s. RSS peak: 75.1 MiB, warm/final medians: 57.0/71.3 MiB (within the existing 32 MiB growth envelope). Maximum sampled commit lag: 512 records; peak uncommitted work: 1,024 records / 4,410,122 logical bytes. Shutdown: 241 ms; all verified records were committed. This finite local run does not establish long-term memory stability or resolve the native startup/Close faults.
+
+Claude Opus 5.5 reviewed the actual working tree at high effort, independently checked build/vet/unit/race paths and retained-test inventory, and agreed on all six implementation items with no blockers or behavior regressions found. No code amendments were required. Stripped macOS ARM64 binary: 15,091,714 bytes.

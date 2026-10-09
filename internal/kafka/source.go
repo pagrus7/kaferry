@@ -38,22 +38,9 @@ type RetentionCheck struct {
 }
 
 func NewSource(clients Clients, inspector SourceMetadata, positioning PositionerFactory, p plan.Plan, fp string, limits config.Worker, logger *slog.Logger, output copy.OutputProgress) (*Source, copy.ProgressStore, error) {
-	cfg := native(p.Source.Properties)
-	queueKB := (limits.ByteCap + 1023) / 1024
-	if existing, ok := cfg["queued.max.messages.kbytes"]; !ok {
-		cfg["queued.max.messages.kbytes"] = fmt.Sprint(queueKB)
-	} else {
-		var value int64
-		if _, err := fmt.Sscan(fmt.Sprint(existing), &value); err != nil || value > queueKB || value < 1 {
-			return nil, nil, conflict("queued.max.messages.kbytes must be positive and no larger than the worker byte cap")
-		}
-	}
-	protected := map[string]any{"group.id": p.Group, "client.id": "kafka-fwd2-" + p.Group, "enable.auto.commit": false, "enable.auto.offset.store": false, "auto.offset.reset": "error", "isolation.level": "read_committed", "enable.partition.eof": true, "partition.assignment.strategy": "cooperative-sticky", "group.protocol": "classic", "allow.auto.create.topics": false, "go.events.channel.enable": false}
-	for key, value := range protected {
-		if old, ok := cfg[key]; ok && fmt.Sprint(old) != fmt.Sprint(value) {
-			return nil, nil, conflict("protected Kafka property %q cannot be overridden", key)
-		}
-		cfg[key] = value
+	cfg, err := consumerConfig(p, limits)
+	if err != nil {
+		return nil, nil, err
 	}
 	c, err := clients.Consumer(cfg)
 	if err != nil {
@@ -121,26 +108,7 @@ func (s *Source) saved() (map[int32]k.TopicPartition, map[int32]Progress, error)
 	if len(parts) != len(requested) {
 		return nil, nil, fmt.Errorf("missing committed partition results")
 	}
-	saved := make(map[int32]k.TopicPartition)
-	metadata := make(map[int32]Progress)
-	for _, part := range parts {
-		if part.Error != nil {
-			return nil, nil, part.Error
-		}
-		if part.Offset < 0 {
-			continue
-		}
-		progress, err := decodeProgress(part.Metadata, s.fingerprint, s.inspector.TopicID(), s.plan.Window.Relative())
-		if err != nil {
-			return nil, nil, err
-		}
-		if err := validateWindow(progress, s.plan.Window, s.plan.CutoffMS); err != nil {
-			return nil, nil, err
-		}
-		saved[part.Partition] = part
-		metadata[part.Partition] = progress
-	}
-	return saved, metadata, nil
+	return decodeCommitted(parts, s.fingerprint, s.inspector.TopicID(), s.plan.Window, s.plan.CutoffMS)
 }
 func (s *Source) position(parts []k.TopicPartition) ([]copy.Assignment, error) {
 	saved, metadata, err := s.saved()

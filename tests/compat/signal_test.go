@@ -3,13 +3,11 @@
 package compat
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -62,40 +60,25 @@ func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 	publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: []byte("before latest"), Timestamp: time.Now()})
 	for run := range 2 {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		cmd := exec.CommandContext(ctx, binary, "run", "-f", "-")
-		cmd.Stdin = strings.NewReader(statement)
-		var output bytes.Buffer
-		cmd.Stderr = &output
-		if err := cmd.Start(); err != nil {
-			cancel()
-			t.Fatal(err)
-		}
-		done := make(chan error, 1)
-		go func() { done <- cmd.Wait() }()
-		finished := false
-		t.Cleanup(func() {
-			cancel()
-			if !finished {
-				_ = cmd.Process.Kill()
-				<-done
-			}
-			if t.Failed() {
-				t.Logf("copy process stderr: %s", output.String())
-			}
-		})
+		t.Cleanup(cancel)
+		// When starting a copy with the saved group position.
+		process := startCLI(t, ctx, binary, statement, "run", "-f", "-")
 		waitMembers(t, a, group, 1, 1, nil)
 		if run == 1 {
 
 			// When
-			signalErr := cmd.Process.Signal(syscall.SIGSTOP)
+			signalErr := process.signal(syscall.SIGSTOP)
 
-			// Then
 			if signalErr != nil {
 				t.Fatal(signalErr)
 			}
+
+			// When a partition is added while the resumed worker is stopped.
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			results, err := a.CreatePartitions(ctx, []k.PartitionsSpecification{{Topic: src, IncreaseTo: 2}})
 			cancel()
+
+			// Then it joins the new assignment after continuing.
 			if err != nil || results[0].Error.Code() != k.ErrNoError {
 				t.Fatal("partition expansion", err, results)
 			}
@@ -103,27 +86,30 @@ func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 				t.Fatal("fixture metadata refresh", err)
 			}
 			publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 1}, Value: []byte("new partition before assignment"), Timestamp: time.Now()})
-			if err := cmd.Process.Signal(syscall.SIGCONT); err != nil {
+			if err := process.signal(syscall.SIGCONT); err != nil {
 				t.Fatal(err)
 			}
 			waitMembers(t, a, group, 1, 2, nil)
 		}
+
+		// When new records arrive and the worker is interrupted after publishing them.
 		for i := range 10 {
 			publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Key: []byte("key"), Value: []byte(fmt.Sprintf("run-%d-%d", run, i)), Timestamp: time.Now()})
 		}
 		waitEnd(t, a, dst, int64((run+1)*10+run))
-		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		if err := process.signal(os.Interrupt); err != nil {
 			t.Fatal(err)
 		}
 		select {
-		case err := <-done:
-			finished = true
-			if err != nil {
-				t.Fatalf("interrupt exit: %v %s", err, output.String())
+		case <-process.done:
+			if err := process.wait(); err != nil {
+				t.Fatalf("interrupt exit: %v %s", err, process.logs())
 			}
 		case <-ctx.Done():
 			t.Fatal("signal shutdown timed out")
 		}
+
+		// Then shutdown persists its confirmed progress.
 		cancel()
 		ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 		result, err := a.ListConsumerGroupOffsets(ctx, []k.ConsumerGroupTopicPartitions{{Group: group, Partitions: []k.TopicPartition{{Topic: &src, Partition: 0}}}})

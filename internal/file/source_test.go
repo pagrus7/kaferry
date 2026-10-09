@@ -1,25 +1,22 @@
 package file
 
 import (
-	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
-	"io"
+	"kafka-fwd2/internal/config"
+	core "kafka-fwd2/internal/copy"
+	"kafka-fwd2/internal/plan"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
-
-	"kafka-fwd2/internal/config"
-	core "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/plan"
 )
 
 type fileClock struct{ now time.Time }
 
-func (c *fileClock) Now() time.Time    { return c.now }
+func (c *fileClock) Now() time.Time { return c.now }
+
 func (*fileClock) Sleep(time.Duration) {}
 
 func TestFileSavedMixedWindowSurvivesClockAdvance(t *testing.T) {
@@ -66,38 +63,6 @@ func TestFileSavedMixedWindowSurvivesClockAdvance(t *testing.T) {
 	}
 }
 
-func TestPhysicalShortReadsCannotBecomeSnapshotEOF(t *testing.T) {
-	for _, scenario := range []struct {
-		name   string
-		length int
-	}{{"prefix", 2}, {"body", 7}} {
-		t.Run(scenario.name, func(t *testing.T) {
-			// Given a complete frame in the open-time snapshot, now physically shorter.
-			data := frame([]byte{1, 2, 3, 4})
-			reader := bytes.NewReader(data[:scenario.length])
-
-			// When reading the advertised snapshot extent.
-			_, _, _, err := readFrame(reader, 0, int64(len(data)), 1024)
-
-			// Then a changed-source conflict fails, without matching normal EOF.
-			var changed *Conflict
-			if err == nil || errors.Is(err, io.EOF) || !errors.As(err, &changed) {
-				t.Fatal("short read treated as snapshot completion", err)
-			}
-		})
-	}
-	// Given an originally partial trailing frame.
-	data := frame([]byte{1, 2, 3, 4})
-
-	// When its original snapshot ends before the complete frame.
-	_, _, _, err := readFrame(bytes.NewReader(data[:7]), 0, 7, 1024)
-
-	// Then the partial trailing frame retains normal snapshot EOF semantics.
-	if !errors.Is(err, io.EOF) {
-		t.Fatal("original partial tail no longer ends the snapshot", err)
-	}
-}
-
 type truncatingFileSource struct {
 	*Source
 	path  string
@@ -126,8 +91,10 @@ func (s *unusedFileSink) Submit(_ core.Record, token core.Token) error {
 	s.reports <- core.Delivery{Token: token}
 	return nil
 }
+
 func (s *unusedFileSink) Deliveries() <-chan core.Delivery { return s.reports }
-func (*unusedFileSink) Flush() error                       { return nil }
+
+func (*unusedFileSink) Flush() error { return nil }
 
 func TestOpenSourceTruncationFailsUnderSkipPolicy(t *testing.T) {
 	// Given an open archive with two complete records and a query that allows SKIP.
@@ -166,43 +133,5 @@ func TestOpenSourceTruncationFailsUnderSkipPolicy(t *testing.T) {
 	var exit *core.Exit
 	if !errors.As(err, &exit) || exit.Code != 1 || sink.writes != 1 || cp.Existing().Position != int64(len(header)+len(data)) {
 		t.Fatal("changed source did not fail", err, sink.writes)
-	}
-}
-
-func TestProvenanceArchiveWireBytesAreStable(t *testing.T) {
-	// Given the documented nullable record fields and diagnostic provenance.
-	c := codec(t)
-	record := core.Record{Key: nil, Value: []byte{}, TimestampType: "unknown", Source: &core.Provenance{Topic: "orders", Partition: 3, Offset: 42}}
-
-	// When encoding the full logical record.
-	data, err := c.EncodeRecord(record)
-
-	// Then the archive wire representation remains byte-identical.
-	if err != nil {
-		t.Fatal(err)
-	}
-	const golden = "00000064a6636b6579f66576616c75654066736f75726365a365746f706963666f7264657273666f6666736574182a69706172746974696f6e036768656164657273806c74696d657374616d705f6d73f66e74696d657374616d705f7479706567756e6b6e6f776e3b069d95"
-	if hex.EncodeToString(data) != golden {
-		t.Fatalf("archive provenance wire bytes changed: %x", data)
-	}
-	decoded, err := c.DecodeRecord(data[4 : len(data)-4])
-	if err != nil || !reflect.DeepEqual(decoded, record) {
-		t.Fatal("provenance round trip changed", decoded, err)
-	}
-}
-
-type failedReader struct{ err error }
-
-func (r failedReader) ReadAt([]byte, int64) (int, error) { return 0, r.err }
-
-func TestFrameReadPreservesNonEOFFailure(t *testing.T) {
-	// Given an input device failure rather than a shortened file.
-	cause := errors.New("injected device failure")
-	// When reading the snapshot prefix.
-	_, _, _, err := readFrame(failedReader{err: cause}, 0, 12, 1024)
-	// Then the original cause remains available to the caller.
-	var changed *Conflict
-	if !errors.Is(err, cause) || errors.Is(err, io.EOF) || errors.As(err, &changed) {
-		t.Fatal("device failure misclassified as truncation", err)
 	}
 }

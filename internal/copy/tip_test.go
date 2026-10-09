@@ -3,12 +3,11 @@ package copy
 import (
 	"bytes"
 	"errors"
+	"kafka-fwd2/internal/plan"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
-
-	"kafka-fwd2/internal/plan"
 )
 
 type watermarkSource struct {
@@ -93,48 +92,8 @@ func TestTipSamplingPermanentFailuresStopImmediately(t *testing.T) {
 	err := r.tips()
 
 	// Then the permanent failure is returned without starting a retry.
-	if !errors.Is(err, failure) || !r.partitions[0].nextSample.IsZero() {
+	if !errors.Is(err, failure) || !r.partitions[0].sampling.next.IsZero() {
 		t.Fatal("permanent query failure retried", err)
-	}
-}
-
-func TestReassignedPartitionResumesWithFreshRunnerState(t *testing.T) {
-	// Given a partition paused by its uncommitted record cap.
-	r, source, sink, _, _ := fixture(t)
-	r.limits.RecordCap, r.limits.PartitionRecordCap = 1, 1
-	if err := source.Start(r); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.input(incoming(0, 0, 1)); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.pause(); err != nil {
-		t.Fatal(err)
-	}
-	if !source.paused[0] {
-		t.Fatal("fixture did not reach the pause cap")
-	}
-
-	// When ownership is revoked and the source clears pause before reassigning.
-	err := r.Revoke([]int32{0}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := source.Pause(0, false); err != nil {
-		t.Fatal(err)
-	}
-	err = r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = r.input(incoming(0, 0, 1))
-
-	// Then the new generation publishes again and late old delivery is fenced.
-	if err != nil || source.paused[0] || len(sink.writes) != 2 || sink.writes[0].Generation == sink.writes[1].Generation {
-		t.Fatal("reassigned partition stalled or reused ownership", err)
-	}
-	if r.tracker.Resolve(sink.writes[0]) {
-		t.Fatal("revoked delivery resolved new work")
 	}
 }
 
@@ -159,11 +118,16 @@ func TestTipSamplingBackoffCapsResetsAndLimitsLogs(t *testing.T) {
 		err := r.tips()
 
 		// Then delay grows to 30s; suppressed polls do not query or start tip_wait.
-		if err != nil || query.calls != attempt+1 || p.sampleDelay != delay || !p.nextSample.Equal(clock.Now().Add(delay)) || p.high != nil || !p.waitStarted.IsZero() {
+		if err != nil || query.calls != attempt+1 || p.sampling.delay != delay || !p.sampling.next.Equal(clock.Now().Add(delay)) || p.high != nil || !p.waitStarted.IsZero() {
 			t.Fatal("invalid retry state", query.calls, p, err)
 		}
+
+		// When polling before the retry deadline.
 		clock.Sleep(delay - time.Millisecond)
-		if err := r.tips(); err != nil || query.calls != attempt+1 {
+		err = r.tips()
+
+		// Then an early poll makes no watermark request.
+		if err != nil || query.calls != attempt+1 {
 			t.Fatal("early retry", query.calls, err)
 		}
 		clock.Sleep(time.Millisecond)
@@ -174,7 +138,7 @@ func TestTipSamplingBackoffCapsResetsAndLimitsLogs(t *testing.T) {
 	err := r.tips()
 
 	// Then retry state resets, the partition completes, and logs remain bounded.
-	if err != nil || !p.stopped || p.sampleDelay != 0 || p.sampleAttempts != 0 || !p.nextSample.IsZero() || !p.sampleLog.IsZero() || !p.waitStarted.Equal(clock.Now()) {
+	if err != nil || !p.stopped || p.sampling.delay != 0 || p.sampling.attempts != 0 || !p.sampling.next.IsZero() || !p.sampling.logged.IsZero() || !p.waitStarted.Equal(clock.Now()) {
 		t.Fatal("retry state not reset", p, err)
 	}
 	if strings.Count(logs.String(), "tip watermark query retrying") != 2 || strings.Count(logs.String(), "tip watermark query recovered") != 1 {

@@ -3,17 +3,11 @@
 package compat
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
-	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -71,112 +65,29 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), duration+45*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, testBinary(t), "run", "-e", statement, "-c", configPath)
-	var output bytes.Buffer
-	cmd.Stderr = &output
-
-	startErr := cmd.Start()
-	if startErr != nil {
-		t.Fatal(startErr)
-	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	finished := false
-	t.Cleanup(func() {
-		cancel()
-		if !finished {
-			_ = cmd.Process.Kill()
-			<-done
-		}
-	})
+	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", configPath)
 	waitMembers(t, a, group, 1, 4, nil)
 	committedPartitions(t, a, group, src, 4)
-	stamp := time.Now().Truncate(time.Millisecond)
-	headers := []k.Header{{Key: "trace", Value: []byte{0, 255}}, {Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}
-	seen := make([]bool, 0)
-	verified, acknowledged, maxLag := 0, 0, 0
-	lastOrder := make(map[[2]int32]int)
-	verify := func(record *k.Message) {
-		if record.TopicPartition.Error != nil || len(record.Value) < 4 {
-			t.Fatal("invalid output", record)
-		}
-		id := int(binary.BigEndian.Uint32(record.Value))
-		if id >= len(seen) || seen[id] {
-			t.Fatal("unexpected or duplicated output", id)
-		}
-		key := []byte(fmt.Sprintf("key-%d", id%257))
-		if id%7 == 0 {
-			key = nil
-		}
-		if !bytes.Equal(record.Key, key) || (record.Key == nil) != (key == nil) || len(record.Value) != 1024+id%4096 || !record.Timestamp.Equal(stamp) || !reflect.DeepEqual(record.Headers, headers) {
-			t.Fatal("logical record changed", id)
-		}
-		for _, b := range record.Value[4:] {
-			if b != byte(id%251) {
-				t.Fatal("payload bytes changed", id)
-			}
-		}
-		pair := [2]int32{int32(id % 4), record.TopicPartition.Partition}
-		if prior, exists := lastOrder[pair]; exists && id <= prior {
-			t.Fatal("source/destination partition order changed", pair, prior, id)
-		}
-		lastOrder[pair] = id
-		seen[id] = true
-		verified++
-	}
-	drainReports := func() {
-		for {
-			select {
-			case event := <-reports:
-				message, ok := event.(*k.Message)
-				if !ok || message.TopicPartition.Error != nil {
-					t.Fatal("fixture publish failed", event)
-				}
-				acknowledged++
-			default:
-				return
-			}
-		}
-	}
+	records := newStreamRecords(src, time.Now().Truncate(time.Millisecond))
 	start := time.Now()
 	nextPublish, nextSample := start, start.Add(time.Second)
 	nextBurst, nextStall := start.Add(10*time.Second), start.Add(30*time.Second)
-	bursts, stalls := 0, 0
-	var stallUntil time.Time
-	paused := false
-	t.Cleanup(func() {
-		if paused {
-			_ = exec.Command("docker", "unpause", stall).Run()
-		}
-	})
-	var rss []int64
+	bursts := 0
+	stalls := &destinationStalls{container: stall, next: nextStall}
+	t.Cleanup(func() { stalls.recover(t) })
+	monitor := soakMonitor{next: nextSample}
 
 	// When copying the controlled stream with periodic bursts and optional destination stalls.
-	for time.Since(start) < duration || verified < len(seen) || acknowledged < len(seen) {
+	for time.Since(start) < duration || records.verified < len(records.seen) || records.acknowledged < len(records.seen) {
 		select {
-		case err := <-done:
-			finished = true
-			t.Fatalf("soak process exited early: %v %s", err, output.String())
+		case <-process.done:
+			t.Fatalf("soak process exited early: %v %s", process.wait(), process.logs())
 		case <-ctx.Done():
 			t.Fatal("soak did not catch up")
 		default:
 		}
 		now := time.Now()
-		if stall != "" && !paused && now.Sub(start) < duration && !now.Before(nextStall) {
-			if data, err := exec.Command("docker", "pause", stall).CombinedOutput(); err != nil {
-				t.Fatalf("destination pause: %v %s", err, data)
-			}
-			paused = true
-			stalls++
-			stallUntil = time.Now().Add(time.Second)
-			nextStall = now.Add(time.Minute)
-		}
-		if paused && !now.Before(stallUntil) {
-			if data, err := exec.Command("docker", "unpause", stall).CombinedOutput(); err != nil {
-				t.Fatalf("destination recovery: %v %s", err, data)
-			}
-			paused = false
-		}
+		stalls.step(t, now, now.Sub(start) < duration)
 		if now.Sub(start) < duration && !now.Before(nextPublish) {
 			batch := 16
 			if !now.Before(nextBurst) {
@@ -184,67 +95,22 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 				bursts++
 				nextBurst = now.Add(time.Minute)
 			}
-			for range batch {
-				id := len(seen)
-				payload := bytes.Repeat([]byte{byte(id % 251)}, 1024+id%4096)
-				binary.BigEndian.PutUint32(payload, uint32(id))
-				key := []byte(fmt.Sprintf("key-%d", id%257))
-				if id%7 == 0 {
-					key = nil
-				}
-				if err := p.Produce(&k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: int32(id % 4)}, Key: key, Value: payload, Timestamp: stamp, Headers: headers}, reports); err != nil {
-					t.Fatal(err)
-				}
-				seen = append(seen, false)
-			}
+			records.publish(t, p, reports, batch)
 			nextPublish = now.Add(20 * time.Millisecond)
 		}
-		switch event := c.Poll(5).(type) {
-		case *k.Message:
-			verify(event)
-		case k.Error:
-			if event.IsFatal() || (event.Code() != k.ErrTransport && event.Code() != k.ErrAllBrokersDown && event.Code() != k.ErrTimedOut && event.Code() != k.ErrResolve) {
-				t.Fatal(event)
-			}
-		}
-		drainReports()
-		if !now.Before(nextSample) {
-			data, err := exec.Command("ps", "-o", "rss=", "-p", strconv.Itoa(cmd.Process.Pid)).Output()
-			if err != nil {
-				t.Fatal("RSS sampling failed", err)
-			}
-			sample, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
-			if err != nil {
-				t.Fatal(err)
-			}
-			rss = append(rss, sample)
-
-			// Sampling checks commit lag while the stream is running.
-			committed := 0
-			for _, part := range committedPartitions(t, a, group, src, 4) {
-				committed += int(part.Offset)
-			}
-			lag := len(seen) - committed
-			if lag < 0 {
-				t.Fatal("committed work never published to the source")
-			}
-			if lag > maxLag {
-				maxLag = lag
-			}
-			nextSample = now.Add(time.Second)
-		}
+		records.catchUp(t, c, reports)
+		monitor.sample(t, now, process.pid(), a, group, src, len(records.seen))
 	}
 
 	// When stopping intake after every fixture record is verified.
 	shutdown := time.Now()
-	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+	if err := process.signal(os.Interrupt); err != nil {
 		t.Fatal(err)
 	}
 	select {
-	case err := <-done:
-		finished = true
-		if err != nil {
-			t.Fatalf("soak shutdown: %v %s", err, output.String())
+	case <-process.done:
+		if err := process.wait(); err != nil {
+			t.Fatalf("soak shutdown: %v %s", err, process.logs())
 		}
 	case <-ctx.Done():
 		t.Fatal("soak shutdown timed out")
@@ -256,47 +122,15 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	for _, part := range committedPartitions(t, a, group, src, 4) {
 		committed += int(part.Offset)
 	}
-	if committed != len(seen) {
-		t.Fatal("shutdown did not commit all verified records", committed, len(seen))
+	if committed != len(records.seen) {
+		t.Fatal("shutdown did not commit all verified records", committed, len(records.seen))
 	}
-	var summary struct {
-		Submitted, Confirmed int
-		PeakRecords          int   `json:"peak_uncommitted_records"`
-		PeakBytes            int64 `json:"peak_uncommitted_bytes"`
-	}
-	for _, line := range strings.Split(output.String(), "\n") {
-		var event struct {
-			Message string `json:"msg"`
-		}
-		if json.Unmarshal([]byte(line), &event) == nil && event.Message == "copy summary" {
-			if err := json.Unmarshal([]byte(line), &summary); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if summary.Submitted != len(seen) || summary.Confirmed != len(seen) || summary.PeakRecords > 1024 || summary.PeakBytes > 128<<20 {
+	summary := summaryFrom(t, process.logs())
+	if summary.Submitted != len(records.seen) || summary.Confirmed != len(records.seen) || summary.PeakRecords > 1024 || summary.PeakBytes > 128<<20 {
 		t.Fatal("soak counts or uncommitted caps violated", summary)
 	}
-	if len(rss) < 30 {
-		t.Fatal("not enough samples for memory stability")
-	}
-	median := func(samples []int64) int64 {
-		copy := append([]int64(nil), samples...)
-		sort.Slice(copy, func(i, j int) bool { return copy[i] < copy[j] })
-		return copy[len(copy)/2]
-	}
-	warm := median(rss[10:30])
-	final := median(rss[len(rss)-20:])
-	var peak int64
-	for _, sample := range rss {
-		if sample > peak {
-			peak = sample
-		}
-	}
-	if peak > 512<<10 || final > warm+32<<10 {
-		t.Fatal("memory did not stay within the soak envelope", warm, final, peak)
-	}
-	t.Logf("duration=%s bursts=%d destination_stalls=%d records=%d records/s=%.0f child_cpu=%s peak_RSS_MiB=%.1f warm_median_RSS_MiB=%.1f final_median_RSS_MiB=%.1f max_sampled_commit_lag=%d shutdown=%s peak_uncommitted_records=%d peak_uncommitted_bytes=%d", duration, bursts, stalls, len(seen), float64(len(seen))/time.Since(start).Seconds(), cmd.ProcessState.UserTime()+cmd.ProcessState.SystemTime(), float64(peak)/1024, float64(warm)/1024, float64(final)/1024, maxLag, shutdownTime, summary.PeakRecords, summary.PeakBytes)
+	warm, final, peak := memoryEnvelope(t, monitor.rss)
+	t.Logf("duration=%s bursts=%d destination_stalls=%d records=%d records/s=%.0f child_cpu=%s peak_RSS_MiB=%.1f warm_median_RSS_MiB=%.1f final_median_RSS_MiB=%.1f max_sampled_commit_lag=%d shutdown=%s peak_uncommitted_records=%d peak_uncommitted_bytes=%d", duration, bursts, stalls.count, len(records.seen), float64(len(records.seen))/time.Since(start).Seconds(), process.cpu(), float64(peak)/1024, float64(warm)/1024, float64(final)/1024, monitor.maxLag, shutdownTime, summary.PeakRecords, summary.PeakBytes)
 }
 
 func ownedSoakDestination(t *testing.T, container string) {
@@ -305,4 +139,65 @@ func ownedSoakDestination(t *testing.T, container string) {
 	if err != nil || strings.TrimSpace(string(data)) != "kafka-fwd2-compat kafka-dr" {
 		t.Fatal("destination stalls require the project's disposable kafka-dr service", err)
 	}
+}
+
+type destinationStalls struct {
+	container   string
+	paused      bool
+	until, next time.Time
+	count       int
+}
+
+func (s *destinationStalls) recover(t *testing.T) {
+	t.Helper()
+	if !s.paused {
+		return
+	}
+	if data, err := exec.Command("docker", "unpause", s.container).CombinedOutput(); err != nil {
+		t.Fatalf("destination recovery: %v %s", err, data)
+	}
+	s.paused = false
+}
+func (s *destinationStalls) step(t *testing.T, now time.Time, publishing bool) {
+	t.Helper()
+	if s.container != "" && !s.paused && publishing && !now.Before(s.next) {
+		if data, err := exec.Command("docker", "pause", s.container).CombinedOutput(); err != nil {
+			t.Fatalf("destination pause: %v %s", err, data)
+		}
+		s.paused = true
+		s.count++
+		s.until = time.Now().Add(time.Second)
+		s.next = now.Add(time.Minute)
+	}
+	if s.paused && !now.Before(s.until) {
+		s.recover(t)
+	}
+}
+
+type soakMonitor struct {
+	next   time.Time
+	rss    []int64
+	maxLag int
+}
+
+func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *k.AdminClient, group, source string, published int) {
+	t.Helper()
+	if now.Before(m.next) {
+		return
+	}
+	rss, err := rssSample(pid)
+	if err != nil {
+		t.Fatal("RSS sampling failed", err)
+	}
+	m.rss = append(m.rss, rss)
+	committed := 0
+	for _, part := range committedPartitions(t, admin, group, source, 4) {
+		committed += int(part.Offset)
+	}
+	lag := published - committed
+	if lag < 0 {
+		t.Fatal("committed work never published to the source")
+	}
+	m.maxLag = max(m.maxLag, lag)
+	m.next = now.Add(time.Second)
 }

@@ -141,7 +141,9 @@ func TestRunnerCapsIncludeConfirmedWorkAndOversizedAlone(t *testing.T) {
 	r, _, d, p, _ := fixture(t)
 	r.limits.ByteCap = 150
 	r.limits.PartitionByteCap = 150
-	_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}}})
+	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+		t.Fatal(err)
+	}
 
 	// When
 	inputErr := r.input(incoming(0, 0, 30))
@@ -150,14 +152,22 @@ func TestRunnerCapsIncludeConfirmedWorkAndOversizedAlone(t *testing.T) {
 	if inputErr != nil {
 		t.Fatal(inputErr)
 	}
+
+	// When the first write succeeds but is still uncommitted.
 	d.reports <- Delivery{Token: d.writes[0]}
-	_ = r.deliveries()
+	if err := r.deliveries(); err != nil {
+		t.Fatal(err)
+	}
 	if err := r.input(incoming(0, 1, 200)); err != nil {
 		t.Fatal(err)
 	}
+
+	// Then the oversized record waits for the outstanding work.
 	if len(d.writes) != 1 || r.deferred == nil {
 		t.Fatal("oversized record submitted alongside uncommitted work")
 	}
+
+	// When confirmed progress is committed and intake resumes.
 	if err := r.pause(); err != nil {
 		t.Fatal(err)
 	}
@@ -167,6 +177,8 @@ func TestRunnerCapsIncludeConfirmedWorkAndOversizedAlone(t *testing.T) {
 	if err := r.admitDeferred(); err != nil {
 		t.Fatal(err)
 	}
+
+	// Then the oversized record is admitted alone.
 	if len(d.writes) != 2 || p.saves[0][0].Position != 1 {
 		t.Fatal("oversized record did not resume after progress became durable")
 	}
@@ -208,7 +220,9 @@ func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 	for _, lost := range []bool{false, true} {
 		t.Run(map[bool]string{false: "revoked", true: "lost"}[lost], func(t *testing.T) {
 			r, _, d, p, _ := fixture(t)
-			_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}}})
+			if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+				t.Fatal(err)
+			}
 			_ = r.input(incoming(0, 0, 1))
 			old := d.writes[0]
 
@@ -219,7 +233,9 @@ func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 			if revokeErr != nil {
 				t.Fatal(revokeErr)
 			}
-			_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}}})
+			if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+				t.Fatal(err)
+			}
 			_ = r.input(incoming(0, 0, 1))
 			d.reports <- Delivery{Token: old, Err: errors.New("late rejected write")}
 			if err := r.deliveries(); err != nil {
@@ -231,10 +247,16 @@ func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 		})
 	}
 	r, _, d, p, _ := fixture(t)
-	_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}}})
+	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+		t.Fatal(err)
+	}
 	_ = r.input(incoming(0, 0, 1))
+
+	// When the first write succeeds but is still uncommitted.
 	d.reports <- Delivery{Token: d.writes[0]}
-	_ = r.deliveries()
+	if err := r.deliveries(); err != nil {
+		t.Fatal(err)
+	}
 	_ = r.Revoke([]int32{0}, true)
 	if len(p.saves) != 0 {
 		t.Fatal("committed after ownership loss")
@@ -271,7 +293,9 @@ func TestPartialCommitReleasesSuccessfulPartitionsOnly(t *testing.T) {
 func TestShutdownDrainDeadlineCommitsConfirmedPrefix(t *testing.T) {
 	// Given
 	r, _, d, p, c := fixture(t)
-	_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}}})
+	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+		t.Fatal(err)
+	}
 	_ = r.input(incoming(0, 0, 1))
 	_ = r.input(incoming(0, 1, 1))
 	d.reports <- Delivery{Token: d.writes[0]}
@@ -335,13 +359,18 @@ func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 	if tipsErr != nil {
 		t.Fatal(tipsErr)
 	}
-	s.high = 999 // Once sampled, a growing log does not move the boundary.
+
+	// When the topic grows after the sample and tip_wait expires.
+	s.high = 999
+	c.Sleep(2 * time.Second)
+	tipsErr = r.tips()
+
+	// Then the original boundary stays fixed and the diagnostic names the cursors.
 	if *r.partitions[0].high != 2 {
 		t.Fatal("tip boundary moved")
 	}
-	c.Sleep(2 * time.Second)
-	if err := r.tips(); err == nil || !strings.Contains(err.Error(), "H=2 stable=0 consumed=0") {
-		t.Fatal("stalled transaction must name its boundary and cursors", err)
+	if tipsErr == nil || !strings.Contains(tipsErr.Error(), "H=2 stable=0 consumed=0") {
+		t.Fatal("stalled transaction must name its boundary and cursors", tipsErr)
 	}
 }
 
@@ -363,7 +392,9 @@ func TestEmptyAssignmentIdleExitRequiresCompletedAssignment(t *testing.T) {
 	if !r.finished() {
 		t.Fatal("bounded idle worker did not exit")
 	}
-	_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}}})
+	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+		t.Fatal(err)
+	}
 	_ = r.Revoke([]int32{0}, false)
 	c.Sleep(time.Hour)
 	if r.finished() {
@@ -485,8 +516,8 @@ func TestRevocationCommitFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			in := incoming(0, 0, 1)
-			token, _ := r.tracker.Observe(in.Cursor, in.Next, 1, false)
-			r.tracker.Resolve(token)
+			token, _ := r.tracker.Observe(in.Cursor, in.Next, 1)
+			r.tracker.Settle(token, true)
 
 			// When
 			err := r.Revoke([]int32{0}, false)
@@ -503,9 +534,11 @@ func TestRevocationCommitFailures(t *testing.T) {
 	// Outside revocation a recoverable error still fails the commit.
 	r, _, _, _, _ := fixture(t)
 	r.store = &requestStore{err: &Recoverable{Err: errors.New("rebalance in progress")}}
-	_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}}})
-	token, _ := r.tracker.Observe(Cursor{0, 0}, 1, 1, false)
-	r.tracker.Resolve(token)
+	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	token, _ := r.tracker.Observe(Cursor{0, 0}, 1, 1)
+	r.tracker.Settle(token, true)
 	if err := r.commit([]int32{0}); err == nil {
 		t.Fatal("periodic commit must fail on a recoverable error")
 	}
@@ -543,34 +576,37 @@ func exitCode(err error) int {
 }
 
 func TestExitCodeFollowsExecutionStage(t *testing.T) {
-	// Given
-	conflict, runtime := operatorConflict{}, errors.New("broker unavailable")
+	for _, stage := range []string{"before intake", "after intake", "runtime then cleanup", "cleanup then runtime"} {
+		t.Run(stage, func(t *testing.T) {
+			// Given a conflict at a particular stage of execution.
+			r, source, _, _, _ := fixture(t)
+			conflict, runtime := operatorConflict{}, errors.New("broker unavailable")
+			want := 1
+			action := func() error { return r.Run(context.Background()) }
+			switch stage {
+			case "before intake":
+				r.source = &failingStart{testSource: source, err: conflict}
+				want = 2
+			case "after intake":
+				input := incoming(0, 0, 1)
+				source.events = []Event{{Input: &input}}
+				r.source = &failingPoll{testSource: source, err: conflict}
+			case "runtime then cleanup":
+				r.failure = runtime
+				action = func() error { return r.exit(errors.Join(runtime, conflict)) }
+			case "cleanup then runtime":
+				r.failure = runtime
+				action = func() error { return r.exit(errors.Join(conflict, runtime)) }
+			}
 
-	r, s, _, _, _ := fixture(t)
-	r.source = &failingStart{testSource: s, err: conflict}
-	if code := exitCode(r.Run(context.Background())); code != 2 {
-		t.Fatalf("conflict before intake exited %d", code)
-	}
+			// When that stage fails.
+			err := action()
 
-	r, s, _, _, _ = fixture(t)
-	in := incoming(0, 0, 1)
-	s.events = []Event{{Input: &in}}
-	r.source = &failingPoll{testSource: s, err: conflict}
-	if code := exitCode(r.Run(context.Background())); code != 1 {
-		t.Fatalf("conflict after intake exited %d", code)
-	}
-
-	for _, joined := range []error{errors.Join(runtime, conflict), errors.Join(conflict, runtime)} {
-		r, _, _, _, _ = fixture(t)
-		r.failure = runtime
-
-		// When
-		exitCode2 := exitCode(r.exit(joined))
-
-		// Then
-		if exitCode2 != 1 {
-			t.Fatalf("runtime failure joined with cleanup conflict exited %d: %v", exitCode2, joined)
-		}
+			// Then only a conflict before intake is an operator error.
+			if code := exitCode(err); code != want {
+				t.Fatalf("exit=%d want=%d", code, want)
+			}
+		})
 	}
 }
 
