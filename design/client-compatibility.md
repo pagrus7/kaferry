@@ -1,4 +1,4 @@
-# Client compatibility — 2026-10-03
+# Client compatibility — 2026-10-08
 
 ## Verified baseline
 
@@ -39,15 +39,21 @@ The disposable qualification cluster uses SASL/PLAIN over TLS with a generated C
 
 A destination-leader broker/controller stop passed with replication factor 3 and minimum ISR 2: 64 records retained order/bytes/timestamp, shutdown succeeded and committed all 64. Fixture clients must tolerate transient connections to the stopped broker; a stale admin-offset request is not a useful failover deadline. Internal broker/controller listeners are private Docker plaintext listeners with an anonymous superuser; this fixture does not qualify encrypted internal traffic.
 
-The two-minute streaming soak verified 74,816 records, sampled commit lag/RSS and graceful shutdown. See [measurements](implementation-results.md#completeness-and-candidate-verification).
+The final implementation's ten-minute streaming soak verified 412,896 records through ten bursts and destination stalls, sampled commit lag/RSS and graceful shutdown. See [measurements](implementation-results.md#simplicity-follow-up--2026-10-08).
 
 Additional broker versions, SCRAM/mTLS/other authentication providers, physical AMD64 deployments, longer production workloads and realistic latency/retention still require deployment-specific qualification. No broader platform/version claim is implied.
 
 ## Native coordinator timeout defect observed — 2026-10-04
 
-Fresh security qualification exposed an `AdminClient.Close` hang after repeatedly cancelled coordinator requests, then a native assertion abort (`rd_kafka_enq_once_del_source_return`) with explicit four-second admin deadlines. The abort matches [upstream issue 4605](https://github.com/confluentinc/librdkafka/issues/4605); exact causal identity remains unproved. Codex and Opus 5.5 source review identified a candidate: the native admin timer expires before coordinator discovery, then late discovery consumes a freed callback reference. The coordinator cleanup changes in [proposal 5397](https://github.com/confluentinc/librdkafka/pull/5397) address that path; the proposal is unmerged and unqualified here. The close hang is a separate observation requiring native stacks; an ignored FindCoordinator retry result is an untested reference-leak hypothesis. Neither current stock 2.15.1 source nor its release notes establishes a fix. The abort run's intermediate fixture source was not archived; logs and recorded timeout changes are retained.
+Fresh security qualification exposed an `AdminClient.Close` hang after repeatedly cancelled coordinator requests, then a native assertion abort (`rd_kafka_enq_once_del_source_return`) with four-second admin deadlines. The abort run's intermediate fixture source was not archived; its logs and recorded timeout changes remain the available evidence.
 
-The security fixture now primes cold coordinator partitions using Kafka's Java CLI, bounds native readiness requests and cleanup, and has a five-minute test timeout. This permits security/failover testing; it does not fix the native defect. Startup uses coordinator-targeted `Inspector.CheckMembers` (`DescribeConsumerGroups`) and `Inspector.Progress` (`ListConsumerGroupOffsets`). Their ten-second Go contexts do not cancel native requests; abandoned work may delay the inspector's deferred Close. This remains a release blocker for reliable recovery from coordinator errors/timeouts. Assignment callbacks now use the joined consumer's `Committed` for all source partitions, retaining topic-ID/partition-count checks through metadata-only discovery. That removes this admin-coordinator path from copying and rebalances; startup exposure remains. Closing it requires qualified recovery and shutdown behavior for both observations, with the startup checks preserved. A stock-API mitigation or native fix remains to be evaluated; no native fork/client substitution was introduced.
+Follow-up stock mock tests reproduced the abort in both pinned 2.15.0 and official [2.16.0](https://github.com/confluentinc/confluent-kafka-go/releases/tag/v2.16.0): request group inspection or offsets with a 100 ms native deadline, restore brokers after 500 ms. Guard Malloc and native samples establish use-after-free in the response callback: native timeout releases the owner; late coordinator discovery releases the last reference, then queues a reply with the freed pointer. A longer native deadline and metadata-only controls exit cleanly; Go cancellation alone is not the trigger. The same defect can spin indefinitely on macOS and block Close. Clean runs do not establish safety.
+
+Opus 5.5 at maximum effort also reproduced a leaked coordinator-request reference when native retry is refused during bootstrap decommissioning. A leaked broker reference could explain another Close hang, but that hang has not been reproduced. The original cold-fixture hang has no native stacks and remains unidentified. [Issue 4605](https://github.com/confluentinc/librdkafka/issues/4605) and [proposal 5397](https://github.com/confluentinc/librdkafka/pull/5397) concern the callback defect; neither a reference-order fix nor the proposal is qualified here. Upgrading to official 2.16.0 does not fix the reproduced defect.
+
+Startup still uses `Inspector.CheckMembers` (`DescribeConsumerGroups`) and `Inspector.Progress` (`ListConsumerGroupOffsets`). Their ten-second Go contexts do not cancel native requests. Assignment callbacks use joined consumer `Committed` plus metadata-only identity discovery, avoiding coordinator-admin calls during copying and rebalances. The security fixture's Java coordinator warmup permits ACL/failover testing; it is not a production remedy.
+
+The user elected to release v0.1.0 with these unfixed native limitations. Proposed long native deadlines, bounded read-only inspector Close, process isolation and native fixes are deferred; none is implemented. Startup checks, permissions and the official pinned client remain unchanged. This release does not establish reliable recovery from coordinator errors or bounded native shutdown.
 
 
 ## Permission baseline and admin inventory — 2026-10-04

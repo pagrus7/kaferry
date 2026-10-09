@@ -79,10 +79,10 @@ Maps `decisions.md` and `grammar.md` to implementation and executable evidence. 
 | Simplicity measured by LOC/complexity | `make metrics`; record updated totals and changes in results |
 | Example-based user docs under 10,000 characters | README + docs/file-format char-count CI gate |
 | Final platform/static/race/integration/fault/fuzz checks | Passed macOS ARM64, Linux ARM64 and emulated Linux AMD64 vet/race/integration; fault/four fuzz targets; identical macOS rebuild from empty cache |
-| Sustained load, memory stability, commit lag, replay and shutdown exposure | `TestStreamingSoakFidelityCommitLagMemoryAndShutdown` (separate `make soak`); passed two-minute local stream, RSS/commit-lag sampling, full fidelity and shutdown checks |
+| Sustained load, memory stability, commit lag, replay and shutdown exposure | `TestStreamingSoakFidelityCommitLagMemoryAndShutdown` (separate `make soak`); final binary passed ten-minute cross-cluster stream with bursts/stalls, RSS/commit-lag sampling, fidelity and shutdown checks |
 | Restricted ACL/SASL/TLS; multiple brokers with failover | Passed `TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight`, `TestReplicatedClusterLeaderFailurePreservesCopy` (`make qualification`, disposable three-broker TLS/SASL/ACL cluster) |
 | Hosted CI | **External blocker:** no Git remote configured; local CI-equivalent gates can run |
-| Archive freeze/release candidate | Candidate `v0.1.0-rc.1`; version 1 remains unfrozen until the first final release; broader deployment qualification remains explicit |
+| Archive freeze/release | `v0.1.0`; archive v1 frozen. User elected release with unfixed native crash/hang limitations; broader deployment qualification remains explicit |
 
 ## Accepted boundaries
 
@@ -104,4 +104,4 @@ Functional `Test*` scenarios use Given/When/Then phases, with the existing asser
 | Symbol-only SQL comparison operators; delivery timeout fits native range | `TestInvalidStatements`, `TestDeliveryTimeoutFitsNativeMillisecondRange` |
 | CBOR representation stays in file adapter; wire bytes unchanged | `TestProvenanceArchiveWireBytesAreStable` |
 
-Runtime assignment progress now uses consumer `Committed` (including unowned partitions and commit metadata), with metadata-only source identity discovery. `TestAssignmentReadsCommittedMetadataThroughConsumer` independently covers success, missing results, query/per-partition failure and foreign metadata. Startup admin coordinator operations retain the documented native-client release blocker.
+Runtime assignment progress now uses consumer `Committed` (including unowned partitions and commit metadata), with metadata-only source identity discovery. `TestAssignmentReadsCommittedMetadataThroughConsumer` independently covers success, missing results, query/per-partition failure and foreign metadata. Startup admin coordinator operations retain the documented unfixed native crash/hang risks.

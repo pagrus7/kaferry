@@ -1,6 +1,6 @@
-# CBOR archive v1 (unreleased)
+# CBOR archive v1
 
-One binary file, in submission order, without compression/segmentation. Provisional until first release.
+One binary file, in submission order, without compression/segmentation. Released in v0.1.0; v1 is frozen.
 
 ## Frames
 

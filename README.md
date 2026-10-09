@@ -114,7 +114,7 @@ Default FAIL. Either `ON_ERROR=SKIP` or specific `ON_MISSING_TIMESTAMP=SKIP` / `
 
 Ensure payload bytes/Schema Registry IDs are destination-compatible. No remapping. Retention is unchecked; old output may expire immediately. Saved topic IDs detect source recreation; destination recreation is undetected.
 
-Limits: Kafka drops NUL header-name suffixes; file→Kafka rejects NUL names. Invalid CreateTime timestamps (zero/negative/outside nanosecond range) use timestamp-error policy. Pre-join checks cannot see unassigned subscriptions. Native coordinator errors can abort/hang at startup: release blocked. [Compatibility](design/client-compatibility.md).
+Limits: Kafka drops NUL header-name suffixes; file→Kafka rejects NUL names. Invalid CreateTime timestamps (zero/negative/outside nanosecond range) use timestamp-error policy. Pre-join checks cannot see unassigned subscriptions. v0.1.0 has unfixed native startup crash/close hang risks. [Compatibility](design/client-compatibility.md).
 
 ## Files and exit codes
 

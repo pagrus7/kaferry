@@ -1,6 +1,17 @@
-# Implementation results — 2026-10-03
+# Implementation results
 
-Initial MVP measurements below describe `7ab6413`; subsequent review checks are recorded at the end.
+## Release v0.1.0 — 2026-10-08
+
+Implementation: reviewed refactor `21ef03c`; official Go/native client 2.15.0, Kafka 3.9.0. User elected release with the unfixed native startup crash/Close hang limitations in [client compatibility](client-compatibility.md#native-coordinator-timeout-defect-observed--2026-10-04). No proposed mitigation is implemented and no production-qualification claim is made. Archive v1 is frozen.
+
+- macOS ARM64: final refactor passed vet/unit/component race, broker integration race (95.866 s), bounded load and ten-minute cross-cluster soak. Linux ARM64 rerun passed vet/unit/component race, integration race (94.749 s) and stripped build.
+- Linux AMD64 rerun under Docker emulation passed vet/unit/component race and stripped build; its broker integration suite was not rerun for this refactor.
+- Final load/soak measurements and independent-component coverage are in [the latest implementation results](#simplicity-follow-up--2026-10-08).
+- Hosted CI and remote publishing remain unrun: no Git remote is configured. TLS/SASL/ACL/failover and Linux AMD64 integration evidence below predates the final refactor; fixture coordinator warmup does not qualify the native failure path.
+
+## Historical measurements
+
+The following snapshots preserve earlier implementation evidence, versions and claims as of their dates; current release status is above. Initial MVP measurements describe `7ab6413`; subsequent review checks follow chronologically.
 
 ## Delivered MVP
 
