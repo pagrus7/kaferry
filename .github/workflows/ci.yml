@@ -1,34 +1,61 @@
 name: checks
 on:
   push:
+    branches: [main]
   pull_request:
-  schedule:
-    - cron: '17 9 * * 1'
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   fast:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
       - run: test -z "$(gofmt -l cmd internal tests)"
-      - run: make check build
+      - run: python3 scripts/ci.py vet go vet ./...
+      - run: python3 scripts/ci.py unit go test -count=1 -json -race -coverprofile=build-results/coverage.out ./...
+      - run: make build
       - run: python3 -c "from pathlib import Path; assert sum(len(p.read_text()) for p in [Path('README.md'),Path('docs/file-format.md')]) < 10000"
+      - if: always()
+        run: python3 scripts/ci.py summary
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checks-fast
+          path: build-results/
+          retention-days: 30
   kafka:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      KAFKA_TEST_BROKERS: 127.0.0.1:39092
+      KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
-      - run: make broker integration
-      - if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        run: make fault load soak qualification fuzz benchmark
+      - run: python3 scripts/ci.py broker make broker
+      - run: python3 scripts/ci.py integration go test -count=1 -json -race -tags=integration ./...
       - if: always()
-        run: make broker-down
+        run: |
+          mkdir -p build-results
+          docker compose -p kafka-fwd2-compat --profile cross-cluster logs --no-color > build-results/brokers.log
+          make broker-down
+      - if: always()
+        run: python3 scripts/ci.py summary
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checks-kafka
+          path: build-results/
+          retention-days: 30

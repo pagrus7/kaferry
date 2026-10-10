@@ -135,4 +135,4 @@ make fault load soak qualification fuzz benchmark
 make broker-down
 ```
 
-Unit/mock/component tests need no Docker. CI schedules fault/load/soak/security tests. Qualification starts and removes its TLS/SASL cluster. [Measurements](design/implementation-results.md).
+Docker is needed only for Kafka tests. [CI](.github/workflows/ci.yml) checks changes; [weekly/manual runs](.github/workflows/qualification.yml) retain metrics/logs for 30 days. [Components](design/components.md).

@@ -27,6 +27,8 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
 			count, recordCap, byteCap, configuration := scenario.count, scenario.records, scenario.bytes, scenario.config
+			report := newLoadReport(t, "load")
+			report.WorkerRecordCap, report.WorkerByteCap = recordCap, byteCap
 			// Given seeded topics, a compiled CLI and worker limits.
 			a := admin(t)
 			src, dst := topic(t, a, 4), topic(t, a, 5)
@@ -61,10 +63,14 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			// When executing the bounded copy and sampling its memory.
 			start := time.Now()
 			process := startCLI(t, ctx, binaryPath, statement, args...)
+			report.cli = process
 			stopSampling := watchRSS(process)
 			err := process.wait()
 			elapsed := time.Since(start)
 			memory := stopSampling()
+			report.ElapsedSeconds = elapsed.Seconds()
+			report.ChildCPUSeconds = process.cpu().Seconds()
+			report.SampledPeakRSSBytes = memory.peak * 1024
 			if err != nil {
 				t.Fatalf("load copy: %v %s", err, process.logs())
 			}
@@ -72,6 +78,9 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 				t.Fatalf("no RSS samples; failures=%d", memory.failures)
 			}
 			summary := summaryFrom(t, process.logs())
+			report.Records = summary.Confirmed
+			report.RecordsPerSecond = float64(report.Records) / elapsed.Seconds()
+			report.PeakUncommittedRecords, report.PeakUncommittedBytes = summary.PeakRecords, summary.PeakBytes
 
 			// Then the CLI resolves every record within its work caps and preserves output.
 			if summary.Submitted != count || summary.Confirmed != count || summary.PeakRecords > recordCap || summary.PeakBytes > byteCap {

@@ -1,0 +1,48 @@
+name: qualification
+on:
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      soak_duration:
+        description: 'Soak duration (Go duration, minimum 1m)'
+        default: '30m'
+        required: true
+permissions:
+  contents: read
+jobs:
+  qualification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [load, soak, fault, qualification, fuzz, benchmark]
+    env:
+      KAFKA_TEST_BROKERS: 127.0.0.1:39092
+      KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
+      KFWD_SOAK_DURATION: ${{ inputs.soak_duration || '30m' }}
+      KFWD_SOAK_DEST_STALL_CONTAINER: kafka-fwd2-compat-kafka-dr-1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - if: matrix.suite == 'load' || matrix.suite == 'soak' || matrix.suite == 'fault'
+        run: python3 scripts/ci.py broker make broker
+      - run: python3 scripts/ci.py build make build
+      - run: python3 scripts/ci.py '${{ matrix.suite }}' make '${{ matrix.suite }}'
+      - if: always()
+        run: |
+          mkdir -p build-results
+          docker compose -p kafka-fwd2-compat --profile cross-cluster logs --no-color > build-results/brokers.log
+          make broker-down
+      - if: always()
+        run: python3 scripts/ci.py summary
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qualification-${{ matrix.suite }}
+          path: build-results/
+          retention-days: 30

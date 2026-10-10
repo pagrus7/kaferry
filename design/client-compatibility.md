@@ -39,7 +39,7 @@ The disposable qualification cluster uses SASL/PLAIN over TLS with a generated C
 
 A destination-leader broker/controller stop passed with replication factor 3 and minimum ISR 2: 64 records retained order/bytes/timestamp, shutdown succeeded and committed all 64. Fixture clients must tolerate transient connections to the stopped broker; a stale admin-offset request is not a useful failover deadline. Internal broker/controller listeners are private Docker plaintext listeners with an anonymous superuser; this fixture does not qualify encrypted internal traffic.
 
-The final implementation's ten-minute streaming soak verified 412,896 records through ten bursts and destination stalls, sampled commit lag/RSS and graceful shutdown. See [measurements](implementation-results.md#simplicity-follow-up--2026-10-08).
+Load/soak measurements belong in build results. Reproduce with `make load` and `KFWD_SOAK_DURATION=30m make soak`; generated reports and logs should be retained as CI artifacts.
 
 Additional broker versions, SCRAM/mTLS/other authentication providers, physical AMD64 deployments, longer production workloads and realistic latency/retention still require deployment-specific qualification. No broader platform/version claim is implied.
 

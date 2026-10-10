@@ -17,6 +17,8 @@ import (
 
 func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	// Given
+	report := newLoadReport(t, "soak")
+	report.WorkerRecordCap, report.WorkerByteCap = 1024, 128<<20
 	duration := 2 * time.Minute
 	if value := os.Getenv("KFWD_SOAK_DURATION"); value != "" {
 		var err error
@@ -66,6 +68,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), duration+45*time.Second)
 	defer cancel()
 	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", configPath)
+	report.cli = process
 	waitMembers(t, a, group, 1, 4, nil)
 	committedPartitions(t, a, group, src, 4)
 	records := newStreamRecords(src, time.Now().Truncate(time.Millisecond))
@@ -116,6 +119,13 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		t.Fatal("soak shutdown timed out")
 	}
 	shutdownTime := time.Since(shutdown)
+	report.ElapsedSeconds = time.Since(start).Seconds()
+	report.Records = records.verified
+	report.RecordsPerSecond = float64(report.Records) / report.ElapsedSeconds
+	report.ChildCPUSeconds = process.cpu().Seconds()
+	report.ShutdownSeconds = shutdownTime.Seconds()
+	report.Bursts, report.DestinationStalls = bursts, stalls.count
+	report.MaxSampledCommitLag = monitor.maxLag
 
 	// Then shutdown saves all progress, preserves fidelity and stays within work/RSS caps.
 	committed := 0
@@ -126,10 +136,12 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		t.Fatal("shutdown did not commit all verified records", committed, len(records.seen))
 	}
 	summary := summaryFrom(t, process.logs())
+	report.PeakUncommittedRecords, report.PeakUncommittedBytes = summary.PeakRecords, summary.PeakBytes
 	if summary.Submitted != len(records.seen) || summary.Confirmed != len(records.seen) || summary.PeakRecords > 1024 || summary.PeakBytes > 128<<20 {
 		t.Fatal("soak counts or uncommitted caps violated", summary)
 	}
 	warm, final, peak := memoryEnvelope(t, monitor.rss)
+	report.SampledPeakRSSBytes, report.WarmMedianRSSBytes, report.FinalMedianRSSBytes = peak*1024, warm*1024, final*1024
 	t.Logf("duration=%s bursts=%d destination_stalls=%d records=%d records/s=%.0f child_cpu=%s peak_RSS_MiB=%.1f warm_median_RSS_MiB=%.1f final_median_RSS_MiB=%.1f max_sampled_commit_lag=%d shutdown=%s peak_uncommitted_records=%d peak_uncommitted_bytes=%d", duration, bursts, stalls.count, len(records.seen), float64(len(records.seen))/time.Since(start).Seconds(), process.cpu(), float64(peak)/1024, float64(warm)/1024, float64(final)/1024, monitor.maxLag, shutdownTime, summary.PeakRecords, summary.PeakBytes)
 }
 

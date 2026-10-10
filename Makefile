@@ -22,7 +22,7 @@ fault:
 load: build
 	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KFWD_TEST_BINARY=$(CURDIR)/bin/kafka-fwd2 $(GO) test -tags=integration,load -run TestLoadBoundedKafkaCopy -v ./tests/compat
 soak: build
-	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KFWD_TEST_BINARY=$(CURDIR)/bin/kafka-fwd2 $(GO) test -tags=integration,load -run TestStreamingSoak -v ./tests/compat
+	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KFWD_TEST_BINARY=$(CURDIR)/bin/kafka-fwd2 $(GO) test -timeout=1h -tags=integration,load -run TestStreamingSoak -v ./tests/compat
 qualification: build
 	GO=$(GO) KFWD_TEST_BINARY=$(CURDIR)/bin/kafka-fwd2 sh tests/qualification/run.sh
 fuzz:
