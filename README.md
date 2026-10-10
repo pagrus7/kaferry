@@ -2,9 +2,11 @@
 
 Copy opaque Kafka records between topics and CBOR files. No transformations or Schema Registry access.
 
+Implementation is AI-driven, using Codex and Claude Code under human direction.
+
 ## Build and run
 
-Requires Go 1.26+, C compiler, CGO; bundled librdkafka. Verified: macOS ARM64, Linux ARM64/AMD64 (AMD64 emulated), Kafka 3.9.0. Earlier brokers are unverified.
+Needs Go 1.26+, C compiler, CGO; bundled librdkafka. Verified: macOS ARM64, Linux ARM64/AMD64 (AMD64 emulated), Kafka 3.9.0; earlier brokers unverified.
 
 ```sh
 make build
@@ -61,7 +63,7 @@ OPTIONS (GROUP='orders-dr-oct1');
 
 ## Examples
 
-Archive from the earliest retained position:
+Archive all retained records:
 
 ```sql
 INSERT INTO FILE cbor('/data/audit.cbor')
@@ -69,7 +71,7 @@ SELECT * FROM TOPIC 'audit@prod'
 OPTIONS (GROUP='audit-archive', START=EARLIEST);
 ```
 
-Restore recent records, skipping timestamps outside readable destination bounds:
+Restore recent records; skip timestamps outside destination bounds:
 
 ```sql
 INSERT INTO TOPIC 'orders@dr'
@@ -106,11 +108,11 @@ Null/empty bytes, ordered duplicate headers, nullable values, and timestamps sur
 
 Stable routing preserves source-partition→destination-partition submission order within one producer session. Files keep observed order; Kafka has no global order. Crash replay repeats records; old-owner writes may land after replay.
 
-At least once: acknowledgment precedes progress; a crash between them duplicates. Revocation releases immediately, possibly duplicating bounded uncommitted work. Later failures retain earlier output. Idempotence covers producer retries, not replay.
+At least once: acknowledgment precedes progress; a crash between them duplicates. Revocation releases immediately, possibly duplicating bounded uncommitted work. Failures retain prior output. Idempotence covers producer retries, not replay.
 
 Caps include acknowledged/uncommitted work; one oversized record proceeds alone. Lookahead/native buffers add memory. Commit each second/half-cap; native queues are bounded. `delivery_timeout` is 1–2147483647 ms for delivery/queue-full. `message.timeout.ms`/`delivery.timeout.ms` override delivery (0: infinite); conflicting aliases fail. Source outages retry indefinitely. Signals stop intake, drain writes ten seconds and commit the prefix. Native commit/filesystem/close can extend shutdown.
 
-Default FAIL. Either `ON_ERROR=SKIP` or specific `ON_MISSING_TIMESTAMP=SKIP` / `ON_REJECTED_TIMESTAMP=SKIP`. Only attributable unsent validation errors skip. Batch rejection, authentication, exhausted recovery, corruption, changed source identity always fail. Change policy and resume the same group to revisit failures.
+Default FAIL. Either `ON_ERROR=SKIP` or specific `ON_MISSING_TIMESTAMP=SKIP` / `ON_REJECTED_TIMESTAMP=SKIP`. Only attributable unsent validation errors skip. Batch rejection, authentication, exhausted recovery, corruption, changed source identity always fail. Change policy and resume the group to revisit failures.
 
 Ensure payload bytes/Schema Registry IDs are destination-compatible. No remapping. Retention is unchecked; old output may expire immediately. Saved topic IDs detect source recreation; destination recreation is undetected.
 
@@ -135,4 +137,4 @@ make fault load soak qualification fuzz benchmark
 make broker-down
 ```
 
-Docker is needed only for Kafka tests. [CI](.github/workflows/ci.yml) checks changes; [weekly/manual runs](.github/workflows/qualification.yml) retain metrics/logs for 30 days. [Components](design/components.md).
+Kafka tests need Docker. [CI](.github/workflows/ci.yml); [weekly/manual runs](.github/workflows/qualification.yml) retain metrics/logs for 30 days. [Components](design/components.md).
