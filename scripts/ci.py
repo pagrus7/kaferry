@@ -22,6 +22,7 @@ def run(label, command, directory):
     binary = Path("bin/kafka-fwd2")
     environment = {
         "commit": capture(["git", "rev-parse", "HEAD"]),
+        "working_tree_dirty": bool(capture(["git", "status", "--porcelain"])),
         "go": capture(["go", "version"]),
         "platform": platform.platform(),
         "cpu_count": os.cpu_count(),

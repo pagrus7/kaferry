@@ -7,6 +7,10 @@ compose() {
   docker compose -p kafka-fwd2-qualification -f tests/qualification/compose.yaml "$@"
 }
 cleanup() {
+  if [ -n "${KFWD_REPORT_DIR:-}" ]; then
+    mkdir -p "$KFWD_REPORT_DIR"
+    compose logs --no-color > "$KFWD_REPORT_DIR/security-brokers.log" || true
+  fi
   compose down -v
   rm -rf "$cert_dir"
 }
