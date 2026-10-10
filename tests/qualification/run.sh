@@ -26,5 +26,5 @@ compose exec -T kafka-secure-1 /opt/kafka/bin/kafka-consumer-groups.sh \
 export KFWD_QUAL_BROKERS=127.0.0.1:41092,127.0.0.1:42092,127.0.0.1:43092
 export KFWD_QUAL_CA="$cert_dir/ca.pem"
 export KFWD_QUAL_WRONG_CA="$cert_dir/wrong-ca.pem"
-"${GO:-go}" test -timeout=5m -race -tags=integration,qualification \
+"${GO:-go}" test -count=1 -timeout=5m -race -tags=integration,qualification \
   -run 'TestSaslTls|TestReplicatedCluster' -v ./tests/compat
