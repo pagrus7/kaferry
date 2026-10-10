@@ -1,9 +1,9 @@
-# Client compatibility — 2026-10-08
+# Client compatibility — 2026-10-10
 
 ## Verified baseline
 
 - Kafka `apache/kafka:3.9.0`, independent single-broker KRaft clusters and a three-broker/controller replicated cluster; `confluent-kafka-go/v2 v2.15.0`, bundled librdkafka `2.15.0`.
-- macOS ARM64 with Go 1.27.1; Linux ARM64 and AMD64 with Go 1.26, CGO, bundled static library. AMD64 ran under Docker emulation. Hosted CI remains unrun.
+- macOS ARM64 with Go 1.27.1; Linux ARM64 and AMD64 with Go 1.26, CGO, bundled static library. AMD64 verified under Docker emulation and GitHub hosted runners. [Hosted checks](https://github.com/pagrus7/kafka-fwd2/actions/workflows/ci.yml) and [qualification](https://github.com/pagrus7/kafka-fwd2/actions/workflows/qualification.yml) retain build results.
 - Lowest verified broker version: 3.9.0. Earlier feature introduction dates do not establish support.
 
 ## Probe results
