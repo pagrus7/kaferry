@@ -1,4 +1,5 @@
 GO ?= go
+FUZZ_ITERATIONS ?= 100000
 KAFKA_TEST_BROKERS ?= 127.0.0.1:39092
 KAFKA_TEST_DEST_BROKERS ?= 127.0.0.1:40092
 
@@ -29,10 +30,9 @@ soak: build
 qualification: build
 	GO=$(GO) KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry sh tests/qualification/run.sh
 fuzz:
-	$(GO) test -run '^$$' -fuzz FuzzParse -fuzztime=5s -parallel=2 ./internal/sql
-	$(GO) test -run '^$$' -fuzz FuzzWindowNormalization -fuzztime=5s -parallel=2 ./internal/plan
-	$(GO) test -run '^$$' -fuzz FuzzFraming -fuzztime=5s -parallel=2 ./internal/file
-	$(GO) test -run '^$$' -fuzz FuzzRecordDecoder -fuzztime=5s -parallel=2 ./internal/file
+	$(GO) test -run '^$$' -fuzz FuzzParse -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/sql
+	$(GO) test -run '^$$' -fuzz FuzzFraming -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/file
+	$(GO) test -run '^$$' -fuzz FuzzRecordDecoder -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/file
 benchmark:
 	$(GO) test -run '^$$' -bench BenchmarkRecordFraming -benchmem ./internal/file
 metrics:

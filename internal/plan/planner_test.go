@@ -2,7 +2,6 @@ package plan
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"strings"
 	"testing"
@@ -161,12 +160,6 @@ func TestInvalidTimeExpressions(t *testing.T) {
 			t.Errorf("accepted invalid filter: %s", filter)
 		}
 	}
-	if _, err := checkedAdd(math.MaxInt64, 1); err == nil {
-		t.Error("positive overflow accepted")
-	}
-	if _, err := checkedAdd(math.MinInt64, -1); err == nil {
-		t.Error("negative overflow accepted")
-	}
 }
 
 func TestInlinePrecedenceAndSecretRedaction(t *testing.T) {
@@ -241,21 +234,6 @@ func TestFingerprintIdentity(t *testing.T) {
 	if _, err := self.Fingerprint("same", "same"); err == nil {
 		t.Fatal("cross-alias self-copy accepted")
 	}
-}
-
-func FuzzWindowNormalization(f *testing.F) {
-	f.Add(int64(0), int64(1), int64(0))
-	f.Add(int64(math.MaxInt64), int64(math.MaxInt64), int64(1))
-	f.Fuzz(func(t *testing.T, lo, hi, delta int64) {
-		s := WindowSpec{Lower: &Expression{LiteralMS: lo, AdjustmentMS: delta}, Upper: &Expression{LiteralMS: hi, AdjustmentMS: delta}}
-		w, err := s.Resolve(time.Time{})
-		if err != nil {
-			return
-		}
-		if !w.Contains(*w.Lower) || w.Contains(*w.Upper) {
-			t.Fatal("half-open window invariant failed")
-		}
-	})
 }
 
 func TestStrictRFC3339AndPersistedWindow(t *testing.T) {

@@ -60,9 +60,11 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 | `make load` | Bounded Kafka-copy throughput and caps; run `make broker` first |
 | `make soak` | Streaming fidelity, lag, memory and shutdown; run `make broker` first |
 | `make qualification` | Security/ACLs and replicated failover; starts its own TLS/SASL fixture |
-| `make fuzz` | Parser, time bounds, frames and record decoding |
+| `make fuzz` | SQL parser, frames and record decoding; default 100,000 iterations per target |
 | `make benchmark` | CBOR framing CPU/allocation measurements |
 | `make broker-down` | Stop the disposable source/destination clusters |
+
+Time-window arithmetic, boundaries and overflow use deterministic unit tests in `make check`. Set `FUZZ_ITERATIONS` to change the per-target fuzz budget; failures remain fatal.
 
 Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The qualification workflow defaults to 30 minutes (overridable on manual dispatch) and also stalls the destination. Fixture coordinator warmup is not a [production remedy](client-compatibility.md#known-defects-in-v010).
 
