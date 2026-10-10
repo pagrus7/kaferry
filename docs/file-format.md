@@ -1,6 +1,6 @@
 # CBOR archive v1
 
-One binary file, in submission order, without compression/segmentation. Released in v0.1.0; v1 is frozen.
+Wire format and durability reference. One binary file, in submission order, without compression/segmentation. Released in v0.1.0; v1 is frozen.
 
 ## Frames
 
@@ -26,8 +26,8 @@ Header: `version` (unsigned 1), `file_id` (random 128-bit hex text), `group` (te
 | `timestamp_type` | Text: `create_time`, `log_append_time`, `unknown` |
 | `source` | Optional map: `topic` text, `partition` integer, `offset` integer; diagnostics only |
 
-Header names use bytes, preserving arbitrary Go string contents. Duplicate headers retain sequence.
+All record fields except `source` are required; `headers` is never null. Header names use bytes, preserving arbitrary Go string contents. Duplicate headers retain sequence.
 
 ## Durability
 
-Progress records output ID/fsynced extent `E`; acknowledgment follows fsync. Wrong identity, length below `E`, damage before `E`, or `E` inside a frame fails. Broken tails at/after `E` truncate; complete frames remain, potentially duplicated. Oversized complete frames fail without truncation. Input ends at partial final frames; complete corrupt frames fail. See [file initialization and checkpoints](../design/decisions.md#files).
+Progress records output ID/fsynced extent `E`; acknowledgment follows fsync. Wrong identity, length below `E`, damage before `E`, or `E` inside a frame fails. Broken tails at/after `E` truncate; complete frames remain, potentially duplicated. Oversized complete frames fail without truncation; raise `worker.max_frame_bytes`. Input ends at partial final frames; complete corrupt frames fail. See [file initialization and checkpoints](../design/decisions.md#files).

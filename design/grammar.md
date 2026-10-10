@@ -1,6 +1,6 @@
 # kafka-fwd2 statement grammar
 
-Syntax for `decisions.md`, which wins on any conflict. The examples are Stage 1 test cases.
+Syntax reference; [behavior and design decisions](decisions.md) wins on any conflict. Tests parse and plan all five valid examples.
 
 ## Lexical rules
 
@@ -56,11 +56,15 @@ Planning or startup enforces:
 
 ## Valid examples
 
-Topic→topic, fixed window, inline connection:
+Aliases not defined inline need TOML profiles; `ENV` variables must be set. TLS connections need a trusted broker CA; set `ssl.ca.location` if [librdkafka's default CA paths](https://docs.confluent.io/platform/current/clients/librdkafka/html/md_INTRODUCTION.html) do not include it.
+
+Topic→topic, fixed window, inline PLAIN over TLS connection:
 
 ```sql
 WITH CONNECTION dr AS (
-  'bootstrap.servers' = 'dr-kafka:9092',
+  'bootstrap.servers' = 'dr-kafka:9093',
+  'security.protocol' = 'SASL_SSL',
+  'sasl.mechanism'    = 'PLAIN',
   'sasl.username'     = 'copier',
   'sasl.password'     = ENV('DR_PASSWORD')
 )
@@ -79,7 +83,7 @@ SELECT * FROM TOPIC 'audit'
 OPTIONS (GROUP = 'audit-archive', START = EARLIEST);
 ```
 
-File→topic, last seven days, skipping timestamps the destination rejects:
+File→topic, last seven days, skipping timestamps known to be outside the destination's accepted bounds:
 
 ```sql
 INSERT INTO TOPIC 'orders@staging'
@@ -110,7 +114,7 @@ OPTIONS (GROUP = 'clicks-backfill-1', CUTOFF = INTERVAL '5' MINUTE, ON_ERROR = S
 
 ## Invalid examples
 
-| Statement or fragment | Expected error |
+| Statement or fragment | Rejected because |
 | --- | --- |
 | `... WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` cannot be combined with a time filter |
 | `... WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS (GROUP = 'g', ON_ERROR = SKIP, ON_MISSING_TIMESTAMP = FAIL)` | `ON_ERROR` cannot be mixed with specific error policies |
@@ -122,7 +126,7 @@ OPTIONS (GROUP = 'clicks-backfill-1', CUTOFF = INTERVAL '5' MINUTE, ON_ERROR = S
 | `INSERT INTO TOPIC 'a@x' SELECT * FROM TOPIC 'a@y' ...` where `x` and `y` reach one cluster | destination is the source topic |
 | `INSERT INTO FILE cbor('a.cbor') SELECT * FROM FILE cbor('./a.cbor') ...` | destination would overwrite the source file |
 | `SELECT key FROM TOPIC 'a' ...` | only `SELECT *` is supported |
-| `WHERE RECORD_TIMESTAMP >= NOW() OR ...` | expected `OPTIONS` |
+| `WHERE RECORD_TIMESTAMP >= NOW() OR ...` | `OR` is unsupported; bounds combine with `AND` |
 | `WHERE RECORD_TIMESTAMP > TIMESTAMP '...' AND RECORD_TIMESTAMP >= TIMESTAMP '...'` | two lower bounds |
 | `RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP < NOW() - INTERVAL '1' HOUR` | empty time range |
 | `TIMESTAMP '2026-10-01T00:00:00'` | timestamp needs `Z` or a UTC offset |

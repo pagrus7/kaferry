@@ -1,10 +1,12 @@
-# kafka-fwd2 design
+# kafka-fwd2 behavior and design decisions
+
+Behavioral contract and rationale. See [grammar](grammar.md) for syntax, [components](components.md) for architecture and tests, and [compatibility](client-compatibility.md) for deployment limits.
 
 ## Scope
 
-- Lightweight Go CLI that copies Kafka records with one SQL-like statement (`grammar.md`); no transformations. Directions: topic→topic, topic→file, file→topic, file→file.
-- Raw key/value bytes, null versus empty, ordered headers (duplicates included), and timestamp/type are preserved where the destination allows. Payloads are opaque; format and Schema Registry compatibility are the user's responsibility.
-- Delivery is at least once: crashes can duplicate records but never lose acknowledged ones.
+- Lightweight Go CLI that copies Kafka records with one SQL-like statement; no transformations. Directions: topic→topic, topic→file, file→topic, file→file.
+- Raw key/value bytes, null versus empty, ordered headers (duplicates included), and timestamp/type are preserved where the client and destination permit. [Client limits](#errors) apply. Payloads are opaque; format and Schema Registry compatibility are the user's responsibility.
+- Delivery is at least once: output is acknowledged (Kafka delivery report or file fsync) before source progress is saved. Crashes and rebalances can duplicate records but cannot save progress past unacknowledged output. Filters, stops, SKIP policies and source/destination retention can still leave records uncopied or deleted.
 
 ## Time window
 
@@ -33,7 +35,7 @@
 
 - `GROUP` is a Kafka consumer group for Kafka sources and a local checkpoint identity for file sources; workers share a named group. `GROUP = ONE_OFF` generates and logs an ID, runs one worker, and resumes through the named form; a successful file-source `ONE_OFF` run deletes its checkpoint but keeps its stable lock file (a logged ID can still be resumed, so unlinking the lock would let two owners hold different inodes), and Kafka `ONE_OFF` groups expire through broker offset retention.
 - Kafka workers share a group with no coordination and progress independently per assigned partition, using the classic group protocol with protected `cooperative-sticky` assignment. Why: nothing extra to run, and eager rebalancing would revoke every busy worker's partitions on each exit.
-- Before subscribing, a worker checks the group: invalid/foreign progress fails, as do active members lacking the protected kafka-fwd2 `client.id` prefix or assigned to another topic. The pinned client cannot expose unassigned subscriptions; this Stage 0 limit is recorded in `client-compatibility.md`. An absent group passes; an unavailable check fails. This guards typos, not concurrent starts; positioning validates again.
+- Before subscribing, a worker checks the group: invalid/foreign progress fails, as do active members lacking the protected kafka-fwd2 `client.id` prefix or assigned to another topic. The pinned client cannot expose unassigned subscriptions; see [binding limits](client-compatibility.md#binding-limits). An absent group passes; an unavailable check fails. This guards typos, not concurrent starts; positioning validates again.
 - A worker exits when all its assigned partitions have stopped; an empty assignment during a rebalance is not completion. In bounded runs a worker holding no partitions for `worker.idle_exit` (default 30 s) exits 0, logged as an idle exit; the timer starts only after a successful assignment (empty included). In follow mode it stays as a standby.
 - There is no group-wide done signal; all workers exiting 0 does not prove coverage, since an idle worker can leave while a partition is being handed to it. To confirm a bounded group, rerun the same statement and `GROUP` with one worker after previous members have left: as sole member it finishes orphaned work, and its completion (never an idle exit) is the confirmation. It is a real copy run, so tip-stopped partitions may copy late arrivals.
 - On revocation, a worker stops intake for the partition, commits its confirmed prefix, and releases it without waiting for in-flight deliveries. Their late outcomes are discarded and the new owner replays them, so a rebalance can duplicate up to a partition's uncommitted work. A revocation commit that fails with a recoverable rebalance, coordinator, timeout, or transport error is logged with the saved and confirmed positions and the partition is released for replay; authorization, metadata-size, fencing, fatal, unknown errors and missing results still fail. Periodic and initial commits fail on any error.
@@ -50,12 +52,13 @@
 
 - One idempotent producer per worker, asynchronous with delivery reports; librdkafka batches internally (the Go batch producer drops headers and timestamps).
 - The original key is sent with partition unset, using `partitioner=murmur2_random` (Java-compatible) unless the connection sets one. Source partition and offset are not copied; destination partition-count changes are logged. Destination topics must exist.
-- Delivery retries belong to the client (`message.timeout.ms`, default 60 s), then the run fails. A queue-full refusal pauses intake and retries the same record first. Terminal record failures follow FAIL/SKIP and are never re-produced behind later records.
+- Delivery retries belong to the client. `message.timeout.ms` (alias `delivery.timeout.ms`) defaults to `worker.delivery_timeout` (60 s); connection properties override it, 0 means no timeout, and conflicting aliases fail configuration. Exhausted delivery fails the run.
+- A queue-full refusal pauses intake and retries the same record first, up to `worker.delivery_timeout`. Synchronous record refusals follow FAIL/SKIP; accepted records are never re-produced behind later records.
 - Preflight reads the destination's timestamp type, timestamp acceptance bounds, and `max.message.bytes`; unreadable configuration warns and skips the dependent check.
 - CreateTime records are checked at wall time against the acceptance bounds (`message.timestamp.before.max.ms` / `after.max.ms`, or legacy `difference.max.ms`) before produce; records outside them go through `ON_REJECTED_TIMESTAMP` and are never sent. The check can race broker clocks and configuration.
 - The producer's `message.max.bytes` is capped at the destination's `max.message.bytes` and logged, so oversized records normally fail synchronously, attributed to one record. librdkafka's limit is not strict (framing, compression), so broker size rejections remain possible.
 - Destination retention is not checked: records older than a CreateTime destination's `retention.ms` are copied and may be deleted by the broker soon after.
-- A broker rejection is skippable only when its delivery report attributes it to one record. Other batch rejections and fatal producer errors fail the worker under every policy; no innocent record is marked skipped, error strings are not parsed, and batches are not split by re-producing. Why: the broker rejects the whole batch.
+- Asynchronous delivery-report errors fail the worker under every policy. Reports cannot identify the guilty record in a rejected batch, so no record is marked skipped, error strings are not parsed, and batches are not split by re-producing. Late outcomes from revoked assignments are discarded as described [above](#groups-and-workers).
 - Ordering: records from one source partition that reach the same destination partition keep submission order within one uninterrupted producer session with stable routing (unchanged partitioner and destination partition count). Nothing is ordered across destination or source partitions, and null-key records spread across partitions. Crash replay repeats runs (100, 101, 100, 101), and records submitted before a revocation can land after the new owner's replays. `LogAppendTime` destinations restamp records.
 
 ## Delivery and progress
@@ -70,8 +73,19 @@
 ## Errors
 
 - Default is FAIL. A query uses either `ON_ERROR = FAIL|SKIP` or the specific policies `ON_MISSING_TIMESTAMP` and `ON_REJECTED_TIMESTAMP`, never both.
-- SKIP drops a failed record with an identifiable source position and logs position and reason. Skippable classes: missing required timestamp, timestamp outside the destination's acceptance bounds, synchronous per-record size rejection, and other supported validation failures attributed to one record. Specific policies cover their named classes; `ON_ERROR = SKIP` covers all.
-- Always FAIL, whatever the policy: unattributed batch rejections, fatal client errors, connectivity and authentication failures, out-of-range positions, framing/CRC corruption, changed source files. Only classified transient client and network failures retry; consumer-side transient failures retry without a total deadline, since a quiet partition gives no recovery signal (`tip_wait` bounds waiting through a sampled H), and `worker.delivery_timeout` bounds only producer delivery and the queue-full wait; framing/CRC and deterministic authentication or authorization failures fail immediately.
+- SKIP drops an identified record whose failure is detected synchronously, before acceptance for delivery, and logs its position and reason. Specific policies cover their named classes; `ON_ERROR = SKIP` covers all supported record-validation classes.
+
+| Skippable failure | Policy |
+| --- | --- |
+| Missing timestamp required by `WHERE` | `ON_MISSING_TIMESTAMP` or `ON_ERROR` |
+| Timestamp outside known destination bounds | `ON_REJECTED_TIMESTAMP` or `ON_ERROR` |
+| Kafka client cannot preserve timestamp ≤ 0 or beyond its nanosecond range, unless destination is known LogAppendTime | `ON_REJECTED_TIMESTAMP` or `ON_ERROR` |
+| NUL in a header name sent to Kafka, synchronous size refusal, or another supported validation failure | `ON_ERROR` |
+
+- Asynchronous delivery failures, fatal client errors, authentication/authorization failures, out-of-range positions, framing/CRC corruption and changed source files cannot be skipped. Deterministic authentication/authorization and framing/CRC failures stop immediately.
+- Consumer polling retries classified transient connection/coordinator errors without a total deadline: a quiet partition gives no recovery signal. `worker.tip_wait` bounds waiting through a sampled H, not general outages.
+- Required startup inspection (topics, cluster, group progress and membership) and initial/periodic commits fail on errors. Optional destination-config inspection warns; revocation follows the [release-for-replay rules](#groups-and-workers). Go contexts do not bound native startup or cleanup.
+- Producer delivery and queue-full timeouts follow [Kafka output](#kafka-output); they do not bound the whole run or shutdown.
 - A source file has changed when its file ID differs, it is shorter than the checkpoint, or the last checkpointed frame's CRC differs; appends never count. The failure names old and new identity; the remedy is a new `GROUP`.
 - A source record without a timestamp, when no filter needs one, gets the producer's timestamp at a topic destination; this is counted and warned about in a summary.
 
@@ -79,29 +93,48 @@
 
 - Endpoints are `FILE cbor('path')`. Any `FILE` endpoint means one process per query on one machine, so Kafka→file runs one worker; locks cannot enforce this across machines or copied files, and such use is unsupported.
 - An output has one writer, holding an exclusive lock on its inode from creation. A file-source group holds an exclusive lock on a stable checkpoint lock file that checkpoint replacement never swaps out; source data is not locked, so other groups can read a growing file.
-- Format: a fixed magic, a header frame, then record frames. A frame is a big-endian u32 payload length, a CBOR payload, and CRC32C over both. The header map holds version, file ID, writing `GROUP`, and fingerprint, and is read with its own bound; an invalid or incomplete published header is fatal. Read size is limited by configuration; no compression or segmentation. Version 1 is frozen with v0.1.0 and specified in `docs/file-format.md`; later readers accept every released version.
-- Record map: `key`, `value`, ordered `headers` (`name`, `value`), `timestamp_ms`, `timestamp_type` (`create_time`, `log_append_time`, `unknown`), and optional `source` (`topic`, `partition`, `offset`) for diagnostics only. Byte fields keep null versus empty.
-- Output is fsynced before records are acknowledged. Any write, buffer flush, short write, or fsync failure poisons the output for the rest of the run: nothing pending is acknowledged and E does not move, because a retried fsync can succeed after the kernel dropped the failed pages. Progress stores the acknowledged extent E: the file length after the fsync that confirmed the committed records, initially the header end; Kafka→file uses the largest committed E across partitions. On restart, progress is read and validated first; an output shorter than E fails, and so does any framing or CRC error in a frame starting before E. From E on, valid complete frames are kept; the first invalid or partial frame and everything after it are truncated, fsynced, and the removed byte count logged. Missing or invalid identity never licenses guessing E or deleting data. Why: only bytes past E are known to be unacknowledged. Restart therefore reads and CRC-checks the whole output, so startup time grows with output size; a faster mode is a future user decision.
-- An existing output is appended to only when its header fingerprint matches and its file ID, read from the header and never regenerated, equals the stored destination ID. If the group stores no destination identity, an existing output fails, including a header-only file left by a crash during creation; deleting it is the remedy. A partition missing its own ID adopts the group's. An output missing while progress names it fails and is never recreated.
-- The output is locked and created or validated before any source is read (for Kafka→file, before subscribing). Creation: generate an ID, write and fsync a complete header to a locked temporary file, publish it without replacing an existing path (a creator that loses opens and locks the published file), fsync the directory, persist initial source progress (every partition's initial position, checking each result, or the initial checkpoint) with the destination ID and initial E, then write records. Cleanup deletes only temporary files whose lock it acquires.
-- Checkpoints live in `~/.kafka-fwd2/checkpoints` (`worker.checkpoint_dir`), named safely from `GROUP`, and replaced atomically. The parent directory is fsynced after creating any output or checkpoint file and after every checkpoint rename.
+
+### Format
+
+[CBOR archive v1](../docs/file-format.md) specifies frames and record maps. An invalid or incomplete published header is fatal. Reads are bounded by configuration; there is no compression or segmentation. Version 1 is frozen with v0.1.0; later readers accept every released version.
+
+### Output recovery
+
+Output is fsynced before acknowledgment. A write, buffer flush, short write or fsync failure poisons the output for the rest of the run: nothing pending is acknowledged and E does not move. Why: a retried fsync can succeed after the kernel dropped failed pages.
+
+Progress stores acknowledged extent E: the file length after the fsync confirming committed records, initially the header end. Kafka→file uses the largest committed E across partitions.
+
+On restart:
+
+1. Read progress and validate ownership: header group/fingerprint must match, and its file ID must equal the stored destination ID. IDs are never regenerated. A partition without its own output ID adopts the group's.
+2. Fail if the output is missing or shorter than E. Scan the whole output and CRC-check frames; corruption before E, or E inside a frame, fails.
+3. A complete frame above `worker.max_frame_bytes` fails without truncation, before or after E; raise the limit. An incomplete frame follows the partial-tail rule below.
+4. Keep valid complete frames at/after E; replay may duplicate them. Truncate the first invalid or partial tail and everything after it, fsync, and log removed bytes. Only bytes past E are known to be unacknowledged.
+
+Missing or invalid ownership never permits guessing E or deleting data. Full-output validation means restart time grows with file size.
+
+### Creation
+
+The output is locked and created or validated before reading source data (before subscribing for Kafka→file).
+
+1. Generate an ID; write and fsync a complete header to a locked temporary file.
+2. Publish without replacing an existing path, then fsync the directory. A losing creator opens and locks the published file.
+3. Persist initial source progress with destination ID and initial E: every Kafka partition's initial position, checking each result, or the file-source checkpoint.
+4. Start writing records. Cleanup deletes only temporary files whose lock it acquires.
+
+An existing output without saved destination ownership fails, including a header-only file left by a creation crash. Verify it is header-only, delete it manually, then rerun. An output missing while progress names it is never recreated.
+
+### Checkpoints
+
+File-source checkpoints live in `~/.kafka-fwd2/checkpoints` (`worker.checkpoint_dir`), named safely from `GROUP`, and replaced atomically. The parent directory is fsynced after output/checkpoint creation and every checkpoint rename.
 
 ## Configuration and CLI
 
 - Aliases come from TOML profiles or `WITH CONNECTION`; inline properties override TOML keys. `ENV('NAME')` resolves at startup, fails if unset, and is redacted. Unknown or guarantee-breaking librdkafka settings are rejected.
-- TOML holds connection profiles and worker tuning: caps, delivery timeout, `idle_exit`, `tip_wait`, `checkpoint_dir`.
+- TOML holds connection profiles and worker tuning: caps, `max_frame_bytes`, delivery timeout, `idle_exit`, `tip_wait`, `checkpoint_dir`.
 - CLI: exactly one of `run --file/-f path`, `run --sql/-e statement`, or `run --file -`. `--config/-c path` loads TOML.
 - Exit codes: 0 for completion or a follow run stopped cleanly by a signal. 1 for runtime failures (including busy locks, transient and broker failures, and record-policy failures) and a bounded run interrupted before completion. 2 for usage, parse, plan, or configuration errors, and for conflicts found before intake (the first consumed record) that need operator action (fingerprint, topic ID, or window mismatch; foreign commit or member; self-copy; an output that is unowned, shorter than E, or damaged before it; a changed source file). A conflict found after intake starts exits 1; the first failure decides the code, not a conflict raised during cleanup. Skips do not change the code; logs carry the count.
 
-## Engineering
-
-- Single-purpose structs behind narrow interfaces. Fx wires replaceable components at the composition root; core logic is Fx-free.
-- Kafka I/O: `confluent-kafka-go/v2 v2.15.0`, bundled librdkafka 2.15.0; verified Kafka baseline 3.9.0. Platform, API limits, probe results, and unverified deployment matrices: `client-compatibility.md`.
-- Tests at the cheapest useful layer: unit, mock, component, end-to-end, load, and targeted edge cases.
-- Keep code simple; lines of code and cyclomatic complexity are signals, not targets.
-- Priorities: correctness, simplicity, throughput, CI duration, binary size.
-- User documentation is example-based and under 10,000 characters.
-
 ## Release
 
-- v0.1.0 releases the current implementation by user decision, with unfixed native coordinator timeout/recovery crashes and possible indefinite close hangs. No mitigation is implemented; this is not production qualification. Evidence and proposed remedies: `client-compatibility.md`.
+- v0.1.0 pins `confluent-kafka-go/v2 v2.15.0` and bundled librdkafka 2.15.0, with unfixed native coordinator crashes and possible indefinite close hangs. No mitigation is implemented; this is not production qualification. [Compatibility, permissions and evidence](client-compatibility.md).

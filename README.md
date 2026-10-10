@@ -133,7 +133,7 @@ Use an absolute path when overriding `checkpoint_dir`.
 - **Payloads:** ensure bytes and Schema Registry IDs work at the destination. Old records may expire under destination retention.
 - **Workers:** topic-to-topic processes may share a group; use literal times for one window. All exiting 0 does not prove completion. After they leave, rerun alone with the same query/group and check there is no `local idle exit`.
 - **Files:** one process per query on one machine, using a local filesystem with locks and hard links. File-source progress lives in `~/.kafka-fwd2/checkpoints`. Keep output and progress; losing either prevents resuming file output. Use a new group and output path to start over.
-- **Errors:** fail by default. Use `ON_ERROR = SKIP` or specific timestamp policies. Batch rejections, authentication errors and corruption still fail. [Skippable errors](design/decisions.md#errors).
+- **Errors:** fail by default. Use `ON_ERROR = SKIP` or specific timestamp policies. Broker rejections, authentication errors and corruption still fail. [Skippable errors](design/decisions.md#errors).
 
 Signals stop reading, drain writes for up to ten seconds and save progress; native calls can extend shutdown. Structured logs are JSON on stderr. Exit codes: `0` finished or stopped while following; `1` failed or interrupted before finishing; `2` invalid usage/configuration or a conflict before copying.
 
@@ -147,4 +147,4 @@ make broker integration
 make broker-down
 ```
 
-Kafka tests need Docker. [CI checks](https://github.com/pagrus7/kafka-fwd2/actions/workflows/ci.yml) run on changes; [qualification](https://github.com/pagrus7/kafka-fwd2/actions/workflows/qualification.yml) retains results for 30 days. More: [test targets](Makefile), [component design](design/components.md).
+Kafka tests need Docker. [CI checks](https://github.com/pagrus7/kafka-fwd2/actions/workflows/ci.yml) run on changes; [qualification](https://github.com/pagrus7/kafka-fwd2/actions/workflows/qualification.yml) retains results for 30 days. More: [test targets](design/components.md#test-targets), [component design](design/components.md).
