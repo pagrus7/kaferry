@@ -1,43 +1,113 @@
 # kafka-fwd2
 
-Copy opaque Kafka records between topics and CBOR files. No transformations or Schema Registry access.
+Copy Kafka records between topics and CBOR files with one SQL-like statement.
+
+Preserves raw keys, values, nulls, ordered headers and timestamps where possible. No transformations or Schema Registry access.
 
 Implementation is AI-driven, using Codex and Claude Code under human direction.
 
-## Build and run
+**Status:** v0.1.0 is not production-qualified: it can crash during startup when the Kafka group coordinator is slow or recovering, and shutdown can hang indefinitely. See [client limitations and permissions](design/client-compatibility.md).
 
-Needs Go 1.26+, C compiler, CGO; bundled librdkafka. Verified: macOS ARM64, Linux ARM64/AMD64 (AMD64 emulated), Kafka 3.9.0; earlier brokers unverified.
+## Install
+
+[Download v0.1.0](https://github.com/pagrus7/kafka-fwd2/releases/tag/v0.1.0): Linux AMD64/ARM64 (glibc 2.34+) or macOS ARM64, with `SHA256SUMS`. Source builds need Go 1.26+, a C compiler and CGO; librdkafka is bundled.
 
 ```sh
+git clone https://github.com/pagrus7/kafka-fwd2.git
+cd kafka-fwd2
 make build
-bin/kafka-fwd2 run -f copy.sql -c connections.toml
-cat copy.sql | bin/kafka-fwd2 run -f - -c connections.toml
-bin/kafka-fwd2 run -e "INSERT INTO FILE cbor('/data/copy.cbor') SELECT * FROM FILE cbor('/data/input.cbor') OPTIONS(GROUP='copy')"
 ```
 
-One `--sql/-e` or `--file/-f`; optional `--config/-c`. Create destination directories/topics first.
+Verified broker baseline: Apache Kafka 3.9.0. See [compatibility](design/client-compatibility.md) for other deployment limits.
 
-## Connections
+## Quick start
 
-Keys/string values follow [librdkafka](https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html). SQL overrides TOML; conflicting protected settings fail.
+Both topics must exist. Replace the example addresses below and add security settings as needed; they use no TLS or authentication. On one cluster, use a different destination topic.
+
+**`connections.toml`:**
 
 ```toml
 [connections.prod]
-'bootstrap.servers' = 'prod-a.example:9093,prod-b.example:9093'
+'bootstrap.servers' = 'source.example:9092'
+
+[connections.backup]
+'bootstrap.servers' = 'destination.example:9092'
+```
+
+**`copy.sql`:** copy the given hour of Kafka record timestamps.
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod'
+WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
+  AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z'
+OPTIONS (GROUP = 'orders-backfill');
+```
+
+`@prod` and `@backup` select connections. `GROUP` names the consumer group, or a local checkpoint for file sources.
+
+Run:
+
+```sh
+bin/kafka-fwd2 run --file copy.sql --config connections.toml
+```
+
+On completion, the run logs a JSON `copy summary` with counts to stderr and exits `0`. The cutoff rule below can omit records.
+
+Use your downloaded binary's path, or `bin/kafka-fwd2` after building. `-e` takes inline SQL; `-f -` reads stdin.
+
+## More examples
+
+**Archive from the earliest retained record, then keep following.** Create the output directory first.
+
+```sql
+INSERT INTO FILE cbor('/data/orders.cbor')
+SELECT * FROM TOPIC 'orders@prod'
+OPTIONS (GROUP = 'orders-archive', START = EARLIEST);
+```
+
+**Restore the last seven days.** Skip timestamps known to be outside the destination's accepted bounds.
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM FILE cbor('/data/orders.cbor')
+WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '7' DAY
+OPTIONS (GROUP = 'orders-restore', ON_REJECTED_TIMESTAMP = SKIP);
+```
+
+**File to file:** [extract an inclusive time range](design/grammar.md#valid-examples) with `BETWEEN` and `GROUP = ONE_OFF`, which generates and logs a group name.
+
+Filters use Kafka record time, not payload event time. Files read up to their size at startup; later appends wait for another run. [Full syntax](design/grammar.md) covers timestamps, intervals and `SELECT *`.
+
+## Connections
+
+Use [librdkafka properties](https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html); quote dotted TOML keys and use string values. SQL overrides TOML. Topics without `@alias` use `default`.
+
+Secure connection example, using the tested PLAIN over TLS mechanism:
+
+```toml
+[connections.prod]
+'bootstrap.servers' = 'source.example:9093'
 'security.protocol' = 'SASL_SSL'
-'sasl.mechanism' = 'SCRAM-SHA-512'
+'sasl.mechanism' = 'PLAIN'
 'sasl.username' = 'copier'
 'ssl.ca.location' = '/etc/kafka/ca.pem'
+```
 
-[connections.dr]
-'bootstrap.servers' = 'dr-a.example:9093,dr-b.example:9093'
-'security.protocol' = 'SASL_SSL'
-'sasl.mechanism' = 'SCRAM-SHA-512'
-'sasl.username' = 'copier'
-'ssl.ca.location' = '/etc/kafka/dr-ca.pem'
-'compression.type' = 'zstd'
-'linger.ms' = '10'
+Prefix the statement to read its password from the environment:
 
+```sql
+WITH CONNECTION prod AS ('sasl.password' = ENV('PROD_PASSWORD'))
+```
+
+`ENV` works only in SQL and must be set. SQL can define a complete connection. Logs redact properties; keep passwords out of literals and shell arguments. Settings that break copy guarantees are rejected.
+
+<details>
+<summary>Optional worker settings and defaults</summary>
+
+Limits count uncommitted work, including delivered records. [Details](design/decisions.md#delivery-and-progress).
+
+```toml
 [worker]
 partition_record_cap = 5000
 partition_byte_cap = 16777216
@@ -47,94 +117,34 @@ max_frame_bytes = 67108864
 delivery_timeout = '60s'
 idle_exit = '30s'
 tip_wait = '15m'
+# checkpoint_dir = '/var/lib/kafka-fwd2/checkpoints'
 ```
 
-```sql
-WITH CONNECTION prod AS ('sasl.password'=ENV('PROD_PASSWORD')),
-     CONNECTION dr AS ('sasl.password'=ENV('DR_PASSWORD'))
-INSERT INTO TOPIC 'orders@dr'
-SELECT * FROM TOPIC 'orders@prod'
-WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z'
-  AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-02T00:00:00Z'
-OPTIONS (GROUP='orders-dr-oct1');
-```
+Use an absolute path when overriding `checkpoint_dir`.
 
-`ENV` must be set. Logs redact connection values; avoid credential literals/arguments. Unqualified topics use `default`.
+</details>
 
-## Examples
+## Before you run
 
-Archive all retained records:
+- **Resume:** rerun the same query and `GROUP` to continue from saved progress. New windows or `CUTOFF` need a new group. `NOW()` is saved per partition or file. Expired offsets or deleted checkpoints can cause a fresh copy.
+- **Window end:** Kafka follows without an upper bound. Otherwise each partition stops at its first timestamp after `end + CUTOFF` (default one minute), or after catching up once that time passes. Records past the stop point can still be within the window and be missed, even if already present before the run. [Details](design/decisions.md#completion).
+- **Delivery:** at least once. Crashing after writing but before saving progress, or rebalancing, can duplicate writes. Kafka sources read committed records.
+- **Kafka output:** keep original keys; let the destination choose partitions. Default Java-compatible partitioning keeps equal non-null keys together with a fixed partition count. `LogAppendTime` replaces timestamps. [Ordering details](design/decisions.md#kafka-output).
+- **Payloads:** ensure bytes and Schema Registry IDs work at the destination. Old records may expire under destination retention.
+- **Workers:** topic-to-topic processes may share a group; use literal times for one window. All exiting 0 does not prove completion. After they leave, rerun alone with the same query/group and check there is no `local idle exit`.
+- **Files:** one process per query on one machine, using a local filesystem with locks and hard links. File-source progress lives in `~/.kafka-fwd2/checkpoints`. Keep output and progress; losing either prevents resuming file output. Use a new group and output path to start over.
+- **Errors:** fail by default. Use `ON_ERROR = SKIP` or specific timestamp policies. Batch rejections, authentication errors and corruption still fail. [Skippable errors](design/decisions.md#errors).
 
-```sql
-INSERT INTO FILE cbor('/data/audit.cbor')
-SELECT * FROM TOPIC 'audit@prod'
-OPTIONS (GROUP='audit-archive', START=EARLIEST);
-```
+Signals stop reading, drain writes for up to ten seconds and save progress; native calls can extend shutdown. Structured logs are JSON on stderr. Exit codes: `0` finished or stopped while following; `1` failed or interrupted before finishing; `2` invalid usage/configuration or a conflict before copying.
 
-Restore recent records; skip timestamps outside destination bounds:
+[Detailed behavior](design/decisions.md) · [File format and recovery](docs/file-format.md) · [Client limits and permissions](design/client-compatibility.md)
 
-```sql
-INSERT INTO TOPIC 'orders@dr'
-SELECT * FROM FILE cbor('/data/orders.cbor')
-WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '7' DAY
-OPTIONS (GROUP='restore', ON_REJECTED_TIMESTAMP=SKIP);
-```
-
-File extract with inclusive endpoints:
-
-```sql
-INSERT INTO FILE cbor('/data/incident.cbor')
-SELECT * FROM FILE cbor('/data/orders.cbor')
-WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z'
-                           AND TIMESTAMP '2026-10-01T09:30:00Z'
-OPTIONS (GROUP=ONE_OFF);
-```
-
-Supports `>`, `<=`, lower/upper bounds joined by `AND`, `NOW()` ± integer SECOND/MINUTE/HOUR/DAY intervals. Times: RFC 3339 with zone, millisecond precision. Only `SELECT *`. Quotes escape as `''`; comments: `--`, `/* ... */`.
-
-## Progress and completion
-
-- Required `GROUP` dedicates one identity/query. `ONE_OFF` logs an ID usable for resume; file-source success deletes its checkpoint, not its lock.
-- Kafka needs `WHERE` or `START=EARLIEST|LATEST`. Commits win; otherwise lower-bound timestamp lookup, upper-only earliest, or `START`. With group progress, new commitless partitions start earliest. No-match/`LATEST` use the read-committed end before open transactions.
-- `NOW()` persists per Kafka partition/file checkpoint. New partitions adopt the lowest-numbered saved window or resolve locally; concurrent workers may differ. Literal times give a shared window. New window needs a new group; expired offsets make it fresh again.
-- Stop on timestamp **> end + cutoff**, or read-committed tip after wall time passes it. Default one minute; override `CUTOFF=INTERVAL '5' MINUTE`. Tip completion samples H once and waits through transactions/control records up to `tip_wait`.
-- Late records and everything after one future-dated trigger can be omitted. Timestamp stops replay the trigger; tip reruns may copy late arrivals. Without an upper bound, Kafka follows.
-- Kafka→Kafka workers share a group, finishing independently. Empty bounded workers exit after `idle_exit`; follow workers stand by. Collective zero exits don't prove coverage: confirm by a sole-worker bounded rerun after others leave.
-- Expired commits resume at log start with a logged gap. Active out-of-range/beyond-end commits fail. Only retained data is available.
-
-## Delivery and errors
-
-Null/empty bytes, ordered duplicate headers, nullable values, and timestamps survive. Files retain provenance. Kafka sends the original key, partition unset; default `murmur2_random` matches Java. Same non-null key routes consistently with stable partitioner/count; null keys spread. Source partitions/offsets never route. `LogAppendTime` restamps; missing timestamps without filters get producer timestamps, counted/warned.
-
-Stable routing preserves source-partition→destination-partition submission order within one producer session. Files keep observed order; Kafka has no global order. Crash replay repeats records; old-owner writes may land after replay.
-
-At least once: acknowledgment precedes progress; a crash between them duplicates. Revocation releases immediately, possibly duplicating bounded uncommitted work. Failures retain prior output. Idempotence covers producer retries, not replay.
-
-Caps include acknowledged/uncommitted work; one oversized record proceeds alone. Lookahead/native buffers add memory. Commit each second/half-cap; native queues are bounded. `delivery_timeout` is 1–2147483647 ms for delivery/queue-full. `message.timeout.ms`/`delivery.timeout.ms` override delivery (0: infinite); conflicting aliases fail. Source outages retry indefinitely. Signals stop intake, drain writes ten seconds and commit the prefix. Native commit/filesystem/close can extend shutdown.
-
-Default FAIL. Either `ON_ERROR=SKIP` or specific `ON_MISSING_TIMESTAMP=SKIP` / `ON_REJECTED_TIMESTAMP=SKIP`. Only attributable unsent validation errors skip. Batch rejection, authentication, exhausted recovery, corruption, changed source identity always fail. Change policy and resume the group to revisit failures.
-
-Ensure payload bytes/Schema Registry IDs are destination-compatible. No remapping. Retention is unchecked; old output may expire immediately. Saved topic IDs detect source recreation; destination recreation is undetected.
-
-Limits: Kafka drops NUL header-name suffixes; file→Kafka rejects NUL names. Invalid CreateTime timestamps (zero/negative/outside nanosecond range) use timestamp-error policy. Pre-join checks cannot see unassigned subscriptions. v0.1.0 has unfixed native startup crash/close hang risks. [Compatibility](design/client-compatibility.md).
-
-## Files and exit codes
-
-Files require one process/query/machine, local locks/hard links/atomic rename/fsync. Input snapshots size at open; appends wait for rerun; partial final frames end input.
-
-Checkpoints: `~/.kafka-fwd2/checkpoints`, safe group-derived names. Keep progress/output together. Validate source ID/last-frame CRC, destination ID/fsynced extent. Changed input needs a new group. Missing/short output or damage before acknowledged extent fails. Broken unacknowledged tails truncate; complete frames remain and may duplicate, even above a lowered frame limit.
-
-Header publication before ID persistence can leave an unowned output: verify header-only, delete manually, rerun. No adoption without saved ownership. [File format](docs/file-format.md).
-
-Exit `0`: completion/skips/clean follow interruption; `1`: runtime/busy lock/drain/bounded interruption/later conflict; `2`: usage/configuration/pre-copy identity conflict. JSON logs carry windows/stops/skips/counts.
-
-## Verification
+## Development
 
 ```sh
 make check
 make broker integration
-make fault load soak qualification fuzz benchmark
 make broker-down
 ```
 
-Kafka tests need Docker. [CI](.github/workflows/ci.yml); [weekly/manual runs](.github/workflows/qualification.yml) retain metrics/logs for 30 days. [Components](design/components.md).
+Kafka tests need Docker. [CI checks](https://github.com/pagrus7/kafka-fwd2/actions/workflows/ci.yml) run on changes; [qualification](https://github.com/pagrus7/kafka-fwd2/actions/workflows/qualification.yml) retains results for 30 days. More: [test targets](Makefile), [component design](design/components.md).
