@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	core "kafka-fwd2/internal/copy"
 	"kafka-fwd2/internal/plan"
@@ -111,17 +112,16 @@ func TestOutputRequiresExistingIdentityAndFrameBoundaryExtent(t *testing.T) {
 	}
 }
 
-type simultaneousHeader struct {
-	*Codec
+type simultaneousPublisher struct {
+	Publisher
 	ready   chan<- struct{}
 	release <-chan struct{}
 }
 
-func (c simultaneousHeader) EncodeHeader(header Header) ([]byte, error) {
-	data, err := c.Codec.EncodeHeader(header)
-	c.ready <- struct{}{}
-	<-c.release
-	return data, err
+func (p simultaneousPublisher) Create(path, group, fingerprint string, codec ArchiveEncoder) (*os.File, bool, error) {
+	p.ready <- struct{}{}
+	<-p.release
+	return p.Publisher.Create(path, group, fingerprint, codec)
 }
 
 func TestSimultaneousOutputCreatorsCannotReplaceWinner(t *testing.T) {
@@ -137,12 +137,23 @@ func TestSimultaneousOutputCreatorsCannotReplaceWinner(t *testing.T) {
 		go func() {
 
 			// When
-			out, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, simultaneousHeader{codec(t), ready, release}, 10, logger())
+			out, err := NewOutput(simultaneousPublisher{NewPublisher(), ready, release}, path, "g", "fp", "", 0, codec(t), 10, logger())
 			results <- result{out, err}
 		}()
 	}
-	<-ready
-	<-ready
+	// Both creators finish orphan cleanup before either creates a temporary file.
+	// A header-encoding barrier can deadlock when cleanup wins the pre-lock race.
+	for range 2 {
+		select {
+		case <-ready:
+		case result := <-results:
+			close(release)
+			t.Fatalf("creator exited before publication: %v", result.err)
+		case <-time.After(5 * time.Second):
+			close(release)
+			t.Fatal("creators did not reach publication")
+		}
+	}
 	close(release)
 	successes := 0
 	for range 2 {
