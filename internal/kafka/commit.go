@@ -5,7 +5,7 @@ import (
 	"errors"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	copy "kafka-fwd2/internal/copy"
+	copy "github.com/pagrus7/kaferry/internal/copy"
 )
 
 type offsetCommitter interface {

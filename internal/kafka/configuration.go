@@ -7,8 +7,8 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"kafka-fwd2/internal/config"
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/config"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 // consumerConfig protects manual commits and bounds the native fetch queue.
@@ -24,7 +24,7 @@ func consumerConfig(p plan.Plan, limits config.Worker) (k.ConfigMap, error) {
 		}
 	}
 	if err := protectConfig(cfg, []protectedProperty{
-		{"group.id", p.Group}, {"client.id", "kafka-fwd2-" + p.Group},
+		{"group.id", p.Group}, {"client.id", "kaferry-" + p.Group},
 		{"enable.auto.commit", false}, {"enable.auto.offset.store", false},
 		{"auto.offset.reset", "error"}, {"isolation.level", "read_committed"},
 		{"enable.partition.eof", true}, {"partition.assignment.strategy", "cooperative-sticky"},

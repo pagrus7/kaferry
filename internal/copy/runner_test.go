@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"kafka-fwd2/internal/config"
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/config"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 type testClock struct {

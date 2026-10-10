@@ -49,7 +49,7 @@ jobs:
       - if: always()
         run: |
           mkdir -p build-results
-          docker compose -p kafka-fwd2-compat --profile cross-cluster logs --no-color > build-results/brokers.log
+          docker compose -p kaferry-compat --profile cross-cluster logs --no-color > build-results/brokers.log
           make broker-down
       - if: always()
         run: python3 scripts/ci.py summary

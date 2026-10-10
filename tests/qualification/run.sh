@@ -2,14 +2,14 @@
 set -eu
 mkdir -p .cache/qualification
 cert_dir=$(mktemp -d "$PWD/.cache/qualification/run.XXXXXX")
-export KFWD_QUAL_CERT_DIR="$cert_dir"
+export KAFERRY_QUAL_CERT_DIR="$cert_dir"
 compose() {
-  docker compose -p kafka-fwd2-qualification -f tests/qualification/compose.yaml "$@"
+  docker compose -p kaferry-qualification -f tests/qualification/compose.yaml "$@"
 }
 cleanup() {
-  if [ -n "${KFWD_REPORT_DIR:-}" ]; then
-    mkdir -p "$KFWD_REPORT_DIR"
-    compose logs --no-color > "$KFWD_REPORT_DIR/security-brokers.log" || true
+  if [ -n "${KAFERRY_REPORT_DIR:-}" ]; then
+    mkdir -p "$KAFERRY_REPORT_DIR"
+    compose logs --no-color > "$KAFERRY_REPORT_DIR/security-brokers.log" || true
   fi
   compose down -v
   rm -rf "$cert_dir"
@@ -22,9 +22,9 @@ compose up -d --wait --wait-timeout 90
 # Load cold group-coordinator partitions with Kafka's Java client first. The
 # pinned native admin timeout crash remains documented in client-compatibility.
 compose exec -T kafka-secure-1 /opt/kafka/bin/kafka-consumer-groups.sh \
-  --bootstrap-server localhost:9092 --describe --group kfwd2-security-warmup --timeout 60000
-export KFWD_QUAL_BROKERS=127.0.0.1:41092,127.0.0.1:42092,127.0.0.1:43092
-export KFWD_QUAL_CA="$cert_dir/ca.pem"
-export KFWD_QUAL_WRONG_CA="$cert_dir/wrong-ca.pem"
+  --bootstrap-server localhost:9092 --describe --group kaferry-security-warmup --timeout 60000
+export KAFERRY_QUAL_BROKERS=127.0.0.1:41092,127.0.0.1:42092,127.0.0.1:43092
+export KAFERRY_QUAL_CA="$cert_dir/ca.pem"
+export KAFERRY_QUAL_WRONG_CA="$cert_dir/wrong-ca.pem"
 "${GO:-go}" test -count=1 -timeout=5m -race -tags=integration,qualification \
   -run 'TestSaslTls|TestReplicatedCluster' -v ./tests/compat

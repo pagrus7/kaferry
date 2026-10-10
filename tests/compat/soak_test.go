@@ -20,17 +20,17 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	report := newLoadReport(t, "soak")
 	report.WorkerRecordCap, report.WorkerByteCap = 1024, 128<<20
 	duration := 2 * time.Minute
-	if value := os.Getenv("KFWD_SOAK_DURATION"); value != "" {
+	if value := os.Getenv("KAFERRY_SOAK_DURATION"); value != "" {
 		var err error
 		duration, err = time.ParseDuration(value)
 		if err != nil || duration < time.Minute {
-			t.Fatal("KFWD_SOAK_DURATION must be at least 1m")
+			t.Fatal("KAFERRY_SOAK_DURATION must be at least 1m")
 		}
 	}
 	a := admin(t)
 	destinationBrokers := broker(t)
 	destinationAdmin := a
-	stall := os.Getenv("KFWD_SOAK_DEST_STALL_CONTAINER")
+	stall := os.Getenv("KAFERRY_SOAK_DEST_STALL_CONTAINER")
 	if stall != "" {
 		ownedSoakDestination(t, stall)
 		destinationBrokers = os.Getenv("KAFKA_TEST_DEST_BROKERS")
@@ -148,7 +148,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 func ownedSoakDestination(t *testing.T, container string) {
 	t.Helper()
 	data, err := exec.Command("docker", "inspect", "--format", "{{index .Config.Labels \"com.docker.compose.project\"}} {{index .Config.Labels \"com.docker.compose.service\"}}", container).Output()
-	if err != nil || strings.TrimSpace(string(data)) != "kafka-fwd2-compat kafka-dr" {
+	if err != nil || strings.TrimSpace(string(data)) != "kaferry-compat kafka-dr" {
 		t.Fatal("destination stalls require the project's disposable kafka-dr service", err)
 	}
 }

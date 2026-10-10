@@ -1,4 +1,4 @@
-module kafka-fwd2
+module github.com/pagrus7/kaferry
 
 go 1.26.0
 

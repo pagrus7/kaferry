@@ -2,8 +2,8 @@ package kafka
 
 import (
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	copy "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/plan"
+	copy "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 type AssignmentStore interface {

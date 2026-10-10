@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 func TestResumePointValidatesCheckpointWithoutOwningReader(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"io"
 	"testing"
 
-	core "kafka-fwd2/internal/copy"
+	core "github.com/pagrus7/kaferry/internal/copy"
 )
 
 type decoderMock struct {

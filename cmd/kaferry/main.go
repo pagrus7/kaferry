@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"kafka-fwd2/internal/app"
+	"github.com/pagrus7/kaferry/internal/app"
 	"os"
 	"os/signal"
 	"syscall"

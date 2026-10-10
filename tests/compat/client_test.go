@@ -12,7 +12,7 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"kafka-fwd2/internal/app"
+	"github.com/pagrus7/kaferry/internal/app"
 )
 
 func broker(t *testing.T) string {
@@ -83,7 +83,7 @@ func admin(t *testing.T) *k.AdminClient {
 
 func topic(t *testing.T, a *k.AdminClient, partitions int) string {
 	t.Helper()
-	name := fmt.Sprintf("kfwd2-compat-%d", time.Now().UnixNano())
+	name := fmt.Sprintf("kaferry-compat-%d", time.Now().UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	results, err := a.CreateTopics(ctx, []k.TopicSpecification{{Topic: name, NumPartitions: partitions, ReplicationFactor: 1, Config: map[string]string{"message.timestamp.before.max.ms": "9223372036854775807", "message.timestamp.after.max.ms": "9223372036854775807"}}})
@@ -185,7 +185,7 @@ func producer(t *testing.T, extra k.ConfigMap) *k.Producer {
 
 func consumer(t *testing.T, group string) *k.Consumer {
 	t.Helper()
-	c, err := k.NewConsumer(&k.ConfigMap{"bootstrap.servers": broker(t), "group.id": group, "client.id": "kafka-fwd2-compat", "enable.auto.commit": false, "enable.auto.offset.store": false, "auto.offset.reset": "error", "isolation.level": "read_committed", "enable.partition.eof": true, "partition.assignment.strategy": "cooperative-sticky"})
+	c, err := k.NewConsumer(&k.ConfigMap{"bootstrap.servers": broker(t), "group.id": group, "client.id": "kaferry-compat", "enable.auto.commit": false, "enable.auto.offset.store": false, "auto.offset.reset": "error", "isolation.level": "read_committed", "enable.partition.eof": true, "partition.assignment.strategy": "cooperative-sticky"})
 	if err != nil {
 		t.Fatal(err)
 	}

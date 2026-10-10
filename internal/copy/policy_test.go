@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 func TestRecordPoliciesCommitSkippedInputsOnly(t *testing.T) {

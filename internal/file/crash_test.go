@@ -9,16 +9,16 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kafka-fwd2/internal/config"
-	core "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/config"
+	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 func TestFileCrashAfterFsyncBeforeCheckpoint(t *testing.T) {
 	// Given
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	c := codec(t)
-	if os.Getenv("KFWD_FILE_CRASH_HELPER") == "1" {
+	if os.Getenv("KAFERRY_FILE_CRASH_HELPER") == "1" {
 		args := os.Args[len(os.Args)-3:]
 		cp, err := NewCheckpoints(args[2], "crash", DurableWriter{})
 		if err != nil {
@@ -80,7 +80,7 @@ func TestFileCrashAfterFsyncBeforeCheckpoint(t *testing.T) {
 	out.Close()
 	cp.Close()
 	child := exec.Command(os.Args[0], "-test.run=^TestFileCrashAfterFsyncBeforeCheckpoint$", "--", src, dst, cpdir)
-	child.Env = append(os.Environ(), "KFWD_FILE_CRASH_HELPER=1")
+	child.Env = append(os.Environ(), "KAFERRY_FILE_CRASH_HELPER=1")
 
 	// When
 	data, err := child.CombinedOutput()

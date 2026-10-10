@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	copy "kafka-fwd2/internal/copy"
+	copy "github.com/pagrus7/kaferry/internal/copy"
 )
 
 type Output struct {
@@ -127,7 +127,7 @@ func recoverOutput(f *os.File, start, size, extent, limit int64, logger *slog.Lo
 
 func temporaryPrefix(path string) string {
 	hash := sha256.Sum256([]byte(filepath.Base(path)))
-	return ".kafka-fwd2-" + hex.EncodeToString(hash[:8]) + "-"
+	return ".kaferry-" + hex.EncodeToString(hash[:8]) + "-"
 }
 func cleanupTemporary(path string) error {
 	dir := filepath.Dir(path)
@@ -139,8 +139,11 @@ func cleanupTemporary(path string) error {
 		return err
 	}
 	removed := false
+	prefix := temporaryPrefix(path)
+	// Recover interrupted publications made before the tool was renamed.
+	legacyPrefix := strings.Replace(prefix, ".kaferry-", ".kafka-fwd2-", 1)
 	for _, entry := range entries {
-		if !entry.Type().IsRegular() || !strings.HasPrefix(entry.Name(), temporaryPrefix(path)) {
+		if !entry.Type().IsRegular() || (!strings.HasPrefix(entry.Name(), prefix) && !strings.HasPrefix(entry.Name(), legacyPrefix)) {
 			continue
 		}
 		name := filepath.Join(dir, entry.Name())

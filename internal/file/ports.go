@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	copy "kafka-fwd2/internal/copy"
+	copy "github.com/pagrus7/kaferry/internal/copy"
 )
 
 type ArchiveDecoder interface {

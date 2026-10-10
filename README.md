@@ -1,4 +1,6 @@
-# kafka-fwd2
+# Kaferry
+
+<img src="assets/kaferry-logo.svg" alt="Kaferry — a ferry carrying a SQL asterisk" width="600">
 
 Copy Kafka records between topics and CBOR files with one SQL-like statement.
 
@@ -10,11 +12,13 @@ Implementation is AI-driven, using Codex and Claude Code under human direction.
 
 ## Install
 
-[Download v0.1.0](https://github.com/pagrus7/kafka-fwd2/releases/tag/v0.1.0): Linux AMD64/ARM64 (glibc 2.34+) or macOS ARM64, with `SHA256SUMS`. Source builds need Go 1.26+, a C compiler and CGO; librdkafka is bundled.
+[Download v0.1.0](https://github.com/pagrus7/kaferry/releases/tag/v0.1.0): Linux AMD64/ARM64 (glibc 2.34+) or macOS ARM64, with `SHA256SUMS`. Source builds need Go 1.26+, a C compiler and CGO; librdkafka is bundled.
+
+Previously named `kafka-fwd2`; v0.1.0 downloads retain that binary name, `~/.kafka-fwd2/checkpoints` and generated group/client IDs. Newer builds use `kaferry` names; `ONE_OFF` ACLs need the `kaferry-` prefix. To resume old file jobs with a newer build, set `worker.checkpoint_dir` to the old directory's absolute path. Archives and Kafka commits stay compatible.
 
 ```sh
-git clone https://github.com/pagrus7/kafka-fwd2.git
-cd kafka-fwd2
+git clone https://github.com/pagrus7/kaferry.git
+cd kaferry
 make build
 ```
 
@@ -46,15 +50,15 @@ OPTIONS (GROUP = 'orders-backfill');
 
 `@prod` and `@backup` select connections. `GROUP` names the consumer group, or a local checkpoint for file sources.
 
-Run:
+Run the source build:
 
 ```sh
-bin/kafka-fwd2 run --file copy.sql --config connections.toml
+bin/kaferry run --file copy.sql --config connections.toml
 ```
 
 On completion, the run logs a JSON `copy summary` with counts to stderr and exits `0`. The cutoff rule below can omit records.
 
-Use your downloaded binary's path, or `bin/kafka-fwd2` after building. `-e` takes inline SQL; `-f -` reads stdin.
+Use `bin/kaferry` after building, or the downloaded binary's path (`kafka-fwd2` in v0.1.0). `-e` takes inline SQL; `-f -` reads stdin.
 
 ## More examples
 
@@ -117,7 +121,7 @@ max_frame_bytes = 67108864
 delivery_timeout = '60s'
 idle_exit = '30s'
 tip_wait = '15m'
-# checkpoint_dir = '/var/lib/kafka-fwd2/checkpoints'
+# checkpoint_dir = '/var/lib/kaferry/checkpoints'
 ```
 
 Use an absolute path when overriding `checkpoint_dir`.
@@ -132,7 +136,7 @@ Use an absolute path when overriding `checkpoint_dir`.
 - **Kafka output:** keep original keys; let the destination choose partitions. Default Java-compatible partitioning keeps equal non-null keys together with a fixed partition count. `LogAppendTime` replaces timestamps. [Ordering details](design/decisions.md#kafka-output).
 - **Payloads:** ensure bytes and Schema Registry IDs work at the destination. Old records may expire under destination retention.
 - **Workers:** topic-to-topic processes may share a group; use literal times for one window. All exiting 0 does not prove completion. After they leave, rerun alone with the same query/group and check there is no `local idle exit`.
-- **Files:** one process per query on one machine, using a local filesystem with locks and hard links. File-source progress lives in `~/.kafka-fwd2/checkpoints`. Keep output and progress; losing either prevents resuming file output. Use a new group and output path to start over.
+- **Files:** one process per query on one machine, using a local filesystem with locks and hard links. New builds use `~/.kaferry/checkpoints`; an old checkpoint/lock without new progress fails until you configure the old directory. Keep output and progress; losing either prevents resuming file output. Use a new group and output path to start over.
 - **Errors:** fail by default. Use `ON_ERROR = SKIP` or specific timestamp policies. Broker rejections, authentication errors and corruption still fail. [Skippable errors](design/decisions.md#errors).
 
 Signals stop reading, drain writes for up to ten seconds and save progress; native calls can extend shutdown. Structured logs are JSON on stderr. Exit codes: `0` finished or stopped while following; `1` failed or interrupted before finishing; `2` invalid usage/configuration or a conflict before copying.
@@ -147,4 +151,4 @@ make broker integration
 make broker-down
 ```
 
-Kafka tests need Docker. [CI checks](https://github.com/pagrus7/kafka-fwd2/actions/workflows/ci.yml) run on changes; [qualification](https://github.com/pagrus7/kafka-fwd2/actions/workflows/qualification.yml) retains results for 30 days. More: [test targets](design/components.md#test-targets), [component design](design/components.md).
+Kafka tests need Docker. [CI checks](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) run on changes; [qualification](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) retains results for 30 days. More: [test targets](design/components.md#test-targets), [component design](design/components.md).

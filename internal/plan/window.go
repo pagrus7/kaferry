@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"kafka-fwd2/internal/sql"
+	"github.com/pagrus7/kaferry/internal/sql"
 )
 
 var timestampSyntax = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,3})?(Z|[+-][0-9]{2}:[0-9]{2})$`)

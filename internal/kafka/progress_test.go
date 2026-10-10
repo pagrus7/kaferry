@@ -3,7 +3,7 @@ package kafka
 import (
 	"errors"
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/plan"
 	"math"
 	"reflect"
 	"testing"
@@ -46,6 +46,19 @@ func TestAssignmentReadsCommittedMetadataThroughConsumer(t *testing.T) {
 				t.Fatal("invalid progress accepted or cause lost", err)
 			}
 		})
+	}
+}
+
+func TestReleasedProgressSurvivesRename(t *testing.T) {
+	// Given committed metadata in the released v1 format.
+	metadata := `kfwd2:1;{"fp":"fp","tid":"topic-id"}`
+
+	// When Kaferry reads and writes that progress.
+	progress, err := decodeProgress(&metadata, "fp", "topic-id", false)
+
+	// Then the persisted identity and wire format remain unchanged.
+	if err != nil || progress.Encode() != metadata {
+		t.Fatal("released Kafka progress changed", progress, err)
 	}
 }
 

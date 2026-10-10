@@ -1,7 +1,7 @@
 x-broker: &broker
   image: apache/kafka:3.9.0
   volumes:
-    - ${KFWD_QUAL_CERT_DIR:?generate fixture certificates}:/mnt/certs:ro
+    - ${KAFERRY_QUAL_CERT_DIR:?generate fixture certificates}:/mnt/certs:ro
   healthcheck:
     test: [CMD, /opt/kafka/bin/kafka-topics.sh, --bootstrap-server, "localhost:9092", --list]
     interval: 5s

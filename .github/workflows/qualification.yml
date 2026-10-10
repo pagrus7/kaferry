@@ -21,8 +21,8 @@ jobs:
     env:
       KAFKA_TEST_BROKERS: 127.0.0.1:39092
       KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
-      KFWD_SOAK_DURATION: ${{ inputs.soak_duration || '30m' }}
-      KFWD_SOAK_DEST_STALL_CONTAINER: kafka-fwd2-compat-kafka-dr-1
+      KAFERRY_SOAK_DURATION: ${{ inputs.soak_duration || '30m' }}
+      KAFERRY_SOAK_DEST_STALL_CONTAINER: kaferry-compat-kafka-dr-1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -36,7 +36,7 @@ jobs:
       - if: always()
         run: |
           mkdir -p build-results
-          docker compose -p kafka-fwd2-compat --profile cross-cluster logs --no-color > build-results/brokers.log
+          docker compose -p kaferry-compat --profile cross-cluster logs --no-color > build-results/brokers.log
           make broker-down
       - if: always()
         run: python3 scripts/ci.py summary

@@ -47,7 +47,7 @@ func newLoadReport(t *testing.T, kind string) *loadReport {
 	_, native := k.LibraryVersion()
 	r := &loadReport{Test: t.Name(), Kind: kind, Platform: runtime.GOOS + "/" + runtime.GOARCH,
 		Librdkafka: native, SourcePartitions: 4, DestinationPartitions: 5}
-	if directory := os.Getenv("KFWD_REPORT_DIR"); directory != "" {
+	if directory := os.Getenv("KAFERRY_REPORT_DIR"); directory != "" {
 		t.Cleanup(func() {
 			r.Passed, r.Skipped = !t.Failed() && !t.Skipped(), t.Skipped()
 			prefix := filepath.Join(directory, fmt.Sprintf("%s-%x", kind, sha256.Sum256([]byte(t.Name()))))

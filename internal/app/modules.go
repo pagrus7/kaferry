@@ -5,13 +5,13 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/pagrus7/kaferry/internal/config"
+	copy "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/kafka"
+	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/pagrus7/kaferry/internal/sql"
 	"go.uber.org/fx"
-	"kafka-fwd2/internal/config"
-	copy "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/file"
-	"kafka-fwd2/internal/kafka"
-	"kafka-fwd2/internal/plan"
-	"kafka-fwd2/internal/sql"
 )
 
 type system struct{}

@@ -5,9 +5,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	core "kafka-fwd2/internal/copy"
+	core "github.com/pagrus7/kaferry/internal/copy"
 )
 
 func TestLowerFrameLimitCannotTruncateCompleteUnacknowledgedData(t *testing.T) {
@@ -46,35 +47,40 @@ func TestLowerFrameLimitCannotTruncateCompleteUnacknowledgedData(t *testing.T) {
 	}
 }
 func TestTemporaryCleanupRespectsActiveLocks(t *testing.T) {
-	// Given
-	dir := t.TempDir()
-	path := filepath.Join(dir, "out.cbor")
-	active, err := os.CreateTemp(dir, temporaryPrefix(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer active.Close()
-	if err := lock(active); err != nil {
-		t.Fatal(err)
-	}
-	stale, err := os.CreateTemp(dir, temporaryPrefix(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	stale.Close()
+	for _, brand := range []string{"kaferry", "kafka-fwd2"} {
+		t.Run(brand, func(t *testing.T) {
+			// Given active and abandoned output temporaries from either tool name.
+			dir := t.TempDir()
+			path := filepath.Join(dir, "out.cbor")
+			prefix := strings.Replace(temporaryPrefix(path), "kaferry", brand, 1)
+			active, err := os.CreateTemp(dir, prefix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer active.Close()
+			if err := lock(active); err != nil {
+				t.Fatal(err)
+			}
+			stale, err := os.CreateTemp(dir, prefix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stale.Close()
 
-	// When
-	cleanupTemporaryErr := cleanupTemporary(path)
+			// When startup cleans up abandoned publication files.
+			err = cleanupTemporary(path)
 
-	// Then
-	if cleanupTemporaryErr != nil {
-		t.Fatal(cleanupTemporaryErr)
-	}
-	if _, err := os.Stat(active.Name()); err != nil {
-		t.Fatal("active temporary file was removed")
-	}
-	if _, err := os.Stat(stale.Name()); !os.IsNotExist(err) {
-		t.Fatal("orphan temporary file remained")
+			// Then legacy and current files obey the same lock safety rule.
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(active.Name()); err != nil {
+				t.Fatal("active temporary file was removed")
+			}
+			if _, err := os.Stat(stale.Name()); !os.IsNotExist(err) {
+				t.Fatal("orphan temporary file remained")
+			}
+		})
 	}
 }
 func TestEncoderDoesNotCreateUnreadableHeaderArrays(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"kafka-fwd2/internal/sql"
+	"github.com/pagrus7/kaferry/internal/sql"
 )
 
 type environment map[string]string

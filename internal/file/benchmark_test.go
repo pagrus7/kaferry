@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	core "kafka-fwd2/internal/copy"
+	core "github.com/pagrus7/kaferry/internal/copy"
 )
 
 func BenchmarkRecordFraming(b *testing.B) {

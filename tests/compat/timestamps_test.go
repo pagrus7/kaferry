@@ -13,8 +13,8 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	core "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/file"
+	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/file"
 )
 
 func TestLogAppendTimeDestinationRestampsUnpreservableValues(t *testing.T) {

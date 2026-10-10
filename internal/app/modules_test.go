@@ -1,10 +1,10 @@
 package app
 
 import (
+	"github.com/pagrus7/kaferry/internal/config"
+	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/pagrus7/kaferry/internal/sql"
 	"go.uber.org/fx"
-	"kafka-fwd2/internal/config"
-	"kafka-fwd2/internal/plan"
-	"kafka-fwd2/internal/sql"
 	"testing"
 )
 

@@ -24,7 +24,7 @@ Command parses, loads configuration and builds a plan before calling Engine. Eng
 | Kafka adapters | [kafka](../internal/kafka) | Poll/assign/pause, produce/deliver, commit progress | ConsumerClient, ProducerClient, AssignmentStore |
 | File adapters | [file](../internal/file) | Encode/decode frames, snapshot input, recover output, persist checkpoints | ArchiveDecoder, ArchiveEncoder, CheckpointStore, I/O ports |
 | File publication | [file](../internal/file) | Publish a durable header without replacing another creator | Publisher, private filesystem port |
-| CLI | [cmd](../cmd/kafka-fwd2), [app](../internal/app) | Parse flags, compose components and handle signals | Command/Engine; Fx at composition only |
+| CLI | [cmd](../cmd/kaferry), [app](../internal/app) | Parse flags, compose components and handle signals | Command/Engine; Fx at composition only |
 
 ## Ownership
 
@@ -64,17 +64,17 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 | `make benchmark` | CBOR framing CPU/allocation measurements |
 | `make broker-down` | Stop the disposable source/destination clusters |
 
-Soak defaults to two minutes locally; `KFWD_SOAK_DURATION` overrides it (minimum one minute). The qualification workflow defaults to 30 minutes (overridable on manual dispatch) and also stalls the destination. Fixture coordinator warmup is not a [production remedy](client-compatibility.md#known-defects-in-v010).
+Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The qualification workflow defaults to 30 minutes (overridable on manual dispatch) and also stalls the destination. Fixture coordinator warmup is not a [production remedy](client-compatibility.md#known-defects-in-v010).
 
 ### Test results
 
-[scripts/ci.py](../scripts/ci.py) captures command logs, environment/result JSON and load/soak metrics in ignored `build-results/`. It sets `KFWD_REPORT_DIR`; bare `make load`/`make soak` write no metric files unless that variable is set.
+[scripts/ci.py](../scripts/ci.py) captures command logs, environment/result JSON and load/soak metrics in ignored `build-results/`. It sets `KAFERRY_REPORT_DIR`; bare `make load`/`make soak` write no metric files unless that variable is set.
 
 ```sh
 make broker
 make build
 python3 scripts/ci.py load make load
-KFWD_SOAK_DURATION=30m python3 scripts/ci.py soak make soak
+KAFERRY_SOAK_DURATION=30m python3 scripts/ci.py soak make soak
 python3 scripts/ci.py summary
 make broker-down
 ```
@@ -83,9 +83,9 @@ To include destination stalls, after `make broker`, use its separate destination
 
 ```sh
 KAFKA_TEST_DEST_BROKERS=127.0.0.1:40092 \
-KFWD_SOAK_DEST_STALL_CONTAINER=kafka-fwd2-compat-kafka-dr-1 \
-KFWD_SOAK_DURATION=30m \
+KAFERRY_SOAK_DEST_STALL_CONTAINER=kaferry-compat-kafka-dr-1 \
+KAFERRY_SOAK_DURATION=30m \
 python3 scripts/ci.py soak make soak
 ```
 
-[CI checks](https://github.com/pagrus7/kafka-fwd2/actions/workflows/ci.yml) run on pushes to main, pull requests and manual dispatch. [Qualification](https://github.com/pagrus7/kafka-fwd2/actions/workflows/qualification.yml) runs load, soak, fault, security/failover, fuzz and benchmark suites weekly and on manual dispatch. Both retain build artifacts for 30 days; measurements belong there, not in tracked status documents.
+[CI checks](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) run on pushes to main, pull requests and manual dispatch. [Qualification](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) runs load, soak, fault, security/failover, fuzz and benchmark suites weekly and on manual dispatch. Both retain build artifacts for 30 days; measurements belong there, not in tracked status documents.

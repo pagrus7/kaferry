@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	core "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/file"
+	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/file"
 )
 
 func TestCLIInputsAndExitCodes(t *testing.T) {

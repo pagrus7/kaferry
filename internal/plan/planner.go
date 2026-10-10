@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"kafka-fwd2/internal/sql"
+	"github.com/pagrus7/kaferry/internal/sql"
 )
 
 type Environment interface{ LookupEnv(string) (string, bool) }

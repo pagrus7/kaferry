@@ -11,7 +11,7 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"kafka-fwd2/internal/app"
+	"github.com/pagrus7/kaferry/internal/app"
 )
 
 func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {

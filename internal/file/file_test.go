@@ -11,8 +11,8 @@ import (
 	"reflect"
 	"testing"
 
-	core "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/plan"
+	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 func logger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }

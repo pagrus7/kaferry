@@ -5,7 +5,7 @@ import (
 	"context"
 	"time"
 
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 type Header struct {

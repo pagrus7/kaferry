@@ -18,8 +18,8 @@ def capture(command):
 
 def run(label, command, directory):
     directory.mkdir(parents=True, exist_ok=True)
-    os.environ["KFWD_REPORT_DIR"] = str(directory.resolve())
-    binary = Path("bin/kafka-fwd2")
+    os.environ["KAFERRY_REPORT_DIR"] = str(directory.resolve())
+    binary = Path("bin/kaferry")
     environment = {
         "commit": capture(["git", "rev-parse", "HEAD"]),
         "working_tree_dirty": bool(capture(["git", "status", "--porcelain"])),
@@ -29,8 +29,8 @@ def run(label, command, directory):
         "runner": os.environ.get("RUNNER_NAME"),
         "run_url": f"https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}",
         "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest() if binary.exists() else None,
-        "broker_images": capture(["docker", "compose", "-p", "kafka-fwd2-compat", "--profile", "cross-cluster", "images", "--format", "json"]),
-        "soak_duration": os.environ.get("KFWD_SOAK_DURATION"),
+        "broker_images": capture(["docker", "compose", "-p", "kaferry-compat", "--profile", "cross-cluster", "images", "--format", "json"]),
+        "soak_duration": os.environ.get("KAFERRY_SOAK_DURATION"),
     }
     (directory / f"{label}.environment.json").write_text(json.dumps(environment, indent=2) + "\n")
     start = time.monotonic()
@@ -69,7 +69,7 @@ def summarize(directory):
 
 
 if __name__ == "__main__":
-    output = Path(os.environ.get("KFWD_REPORT_DIR", "build-results"))
+    output = Path(os.environ.get("KAFERRY_REPORT_DIR", "build-results"))
     if sys.argv[1] == "summary":
         summarize(output)
     else:

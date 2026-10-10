@@ -17,12 +17,12 @@ import (
 
 func testBinary(t *testing.T) string {
 	t.Helper()
-	path := os.Getenv("KFWD_TEST_BINARY")
+	path := os.Getenv("KAFERRY_TEST_BINARY")
 	if path != "" {
 		return path
 	}
-	path = filepath.Join(t.TempDir(), "kafka-fwd2")
-	cmd := exec.Command("go", "build", "-trimpath", "-o", path, "../../cmd/kafka-fwd2")
+	path = filepath.Join(t.TempDir(), "kaferry")
+	cmd := exec.Command("go", "build", "-trimpath", "-o", path, "../../cmd/kaferry")
 	if data, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, data)
 	}

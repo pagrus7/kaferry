@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	core "github.com/pagrus7/kaferry/internal/copy"
 	"io"
-	core "kafka-fwd2/internal/copy"
 	"reflect"
 	"testing"
 )

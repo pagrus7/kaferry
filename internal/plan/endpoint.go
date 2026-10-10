@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"kafka-fwd2/internal/sql"
+	"github.com/pagrus7/kaferry/internal/sql"
 )
 
 func endpoint(source sql.Endpoint, profiles Profiles) (Endpoint, error) {

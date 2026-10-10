@@ -2,7 +2,7 @@ package kafka
 
 import (
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/plan"
 	"testing"
 )
 
@@ -65,5 +65,34 @@ func TestInspectorRejectsMissingOffsetResultsAndForeignMembers(t *testing.T) {
 	admin.groups = k.DescribeConsumerGroupsResult{ConsumerGroupDescriptions: []k.ConsumerGroupDescription{{Members: []k.MemberDescription{{ClientID: "another-app"}}}}}
 	if err := inspector.CheckMembers("group"); err == nil {
 		t.Fatal("foreign active member accepted")
+	}
+}
+
+func TestInspectorRecognizesCurrentAndLegacyWorkers(t *testing.T) {
+	for _, tc := range []struct {
+		client, topic string
+		allowed       bool
+	}{
+		{"kaferry-worker", "orders", true},
+		{"kafka-fwd2-worker", "orders", true},
+		{"kaferry-worker", "other", false},
+		{"kafka-fwd2-worker", "other", false},
+		{"another-app", "orders", false},
+		{"kaferryx-worker", "orders", false},
+	} {
+		t.Run(tc.client+"/"+tc.topic, func(t *testing.T) {
+			// Given an active member from before or after the rename.
+			member := k.MemberDescription{ClientID: tc.client, Assignment: k.MemberAssignment{TopicPartitions: []k.TopicPartition{{Topic: &tc.topic, Partition: 0}}}}
+			admin := &adminMock{groups: k.DescribeConsumerGroupsResult{ConsumerGroupDescriptions: []k.ConsumerGroupDescription{{Members: []k.MemberDescription{member}}}}}
+			inspector := &Inspector{admin: admin, topic: "orders", log: quietLogger()}
+
+			// When startup checks the group's members.
+			err := inspector.CheckMembers("group")
+
+			// Then the rename preserves compatible workers without admitting foreign ones.
+			if (err == nil) != tc.allowed {
+				t.Fatal("incorrect member compatibility", err)
+			}
+		})
 	}
 }

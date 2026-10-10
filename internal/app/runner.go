@@ -3,9 +3,9 @@ package app
 import (
 	"log/slog"
 
-	"kafka-fwd2/internal/config"
-	copy "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/config"
+	copy "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 type runnerFactory struct {

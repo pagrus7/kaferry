@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 200" width="850" height="200" role="img" aria-labelledby="title desc">
+  <title id="title">Kaferry</title>
+  <desc id="desc">A blue ferry carrying a SQL asterisk beside the Kaferry wordmark.</desc>
+  <g fill="#1a4eb1">
+    <!-- Cabin with a transparent window. -->
+    <path fill-rule="evenodd" d="M55 118V51Q55 46 60 46H131Q136 46 136 51V60Q136 65 131 65H125V118ZM86 67Q82 67 82 71V88Q82 92 86 92H102Q106 92 106 88V71Q106 67 102 67Z"/>
+    <!-- Straight deck and a rounded lower hull. -->
+    <path d="M26 118H302Q310 118 307 126L294 152Q282 177 257 177H74Q47 177 34 153L20 127Q16 118 26 118Z"/>
+    <!-- Three crossing bars make one six-spoke asterisk. -->
+    <g transform="translate(220 68)">
+      <rect x="-10" y="-50" width="20" height="100" rx="1.5"/>
+      <rect x="-10" y="-50" width="20" height="100" rx="1.5" transform="rotate(60)"/>
+      <rect x="-10" y="-50" width="20" height="100" rx="1.5" transform="rotate(120)"/>
+    </g>
+    <text x="350" y="141" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-weight="800" font-size="110" letter-spacing="-1.5">Kaferry</text>
+  </g>
+</svg>

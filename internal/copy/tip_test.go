@@ -3,7 +3,7 @@ package copy
 import (
 	"bytes"
 	"errors"
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/plan"
 	"log/slog"
 	"strings"
 	"testing"

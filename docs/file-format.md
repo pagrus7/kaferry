@@ -4,7 +4,7 @@ Wire format and durability reference. One binary file, in submission order, with
 
 ## Frames
 
-Magic: eight bytes `4b 46 57 44 32 0d 0a 1a` (`KFWD2\r\n\x1a`). Then one framed header and framed records until EOF.
+Magic: eight bytes `4b 46 57 44 32 0d 0a 1a` (`KFWD2\r\n\x1a`), retained from the original project name for compatibility. Then one framed header and framed records until EOF.
 
 | Field | Encoding |
 | --- | --- |

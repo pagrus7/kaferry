@@ -19,11 +19,11 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/pagrus7/kaferry/internal/app"
+	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/file"
+	adapter "github.com/pagrus7/kaferry/internal/kafka"
 	"go.uber.org/fx"
-	"kafka-fwd2/internal/app"
-	core "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/file"
-	adapter "kafka-fwd2/internal/kafka"
 )
 
 func loggedWorker(ctx context.Context, statement, cfg string) workerResult {
@@ -345,7 +345,7 @@ func (p *crashingProducer) Events() chan k.Event {
 
 func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 	// Given
-	if os.Getenv("KFWD_KAFKA_CRASH_HELPER") == "1" {
+	if os.Getenv("KAFERRY_KAFKA_CRASH_HELPER") == "1" {
 		var command app.Command
 		graph := fx.New(fx.NopLogger, app.RuntimeModules, fx.Decorate(func(clients adapter.Clients) adapter.Clients {
 			return crashingClients{clients}
@@ -381,7 +381,7 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss$", "--", statement, cfg)
-	child.Env = append(os.Environ(), "KFWD_KAFKA_CRASH_HELPER=1")
+	child.Env = append(os.Environ(), "KAFERRY_KAFKA_CRASH_HELPER=1")
 
 	// When
 	data, err := child.CombinedOutput()

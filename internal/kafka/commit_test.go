@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	core "kafka-fwd2/internal/copy"
+	core "github.com/pagrus7/kaferry/internal/copy"
 	"testing"
 )
 

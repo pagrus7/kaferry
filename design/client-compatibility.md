@@ -29,7 +29,7 @@ A destination-leader broker/controller stop passed with replication factor 3 and
 
 Additional broker versions, SCRAM/mTLS/other authentication providers, physical AMD64 production deployments, longer production workloads and realistic latency/retention need deployment-specific qualification. The successful fixtures do not qualify the native defect paths above.
 
-[Hosted checks](https://github.com/pagrus7/kafka-fwd2/actions/workflows/ci.yml) and [qualification](https://github.com/pagrus7/kafka-fwd2/actions/workflows/qualification.yml) retain build artifacts. See [test targets and results](components.md#test-targets) to reproduce load/soak measurements.
+[Hosted checks](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) and [qualification](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) retain build artifacts. See [test targets and results](components.md#test-targets) to reproduce load/soak measurements.
 
 ## Permissions
 
@@ -45,7 +45,7 @@ READ/WRITE imply the associated DESCRIBE operations. Source/destination credenti
 
 CI qualification grants source/destination topic permissions literally and group READ by fixture prefix, then copies with a named group. Cluster-ID discovery, group inspection, offset fetch/commit and copying passed; denied config description warned and disabled dependent checks. A one-off exact-group LITERAL variant passed on 2026-10-04, asserting denied-config fallback and record fidelity, but that variant is not in the repository. Same-cluster/one-version evidence does not qualify other authorizers or split-cluster credentials.
 
-`GROUP = ONE_OFF` needs authorization for generated `kafka-fwd2-<hex>` IDs, usually a `kafka-fwd2-` prefix grant. This follows the naming rule; generated-ID authorization was not tested by those fixtures. Named `GROUP` permits an exact grant. A groupless reader without commits could omit group READ; this tool's grouped/resumable behavior requires it.
+`GROUP = ONE_OFF` needs authorization for generated `kaferry-<hex>` IDs, usually a `kaferry-` prefix grant (v0.1.0: `kafka-fwd2-`). This follows the naming rule; generated-ID authorization was not tested by those fixtures. Named `GROUP` permits an exact grant. A groupless reader without commits could omit group READ; this tool's grouped/resumable behavior requires it.
 
 Nontransactional idempotence needs only topic WRITE on standard Kafka >=2.8; older/custom authorizers may require cluster IDEMPOTENT_WRITE ([KIP-679](https://cwiki.apache.org/confluence/display/KAFKA/KIP-679%3A+Producer+will+enable+the+strongest+delivery+guarantee+by+default)). Older brokers are unqualified here.
 

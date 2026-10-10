@@ -50,7 +50,7 @@ type commandOptions struct {
 func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 	var options commandOptions
 	if len(args) == 0 || args[0] != "run" {
-		err := fmt.Errorf("usage: kafka-fwd2 run (--sql statement | --file path | --file -) [--config path]")
+		err := fmt.Errorf("usage: kaferry run (--sql statement | --file path | --file -) [--config path]")
 		fmt.Fprintln(stderr, err)
 		return options, err
 	}

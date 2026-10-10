@@ -3,9 +3,9 @@ package file
 import (
 	"context"
 	"errors"
-	"kafka-fwd2/internal/config"
-	core "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/config"
+	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/plan"
 	"os"
 	"path/filepath"
 	"reflect"

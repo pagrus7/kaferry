@@ -20,7 +20,7 @@ func ownedContainer(t *testing.T) string {
 		t.Skip("set KAFKA_FAULT_CONTAINER for broker pause tests")
 	}
 	data, err := exec.Command("docker", "inspect", "--format", "{{index .Config.Labels \"com.docker.compose.project\"}}", name).Output()
-	if err != nil || strings.TrimSpace(string(data)) != "kafka-fwd2-compat" {
+	if err != nil || strings.TrimSpace(string(data)) != "kaferry-compat" {
 		t.Fatal("fault tests require the project's disposable compose broker")
 	}
 	return name

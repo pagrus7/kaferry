@@ -9,9 +9,10 @@ import (
 	"io"
 
 	"github.com/fxamacker/cbor/v2"
-	core "kafka-fwd2/internal/copy"
+	core "github.com/pagrus7/kaferry/internal/copy"
 )
 
+// Frozen archive v1 signature; branding changes must not invalidate archives.
 var magic = []byte{'K', 'F', 'W', 'D', '2', '\r', '\n', 0x1a}
 var checksum = crc32.MakeTable(crc32.Castagnoli)
 

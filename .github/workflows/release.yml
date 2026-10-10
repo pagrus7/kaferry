@@ -46,8 +46,8 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: |
           mkdir -p release
-          tar -czf "release/kafka-fwd2-$RELEASE_TAG-$PLATFORM.tar.gz" -C bin kafka-fwd2
-          go version -m bin/kafka-fwd2 > "release/build-$PLATFORM.txt"
+          COPYFILE_DISABLE=1 tar -czf "release/kaferry-$RELEASE_TAG-$PLATFORM.tar.gz" -C bin kaferry
+          go version -m bin/kaferry > "release/build-$PLATFORM.txt"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ matrix.platform }}
@@ -81,4 +81,4 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$RELEASE_TAG" --verify-tag --title "kafka-fwd2 $RELEASE_TAG" --notes-file release-notes.txt release/*.tar.gz release/*.txt release/SHA256SUMS
+        run: gh release create "$RELEASE_TAG" --verify-tag --title "Kaferry $RELEASE_TAG" --notes-file release-notes.txt release/*.tar.gz release/*.txt release/SHA256SUMS

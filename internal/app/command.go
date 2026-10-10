@@ -3,10 +3,10 @@ package app
 import (
 	"context"
 
-	"kafka-fwd2/internal/config"
-	copy "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/plan"
-	"kafka-fwd2/internal/sql"
+	"github.com/pagrus7/kaferry/internal/config"
+	copy "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/pagrus7/kaferry/internal/sql"
 )
 
 // Command plans one statement before starting its execution.

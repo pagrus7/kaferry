@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"os"
 
-	"kafka-fwd2/internal/config"
-	copy "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/config"
+	copy "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 type DestinationProgress struct {
@@ -51,6 +51,9 @@ func (f *Factory) OpenSource(p plan.Plan, fp string, limits config.Worker) (Inpu
 	}
 	codec, err := NewCodec(limits.MaxFrameBytes)
 	if err != nil {
+		return nil, err
+	}
+	if err := rejectLegacyCheckpoint(limits.CheckpointDir, limits.LegacyCheckpointDir(), p.Group); err != nil {
 		return nil, err
 	}
 	checkpoints, err := NewCheckpoints(limits.CheckpointDir, p.Group, f.writer)

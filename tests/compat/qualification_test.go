@@ -19,9 +19,9 @@ import (
 
 func secureProperties(t *testing.T, username, password string) k.ConfigMap {
 	t.Helper()
-	brokers, ca := os.Getenv("KFWD_QUAL_BROKERS"), os.Getenv("KFWD_QUAL_CA")
+	brokers, ca := os.Getenv("KAFERRY_QUAL_BROKERS"), os.Getenv("KAFERRY_QUAL_CA")
 	if brokers == "" || ca == "" {
-		t.Skip("set KFWD_QUAL_BROKERS and KFWD_QUAL_CA for disposable qualification cluster")
+		t.Skip("set KAFERRY_QUAL_BROKERS and KAFERRY_QUAL_CA for disposable qualification cluster")
 	}
 	return k.ConfigMap{"bootstrap.servers": brokers, "security.protocol": "SASL_SSL", "sasl.mechanism": "PLAIN", "sasl.username": username, "sasl.password": password, "ssl.ca.location": ca}
 }
@@ -53,7 +53,7 @@ func secureFixture(t *testing.T) (*k.AdminClient, *k.Producer, string, string, s
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { closeAdmin(t, a) })
-	prefix := fmt.Sprintf("kfwd2-security-%d", time.Now().UnixNano())
+	prefix := fmt.Sprintf("kaferry-security-%d", time.Now().UnixNano())
 	src, dst, group := prefix+"-src", prefix+"-dst", prefix+"-copy"
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -264,7 +264,7 @@ func TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 			case "password":
 				cfg["sasl.password"] = "unique-wrong-secret"
 			case "trust":
-				cfg["ssl.ca.location"] = os.Getenv("KFWD_QUAL_WRONG_CA")
+				cfg["ssl.ca.location"] = os.Getenv("KAFERRY_QUAL_WRONG_CA")
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
@@ -287,9 +287,9 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 		t.Fatal("destination leader discovery", described, err)
 	}
 	leader := described.TopicDescriptions[0].Partitions[0].Leader.ID
-	container := fmt.Sprintf("kafka-fwd2-qualification-kafka-secure-%d-1", leader)
+	container := fmt.Sprintf("kaferry-qualification-kafka-secure-%d-1", leader)
 	label, err := exec.Command("docker", "inspect", "--format", `{{index .Config.Labels "com.docker.compose.project"}}`, container).Output()
-	if err != nil || strings.TrimSpace(string(label)) != "kafka-fwd2-qualification" {
+	if err != nil || strings.TrimSpace(string(label)) != "kaferry-qualification" {
 		t.Fatal("failover target is not the disposable qualification broker", err)
 	}
 	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", dst, src, group)

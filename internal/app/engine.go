@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"log/slog"
 
-	"kafka-fwd2/internal/config"
-	copy "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/file"
-	"kafka-fwd2/internal/kafka"
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/config"
+	copy "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/kafka"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 type Engine interface {
@@ -104,7 +104,7 @@ func oneOffGroup() (string, error) {
 	if _, err := rand.Read(id[:]); err != nil {
 		return "", err
 	}
-	return "kafka-fwd2-" + hex.EncodeToString(id[:]), nil
+	return "kaferry-" + hex.EncodeToString(id[:]), nil
 }
 
 type inspectedEndpoint struct {

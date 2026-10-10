@@ -14,9 +14,9 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"kafka-fwd2/internal/app"
-	core "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/file"
+	"github.com/pagrus7/kaferry/internal/app"
+	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/file"
 )
 
 func execute(t *testing.T, statement, config string) {

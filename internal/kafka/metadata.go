@@ -10,7 +10,7 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 type Conflict struct{ Err error }
@@ -28,6 +28,7 @@ type Progress struct {
 	Extent      int64        `json:"extent,omitempty"`
 }
 
+// The v1 wire prefix stays stable across the Kaferry rename.
 func (p Progress) Encode() string { data, _ := json.Marshal(p); return "kfwd2:1;" + string(data) }
 func decodeProgress(metadata *string, fp, topicID string, relative bool) (Progress, error) {
 	var progress Progress
@@ -209,7 +210,7 @@ func (i *Inspector) CheckMembers(group string) error {
 			return description.Error
 		}
 		for _, member := range description.Members {
-			if !strings.HasPrefix(member.ClientID, "kafka-fwd2-") {
+			if !strings.HasPrefix(member.ClientID, "kaferry-") && !strings.HasPrefix(member.ClientID, "kafka-fwd2-") {
 				return conflict("GROUP has a foreign active member")
 			}
 			for _, part := range member.Assignment.TopicPartitions {

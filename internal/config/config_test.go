@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -18,8 +19,11 @@ func TestConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Connections["prod"]["bootstrap.servers"] != "prod:9092" || c.Worker.PartitionRecordCap != 100 || c.Worker.PartitionByteCap != 16<<20 || c.Worker.IdleExit != "5s" {
+	if c.Connections["prod"]["bootstrap.servers"] != "prod:9092" || c.Worker.PartitionRecordCap != 100 || c.Worker.PartitionByteCap != 16<<20 || c.Worker.IdleExit != "5s" || c.Worker.CheckpointDir != filepath.Join("/home/test", ".kaferry", "checkpoints") {
 		t.Fatalf("incorrect config defaults or overrides: %+v", c.Worker)
+	}
+	if c.Worker.LegacyCheckpointDir() != filepath.Join("/home/test", ".kafka-fwd2", "checkpoints") {
+		t.Fatal("TOML loading disabled the default checkpoint upgrade guard")
 	}
 	for _, input := range []string{"unknown=1", "[worker]\nrecord_cap=0", "[worker]\nidle_exit='0s'", "[worker]\nunknown=3", "[connections.prod]\n'sasl.password'= 'unique-secret' trailing", "[connections.prod]\n'bootstrap.servers'=123"} {
 		_, err := Decode(strings.NewReader(input), "/home/test")

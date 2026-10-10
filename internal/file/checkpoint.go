@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	copy "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/plan"
+	copy "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 type FrameIdentity struct {
@@ -80,6 +80,26 @@ type Checkpoints struct {
 	current Checkpoint
 	frames  map[int64]*FrameIdentity
 	output  copy.OutputProgress
+}
+
+func rejectLegacyCheckpoint(directory, legacyDirectory, group string) error {
+	if legacyDirectory == "" {
+		return nil
+	}
+	if _, err := os.Stat(checkpointPath(directory, group)); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	path := checkpointPath(legacyDirectory, group)
+	for _, candidate := range []string{path, path + ".lock"} {
+		if _, err := os.Lstat(candidate); err == nil {
+			return conflict("legacy file progress for GROUP exists in %s; set worker.checkpoint_dir to that directory before resuming", legacyDirectory)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func NewCheckpoints(directory, group string, writer AtomicWriter) (*Checkpoints, error) {

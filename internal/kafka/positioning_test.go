@@ -2,7 +2,7 @@ package kafka
 
 import (
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/plan"
 	"reflect"
 	"testing"
 	"time"

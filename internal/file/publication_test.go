@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"kafka-fwd2/internal/config"
-	core "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/plan"
+	"github.com/pagrus7/kaferry/internal/config"
+	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 type interruptedPublication struct {
@@ -145,7 +145,7 @@ func (w interruptedCheckpoint) SyncDirectory(path string) error {
 
 func TestCrashAtEveryOutputInitializationBoundary(t *testing.T) {
 	// Given
-	if os.Getenv("KFWD_INITIALIZATION_CRASH") == "1" {
+	if os.Getenv("KAFERRY_INITIALIZATION_CRASH") == "1" {
 		args := os.Args[len(os.Args)-4:]
 		stage, src, dst, directory := args[0], args[1], args[2], args[3]
 		cp, err := NewCheckpoints(directory, "initialization", initializationWriter{stage})
@@ -185,7 +185,7 @@ func TestCrashAtEveryOutputInitializationBoundary(t *testing.T) {
 			}
 			fixture.Close()
 			child := exec.Command(os.Args[0], "-test.run=^TestCrashAtEveryOutputInitializationBoundary$", "--", stage, src, dst, cpdir)
-			child.Env = append(os.Environ(), "KFWD_INITIALIZATION_CRASH=1")
+			child.Env = append(os.Environ(), "KAFERRY_INITIALIZATION_CRASH=1")
 
 			// When
 			data, err := child.CombinedOutput()

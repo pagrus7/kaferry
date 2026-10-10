@@ -1,4 +1,4 @@
-# kafka-fwd2 statement grammar
+# Kaferry statement grammar
 
 Syntax reference; [behavior and design decisions](decisions.md) wins on any conflict. Tests parse and plan all five valid examples.
 

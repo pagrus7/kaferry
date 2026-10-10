@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pagrus7/kaferry/internal/config"
+	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/kafka"
+	"github.com/pagrus7/kaferry/internal/plan"
 	"go.uber.org/fx"
-	"kafka-fwd2/internal/config"
-	core "kafka-fwd2/internal/copy"
-	"kafka-fwd2/internal/file"
-	"kafka-fwd2/internal/kafka"
-	"kafka-fwd2/internal/plan"
 )
 
 type engineFixture struct {
@@ -240,7 +240,7 @@ func TestOneOffUsesOneGroupAndDeletesOnlyOnSuccess(t *testing.T) {
 				t.Fatal("incorrect completion result", err)
 			}
 			for _, group := range f.groups {
-				if group != f.groups[0] || !strings.HasPrefix(group, "kafka-fwd2-") || group == p.Group {
+				if group != f.groups[0] || !strings.HasPrefix(group, "kaferry-") || group == p.Group {
 					t.Fatal("inconsistent generated group", f.groups)
 				}
 			}
