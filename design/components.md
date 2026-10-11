@@ -8,6 +8,8 @@ Constructors receive dependencies through narrow interfaces. [Fx modules](../int
 
 Command parses, configures and plans; Engine acquires adapters; Runner copies through shared source, sink and progress contracts.
 
+Parser and planner errors share `sql.Diagnostic`, which carries a source position and preserves its cause. AST positions stay out of normalized plans, fingerprints and checkpoints. The CLI adds SQL file/stdin names; errors report token categories and fixed syntax hints without echoing input values or SQL excerpts. Caller-created ASTs without positions produce plain messages.
+
 ## Components
 
 | Component | Package | Responsibility | Dependency boundary |

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/pagrus7/kaferry/internal/sql"
 	"go.uber.org/fx"
 )
 
@@ -38,7 +39,7 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		return 2
 	}
 	if err = command.Run(ctx, statement, options.configPath); err != nil {
-		fmt.Fprintln(stderr, err)
+		printCommandError(stderr, options.file, err)
 		var coded interface{ ExitCode() int }
 		if errors.As(err, &coded) {
 			return coded.ExitCode()
@@ -46,6 +47,18 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		return 1
 	}
 	return 0
+}
+
+func printCommandError(output io.Writer, source string, err error) {
+	var diagnostic *sql.Diagnostic
+	if source != "" && errors.As(err, &diagnostic) && diagnostic.Position.Line != 0 {
+		if source == "-" {
+			source = "stdin"
+		}
+		fmt.Fprintf(output, "%q: %v\n", source, err)
+		return
+	}
+	fmt.Fprintln(output, err)
 }
 
 type commandOptions struct {

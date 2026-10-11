@@ -8,11 +8,12 @@ import (
 )
 
 type token struct {
-	kind   string
-	text   string
-	line   int
-	column int
+	kind string
+	text string
+	Position
 }
+
+func (l *lexer) position() Position { return Position{Line: l.line, Column: l.column} }
 
 type lexer struct {
 	input  string
@@ -48,15 +49,15 @@ func (l *lexer) space() error {
 		if !strings.HasPrefix(l.input[l.index:], "/*") {
 			return nil
 		}
-		line, column := l.line, l.column
+		position := l.position()
 		l.advance()
 		l.advance()
 		for !strings.HasPrefix(l.input[l.index:], "*/") {
 			if l.index == len(l.input) {
-				return fmt.Errorf("line %d, column %d: unterminated comment", line, column)
+				return At(position, fmt.Errorf("unterminated comment; close it with */"))
 			}
 			if strings.HasPrefix(l.input[l.index:], "/*") {
-				return fmt.Errorf("line %d, column %d: nested comments are not supported", l.line, l.column)
+				return At(l.position(), fmt.Errorf("nested comments are not supported"))
 			}
 			l.advance()
 		}
@@ -70,7 +71,7 @@ func (l *lexer) next() (token, error) {
 	if err := l.space(); err != nil {
 		return token{}, err
 	}
-	t := token{line: l.line, column: l.column, kind: "end of statement"}
+	t := token{Position: l.position(), kind: "end of statement"}
 	if l.index == len(l.input) {
 		return t, nil
 	}
@@ -92,7 +93,7 @@ func (l *lexer) next() (token, error) {
 			t.text = b.String()
 			return t, nil
 		}
-		return token{}, fmt.Errorf("line %d, column %d: unterminated string", t.line, t.column)
+		return token{}, At(t.Position, fmt.Errorf("unterminated string literal; close it with a single quote"))
 	}
 	if identifierStart(r) {
 		start := l.index - 1
@@ -114,7 +115,18 @@ func (l *lexer) next() (token, error) {
 		}
 		return t, nil
 	}
-	return token{}, fmt.Errorf("line %d, column %d: unexpected character", t.line, t.column)
+	return token{}, At(t.Position, fmt.Errorf("unexpected character; use single quotes for literals and supported SQL operators"))
+}
+
+func (t token) description() string {
+	switch t.kind {
+	case "string":
+		return "string literal"
+	case "symbol":
+		return fmt.Sprintf("%q", t.text)
+	default:
+		return t.kind
+	}
 }
 
 func identifierStart(r rune) bool { return r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' }

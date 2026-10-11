@@ -180,3 +180,58 @@ func TestCLIRejectsUnavailableOrOversizedStatementInputs(t *testing.T) {
 		})
 	}
 }
+
+func TestCLISQLDiagnosticsIdentifyInputWithoutCreatingOutput(t *testing.T) {
+	for _, input := range []string{"inline", "file", "stdin", "file validation"} {
+		t.Run(input, func(t *testing.T) {
+			// Given malformed SQL, explicit configuration and an output that does not exist.
+			t.Setenv("HOME", "")
+			dir := t.TempDir()
+			destination := filepath.Join(dir, "output.cbor")
+			query := "INSERT INTO FILE cbor('" + destination + "')\nSELECT 'sensitive_SENTINEL_5c27' FROM FILE cbor('missing.cbor')\nOPTIONS(GROUP='g')"
+			want := "line 2, column 8: expected *; found string literal"
+			if input == "file validation" {
+				query = strings.Replace(query, "'sensitive_SENTINEL_5c27'", "*", 1)
+				query = strings.Replace(query, "GROUP='g'", "ON_ERROR=SKIP", 1)
+				want = "line 3, column 1: GROUP is required"
+			}
+			config := filepath.Join(dir, "config.toml")
+			if err := os.WriteFile(config, []byte("[worker]\ncheckpoint_dir = '"+dir+"'\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"run", "-c", config}
+			var stdin io.Reader
+			source := ""
+			switch input {
+			case "inline":
+				args = append(args, "-e", query)
+			case "stdin":
+				args = append(args, "-f", "-")
+				stdin, source = strings.NewReader(query), "stdin"
+			default:
+				source = filepath.Join(dir, "copy.sql")
+				if err := os.WriteFile(source, []byte(query), 0600); err != nil {
+					t.Fatal(err)
+				}
+				args = append(args, "-f", source)
+			}
+			var stdout, stderr bytes.Buffer
+			// When running the public command.
+			code := Execute(t.Context(), args, stdin, &stdout, &stderr)
+			// Then exit 2 with source/location and no credentials, copies or checkpoints.
+			if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), want) || strings.Contains(stderr.String(), "sensitive_SENTINEL_5c27") {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if source != "" && !strings.HasPrefix(stderr.String(), "\""+source+"\": ") {
+				t.Fatal("SQL input source missing", stderr.String())
+			}
+			if _, err := os.Stat(destination); !os.IsNotExist(err) {
+				t.Fatal("invalid SQL created output", err)
+			}
+			checkpoints, err := filepath.Glob(filepath.Join(dir, "*.json"))
+			if err != nil || len(checkpoints) != 0 {
+				t.Fatal("invalid SQL created progress", err)
+			}
+		})
+	}
+}

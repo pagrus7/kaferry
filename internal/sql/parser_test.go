@@ -1,9 +1,11 @@
 package sql
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestDocumentedExamples(t *testing.T) {
@@ -86,5 +88,19 @@ func FuzzParse(f *testing.F) {
 	for _, seed := range []string{"", "INSERT INTO FILE cbor('b') SELECT * FROM FILE cbor('a') OPTIONS(GROUP=ONE_OFF)", "/*", "'", "NOW()"} {
 		f.Add(seed)
 	}
-	f.Fuzz(func(t *testing.T, input string) { _, _ = NewParser().Parse(input) })
+	f.Fuzz(func(t *testing.T, input string) {
+		_, err := NewParser().Parse(input)
+		if err == nil {
+			return
+		}
+		var diagnostic *Diagnostic
+		if !errors.As(err, &diagnostic) {
+			t.Fatalf("unstructured parser error: %v", err)
+		}
+		lines := strings.Split(input, "\n")
+		position := diagnostic.Position
+		if position.Line < 1 || position.Line > len(lines) || position.Column < 1 || position.Column > utf8.RuneCountInString(lines[position.Line-1])+1 {
+			t.Fatalf("diagnostic outside input: %v", err)
+		}
+	})
 }

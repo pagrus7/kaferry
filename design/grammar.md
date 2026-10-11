@@ -114,6 +114,12 @@ OPTIONS (GROUP = 'clicks-backfill-1', CUTOFF = INTERVAL '5' MINUTE, ON_ERROR = S
 
 ## Invalid examples
 
+SQL errors identify the first failure by one-based line and rune column; tabs count as one column. File and stdin input include their source name. Input values and SQL excerpts are omitted. Fix the reported error, then rerun.
+
+```text
+"copy.sql": line 3, column 29: ON_ERROR must be FAIL or SKIP
+```
+
 | Statement or fragment | Rejected because |
 | --- | --- |
 | `... WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` cannot be combined with a time filter |

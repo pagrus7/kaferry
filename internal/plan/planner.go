@@ -69,30 +69,33 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 	var plan Plan
 	plan.Source, err = endpoint(statement.Source, connections)
 	if err != nil {
-		return Plan{}, err
+		return Plan{}, sql.At(statement.Source.Position, fmt.Errorf("FROM endpoint: %w", err))
 	}
 	plan.Destination, err = endpoint(statement.Destination, connections)
 	if err != nil {
-		return Plan{}, err
+		return Plan{}, sql.At(statement.Destination.Position, fmt.Errorf("INTO endpoint: %w", err))
 	}
 	plan.Window, err = normalize(statement.Bounds)
 	if err != nil {
-		return Plan{}, err
+		return Plan{}, sql.At(statement.WherePosition, err)
 	}
-	if err = plan.options(statement.Options); err != nil {
+	if err = plan.options(statement.Options, statement.OptionsPosition); err != nil {
 		return Plan{}, err
 	}
 	if hi := plan.Window.Upper; hi != nil && !hi.Now {
 		if _, err := checkedAdd(hi.LiteralMS, plan.CutoffMS); err != nil {
-			return Plan{}, err
+			return Plan{}, sql.At(optionPosition(statement.Options, "CUTOFF", statement.WherePosition), fmt.Errorf("upper bound plus CUTOFF: %w", err))
 		}
 	}
 	if plan.Source.Kind == "TOPIC" {
-		if (len(statement.Bounds) > 0) == (plan.Start != "") {
-			return Plan{}, fmt.Errorf("topic sources require exactly one of WHERE and START")
+		if len(statement.Bounds) == 0 && plan.Start == "" {
+			return Plan{}, sql.At(statement.OptionsPosition, fmt.Errorf("topic sources require WHERE or START; add START = EARLIEST or START = LATEST to OPTIONS"))
+		}
+		if len(statement.Bounds) > 0 && plan.Start != "" {
+			return Plan{}, sql.At(optionPosition(statement.Options, "START", statement.OptionsPosition), fmt.Errorf("START cannot be combined with WHERE; remove START"))
 		}
 	} else if plan.Start != "" {
-		return Plan{}, fmt.Errorf("START requires a topic source")
+		return Plan{}, sql.At(optionPosition(statement.Options, "START", statement.OptionsPosition), fmt.Errorf("START requires a topic source; remove START for FILE sources"))
 	}
 	return plan, nil
 }
@@ -111,8 +114,11 @@ func (p *Planner) connections(inline []sql.Connection, profiles Profiles) (Profi
 	}
 	seen := make(map[string]bool)
 	for _, connection := range inline {
-		if !validAlias(connection.Alias) || seen[connection.Alias] {
-			return nil, fmt.Errorf("invalid or repeated connection alias")
+		if !validAlias(connection.Alias) {
+			return nil, sql.At(connection.Position, fmt.Errorf("invalid connection alias; use ASCII letters, digits and underscores, starting with a letter or underscore"))
+		}
+		if seen[connection.Alias] {
+			return nil, sql.At(connection.Position, fmt.Errorf("connection alias repeats; declare each alias once"))
 		}
 		seen[connection.Alias] = true
 		values := connections[connection.Alias]
@@ -122,19 +128,22 @@ func (p *Planner) connections(inline []sql.Connection, profiles Profiles) (Profi
 		}
 		keys := make(map[string]bool)
 		for _, property := range connection.Properties {
-			if property.Name == "" || keys[property.Name] {
-				return nil, fmt.Errorf("empty or repeated inline connection property")
+			if property.Name == "" {
+				return nil, sql.At(property.Position, fmt.Errorf("inline connection property name must not be empty"))
+			}
+			if keys[property.Name] {
+				return nil, sql.At(property.Position, fmt.Errorf("inline connection property repeats; specify it once per CONNECTION"))
 			}
 			keys[property.Name] = true
 			value := property.Value
 			if property.Environment {
 				if p.environment == nil {
-					return nil, fmt.Errorf("environment lookup is unavailable")
+					return nil, sql.At(property.ValuePosition, fmt.Errorf("ENV(...) cannot be resolved: environment lookup is unavailable"))
 				}
 				var ok bool
 				value, ok = p.environment.LookupEnv(property.Value)
 				if !ok {
-					return nil, fmt.Errorf("required environment variable is unset")
+					return nil, sql.At(property.ValuePosition, fmt.Errorf("ENV(...) variable is unset; set it before running"))
 				}
 			}
 			values[property.Name] = value

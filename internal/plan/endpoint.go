@@ -28,8 +28,14 @@ func endpoint(source sql.Endpoint, profiles Profiles) (Endpoint, error) {
 		return Endpoint{}, fmt.Errorf("unsupported endpoint kind")
 	}
 	values, exists := profiles[e.Alias]
-	if !exists || values["bootstrap.servers"] == "" {
-		return Endpoint{}, fmt.Errorf("connection %q requires bootstrap.servers", e.Alias)
+	if !exists {
+		if e.Alias == "default" {
+			return Endpoint{}, fmt.Errorf("default connection is not defined; add [connections.default] or specify topic@alias")
+		}
+		return Endpoint{}, fmt.Errorf("connection alias is not defined; add it with WITH CONNECTION or TOML [connections.alias]")
+	}
+	if values["bootstrap.servers"] == "" {
+		return Endpoint{}, fmt.Errorf("connection requires bootstrap.servers; set it in WITH CONNECTION or TOML")
 	}
 	e.Properties = Properties{values: values}
 	return e, nil
@@ -44,10 +50,10 @@ func topicEndpoint(input string) (string, string, error) {
 		name, alias, _ = strings.Cut(input, "@")
 	}
 	if name == "" || !validAlias(alias) {
-		return "", "", fmt.Errorf("invalid topic endpoint")
+		return "", "", fmt.Errorf("invalid topic endpoint; use a nonempty topic and an alias starting with a letter or underscore")
 	}
 	if !validTopicName(name) {
-		return "", "", fmt.Errorf("invalid Kafka topic name")
+		return "", "", fmt.Errorf("invalid Kafka topic name; use 1–249 ASCII letters, digits, dots, underscores or hyphens, excluding . and ..")
 	}
 	return name, alias, nil
 }
