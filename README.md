@@ -15,8 +15,6 @@ Preserves raw keys, values, nulls, ordered headers and timestamps where possible
 
 Implementation is AI-driven, using Codex and Claude Code under human direction.
 
-**Known issue:** A [librdkafka bug](https://github.com/confluentinc/librdkafka/pull/5397) can crash Kafka-source startup during coordinator failures, before copying or saving progress. Rerun after recovery. Current source mitigates tested timeouts; releases through v0.2.0 lack this workaround. Production frequency is unknown. [Details](design/client-compatibility.md#known-issues).
-
 ## Install
 
 [Download Kaferry](https://github.com/pagrus7/kaferry/releases/latest): Linux AMD64/ARM64 (glibc 2.34+) or macOS 14+ ARM64, with `SHA256SUMS`. Source builds need Go 1.26+, a C compiler and CGO; librdkafka is bundled.
@@ -30,6 +28,10 @@ make build
 ```
 
 Tested with Apache Kafka 3.9.0.
+
+## Known issues
+
+Since v0.2.1, a workaround turns tested coordinator timeouts at Kafka-source startup into a normal error (exit `1`) instead of a [librdkafka crash](https://github.com/confluentinc/librdkafka/pull/5397); other cases can still crash. Either way, the worker copies nothing and leaves saved progress unchanged; rerun after coordinator recovery. Production frequency is unknown. [Details](design/client-compatibility.md#known-issues).
 
 ## Quick start
 
@@ -65,7 +67,7 @@ bin/kaferry run --file copy.sql --config connections.toml
 
 Completion logs a JSON `copy summary` to stderr and exits `0`. The cutoff rule below can omit records.
 
-Downloaded binaries run as `kaferry`. `-e` takes inline SQL; `-f -` reads stdin.
+`-e` takes inline SQL; `-f -` reads stdin.
 
 ## More examples
 

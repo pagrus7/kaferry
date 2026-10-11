@@ -4,11 +4,13 @@ Deployment limits and Kafka access requirements. See [copy behavior](decisions.m
 
 ## Known issues
 
-A [librdkafka use-after-free bug](https://github.com/confluentinc/librdkafka/pull/5397) can crash the process during group-coordinator failures. Kaferry sends the affected admin requests only at Kafka-source startup, before writing records or saving progress. File sources and runs already copying do not send these requests.
+Since v0.2.1, a workaround turns tested group-coordinator timeouts at Kafka-source startup into a normal error (exit `1`) instead of a [librdkafka crash](https://github.com/confluentinc/librdkafka/pull/5397); other cases can still crash.
 
-**Impact:** the affected worker exits with a signal status before copying. Rerun after coordinator recovery. Production frequency is unknown.
+**Scope and impact:** the affected [coordinator requests](#production-admin-inventory) run before Kaferry creates the consumer or opens output. File sources and runs already copying do not send them. Whether startup fails normally or crashes, this worker copies nothing and leaves saved progress unchanged. Rerun after coordinator recovery.
 
-**Mitigation:** current source uses a 10 s Go deadline and a 20 s native timeout, then closes the failed source handle immediately: roughly a 10 s cleanup window. Five [mock-cluster regression cases](../internal/kafka/native_test.go) pass with shorter 2 s/4 s timeouts. A separate manual probe reproduced the crash with cleanup delayed past native expiry. Broker tests warm the coordinator and do not cover this path. The workaround mitigates tested timeouts; the upstream fix is not in bundled librdkafka 2.16.0. Releases through v0.2.0 use 2.15.0 and lack the workaround.
+**Workaround:** coordinator requests have a 10 s Go deadline and a 20 s librdkafka timeout. At the Go deadline, startup fails with `context deadline exceeded` and closes the source admin client immediately, leaving about 10 s for cleanup before the native timeout. Five [mock-cluster cases](../internal/kafka/native_test.go) pass with shortened timeouts, including brokers that remain unavailable or recover. Broker tests warm the coordinator and do not exercise this path.
+
+**Remaining risk:** the underlying use-after-free bug remains. Cleanup delayed past the native timeout can still crash; the workaround is not verified for every upstream error path, including dropped connections. A crash uses a signal exit status. Production frequency is unknown. Bundled librdkafka 2.16.0 lacks the upstream fix; releases through v0.2.0 use 2.15.0 and lack the workaround.
 
 ## Tested configurations
 
