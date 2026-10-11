@@ -34,7 +34,7 @@ jobs:
           curl --fail --location --retry 3 https://github.com/kucherenko/jscpd/releases/download/v5.4.1/jscpd-linux-x64-gnu.tar.gz -o .cache/quality-tools/jscpd.tar.gz
           echo 'f2017a17de2a8d5708f8354c6e7223f82da3dc6489675bce543ba00d9d529468  .cache/quality-tools/jscpd.tar.gz' | sha256sum --check
           tar -xzf .cache/quality-tools/jscpd.tar.gz -C .cache/quality-tools
-      - name: Report integrity tests
+      - name: Script tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Staticcheck
         run: python3 scripts/ci.py staticcheck staticcheck ./...

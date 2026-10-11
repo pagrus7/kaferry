@@ -64,7 +64,7 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 
 Time-window arithmetic, boundaries and overflow use deterministic unit tests in `make check`. Set `FUZZ_ITERATIONS` to change the per-target fuzz budget; failures remain fatal.
 
-Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The qualification workflow defaults to 30 minutes, configurable on manual dispatch, and stalls the destination. Plaintext fixtures warm the group coordinator with the Java CLI; TLS fixtures check readiness with consumer `Committed`. Broker integration therefore does not cover cold coordinator startup; isolated mock-cluster subprocesses test coordinator outages. [Native limits](client-compatibility.md#known-native-defects).
+Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The extended-test workflow defaults to 30 minutes, configurable on manual dispatch, and stalls the destination. Plaintext fixtures warm the group coordinator with the Java CLI; TLS fixtures check readiness with consumer `Committed`. Broker integration therefore does not cover cold coordinator startup; isolated mock-cluster subprocesses test coordinator outages. [Native limits](client-compatibility.md#known-issues).
 
 ### Test results
 
@@ -88,7 +88,7 @@ KAFERRY_SOAK_DURATION=30m \
 python3 scripts/ci.py soak make soak
 ```
 
-[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. [Qualification](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) runs load, soak, fault, security/failover, fuzz and benchmarks weekly and on manual dispatch. Artifacts retain logs and measurements for 30 days.
+[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. [Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) run load, soak, fault, security/failover, fuzz and benchmarks weekly and on manual dispatch. Artifacts retain logs and measurements for 30 days.
 
 ### Quality indicators
 
@@ -102,12 +102,12 @@ python3 scripts/ci.py soak make soak
 | Extended tests | README badge; weekly default 30-minute soak plus load, fault, ACL/failover, fuzz and CBOR benchmarks |
 | Performance | Dated SHA/environment JSON and summaries: throughput, sampled RSS/growth, lag, caps, shutdown, ns/op and allocations. Prior successful measurements compare only matching settings; shared runners provide no regression gate |
 
-Missing measurements are unavailable. Coverage and Go vulnerability scans exclude native C/C++; badges report the listed checks, not production readiness.
+Missing measurements are unavailable. Coverage and Go vulnerability scans exclude native C/C++; badges report only the listed checks.
 
 ### Release evidence
 
 The release workflow produces per-platform SPDX SBOMs, native inventory/license text, archive provenance and binary SBOM attestations. Syft inventories the binary; the native supplement identifies the selected librdkafka archive and observed version strings. Bundled licenses do not prove every component was linked; native vulnerability coverage is incomplete.
 
-For releases built by the current workflow, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document`. Attestations establish build origin. Published v0.2.0 has checksums/build information but lacks these SBOMs and attestations.
+For releases built by the current workflow, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document`. Attestations establish build origin. Releases through v0.2.0 have checksums/build information but lack these SBOMs and attestations.
 
-Pushing a `v*` tag publishes after successful builds. Manual dispatch defaults to validation only; publishing requires selecting the version tag as the workflow ref. Checkout must match the attested workflow SHA.
+Pushing a `v*` tag publishes after successful builds. Manual dispatch defaults to validation only; publishing requires selecting the version tag as the workflow ref. Checkout must match the attested workflow SHA. [Release procedure and note format](../releases/README.md).
