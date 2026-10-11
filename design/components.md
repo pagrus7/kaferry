@@ -66,7 +66,7 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 
 Time-window arithmetic, boundaries and overflow use deterministic unit tests in `make check`. Set `FUZZ_ITERATIONS` to change the per-target fuzz budget; failures remain fatal.
 
-Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The qualification workflow defaults to 30 minutes (overridable on manual dispatch) and also stalls the destination. Fixture coordinator warmup is not a [production remedy](client-compatibility.md#known-defects-in-v010).
+Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The qualification workflow defaults to 30 minutes (overridable on manual dispatch) and also stalls the destination. Fixture coordinator warmup is not a [production remedy](client-compatibility.md#known-native-defects).
 
 ### Test results
 

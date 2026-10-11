@@ -23,7 +23,6 @@ type Worker struct {
 	IdleExit           string `toml:"idle_exit"`
 	TipWait            string `toml:"tip_wait"`
 	CheckpointDir      string `toml:"checkpoint_dir"`
-	checkpointHome     string
 }
 
 type Config struct {
@@ -41,15 +40,7 @@ type Loader struct {
 func NewLoader(files FileReader, home string) *Loader { return &Loader{files: files, home: home} }
 
 func Defaults(home string) Config {
-	return Config{Connections: make(plan.Profiles), Worker: Worker{MaxFrameBytes: 64 << 20, PartitionRecordCap: 5000, PartitionByteCap: 16 << 20, RecordCap: 20000, ByteCap: 128 << 20, DeliveryTimeout: "60s", IdleExit: "30s", TipWait: "15m", CheckpointDir: filepath.Join(home, ".kaferry", "checkpoints"), checkpointHome: home}}
-}
-
-// LegacyCheckpointDir enables the upgrade guard only at the default location.
-func (w Worker) LegacyCheckpointDir() string {
-	if w.checkpointHome == "" || filepath.Clean(w.CheckpointDir) != filepath.Join(w.checkpointHome, ".kaferry", "checkpoints") {
-		return ""
-	}
-	return filepath.Join(w.checkpointHome, ".kafka-fwd2", "checkpoints")
+	return Config{Connections: make(plan.Profiles), Worker: Worker{MaxFrameBytes: 64 << 20, PartitionRecordCap: 5000, PartitionByteCap: 16 << 20, RecordCap: 20000, ByteCap: 128 << 20, DeliveryTimeout: "60s", IdleExit: "30s", TipWait: "15m", CheckpointDir: filepath.Join(home, ".kaferry", "checkpoints")}}
 }
 
 func (l *Loader) Load(path string) (Config, error) {

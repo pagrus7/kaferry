@@ -1,7 +1,6 @@
 package file
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +15,7 @@ func TestSourceFactoryReleasesCheckpointLockOnOpenFailure(t *testing.T) {
 	// Given
 	dir := t.TempDir()
 	limits := config.Defaults(dir).Worker
-	limits.CheckpointDir = filepath.Join(dir, "checkpoints")
+	limits.CheckpointDir = t.TempDir()
 	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Name: filepath.Join(dir, "missing.cbor")}, Destination: plan.Endpoint{Kind: "TOPIC"}, Group: "group"}
 	factory := NewFactory(core.RealClock{}, logger(), DurableWriter{}, NewPublisher())
 
@@ -79,86 +78,8 @@ func TestOutputFactoryRejectsMissingIdentityBeforeCreatingFile(t *testing.T) {
 	}
 }
 
-func TestFileUpgradeGuard(t *testing.T) {
-	for _, tc := range []struct {
-		name, oldSuffix, oldGroup, destination string
-		custom, existing, trailingSlash        bool
-		blocked                                bool
-	}{
-		{name: "saved checkpoint", oldSuffix: ".json", blocked: true},
-		{name: "stable lock", oldSuffix: ".json.lock", blocked: true},
-		{name: "normalized default", oldSuffix: ".json", trailingSlash: true, blocked: true},
-		{name: "file output", oldSuffix: ".json", destination: "FILE", blocked: true},
-		{name: "different group", oldSuffix: ".json", oldGroup: "other"},
-		{name: "custom directory", oldSuffix: ".json", custom: true},
-		{name: "existing new progress", oldSuffix: ".json", existing: true},
-		{name: "fresh group"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			// Given a temporary home and optional state from before the rename.
-			homeDir := t.TempDir()
-			limits := config.Defaults(homeDir).Worker
-			legacyDir := filepath.Join(homeDir, ".kafka-fwd2", "checkpoints")
-			group := "restore"
-			if tc.oldSuffix != "" {
-				if err := os.MkdirAll(legacyDir, 0700); err != nil {
-					t.Fatal(err)
-				}
-				oldGroup := group
-				if tc.oldGroup != "" {
-					oldGroup = tc.oldGroup
-				}
-				name := strings.TrimSuffix(checkpointPath(legacyDir, oldGroup), ".json") + tc.oldSuffix
-				if err := os.WriteFile(name, []byte("old state"), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if tc.custom {
-				limits.CheckpointDir = filepath.Join(homeDir, "custom")
-			}
-			if tc.trailingSlash {
-				limits.CheckpointDir += string(filepath.Separator)
-			}
-			if tc.existing {
-				if err := os.MkdirAll(limits.CheckpointDir, 0700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(checkpointPath(limits.CheckpointDir, group), []byte("new state"), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-
-			// When checking the default location before creating new progress.
-			err := rejectLegacyCheckpoint(limits.CheckpointDir, limits.LegacyCheckpointDir(), group)
-
-			// Then only an unmatched legacy checkpoint or lock requires operator action.
-			var stateConflict *Conflict
-			if errors.As(err, &stateConflict) != tc.blocked || (!tc.blocked && err != nil) {
-				t.Fatal("incorrect upgrade decision", err)
-			}
-			if !tc.blocked {
-				return
-			}
-			p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Name: filepath.Join(homeDir, "missing.cbor")}, Destination: plan.Endpoint{Kind: "TOPIC"}, Group: group}
-			if tc.destination != "" {
-				p.Destination.Kind = tc.destination
-			}
-			factory := NewFactory(core.RealClock{}, logger(), DurableWriter{}, NewPublisher())
-			// When opening the source through its component boundary.
-			_, err = factory.OpenSource(p, "fp", limits)
-			// Then the guard fails before opening the archive or creating checkpoint state.
-			if !errors.As(err, &stateConflict) || !strings.Contains(err.Error(), legacyDir) || !strings.Contains(err.Error(), "worker.checkpoint_dir") {
-				t.Fatal("missing actionable upgrade conflict", err)
-			}
-			if _, err := os.Stat(limits.CheckpointDir); !os.IsNotExist(err) {
-				t.Fatal("upgrade failure created new checkpoint state", err)
-			}
-		})
-	}
-}
-
-func TestExplicitLegacyDirectoryResumesProgressAndKeepsItsLock(t *testing.T) {
-	// Given an archive and checkpoint retained in the old directory.
+func TestConfiguredDirectoryResumesProgressAndKeepsItsLock(t *testing.T) {
+	// Given an archive and checkpoint retained in a configured directory.
 	homeDir := t.TempDir()
 	archive := filepath.Join(homeDir, "input.cbor")
 	output, err := NewOutput(NewPublisher(), archive, "archive", "archive-fp", "", 0, codec(t), 10, logger())
@@ -174,8 +95,8 @@ func TestExplicitLegacyDirectoryResumesProgressAndKeepsItsLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	output.Close()
-	legacyDir := filepath.Join(homeDir, ".kafka-fwd2", "checkpoints")
-	checkpoints, err := NewCheckpoints(legacyDir, "restore", DurableWriter{})
+	checkpointDir := t.TempDir()
+	checkpoints, err := NewCheckpoints(checkpointDir, "restore", DurableWriter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +113,7 @@ func TestExplicitLegacyDirectoryResumesProgressAndKeepsItsLock(t *testing.T) {
 	}
 	oldSource.Close()
 	checkpoints.Close()
-	cfg, err := config.Decode(strings.NewReader("[worker]\ncheckpoint_dir='"+legacyDir+"'\n"), homeDir)
+	cfg, err := config.Decode(strings.NewReader("[worker]\ncheckpoint_dir='"+checkpointDir+"'\n"), homeDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +121,7 @@ func TestExplicitLegacyDirectoryResumesProgressAndKeepsItsLock(t *testing.T) {
 	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Name: archive}, Destination: plan.Endpoint{Kind: "TOPIC"}, Group: "restore"}
 	factory := NewFactory(core.RealClock{}, logger(), DurableWriter{}, NewPublisher())
 
-	// When the newer build uses the explicitly configured legacy directory.
+	// When a worker uses the explicitly configured checkpoint directory.
 	source, err := factory.OpenSource(p, "fp", limits)
 
 	// Then it retains saved ownership and excludes a second reader of that group.
@@ -209,14 +130,14 @@ func TestExplicitLegacyDirectoryResumesProgressAndKeepsItsLock(t *testing.T) {
 	}
 	defer source.Close()
 	if !source.Progress().Exists {
-		t.Fatal("legacy checkpoint was not resumed")
+		t.Fatal("configured checkpoint was not resumed")
 	}
 	secondRecord, err := source.Poll(0)
 	if err != nil || secondRecord.Input == nil || string(secondRecord.Input.Record.Value) != "second" {
-		t.Fatal("legacy resume replayed or lost records", secondRecord, err)
+		t.Fatal("configured resume replayed or lost records", secondRecord, err)
 	}
 	if second, err := factory.OpenSource(p, "fp", limits); err == nil {
 		second.Close()
-		t.Fatal("legacy checkpoint lock was bypassed")
+		t.Fatal("configured checkpoint lock was bypassed")
 	}
 }

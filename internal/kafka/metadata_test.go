@@ -68,20 +68,18 @@ func TestInspectorRejectsMissingOffsetResultsAndForeignMembers(t *testing.T) {
 	}
 }
 
-func TestInspectorRecognizesCurrentAndLegacyWorkers(t *testing.T) {
+func TestInspectorRecognizesKaferryWorkers(t *testing.T) {
 	for _, tc := range []struct {
 		client, topic string
 		allowed       bool
 	}{
 		{"kaferry-worker", "orders", true},
-		{"kafka-fwd2-worker", "orders", true},
 		{"kaferry-worker", "other", false},
-		{"kafka-fwd2-worker", "other", false},
 		{"another-app", "orders", false},
 		{"kaferryx-worker", "orders", false},
 	} {
 		t.Run(tc.client+"/"+tc.topic, func(t *testing.T) {
-			// Given an active member from before or after the rename.
+			// Given an active member with a protected or foreign client ID.
 			member := k.MemberDescription{ClientID: tc.client, Assignment: k.MemberAssignment{TopicPartitions: []k.TopicPartition{{Topic: &tc.topic, Partition: 0}}}}
 			admin := &adminMock{groups: k.DescribeConsumerGroupsResult{ConsumerGroupDescriptions: []k.ConsumerGroupDescription{{Members: []k.MemberDescription{member}}}}}
 			inspector := &Inspector{admin: admin, topic: "orders", log: quietLogger()}
@@ -89,7 +87,7 @@ func TestInspectorRecognizesCurrentAndLegacyWorkers(t *testing.T) {
 			// When startup checks the group's members.
 			err := inspector.CheckMembers("group")
 
-			// Then the rename preserves compatible workers without admitting foreign ones.
+			// Then only Kaferry workers consuming this topic are accepted.
 			if (err == nil) != tc.allowed {
 				t.Fatal("incorrect member compatibility", err)
 			}

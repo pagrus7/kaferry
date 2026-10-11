@@ -82,29 +82,16 @@ type Checkpoints struct {
 	output  copy.OutputProgress
 }
 
-func rejectLegacyCheckpoint(directory, legacyDirectory, group string) error {
-	if legacyDirectory == "" {
-		return nil
-	}
-	if _, err := os.Stat(checkpointPath(directory, group)); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	path := checkpointPath(legacyDirectory, group)
-	for _, candidate := range []string{path, path + ".lock"} {
-		if _, err := os.Lstat(candidate); err == nil {
-			return conflict("legacy file progress for GROUP exists in %s; set worker.checkpoint_dir to that directory before resuming", legacyDirectory)
-		} else if !os.IsNotExist(err) {
-			return err
-		}
-	}
-	return nil
-}
-
 func NewCheckpoints(directory, group string, writer AtomicWriter) (*Checkpoints, error) {
-	if err := createDirectory(directory); err != nil {
+	info, err := os.Stat(directory)
+	if os.IsNotExist(err) {
+		return nil, conflict("worker.checkpoint_dir %q does not exist; to resume, configure the existing checkpoint directory; for a new job, create it first", directory)
+	}
+	if err != nil {
 		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, conflict("worker.checkpoint_dir %q is not a directory", directory)
 	}
 	path := checkpointPath(directory, group)
 	f, err := openCheckpointLock(path)

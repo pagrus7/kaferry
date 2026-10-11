@@ -210,7 +210,7 @@ func (i *Inspector) CheckMembers(group string) error {
 			return description.Error
 		}
 		for _, member := range description.Members {
-			if !strings.HasPrefix(member.ClientID, "kaferry-") && !strings.HasPrefix(member.ClientID, "kafka-fwd2-") {
+			if !strings.HasPrefix(member.ClientID, "kaferry-") {
 				return conflict("GROUP has a foreign active member")
 			}
 			for _, part := range member.Assignment.TopicPartitions {

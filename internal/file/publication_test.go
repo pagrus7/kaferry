@@ -170,7 +170,7 @@ func TestCrashAtEveryOutputInitializationBoundary(t *testing.T) {
 	for _, stage := range []string{"temporary", "header-write", "header-sync", "publish", "temporary-unlink", "directory-sync", "before-checkpoint", "checkpoint-temporary", "checkpoint-write", "checkpoint-sync", "checkpoint-rename", "checkpoint-directory-sync", "after-checkpoint"} {
 		t.Run(stage, func(t *testing.T) {
 			dir := t.TempDir()
-			src, dst, cpdir := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "out.cbor"), filepath.Join(dir, "checkpoints")
+			src, dst, cpdir := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "out.cbor"), t.TempDir()
 			fixture, err := NewOutput(NewPublisher(), src, "fixture", "fixture", "", 0, codec(t), 10, logger())
 			if err != nil {
 				t.Fatal(err)

@@ -51,7 +51,7 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	o.Close()
-	cpdir := filepath.Join(dir, "checkpoints")
+	cpdir := t.TempDir()
 	cfg := filepath.Join(dir, "config.toml")
 	if err := os.WriteFile(cfg, []byte("[worker]\ncheckpoint_dir = '"+cpdir+"'\n"), 0600); err != nil {
 		t.Fatal(err)

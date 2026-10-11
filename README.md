@@ -8,13 +8,13 @@ Preserves raw keys, values, nulls, ordered headers and timestamps where possible
 
 Implementation is AI-driven, using Codex and Claude Code under human direction.
 
-**Status:** v0.1.0 is not production-qualified: it can crash during startup when the Kafka group coordinator is slow or recovering, and shutdown can hang indefinitely. See [client limitations and permissions](design/client-compatibility.md).
+**Status:** Kaferry is not production-qualified: it can crash during startup when the Kafka group coordinator is slow or recovering, and shutdown can hang indefinitely. See [client limitations and permissions](design/client-compatibility.md).
 
 ## Install
 
-[Download v0.1.0](https://github.com/pagrus7/kaferry/releases/tag/v0.1.0): Linux AMD64/ARM64 (glibc 2.34+) or macOS ARM64, with `SHA256SUMS`. Source builds need Go 1.26+, a C compiler and CGO; librdkafka is bundled.
+[Download Kaferry](https://github.com/pagrus7/kaferry/releases/latest): Linux AMD64/ARM64 (glibc 2.34+) or macOS ARM64, with `SHA256SUMS`. Source builds need Go 1.26+, a C compiler and CGO; librdkafka is bundled.
 
-Previously named `kafka-fwd2`; v0.1.0 downloads retain that binary name, `~/.kafka-fwd2/checkpoints` and generated group/client IDs. Newer builds use `kaferry` names; `ONE_OFF` ACLs need the `kaferry-` prefix. To resume old file jobs with a newer build, set `worker.checkpoint_dir` to the old directory's absolute path. Archives and Kafka commits stay compatible.
+Extract the archive and run `kaferry`. `GROUP = ONE_OFF` generates IDs with the `kaferry-` prefix; authorize that prefix when using Kafka groups.
 
 ```sh
 git clone https://github.com/pagrus7/kaferry.git
@@ -58,7 +58,7 @@ bin/kaferry run --file copy.sql --config connections.toml
 
 On completion, the run logs a JSON `copy summary` with counts to stderr and exits `0`. The cutoff rule below can omit records.
 
-Use `bin/kaferry` after building, or the downloaded binary's path (`kafka-fwd2` in v0.1.0). `-e` takes inline SQL; `-f -` reads stdin.
+Use `bin/kaferry` after building, or the extracted `kaferry` binary. `-e` takes inline SQL; `-f -` reads stdin.
 
 ## More examples
 
@@ -124,19 +124,19 @@ tip_wait = '15m'
 # checkpoint_dir = '/var/lib/kaferry/checkpoints'
 ```
 
-Use an absolute path when overriding `checkpoint_dir`.
+For file sources, create the checkpoint directory before a new job: `mkdir -p ~/.kaferry/checkpoints`. To resume, configure the existing directory's absolute path; do not create a fresh directory.
 
 </details>
 
 ## Before you run
 
-- **Resume:** rerun the same query and `GROUP` to continue from saved progress. New windows or `CUTOFF` need a new group. `NOW()` is saved per partition or file. Expired offsets or deleted checkpoints can cause a fresh copy.
+- **Resume:** rerun the same query and `GROUP` to continue from saved progress. New windows or `CUTOFF` need a new group. `NOW()` is saved per partition or file. Expired offsets, deleted checkpoints or a different checkpoint directory can cause a fresh copy.
 - **Window end:** Kafka follows without an upper bound. Otherwise each partition stops at its first timestamp after `end + CUTOFF` (default one minute), or after catching up once that time passes. Records past the stop point can still be within the window and be missed, even if already present before the run. [Details](design/decisions.md#completion).
 - **Delivery:** at least once. Crashing after writing but before saving progress, or rebalancing, can duplicate writes. Kafka sources read committed records.
 - **Kafka output:** keep original keys; let the destination choose partitions. Default Java-compatible partitioning keeps equal non-null keys together with a fixed partition count. `LogAppendTime` replaces timestamps. [Ordering details](design/decisions.md#kafka-output).
 - **Payloads:** ensure bytes and Schema Registry IDs work at the destination. Old records may expire under destination retention.
 - **Workers:** topic-to-topic processes may share a group; use literal times for one window. All exiting 0 does not prove completion. After they leave, rerun alone with the same query/group and check there is no `local idle exit`.
-- **Files:** one process per query on one machine, using a local filesystem with locks and hard links. New builds use `~/.kaferry/checkpoints`; an old checkpoint/lock without new progress fails until you configure the old directory. Keep output and progress; losing either prevents resuming file output. Use a new group and output path to start over.
+- **Files:** one process per query on one machine, using a local filesystem with locks and hard links. Checkpoints default to `~/.kaferry/checkpoints` (must exist); explicitly configure the existing directory to resume jobs stored elsewhere. Keep output and progress; losing either prevents resuming file output. Use a new group and output path to start over.
 - **Errors:** fail by default. Use `ON_ERROR = SKIP` or specific timestamp policies. Broker rejections, authentication errors and corruption still fail. [Skippable errors](design/decisions.md#errors).
 
 Signals stop reading, drain writes for up to ten seconds and save progress; native calls can extend shutdown. Structured logs are JSON on stderr. Exit codes: `0` finished or stopped while following; `1` failed or interrupted before finishing; `2` invalid usage/configuration or a conflict before copying.

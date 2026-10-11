@@ -1,0 +1,77 @@
+package file
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/pagrus7/kaferry/internal/config"
+	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/plan"
+)
+
+func TestCheckpointDirectoryMustAlreadyExist(t *testing.T) {
+	for _, scenario := range []string{"missing", "not a directory", "existing"} {
+		t.Run(scenario, func(t *testing.T) {
+			// Given an existing directory, a missing path, or a regular file.
+			directory := t.TempDir()
+			if scenario != "existing" {
+				directory = filepath.Join(directory, "checkpoints")
+			}
+			if scenario == "not a directory" {
+				if err := os.WriteFile(directory, []byte("keep"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			// When a file-source group opens its checkpoint store.
+			store, err := NewCheckpoints(directory, "restore", DurableWriter{})
+
+			// Then only an existing directory permits ownership; other paths stay untouched.
+			if scenario == "existing" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer store.Close()
+				if second, err := NewCheckpoints(directory, "restore", DurableWriter{}); err == nil {
+					second.Close()
+					t.Fatal("second owner accepted")
+				}
+				return
+			}
+			var stateConflict *Conflict
+			if store != nil || !errors.As(err, &stateConflict) || !strings.Contains(err.Error(), "worker.checkpoint_dir") {
+				t.Fatal("missing actionable conflict", err)
+			}
+			if scenario == "missing" {
+				if _, err := os.Stat(directory); !os.IsNotExist(err) {
+					t.Fatal("missing checkpoint directory was created", err)
+				}
+			} else if data, err := os.ReadFile(directory); err != nil || string(data) != "keep" {
+				t.Fatal("non-directory path changed", err)
+			}
+		})
+	}
+}
+
+func TestSourceFactoryRequiresCheckpointDirectoryBeforeOpeningArchive(t *testing.T) {
+	// Given a fresh default directory and a missing archive.
+	home := t.TempDir()
+	limits := config.Defaults(home).Worker
+	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Name: filepath.Join(home, "missing.cbor")}, Destination: plan.Endpoint{Kind: "TOPIC"}, Group: "restore"}
+	factory := NewFactory(core.RealClock{}, logger(), DurableWriter{}, NewPublisher())
+
+	// When a file-source job starts without provisioning its checkpoint directory.
+	source, err := factory.OpenSource(p, "fp", limits)
+
+	// Then startup requests an existing progress directory before reading or creating state.
+	var stateConflict *Conflict
+	if source != nil || !errors.As(err, &stateConflict) || !strings.Contains(err.Error(), "to resume") {
+		t.Fatal("directory gate did not fail first", err)
+	}
+	if _, err := os.Stat(limits.CheckpointDir); !os.IsNotExist(err) {
+		t.Fatal("startup created a fresh checkpoint directory", err)
+	}
+}

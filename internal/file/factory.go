@@ -53,9 +53,6 @@ func (f *Factory) OpenSource(p plan.Plan, fp string, limits config.Worker) (Inpu
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectLegacyCheckpoint(limits.CheckpointDir, limits.LegacyCheckpointDir(), p.Group); err != nil {
-		return nil, err
-	}
 	checkpoints, err := NewCheckpoints(limits.CheckpointDir, p.Group, f.writer)
 	if err != nil {
 		return nil, err

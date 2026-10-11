@@ -86,7 +86,7 @@ func outputIdentity(header Header, start, size int64, created bool, group, fp, e
 	}
 	if expectedID == "" {
 		if size != start || !created {
-			return 0, conflict("output has no stored destination identity; delete the unowned output")
+			return 0, conflict("output has no stored destination identity; restore source progress (for file sources, check worker.checkpoint_dir), or use a new GROUP and output")
 		}
 		expectedID, extent = header.ID, start
 	}
@@ -140,10 +140,8 @@ func cleanupTemporary(path string) error {
 	}
 	removed := false
 	prefix := temporaryPrefix(path)
-	// Recover interrupted publications made before the tool was renamed.
-	legacyPrefix := strings.Replace(prefix, ".kaferry-", ".kafka-fwd2-", 1)
 	for _, entry := range entries {
-		if !entry.Type().IsRegular() || (!strings.HasPrefix(entry.Name(), prefix) && !strings.HasPrefix(entry.Name(), legacyPrefix)) {
+		if !entry.Type().IsRegular() || !strings.HasPrefix(entry.Name(), prefix) {
 			continue
 		}
 		name := filepath.Join(dir, entry.Name())

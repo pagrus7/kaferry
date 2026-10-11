@@ -188,11 +188,12 @@ func TestCheckpointAndSourceSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Close()
-	checkpoints, err := NewCheckpoints(filepath.Join(dir, "checkpoints"), "../g", DurableWriter{})
+	checkpointDir := t.TempDir()
+	checkpoints, err := NewCheckpoints(checkpointDir, "../g", DurableWriter{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = NewCheckpoints(filepath.Join(dir, "checkpoints"), "../g", DurableWriter{}); err == nil {
+	if _, err = NewCheckpoints(checkpointDir, "../g", DurableWriter{}); err == nil {
 		t.Fatal("exclusive checkpoint lock not enforced")
 	}
 	source, err := NewSource(path, "copy-query", plan.WindowSpec{}, c, checkpoints, core.RealClock{})
@@ -233,7 +234,7 @@ func TestCheckpointAndSourceSnapshot(t *testing.T) {
 	}
 	source.Close()
 	checkpoints.Close()
-	checkpoints, err = NewCheckpoints(filepath.Join(dir, "checkpoints"), "../g", DurableWriter{})
+	checkpoints, err = NewCheckpoints(checkpointDir, "../g", DurableWriter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +268,8 @@ func TestSourceReplacementFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Close()
-	cp, err := NewCheckpoints(filepath.Join(dir, "cp"), "group", DurableWriter{})
+	checkpointDir := t.TempDir()
+	cp, err := NewCheckpoints(checkpointDir, "group", DurableWriter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +295,7 @@ func TestSourceReplacementFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Close()
-	cp, err = NewCheckpoints(filepath.Join(dir, "cp"), "group", DurableWriter{})
+	cp, err = NewCheckpoints(checkpointDir, "group", DurableWriter{})
 	if err != nil {
 		t.Fatal(err)
 	}

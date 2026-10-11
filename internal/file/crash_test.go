@@ -46,7 +46,7 @@ func TestFileCrashAfterFsyncBeforeCheckpoint(t *testing.T) {
 		os.Exit(99) // Durable data, deliberately no source checkpoint or deferred closes.
 	}
 	dir := t.TempDir()
-	src, dst, cpdir := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "output.cbor"), filepath.Join(dir, "checkpoints")
+	src, dst, cpdir := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "output.cbor"), t.TempDir()
 	o, err := NewOutput(NewPublisher(), src, "fixture", "fixture", "", 0, c, 10, logger)
 	if err != nil {
 		t.Fatal(err)

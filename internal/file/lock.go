@@ -22,30 +22,6 @@ func syncDirectory(path string) error {
 	return directory.Sync()
 }
 
-func createDirectory(path string) error {
-	path = filepath.Clean(path)
-	info, err := os.Stat(path)
-	if err == nil {
-		if !info.IsDir() {
-			return fmt.Errorf("checkpoint directory is not a directory")
-		}
-		return nil
-	}
-	if !os.IsNotExist(err) {
-		return err
-	}
-	parent := filepath.Dir(path)
-	if parent != path {
-		if err := createDirectory(parent); err != nil {
-			return err
-		}
-	}
-	if err := os.Mkdir(path, 0700); err != nil && !os.IsExist(err) {
-		return err
-	}
-	return syncDirectory(path)
-}
-
 type Conflict struct{ Err error }
 
 func (e *Conflict) Error() string               { return e.Err.Error() }

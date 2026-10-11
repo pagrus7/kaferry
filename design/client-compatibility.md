@@ -2,9 +2,9 @@
 
 Deployment limits, minimum permissions and verified client behavior. Last reviewed: 2026-10-10.
 
-## Known defects in v0.1.0
+## Known native defects
 
-v0.1.0 ships with unfixed native startup crashes and possible indefinite close hangs. It does not establish reliable recovery from coordinator errors or bounded shutdown.
+Kaferry ships with unfixed native startup crashes and possible indefinite close hangs. It does not establish reliable recovery from coordinator errors or bounded shutdown.
 
 Symptoms were first observed on 2026-10-04 during fresh security qualification: `AdminClient.Close` hung after repeatedly cancelled coordinator requests, then a native assertion aborted (`rd_kafka_enq_once_del_source_return`) with four-second admin deadlines. The abort fixture's intermediate source was not archived; logs and recorded timeout changes are the available evidence.
 
@@ -45,7 +45,7 @@ READ/WRITE imply the associated DESCRIBE operations. Source/destination credenti
 
 CI qualification grants source/destination topic permissions literally and group READ by fixture prefix, then copies with a named group. Cluster-ID discovery, group inspection, offset fetch/commit and copying passed; denied config description warned and disabled dependent checks. A one-off exact-group LITERAL variant passed on 2026-10-04, asserting denied-config fallback and record fidelity, but that variant is not in the repository. Same-cluster/one-version evidence does not qualify other authorizers or split-cluster credentials.
 
-`GROUP = ONE_OFF` needs authorization for generated `kaferry-<hex>` IDs, usually a `kaferry-` prefix grant (v0.1.0: `kafka-fwd2-`). This follows the naming rule; generated-ID authorization was not tested by those fixtures. Named `GROUP` permits an exact grant. A groupless reader without commits could omit group READ; this tool's grouped/resumable behavior requires it.
+`GROUP = ONE_OFF` needs authorization for generated `kaferry-<hex>` IDs, usually a `kaferry-` prefix grant. This follows the naming rule; generated-ID authorization was not tested by those fixtures. Named `GROUP` permits an exact grant. A groupless reader without commits could omit group READ; this tool's grouped/resumable behavior requires it.
 
 Nontransactional idempotence needs only topic WRITE on standard Kafka >=2.8; older/custom authorizers may require cluster IDEMPOTENT_WRITE ([KIP-679](https://cwiki.apache.org/confluence/display/KAFKA/KIP-679%3A+Producer+will+enable+the+strongest+delivery+guarantee+by+default)). Older brokers are unqualified here.
 

@@ -32,7 +32,7 @@ func configuration(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	text := fmt.Sprintf("[connections.default]\n'bootstrap.servers' = %q\n[worker]\ncheckpoint_dir = %q\n", broker(t), filepath.Join(dir, "checkpoints"))
+	text := fmt.Sprintf("[connections.default]\n'bootstrap.servers' = %q\n[worker]\ncheckpoint_dir = %q\n", broker(t), t.TempDir())
 	if err := os.WriteFile(path, []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -37,7 +37,7 @@ func TestFailedSyncIsNeverAcknowledged(t *testing.T) {
 	fixture.Close()
 
 	limits := config.Defaults(dir).Worker
-	cp, err := NewCheckpoints(filepath.Join(dir, "checkpoints"), "durable", DurableWriter{})
+	cp, err := NewCheckpoints(t.TempDir(), "durable", DurableWriter{})
 	if err != nil {
 		t.Fatal(err)
 	}
