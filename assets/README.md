@@ -1,6 +1,6 @@
 # Kaferry visuals
 
-Adapted from Claude-generated designs. Navy `#0E2A47`, orange `#E8662E`, teal `#1B8A8F`; reversed artwork uses light `#F2F5F7` and cyan `#4FC1C6`.
+Palette: navy `#0E2A47`, orange `#E8662E`, teal `#1B8A8F`; reversed artwork uses light `#F2F5F7` and cyan `#4FC1C6`.
 
 | Asset | Use |
 | --- | --- |

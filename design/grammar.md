@@ -1,6 +1,6 @@
 # Kaferry statement grammar
 
-Syntax reference; [behavior and design decisions](decisions.md) wins on any conflict. Tests parse and plan all five valid examples.
+Syntax reference. See [copy behavior](decisions.md) for completion and restart rules.
 
 ## Lexical rules
 
@@ -46,7 +46,7 @@ option      = "GROUP" "=" ( string | "ONE_OFF" )
 
 Planning or startup enforces:
 
-- `GROUP` is required; no option repeats.
+- `GROUP` is required; no option repeats. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name; unquoted `ONE_OFF` generates one.
 - A topic source needs exactly one of `WHERE` and `START`; a file source takes no `START`.
 - `ON_ERROR` cannot be combined with any specific error policy.
 - `CUTOFF` requires a topic source with an upper bound. `ON_REJECTED_TIMESTAMP` requires a topic destination; `ON_MISSING_TIMESTAMP` a `WHERE` clause.

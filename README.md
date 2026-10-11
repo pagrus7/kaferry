@@ -15,13 +15,13 @@ Preserves raw keys, values, nulls, ordered headers and timestamps where possible
 
 Implementation is AI-driven, using Codex and Claude Code under human direction.
 
-**Status:** Kaferry is not production-qualified: it can crash during startup when the Kafka group coordinator is slow or recovering, and shutdown can hang indefinitely. See [client limitations and permissions](design/client-compatibility.md).
+**Status:** Kaferry is not production-qualified. Kafka-source startup coordinator failures can abort the process or hang cleanup. [Client limits and permissions](design/client-compatibility.md).
 
 ## Install
 
 [Download Kaferry](https://github.com/pagrus7/kaferry/releases/latest): Linux AMD64/ARM64 (glibc 2.34+) or macOS 14+ ARM64, with `SHA256SUMS`. Source builds need Go 1.26+, a C compiler and CGO; librdkafka is bundled.
 
-Extract and run `kaferry`. Authorize the `kaferry-` group prefix for `GROUP = ONE_OFF`.
+Extract and run `kaferry`.
 
 ```sh
 git clone https://github.com/pagrus7/kaferry.git
@@ -29,7 +29,7 @@ cd kaferry
 make build
 ```
 
-Broker baseline: Apache Kafka 3.9.0. [Deployment limits](design/client-compatibility.md).
+Broker baseline: Apache Kafka 3.9.0.
 
 ## Quick start
 
@@ -65,7 +65,7 @@ bin/kaferry run --file copy.sql --config connections.toml
 
 Completion logs a JSON `copy summary` to stderr and exits `0`. The cutoff rule below can omit records.
 
-Use `kaferry` for downloads. `-e` takes inline SQL; `-f -` reads stdin.
+Downloaded binaries run as `kaferry`. `-e` takes inline SQL; `-f -` reads stdin.
 
 ## More examples
 
@@ -131,8 +131,6 @@ tip_wait = '15m'
 # checkpoint_dir = '/var/lib/kaferry/checkpoints'
 ```
 
-For file sources, create the checkpoint directory before a new job: `mkdir -p ~/.kaferry/checkpoints`. To resume, configure the existing directory's absolute path; do not create a fresh directory.
-
 </details>
 
 ## Before you run
@@ -140,13 +138,14 @@ For file sources, create the checkpoint directory before a new job: `mkdir -p ~/
 - **Resume:** rerun the same query and `GROUP` to continue from saved progress. New windows or `CUTOFF` need a new group. `NOW()` is saved per partition or file. Expired offsets, deleted checkpoints or a different checkpoint directory can cause a fresh copy.
 - **Window end:** Kafka follows without an upper bound. Otherwise each partition stops at its first timestamp after `end + CUTOFF` (default one minute), or after catching up once that time passes. Records past the stop point can still be within the window and be missed, even if already present before the run. [Details](design/decisions.md#completion).
 - **Delivery:** at least once. Crashing after writing but before saving progress, or rebalancing, can duplicate writes. Kafka sources read committed records.
-- **Kafka output:** keep original keys; let the destination choose partitions. Default Java-compatible partitioning keeps equal non-null keys together with a fixed partition count. `LogAppendTime` replaces timestamps. [Ordering details](design/decisions.md#kafka-output).
+- **Kafka output:** keep original keys; let the destination choose partitions. Default Java-compatible partitioning keeps equal non-null keys together with a fixed partition count. The destination controls timestamp type; `LogAppendTime` replaces timestamps. [Ordering details](design/decisions.md#kafka-output).
 - **Payloads:** ensure bytes and Schema Registry IDs work at the destination. Old records may expire under destination retention.
 - **Workers:** topic-to-topic processes may share a group; use literal times for one window. All exiting 0 does not prove completion. After they leave, rerun alone with the same query/group and check there is no `local idle exit`.
-- **Files:** one process per query on one machine, using a local filesystem with locks and hard links. Checkpoints default to `~/.kaferry/checkpoints` (must exist); explicitly configure the existing directory to resume jobs stored elsewhere. Keep output and progress; losing either prevents resuming file output. Use a new group and output path to start over.
+- **Files:** one process per query on one machine, using a local filesystem with locks and hard links. For a new file-source job, run `mkdir -p ~/.kaferry/checkpoints`. To resume, use the existing checkpoint directory. Keep output and progress; losing either prevents resuming file output. Use a new group and output path to start over.
+- **Permissions:** source topic READ and group READ for Kafka sources; destination WRITE for Kafka output. Kafka-source `ONE_OFF` needs the `kaferry-` group prefix authorized. [Details](design/client-compatibility.md#permissions).
 - **Errors:** fail by default. Use `ON_ERROR = SKIP` or specific timestamp policies. Broker rejections, authentication errors and corruption still fail. [Skippable errors](design/decisions.md#errors).
 
-Signals stop reading, drain writes for up to ten seconds and save progress; native calls can extend shutdown. Structured logs are JSON on stderr. Exit codes: `0` finished or stopped while following; `1` failed or interrupted before finishing; `2` invalid usage/configuration or a conflict before copying.
+Signals stop reading, drain writes for up to ten seconds and save progress; native calls can extend shutdown. Logs go to stderr: JSON events and a plain-text final error. Normal exit codes: `0` finished or stopped while following; `1` failed or interrupted before finishing; `2` invalid usage/configuration or a conflict before copying. Native aborts use signal exit status.
 
 [Detailed behavior](design/decisions.md) · [File format and recovery](docs/file-format.md) · [Client limits and permissions](design/client-compatibility.md)
 
@@ -158,4 +157,4 @@ make broker integration
 make broker-down
 ```
 
-Kafka tests need Docker. CI results and measurements are retained for 30 days. Go coverage excludes native code; passing tests do not establish production readiness. [Checks and reports](design/components.md#quality-indicators) · [Test targets](design/components.md#test-targets).
+Kafka tests need Docker. [Checks and reports](design/components.md#quality-indicators) · [Test targets](design/components.md#test-targets).

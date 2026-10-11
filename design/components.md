@@ -1,12 +1,12 @@
 # Component design
 
-Contributor guide to responsibilities, interfaces, resource ownership and testing. Query behavior is specified in [decisions](decisions.md); command syntax in [grammar](grammar.md).
+Contributor reference for boundaries, ownership and checks. See [copy behavior](decisions.md) and [syntax](grammar.md).
 
 ## Composition
 
 Constructors receive dependencies through narrow interfaces. [Fx modules](../internal/app/modules.go) compose the application; domain packages do not depend on Fx. Passive records, cursors and pure helpers stay concrete.
 
-Command parses, loads configuration and builds a plan before calling Engine. Engine obtains per-query adapters from factories and supplies them to Runner. Kafka and file adapters implement the same source, sink and progress contracts.
+Command parses, configures and plans; Engine acquires adapters; Runner copies through shared source, sink and progress contracts.
 
 ## Components
 
@@ -39,13 +39,11 @@ Command parses, loads configuration and builds a plan before calling Engine. Eng
 
 - Priorities: correctness, simplicity, throughput, CI duration, binary size.
 - Single-purpose structs behind narrow interfaces; keep core logic Fx-free. Lines of code and cyclomatic complexity are signals, not targets.
-- Keep user documentation example-based. CI enforces fewer than 10,000 characters across [README](../README.md) and [file format](../docs/file-format.md).
+- Keep user documentation example-based. CI enforces fewer than 10,000 characters across [README](../README.md) and [file format](../docs/file-format.md). Grammar tests parse and plan exactly five fenced SQL examples; invalid examples use inline code.
 
 ## Tests
 
-- Most tests exercise pure functions or one component with handwritten dependency mocks; native clients and filesystem failures are injected through their ports.
-- Component tests use real files and replace Fx factories to verify composition, ownership and cleanup.
-- Fewer [broker/CLI tests](../tests/compat) verify complete copy paths, rebalances and restart. Functional tests use Given/When/Then phases; load and targeted edge cases run at the cheapest useful layer.
+Most tests exercise pure functions or individual components with handwritten mocks. Native-client and filesystem failures use injected ports; file-component tests use real files, and app tests replace Fx factories. Fewer [broker/CLI tests](../tests/compat) cover complete copy paths, rebalances and restart. Functional tests use Given/When/Then phases.
 
 ### Test targets
 
@@ -66,11 +64,11 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 
 Time-window arithmetic, boundaries and overflow use deterministic unit tests in `make check`. Set `FUZZ_ITERATIONS` to change the per-target fuzz budget; failures remain fatal.
 
-Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The qualification workflow defaults to 30 minutes (overridable on manual dispatch) and also stalls the destination. Fixture coordinator warmup is not a [production remedy](client-compatibility.md#known-native-defects).
+Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The qualification workflow defaults to 30 minutes, configurable on manual dispatch, and stalls the destination. Fixtures warm the coordinator; passing them does not cover the [startup failure path](client-compatibility.md#known-native-defects).
 
 ### Test results
 
-[scripts/ci.py](../scripts/ci.py) captures command logs, environment/result JSON and load/soak metrics in ignored `build-results/`. It sets `KAFERRY_REPORT_DIR`; bare `make load`/`make soak` write no metric files unless that variable is set.
+[scripts/ci.py](../scripts/ci.py) writes logs, environment/result JSON and measurements to ignored `build-results/`, setting `KAFERRY_REPORT_DIR`. Direct load/soak commands need that variable to save metrics.
 
 ```sh
 make broker
@@ -90,7 +88,7 @@ KAFERRY_SOAK_DURATION=30m \
 python3 scripts/ci.py soak make soak
 ```
 
-[CI checks](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) run on pushes to main, pull requests and manual dispatch. [Qualification](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) runs load, soak, fault, security/failover, fuzz and benchmark suites weekly and on manual dispatch. Both retain build artifacts for 30 days; measurements belong there, not in tracked status documents.
+[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. [Qualification](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) runs load, soak, fault, security/failover, fuzz and benchmarks weekly and on manual dispatch. Artifacts retain logs and measurements for 30 days.
 
 ### Quality indicators
 
@@ -104,12 +102,12 @@ python3 scripts/ci.py soak make soak
 | Extended tests | README badge; weekly default 30-minute soak plus load, fault, ACL/failover, fuzz and CBOR benchmarks |
 | Performance | Dated SHA/environment JSON and summaries: throughput, sampled RSS/growth, lag, caps, shutdown, ns/op and allocations. Prior successful measurements compare only matching settings; shared runners provide no regression gate |
 
-Missing measurements are unavailable, not zero. Badge success describes its workflow's scope; it does not override the [native defects](client-compatibility.md#known-native-defects). Go security scans do not cover all native dependencies.
+Missing measurements are unavailable. Coverage and Go vulnerability scans exclude native C/C++; badges report the listed checks, not production readiness.
 
 ### Release evidence
 
-Future release builds produce per-platform SPDX SBOMs, native inventory/license text, archive provenance and binary SBOM attestations. Syft inventories the built binary; the native supplement identifies the selected static librdkafka archive and observed version strings. Bundle licenses alone do not prove that every component was linked; this is not a complete native vulnerability scan.
+The release workflow produces per-platform SPDX SBOMs, native inventory/license text, archive provenance and binary SBOM attestations. Syft inventories the binary; the native supplement identifies the selected librdkafka archive and observed version strings. Bundled licenses do not prove every component was linked; native vulnerability coverage is incomplete.
 
-Verify an archive with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`; verify the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document`. Attestations establish build origin, not correctness or safety. Historical releases are unchanged.
+For releases built by the current workflow, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document`. Attestations establish build origin. Published v0.2.0 has checksums/build information but lacks these SBOMs and attestations.
 
-Manual release dispatch defaults to building validation artifacts without publishing. Publishing requires selecting the actual version tag as the workflow ref; attested checkout must match the workflow SHA.
+Pushing a `v*` tag publishes after successful builds. Manual dispatch defaults to validation only; publishing requires selecting the version tag as the workflow ref. Checkout must match the attested workflow SHA.
