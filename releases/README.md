@@ -35,7 +35,7 @@ Supported platforms, prerequisites and available verification files.
 1. Inspect the intended tag's source, dependency versions and upgrade changes. Write its notes and validate with `python3 scripts/release_notes.py vX.Y.Z`. Update living known-issue docs with current behavior, without release chronology; do not copy the release's change narrative into them.
 2. Reread changed docs, comments and diagnostics as a user of the current version. Check behavior, scope, impact, action and limits against the tagged implementation. Include the `Docs review` required by [AGENTS.md](../AGENTS.md) in the PR body. Run the checks appropriate to the changed behavior. See [test targets](../design/components.md#test-targets) and [release evidence](../design/components.md#release-evidence).
 3. Commit the notes with the release changes. Push an annotated `vX.Y.Z` tag on the reviewed commit; the release workflow builds and publishes. Manual dispatch without publishing validates builds. Manual publishing must select that version tag.
-4. Check the GitHub release body, assets and checksums after publishing. Keep notes aligned with that tag. If a tagged build fails, fix the problem and use a new version tag.
+4. Check the GitHub release body, assets and checksums after publishing. Verify each archive contains `kaferry`, `LICENSE` and `THIRD_PARTY_NOTICES.txt`, and `kaferry --version` matches the tag and commit. Keep notes aligned with that tag. If a tagged build fails, fix the problem and use a new version tag.
 
 To correct published prose, edit the tracked note file, then validate before updating the body. Keep tags and assets unchanged:
 

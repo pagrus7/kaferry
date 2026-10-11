@@ -3,24 +3,27 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
 )
 
 func TestCLIInputsAndExitCodes(t *testing.T) {
 	// Given
-	for _, args := range [][]string{{}, {"bad"}, {"run"}, {"run", "--sql", "SELECT *", "--file", "x"}, {"run", "--sql", "SELECT *"}, {"run", "--file", "-"}, {"run", "--unknown"}} {
+	for _, args := range [][]string{{}, {"bad"}, {"--version", "run"}, {"run"}, {"run", "--sql", "SELECT *", "--file", "x"}, {"run", "--sql", "SELECT *"}, {"run", "--file", "-"}, {"run", "--unknown"}} {
 		var out bytes.Buffer
 
 		// When
-		executeCode := Execute(context.Background(), args, nil, &out)
+		executeCode := Execute(context.Background(), args, nil, io.Discard, &out)
 
 		// Then
 		if executeCode != 2 {
@@ -28,10 +31,47 @@ func TestCLIInputsAndExitCodes(t *testing.T) {
 		}
 	}
 	var out bytes.Buffer
-	if code := Execute(context.Background(), []string{"run", "--help"}, nil, &out); code != 0 {
+	if code := Execute(context.Background(), []string{"run", "--help"}, nil, io.Discard, &out); code != 0 {
 		t.Fatal("help failed")
 	}
 }
+
+func TestCLIVersionWithoutConfigurationOrInput(t *testing.T) {
+	// Given no home directory and a reader that cannot supply SQL.
+	t.Setenv("HOME", "")
+	var stdout, stderr bytes.Buffer
+	_, native := kafka.LibraryVersion()
+	want := "kaferry " + version + " (commit " + revision + "; " + runtime.Version() + "; librdkafka " + native + ")\n"
+
+	// When requesting build information.
+	code := Execute(t.Context(), []string{"--version"}, forbiddenInput{}, &stdout, &stderr)
+
+	// Then report the build on stdout without loading configuration or reading SQL.
+	if code != 0 || stdout.String() != want || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+type forbiddenInput struct{}
+
+func (forbiddenInput) Read([]byte) (int, error) { panic("version must not read SQL") }
+
+func TestCLIVersionOutputFailure(t *testing.T) {
+	// Given an output stream that has closed.
+	var stderr bytes.Buffer
+
+	// When requesting build information.
+	code := Execute(t.Context(), []string{"--version"}, nil, closedOutput{}, &stderr)
+
+	// Then report a failure instead of claiming the version was printed.
+	if code != 1 || !strings.Contains(stderr.String(), "output closed") {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+}
+
+type closedOutput struct{}
+
+func (closedOutput) Write([]byte) (int, error) { return 0, errors.New("output closed") }
 func TestFileCLIAndOneOffCleanup(t *testing.T) {
 	for _, input := range []string{"stdin", "file"} {
 		t.Run(input, func(t *testing.T) {
@@ -72,7 +112,7 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 				}
 			}
 			// When running a file-to-file copy through the selected SQL input.
-			executeCode := Execute(context.Background(), []string{"run", "-f", inputPath, "-c", cfg}, stdin, &out)
+			executeCode := Execute(context.Background(), []string{"run", "-f", inputPath, "-c", cfg}, stdin, io.Discard, &out)
 
 			// Then
 			if executeCode != 0 {
@@ -83,7 +123,7 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 				t.Fatal("successful one-off checkpoint not removed")
 			}
 			statement = "INSERT INTO FILE cbor('" + src + "') SELECT * FROM FILE cbor('" + src + "') OPTIONS(GROUP='self')"
-			if code := Execute(context.Background(), []string{"run", "-e", statement, "-c", cfg}, nil, &out); code != 2 {
+			if code := Execute(context.Background(), []string{"run", "-e", statement, "-c", cfg}, nil, io.Discard, &out); code != 2 {
 				t.Fatal("file self-copy was allowed")
 			}
 		})
@@ -105,7 +145,7 @@ func TestCLIMissingHomeReportsConfigurationErrors(t *testing.T) {
 			var out bytes.Buffer
 
 			// When the CLI loads configuration and opens the source.
-			code := Execute(context.Background(), args, nil, &out)
+			code := Execute(context.Background(), args, nil, io.Discard, &out)
 
 			// Then startup diagnostics identify the required configuration.
 			if code != 2 || !strings.Contains(out.String(), want) || strings.Contains(out.String(), "composition failed") {
@@ -131,7 +171,7 @@ func TestCLIRejectsUnavailableOrOversizedStatementInputs(t *testing.T) {
 			var diagnostics bytes.Buffer
 
 			// When executing the supplied statement input.
-			code := Execute(t.Context(), tc.args, tc.stdin, &diagnostics)
+			code := Execute(t.Context(), tc.args, tc.stdin, io.Discard, &diagnostics)
 
 			// Then fail as an input error before opening endpoints or creating progress.
 			if code != 2 || !strings.Contains(diagnostics.String(), tc.want) {

@@ -11,7 +11,7 @@
 
 Copy Kafka records between topics and CBOR files with one SQL-like statement.
 
-Preserves raw keys, values, nulls, ordered headers and timestamps where possible. No transformations or Schema Registry access.
+Preserves raw keys, values, nulls, ordered headers and timestamps where possible; no transformations or Schema Registry access.
 
 Implementation is AI-driven, using Codex and Claude Code under human direction.
 
@@ -19,7 +19,7 @@ Implementation is AI-driven, using Codex and Claude Code under human direction.
 
 [Download Kaferry](https://github.com/pagrus7/kaferry/releases/latest): Linux AMD64/ARM64 (glibc 2.34+) or macOS 14+ ARM64, with `SHA256SUMS`. Source builds need Go 1.26+, a C compiler and CGO; librdkafka is bundled.
 
-Extract and run `kaferry`.
+Extract and run `kaferry`; `kaferry --version` identifies the build.
 
 ```sh
 git clone https://github.com/pagrus7/kaferry.git
@@ -57,9 +57,7 @@ WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
 OPTIONS (GROUP = 'orders-backfill');
 ```
 
-`@prod` and `@backup` select connections. `GROUP` names the consumer group, or a local checkpoint for file sources.
-
-Run:
+`@alias` selects a connection. `GROUP` names the consumer group or file-source checkpoint.
 
 ```sh
 bin/kaferry run --file copy.sql --config connections.toml
@@ -71,7 +69,7 @@ Completion logs a JSON `copy summary` to stderr and exits `0`. The cutoff rule b
 
 ## More examples
 
-**Archive from the earliest retained record, then keep following.** Create the output directory first.
+**Archive and follow from earliest.** Create the output directory first.
 
 ```sql
 INSERT INTO FILE cbor('/data/orders.cbor')
@@ -79,7 +77,7 @@ SELECT * FROM TOPIC 'orders@prod'
 OPTIONS (GROUP = 'orders-archive', START = EARLIEST);
 ```
 
-**Restore the last seven days.** Skip timestamps known to be outside the destination's accepted bounds.
+**Restore the last seven days.** Skip timestamps outside the destination's bounds.
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
@@ -90,7 +88,7 @@ OPTIONS (GROUP = 'orders-restore', ON_REJECTED_TIMESTAMP = SKIP);
 
 **File to file:** [extract an inclusive time range](design/grammar.md#valid-examples) with `BETWEEN` and `GROUP = ONE_OFF`, which generates and logs a group name.
 
-Filters use Kafka record time, not payload event time. Files read up to their size at startup; later appends wait for another run. [Full syntax](design/grammar.md) covers timestamps, intervals and `SELECT *`.
+Filters use Kafka record time, not payload event time. Files read up to their size at startup; later appends wait for another run. [Full syntax](design/grammar.md).
 
 ## Connections
 
@@ -113,12 +111,12 @@ Prefix the statement to read its password from the environment:
 WITH CONNECTION prod AS ('sasl.password' = ENV('PROD_PASSWORD'))
 ```
 
-`ENV` works only in SQL and must be set. SQL can define complete connections. Logs redact properties; keep passwords out of literals and shell arguments. Settings that break copy guarantees are rejected.
+`ENV` works only in SQL and must be set. SQL can define connections. Logs redact properties; keep passwords out of literals and shell arguments. Settings that break copy guarantees are rejected.
 
 <details>
 <summary>Optional worker settings and defaults</summary>
 
-Limits count uncommitted work, including delivered records. [Details](design/decisions.md#delivery-and-progress).
+Limits include delivered but uncommitted records. [Details](design/decisions.md#delivery-and-progress).
 
 ```toml
 [worker]
@@ -160,3 +158,5 @@ make broker-down
 ```
 
 Kafka tests need Docker. [Checks and reports](design/components.md#quality-indicators) · [Test targets](design/components.md#test-targets).
+
+[MIT license](LICENSE); dependencies retain their licenses. [Security reporting](SECURITY.md).
