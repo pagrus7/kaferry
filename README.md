@@ -33,7 +33,7 @@ Broker baseline: Apache Kafka 3.9.0. [Deployment limits](design/client-compatibi
 
 ## Quick start
 
-Both topics must exist. Replace these unauthenticated addresses and add security settings. On one cluster, use a different destination topic.
+Both topics must exist. Replace these addresses and add TLS/authentication. On one cluster, use a different destination topic.
 
 **`connections.toml`:**
 

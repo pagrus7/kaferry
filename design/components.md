@@ -97,7 +97,7 @@ python3 scripts/ci.py soak make soak
 | Indicator | Where / meaning |
 | --- | --- |
 | CI | README badge; vet, race-enabled tests, build and broker integration |
-| Go coverage | README badge and Codecov PR/file view; weighted statement coverage from unit/mock/file-component tests, excluding native C/C++ |
+| Go coverage | README badge and Codecov PR/file view show line coverage; Actions summarizes weighted Go statement coverage. Both use unit/mock/file-component tests and exclude native C/C++ |
 | Static analysis | [Quality workflow](https://github.com/pagrus7/kaferry/actions/workflows/quality.yml): Staticcheck and CodeQL for Go, Python and workflows |
 | Security | govulncheck fails on reachable Go advisories; CodeQL findings and Dependabot alerts appear in GitHub Security. Dependency review checks PRs; updates require review |
 | Complexity / duplication | Quality summary/artifact: gocyclo maximum/top ten, exact clones ≥100 tokens and ≥10 lines. Identical tools scan the PR base; no arbitrary score gates |
