@@ -19,10 +19,10 @@ func TestConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Connections["prod"]["bootstrap.servers"] != "prod:9092" || c.Worker.PartitionRecordCap != 100 || c.Worker.PartitionByteCap != 16<<20 || c.Worker.IdleExit != "5s" || c.Worker.CheckpointDir != filepath.Join("/home/test", ".kaferry", "checkpoints") {
+	if c.Connections["prod"]["bootstrap.servers"] != "prod:9092" || c.Worker.PartitionRecordCap != 100 || c.Worker.PartitionByteCap != 16<<20 || c.Worker.IdleExit != "5s" || c.Worker.CheckpointDir == nil || *c.Worker.CheckpointDir != filepath.Join("/home/test", ".kaferry", "checkpoints") {
 		t.Fatalf("incorrect config defaults or overrides: %+v", c.Worker)
 	}
-	for _, input := range []string{"unknown=1", "[worker]\nrecord_cap=0", "[worker]\nidle_exit='0s'", "[worker]\nunknown=3", "[connections.prod]\n'sasl.password'= 'unique-secret' trailing", "[connections.prod]\n'bootstrap.servers'=123"} {
+	for _, input := range []string{"unknown=1", "[worker]\nrecord_cap=0", "[worker]\nidle_exit='0s'", "[worker]\ncheckpoint_dir=''", "[worker]\nunknown=3", "[connections.prod]\n'sasl.password'= 'unique-secret' trailing", "[connections.prod]\n'bootstrap.servers'=123"} {
 		_, err := Decode(strings.NewReader(input), "/home/test")
 		if err == nil || strings.Contains(err.Error(), "unique-secret") {
 			t.Errorf("invalid or unsafe diagnostic: %v", err)
@@ -81,6 +81,36 @@ func TestDeliveryTimeoutFitsNativeMillisecondRange(t *testing.T) {
 			// Then positive sub-millisecond and overflowing deadlines fail.
 			if (err == nil) != scenario.valid {
 				t.Fatal("incorrect timeout validation", err)
+			}
+		})
+	}
+}
+
+func TestLoaderDefersDefaultCheckpointDirectoryWithoutHome(t *testing.T) {
+	for _, input := range []string{"", "[worker]\nrecord_cap=17\n", "[worker]\ncheckpoint_dir='/chosen/checkpoints'\n", "[worker]\ncheckpoint_dir=''\n"} {
+		t.Run(input, func(t *testing.T) {
+			// Given configuration without an available home directory.
+			loader := NewLoader(&readerMock{data: []byte(input)}, "")
+
+			// When loading defaults or TOML overrides.
+			cfg, err := loader.Load("chosen.toml")
+
+			// Then omitted defaults stay unresolved; explicit empty settings fail.
+			if strings.Contains(input, "checkpoint_dir=''") {
+				if err == nil || !strings.Contains(err.Error(), "worker.checkpoint_dir must not be empty") {
+					t.Fatal("explicit empty directory accepted", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(input, "checkpoint_dir") {
+				if cfg.Worker.CheckpointDir == nil || *cfg.Worker.CheckpointDir != "/chosen/checkpoints" {
+					t.Fatal("explicit directory lost")
+				}
+			} else if cfg.Worker.CheckpointDir != nil {
+				t.Fatalf("default resolved prematurely: %q", *cfg.Worker.CheckpointDir)
 			}
 		})
 	}

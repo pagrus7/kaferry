@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/pagrus7/kaferry/internal/config"
 	copy "github.com/pagrus7/kaferry/internal/copy"
@@ -53,7 +54,17 @@ func (f *Factory) OpenSource(p plan.Plan, fp string, limits config.Worker) (Inpu
 	if err != nil {
 		return nil, err
 	}
-	checkpoints, err := NewCheckpoints(limits.CheckpointDir, p.Group, f.writer)
+	var directory string
+	if limits.CheckpointDir != nil {
+		directory = *limits.CheckpointDir
+	} else {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, conflict("cannot resolve the default checkpoint directory; set HOME or worker.checkpoint_dir")
+		}
+		directory = filepath.Join(home, ".kaferry", "checkpoints")
+	}
+	checkpoints, err := NewCheckpoints(directory, p.Group, f.writer)
 	if err != nil {
 		return nil, err
 	}

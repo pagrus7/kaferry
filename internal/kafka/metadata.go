@@ -62,6 +62,7 @@ type Inspector struct {
 	admin       AdminClient
 	topic       string
 	description k.TopicDescription
+	topicID     string
 	log         *slog.Logger
 }
 
@@ -92,6 +93,7 @@ func NewInspector(clients Clients, properties plan.Properties, topic string, log
 		a.Close()
 		return nil, conflict("broker did not provide a source topic identity")
 	}
+	i.topicID = i.description.TopicID.String()
 	return i, nil
 }
 func (i *Inspector) Close() { i.admin.Close() }
@@ -100,7 +102,7 @@ func (i *Inspector) ClusterID() (string, error) {
 	defer cancel()
 	return i.admin.ClusterID(ctx)
 }
-func (i *Inspector) TopicID() string     { return i.description.TopicID.String() }
+func (i *Inspector) TopicID() string     { return i.topicID }
 func (i *Inspector) PartitionCount() int { return len(i.description.Partitions) }
 func (i *Inspector) Parts() []k.TopicPartition {
 	parts := make([]k.TopicPartition, len(i.description.Partitions))
@@ -268,7 +270,7 @@ func (i *Inspector) Config() map[string]string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	result, err := i.admin.DescribeConfigs(ctx, []k.ConfigResource{{Type: k.ResourceTopic, Name: i.topic}})
-	if err != nil || len(result) != 1 || result[0].Error.Code() != k.ErrNoError {
+	if err != nil || len(result) != 1 || result[0].Error.Code() != k.ErrNoError || result[0].Type != k.ResourceTopic || result[0].Name != i.topic {
 		i.log.Warn("topic configuration unreadable; dependent preflight checks disabled", "topic", i.topic)
 		return nil
 	}

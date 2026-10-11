@@ -121,20 +121,23 @@ func producerLimit(properties k.ConfigMap, configuration map[string]string) (int
 }
 
 func boundQueue(properties k.ConfigMap, key string, limit int64) error {
+	var capacity any = strconv.FormatInt(limit, 10)
 	if existing, ok := properties[key]; ok {
-		value, err := strconv.ParseInt(fmt.Sprint(existing), 10, 64)
-		if err != nil || value <= 0 || value > limit {
-			return conflict("%s must be positive and no larger than %d", key, limit)
-		}
-		if strings.HasPrefix(key, "go.") {
-			properties[key] = int(value)
-		}
-		return nil
+		capacity = existing
 	}
-	properties[key] = strconv.FormatInt(limit, 10)
+	text := fmt.Sprint(capacity)
+	value, err := strconv.ParseInt(text, 10, 64)
+	if err != nil || value <= 0 || value > limit {
+		return conflict("%s must be positive and no larger than %d", key, limit)
+	}
 	if strings.HasPrefix(key, "go.") {
-		properties[key] = int(limit)
+		integer, err := strconv.Atoi(text)
+		if err != nil {
+			return conflict("%s exceeds Go integer capacity", key)
+		}
+		capacity = integer
 	}
+	properties[key] = capacity
 	return nil
 }
 

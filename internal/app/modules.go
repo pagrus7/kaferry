@@ -25,12 +25,8 @@ var EnvironmentModule = fx.Module("environment", fx.Provide(
 	func(s *system) plan.Environment { return s },
 ))
 var SQLModule = fx.Module("sql", fx.Provide(fx.Annotate(sql.NewParser, fx.As(new(sql.Parser)))))
-var ConfigurationModule = fx.Module("configuration", fx.Provide(func(files config.FileReader) (config.Reader, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	return config.NewLoader(files, home), nil
+var ConfigurationModule = fx.Module("configuration", fx.Provide(func(files config.FileReader) config.Reader {
+	return config.NewLoader(files, "")
 }))
 var PlannerModule = fx.Module("planner", fx.Provide(fx.Annotate(plan.NewPlanner, fx.As(new(plan.Builder)))))
 

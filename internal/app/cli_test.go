@@ -34,6 +34,7 @@ func TestCLIInputsAndExitCodes(t *testing.T) {
 }
 func TestFileCLIAndOneOffCleanup(t *testing.T) {
 	// Given
+	t.Setenv("HOME", "") // Explicit configuration must not require a home directory.
 	dir := t.TempDir()
 	src, dst := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "destination.cbor")
 	codec, err := file.NewCodec(1 << 20)
@@ -73,5 +74,30 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 	statement = "INSERT INTO FILE cbor('" + src + "') SELECT * FROM FILE cbor('" + src + "') OPTIONS(GROUP='self')"
 	if code := Execute(context.Background(), []string{"run", "-e", statement, "-c", cfg}, nil, &out); code != 2 {
 		t.Fatal("file self-copy was allowed")
+	}
+}
+
+func TestCLIMissingHomeReportsConfigurationErrors(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default directory", true: "missing configuration"}[configured], func(t *testing.T) {
+			// Given a valid file-copy statement and no home directory.
+			t.Setenv("HOME", "")
+			statement := "INSERT INTO FILE cbor('/unused-output.cbor') SELECT * FROM FILE cbor('/unused-source.cbor') OPTIONS(GROUP='restore')"
+			args := []string{"run", "--sql", statement}
+			want := "set HOME or worker.checkpoint_dir"
+			if configured {
+				args = append(args, "--config", filepath.Join(t.TempDir(), "missing.toml"))
+				want = "read configuration"
+			}
+			var out bytes.Buffer
+
+			// When the CLI loads configuration and opens the source.
+			code := Execute(context.Background(), args, nil, &out)
+
+			// Then startup diagnostics identify the required configuration.
+			if code != 2 || !strings.Contains(out.String(), want) || strings.Contains(out.String(), "composition failed") {
+				t.Fatalf("exit=%d: %s", code, out.String())
+			}
+		})
 	}
 }

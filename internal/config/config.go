@@ -14,15 +14,15 @@ import (
 )
 
 type Worker struct {
-	MaxFrameBytes      int64  `toml:"max_frame_bytes"`
-	PartitionRecordCap int    `toml:"partition_record_cap"`
-	PartitionByteCap   int64  `toml:"partition_byte_cap"`
-	RecordCap          int    `toml:"record_cap"`
-	ByteCap            int64  `toml:"byte_cap"`
-	DeliveryTimeout    string `toml:"delivery_timeout"`
-	IdleExit           string `toml:"idle_exit"`
-	TipWait            string `toml:"tip_wait"`
-	CheckpointDir      string `toml:"checkpoint_dir"`
+	MaxFrameBytes      int64   `toml:"max_frame_bytes"`
+	PartitionRecordCap int     `toml:"partition_record_cap"`
+	PartitionByteCap   int64   `toml:"partition_byte_cap"`
+	RecordCap          int     `toml:"record_cap"`
+	ByteCap            int64   `toml:"byte_cap"`
+	DeliveryTimeout    string  `toml:"delivery_timeout"`
+	IdleExit           string  `toml:"idle_exit"`
+	TipWait            string  `toml:"tip_wait"`
+	CheckpointDir      *string `toml:"checkpoint_dir"` // Nil selects the default when opening a file source.
 }
 
 type Config struct {
@@ -40,7 +40,12 @@ type Loader struct {
 func NewLoader(files FileReader, home string) *Loader { return &Loader{files: files, home: home} }
 
 func Defaults(home string) Config {
-	return Config{Connections: make(plan.Profiles), Worker: Worker{MaxFrameBytes: 64 << 20, PartitionRecordCap: 5000, PartitionByteCap: 16 << 20, RecordCap: 20000, ByteCap: 128 << 20, DeliveryTimeout: "60s", IdleExit: "30s", TipWait: "15m", CheckpointDir: filepath.Join(home, ".kaferry", "checkpoints")}}
+	var checkpointDir *string
+	if home != "" {
+		directory := filepath.Join(home, ".kaferry", "checkpoints")
+		checkpointDir = &directory
+	}
+	return Config{Connections: make(plan.Profiles), Worker: Worker{MaxFrameBytes: 64 << 20, PartitionRecordCap: 5000, PartitionByteCap: 16 << 20, RecordCap: 20000, ByteCap: 128 << 20, DeliveryTimeout: "60s", IdleExit: "30s", TipWait: "15m", CheckpointDir: checkpointDir}}
 }
 
 func (l *Loader) Load(path string) (Config, error) {
@@ -87,7 +92,7 @@ func (w Worker) Validate() error {
 			return fmt.Errorf("worker.delivery_timeout must be between 1ms and 2147483647ms")
 		}
 	}
-	if w.CheckpointDir == "" {
+	if w.CheckpointDir != nil && *w.CheckpointDir == "" {
 		return fmt.Errorf("worker.checkpoint_dir must not be empty")
 	}
 	return nil

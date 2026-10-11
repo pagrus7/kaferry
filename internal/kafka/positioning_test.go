@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"errors"
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"reflect"
@@ -37,6 +38,55 @@ func TestSavedMixedWindowSurvivesClockAdvanceAndAdoption(t *testing.T) {
 			}
 			if err != nil || !reflect.DeepEqual(got, window) || origin == "saved" && position != 42 {
 				t.Fatal("saved window was re-resolved", got, position, err)
+			}
+		})
+	}
+}
+
+func TestPositioningStartRulesAndCommittedPositions(t *testing.T) {
+	lower, upper := int64(1000), int64(2000)
+	zero, negative := int64(0), int64(-1000)
+	for _, scenario := range []struct {
+		name   string
+		start  string
+		window plan.WindowSpec
+		saved  map[int32]k.TopicPartition
+		want   int64
+		times  int
+		fails  bool
+	}{
+		{name: "fresh earliest", start: "EARLIEST", want: 100},
+		{name: "fresh latest uses stable end", start: "LATEST", want: 900},
+		{name: "existing commit overrides latest", start: "LATEST", saved: map[int32]k.TopicPartition{1: {Offset: 700}}, want: 700},
+		{name: "expired commit remaps to retained start", start: "LATEST", saved: map[int32]k.TopicPartition{1: {Offset: 50}}, want: 100},
+		{name: "commit above log end fails", start: "EARLIEST", saved: map[int32]k.TopicPartition{1: {Offset: 1001}}, fails: true},
+		{name: "new partition in existing group starts earliest", start: "LATEST", saved: map[int32]k.TopicPartition{0: {Offset: 700}}, want: 100},
+		{name: "positive lower uses timestamp lookup", window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: lower}}, want: 500, times: 1},
+		{name: "zero lower starts earliest", window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: zero}}, want: 100},
+		{name: "negative lower starts earliest", window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: negative}}, want: 100},
+		{name: "upper only starts earliest", window: plan.WindowSpec{Upper: &plan.Expression{LiteralMS: upper}}, want: 100},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			// Given retained offsets, an unstable tail, and optional committed progress.
+			topic := "orders"
+			offsets := &countingOffsets{low: 100, high: 1000, stable: 900}
+			times := &countingTimes{topic: topic}
+			p := plan.Plan{Source: plan.Endpoint{Name: topic}, Start: scenario.start, Window: scenario.window}
+			positioner := NewPositionerFactory(&fixedClock{now: time.Unix(100, 0)}, quietLogger()).New(offsets, times, p, "fp", "topic-id")
+
+			// When a partition is assigned through the positioner interface.
+			got, err := positioner.Locate([]k.TopicPartition{{Topic: &topic, Partition: 1}}, scenario.saved, map[int32]Progress{})
+
+			// Then the start rule is applied only in the absence of usable commits.
+			if scenario.fails {
+				var conflict *Conflict
+				if !errors.As(err, &conflict) || len(got.Assignments) != 0 || times.calls != 0 || len(offsets.calls) != 2 {
+					t.Fatalf("invalid commit fell back: result=%+v err=%v", got, err)
+				}
+				return
+			}
+			if err != nil || len(got.Assignments) != 1 || got.Assignments[0].Cursor.Position != scenario.want || times.calls != scenario.times {
+				t.Fatalf("result=%+v lookups=%d err=%v", got, times.calls, err)
 			}
 		})
 	}

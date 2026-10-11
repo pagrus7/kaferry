@@ -15,7 +15,8 @@ func TestSourceFactoryReleasesCheckpointLockOnOpenFailure(t *testing.T) {
 	// Given
 	dir := t.TempDir()
 	limits := config.Defaults(dir).Worker
-	limits.CheckpointDir = t.TempDir()
+	checkpointDir := t.TempDir()
+	limits.CheckpointDir = &checkpointDir
 	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Name: filepath.Join(dir, "missing.cbor")}, Destination: plan.Endpoint{Kind: "TOPIC"}, Group: "group"}
 	factory := NewFactory(core.RealClock{}, logger(), DurableWriter{}, NewPublisher())
 
@@ -26,7 +27,7 @@ func TestSourceFactoryReleasesCheckpointLockOnOpenFailure(t *testing.T) {
 	if openSourceErr == nil {
 		t.Fatal("missing source was accepted")
 	}
-	checkpoints, err := NewCheckpoints(limits.CheckpointDir, p.Group, DurableWriter{})
+	checkpoints, err := NewCheckpoints(*limits.CheckpointDir, p.Group, DurableWriter{})
 	if err != nil {
 		t.Fatal("failed source open leaked checkpoint lock", err)
 	}
@@ -44,7 +45,8 @@ func TestSourceFactoryRejectsFileAliasesBeforeCheckpointCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	limits := config.Defaults(dir).Worker
-	limits.CheckpointDir = filepath.Join(dir, "checkpoints")
+	checkpointDir := filepath.Join(dir, "checkpoints")
+	limits.CheckpointDir = &checkpointDir
 	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Name: source}, Destination: plan.Endpoint{Kind: "FILE", Name: destination}, Group: "group"}
 	factory := NewFactory(core.RealClock{}, logger(), DurableWriter{}, NewPublisher())
 
@@ -55,7 +57,7 @@ func TestSourceFactoryRejectsFileAliasesBeforeCheckpointCreation(t *testing.T) {
 	if openSourceErr == nil {
 		t.Fatal("source/destination inode alias was accepted")
 	}
-	if _, err := os.Stat(limits.CheckpointDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(*limits.CheckpointDir); !os.IsNotExist(err) {
 		t.Fatal("self-copy created checkpoint state", err)
 	}
 }
