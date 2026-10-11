@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -132,8 +133,11 @@ func runNativeSubprocess(t *testing.T, s nativeScenario, helper string) nativeOu
 	start := time.Now()
 	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+helper+"$")
 	command.Env = append(os.Environ(), nativeScenarioEnv+"="+string(encoded))
-	output, err := command.CombinedOutput()
-	outcome := nativeOutcome{Kind: "clean", Elapsed: time.Since(start), Output: string(output)}
+	// Native stderr writes can split Go stdout markers when both share a pipe.
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	err = command.Run()
+	outcome := nativeOutcome{Kind: "clean", Elapsed: time.Since(start), Output: stdout.String() + "\n" + stderr.String()}
 	var exitErr *exec.ExitError
 	switch {
 	case ctx.Err() != nil:
