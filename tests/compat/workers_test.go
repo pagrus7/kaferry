@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"testing"
 	"time"
 
@@ -62,7 +63,7 @@ func TestDistributedWorkersFinishAndSoleWorkerConfirms(t *testing.T) {
 			var output bytes.Buffer
 
 			// When
-			code := app.Execute(ctx, []string{"run", "--sql", statement}, nil, &output)
+			code := app.Execute(ctx, []string{"run", "--sql", statement}, nil, io.Discard, &output)
 			results <- workerResult{code, output.String()}
 		}()
 	}
@@ -87,7 +88,7 @@ func TestDistributedWorkersFinishAndSoleWorkerConfirms(t *testing.T) {
 		}
 	}
 	var output bytes.Buffer
-	if code := app.Execute(ctx, []string{"run", "--sql", statement}, nil, &output); code != 0 {
+	if code := app.Execute(ctx, []string{"run", "--sql", statement}, nil, io.Discard, &output); code != 0 {
 		t.Fatalf("sole-worker confirmation exit=%d: %s", code, output.String())
 	}
 	c := consumer(t, destination+"-reader")

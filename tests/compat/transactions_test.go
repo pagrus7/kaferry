@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 				var output bytes.Buffer
 
 				// When
-				code := app.Execute(ctx, []string{"run", "-e", statement, "-c", cfg}, nil, &output)
+				code := app.Execute(ctx, []string{"run", "-e", statement, "-c", cfg}, nil, io.Discard, &output)
 				result <- workerResult{code, output.String()}
 			}()
 			finished := false

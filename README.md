@@ -19,12 +19,13 @@ Implementation is AI-driven, using Codex and Claude Code under human direction.
 
 [Download Kaferry](https://github.com/pagrus7/kaferry/releases/latest): Linux AMD64/ARM64 (glibc 2.34+) or macOS 14+ ARM64, with `SHA256SUMS`. Source builds need Go 1.26+, a C compiler and CGO; librdkafka is bundled.
 
-Extract and run `kaferry`; `kaferry --version` identifies the build.
+Extract and run `kaferry`.
 
 ```sh
 git clone https://github.com/pagrus7/kaferry.git
 cd kaferry
 make build
+bin/kaferry --version
 ```
 
 Tested with Apache Kafka 3.9.0.

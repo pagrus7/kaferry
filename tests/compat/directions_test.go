@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -24,7 +25,7 @@ func execute(t *testing.T, statement, config string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var output bytes.Buffer
-	if code := app.Execute(ctx, []string{"run", "--sql", statement, "--config", config}, nil, &output); code != 0 {
+	if code := app.Execute(ctx, []string{"run", "--sql", statement, "--config", config}, nil, io.Discard, &output); code != 0 {
 		t.Fatalf("exit=%d: %s", code, output.String())
 	}
 }

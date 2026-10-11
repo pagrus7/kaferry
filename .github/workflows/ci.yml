@@ -38,6 +38,8 @@ jobs:
           python3 scripts/quality.py coverage
           go tool cover -html=build-results/coverage.out -o=build-results/coverage.html
       - run: make build
+      - name: Validate release license notices
+        run: python3 scripts/notices.py bin/kaferry bin/THIRD_PARTY_NOTICES.txt
       - run: python3 -c "from pathlib import Path; assert sum(len(p.read_text()) for p in [Path('README.md'),Path('docs/file-format.md')]) < 10000"
       - name: Publish Go coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1

@@ -1,6 +1,6 @@
 GO ?= go
-VERSION ?= dev
-REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || printf unknown)$(if $(shell git status --porcelain --untracked-files=no 2>/dev/null),-dirty)
+KAFERRY_VERSION ?= dev
+KAFERRY_REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || printf unknown)$(if $(shell git status --porcelain --untracked-files=no 2>/dev/null),-dirty)
 FUZZ_ITERATIONS ?= 100000
 KAFKA_TEST_BROKERS ?= 127.0.0.1:39092
 KAFKA_TEST_DEST_BROKERS ?= 127.0.0.1:40092
@@ -8,7 +8,7 @@ KAFKA_TEST_DEST_BROKERS ?= 127.0.0.1:40092
 .PHONY: build test check integration fault load soak qualification fuzz benchmark metrics broker broker-down
 build:
 	mkdir -p bin
-	$(GO) build -trimpath -ldflags='-s -w -buildid= -X github.com/pagrus7/kaferry/internal/app.version=$(VERSION) -X github.com/pagrus7/kaferry/internal/app.revision=$(REVISION)' -o bin/kaferry ./cmd/kaferry
+	$(GO) build -trimpath -ldflags='-s -w -buildid= -X github.com/pagrus7/kaferry/internal/app.version=$(KAFERRY_VERSION) -X github.com/pagrus7/kaferry/internal/app.revision=$(KAFERRY_REVISION)' -o bin/kaferry ./cmd/kaferry
 test:
 	$(GO) test ./...
 check:

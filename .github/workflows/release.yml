@@ -60,10 +60,10 @@ jobs:
         env:
           SOURCE_SHA: ${{ github.sha }}
         run: |
-          make build VERSION="$RELEASE_TAG" REVISION="$SOURCE_SHA"
+          make build KAFERRY_VERSION="$RELEASE_TAG" KAFERRY_REVISION="$SOURCE_SHA"
           version=$(bin/kaferry --version)
-          [[ "$version" == "kaferry $RELEASE_TAG (commit $SOURCE_SHA; "* ]]
           echo "$version"
+          [[ "$version" == "kaferry $RELEASE_TAG (commit $SOURCE_SHA; "* ]]
       - name: Build information and platform requirements
         shell: bash
         env:
@@ -103,7 +103,7 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
         run: |
-          python3 scripts/notices.py bin/THIRD_PARTY_NOTICES.txt
+          python3 scripts/notices.py bin/kaferry bin/THIRD_PARTY_NOTICES.txt
           COPYFILE_DISABLE=1 tar -czf "release/kaferry-$RELEASE_TAG-$PLATFORM.tar.gz" -C bin kaferry THIRD_PARTY_NOTICES.txt -C "$GITHUB_WORKSPACE" LICENSE
       - name: Attest archive provenance
         id: provenance

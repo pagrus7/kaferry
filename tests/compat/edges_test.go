@@ -71,7 +71,7 @@ func TestForeignProgressAndSelfCopyFailBeforeJoining(t *testing.T) {
 	var out bytes.Buffer
 
 	// When
-	executeCode := app.Execute(ctx, []string{"run", "-e", statement}, nil, &out)
+	executeCode := app.Execute(ctx, []string{"run", "-e", statement}, nil, io.Discard, &out)
 
 	// Then
 	if executeCode != 2 {
@@ -85,7 +85,7 @@ func TestForeignProgressAndSelfCopyFailBeforeJoining(t *testing.T) {
 		t.Fatal("foreign group joined before validation")
 	}
 	statement = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s-self',START=EARLIEST)", broker(t), src, src, src)
-	if code := app.Execute(ctx, []string{"run", "-e", statement}, nil, &out); code != 2 {
+	if code := app.Execute(ctx, []string{"run", "-e", statement}, nil, io.Discard, &out); code != 2 {
 		t.Fatal("Kafka self-copy permitted")
 	}
 }
@@ -131,7 +131,7 @@ func TestExpiredAndAboveEndCommits(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if code := app.Execute(ctx, []string{"run", "-e", statement, "-c", cfg}, nil, &out); code != 2 {
+	if code := app.Execute(ctx, []string{"run", "-e", statement, "-c", cfg}, nil, io.Discard, &out); code != 2 {
 		t.Fatalf("above-end offset exit=%d: %s", code, out.String())
 	}
 }
@@ -169,7 +169,7 @@ func TestMissingTimestampSkipAndResumeWithDifferentPolicy(t *testing.T) {
 	var output bytes.Buffer
 
 	// When
-	executeCode := app.Execute(context.Background(), []string{"run", "-e", prefix + "OPTIONS(GROUP='missing')", "-c", cfg}, nil, &output)
+	executeCode := app.Execute(context.Background(), []string{"run", "-e", prefix + "OPTIONS(GROUP='missing')", "-c", cfg}, nil, io.Discard, &output)
 
 	// Then
 	if executeCode != 1 {
