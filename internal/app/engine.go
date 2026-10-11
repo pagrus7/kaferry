@@ -65,6 +65,7 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Work
 	}
 	input, progress, err := e.sourceProgress(p, fp, limits, sourceEndpoint.connection)
 	if err != nil {
+		sourceEndpoint.close()
 		return err
 	}
 	if input != nil {
@@ -127,9 +128,10 @@ func (e *runtimeEngine) inspect(endpoint plan.Endpoint) (inspectedEndpoint, erro
 	}
 	return inspectedEndpoint{connection: connection, clusterID: id}, nil
 }
-func (e inspectedEndpoint) close() {
+func (e *inspectedEndpoint) close() {
 	if e.connection != nil {
 		e.connection.Close()
+		e.connection = nil
 	}
 }
 
