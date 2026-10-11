@@ -19,7 +19,7 @@ One sentence describing this release.
 
 ## Known issues
 
-- Affected behavior, impact, mitigation and remaining risk; link upstream issues.
+- Shipped mitigation and resulting behavior first, then remaining risk, impact and action; link upstream issues.
 
 ## Downloads
 
