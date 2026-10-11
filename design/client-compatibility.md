@@ -19,8 +19,8 @@ No reliable mitigation is implemented. File-source runs do not perform startup g
 | Area | Tested configuration |
 | --- | --- |
 | Broker | Apache Kafka 3.9.0, KRaft; single-broker and three-broker clusters |
-| Client | `confluent-kafka-go/v2 v2.15.0`, bundled librdkafka 2.15.0, CGO |
-| Build platforms | Linux AMD64/ARM64 and macOS ARM64; CI uses Go 1.26.9 |
+| Client | `confluent-kafka-go/v2 v2.16.0`, bundled librdkafka 2.16.0, CGO |
+| Build/test platforms | Linux AMD64 (CI) and macOS ARM64; Go 1.26.9 |
 | Client authentication | SASL/PLAIN over TLS |
 | Failover | Replication factor 3, minimum ISR 2, destination-leader failure |
 
