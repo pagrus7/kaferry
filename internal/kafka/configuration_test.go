@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"errors"
 	"fmt"
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/config"
@@ -180,5 +181,38 @@ func TestConsumerPolicyReportsConflictsWithoutLeakingValues(t *testing.T) {
 	// Then the first protected property is deterministic and its value stays private.
 	if err == nil || err.Error() != `protected Kafka property "group.id" cannot be overridden` {
 		t.Fatal("wrong conflict diagnostic", err)
+	}
+}
+
+func TestConsumerFetchQueueOverrideRespectsByteBudget(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  string
+	}{{"", "2"}, {"1", "1"}, {"2", "2"}, {"3", ""}, {"0", ""}, {"-1", ""}, {"abc", ""}} {
+		t.Run(tc.value, func(t *testing.T) {
+			// Given a 1,500-byte worker budget, rounded up to a 2 KiB fetch queue ceiling.
+			overrides := map[string]string{}
+			if tc.value != "" {
+				overrides["queued.max.messages.kbytes"] = tc.value
+			}
+			p := plan.Plan{Source: sinkEndpoint(t, overrides), Group: "copy-group"}
+			limits := config.Defaults("home").Worker
+			limits.ByteCap = 1500
+
+			// When deriving the native consumer queue size.
+			properties, err := consumerConfig(p, limits)
+
+			// Then defaults and valid overrides respect the bound; unsafe capacity is rejected.
+			if tc.want != "" {
+				if err != nil || properties["queued.max.messages.kbytes"] != tc.want {
+					t.Fatal("wrong fetch queue bound", properties, err)
+				}
+			} else {
+				var conflict *Conflict
+				if properties != nil || !errors.As(err, &conflict) {
+					t.Fatal("unsafe fetch queue accepted", properties, err)
+				}
+			}
+		})
 	}
 }

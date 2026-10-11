@@ -3,6 +3,7 @@ package copy
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -258,5 +259,32 @@ func TestSignalDuringBoundedCopySavesProgressAndFails(t *testing.T) {
 				t.Fatalf("incorrect interrupted progress: %v", store.saves)
 			}
 		})
+	}
+}
+
+func TestWriteRejectedDuringFollowShutdownFailsAndSavesOnlyConfirmedPrefix(t *testing.T) {
+	// Given a following copy whose second write remains outstanding at the signal.
+	r, source, sink, store, _ := fixture(t)
+	r.plan.Source.Kind = "TOPIC"
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	first, second := incoming(0, 0, 1), incoming(0, 1, 1)
+	source.events = []Event{{Input: &first}, {Input: &second}}
+	rejected := errors.New("destination rejected outstanding write")
+	sink.submit = func(_ Record, token Token) error {
+		if len(sink.writes) == 1 {
+			cancel()
+			sink.reports <- Delivery{Token: sink.writes[0]}
+			sink.reports <- Delivery{Token: token, Err: rejected}
+		}
+		return nil
+	}
+
+	// When shutdown drains the writes and learns that the second write failed.
+	err := r.Run(ctx)
+
+	// Then a following copy cannot report clean shutdown or commit the rejected input.
+	if !errors.Is(err, rejected) || exitCode(err) != 1 || len(sink.writes) != 2 || !reflect.DeepEqual(store.saves, [][]Cursor{{{0, 1}}}) {
+		t.Fatal("shutdown hid a write failure or advanced past it", err, store.saves)
 	}
 }
