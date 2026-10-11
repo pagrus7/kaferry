@@ -8,7 +8,7 @@ A [librdkafka use-after-free bug](https://github.com/confluentinc/librdkafka/pul
 
 **Impact:** the affected worker exits with a signal status before copying. Rerun after coordinator recovery. Production frequency is unknown.
 
-**Mitigation:** current source uses a 10 s Go deadline and a 20 s native timeout, then closes the failed source handle immediately: roughly a 10 s cleanup window. Five [mock-cluster regression cases](../internal/kafka/native_test.go) pass with shorter 2 s/4 s timeouts; deliberately delayed cleanup past native expiry still reproduces the crash. Broker tests warm the coordinator and do not cover this path. The workaround mitigates tested timeouts; the upstream fix is not in bundled librdkafka 2.16.0. Releases through v0.2.0 use 2.15.0 and lack the workaround.
+**Mitigation:** current source uses a 10 s Go deadline and a 20 s native timeout, then closes the failed source handle immediately: roughly a 10 s cleanup window. Five [mock-cluster regression cases](../internal/kafka/native_test.go) pass with shorter 2 s/4 s timeouts. A separate manual probe reproduced the crash with cleanup delayed past native expiry. Broker tests warm the coordinator and do not cover this path. The workaround mitigates tested timeouts; the upstream fix is not in bundled librdkafka 2.16.0. Releases through v0.2.0 use 2.15.0 and lack the workaround.
 
 ## Tested configurations
 

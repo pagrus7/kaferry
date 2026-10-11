@@ -2,7 +2,7 @@
 
 ## Release notes
 
-`releases/vX.Y.Z.md` is the source for the GitHub release body. Write it before tagging; the workflow reads the file from the tagged commit and fails if it is missing or has the wrong title. The script omits the file's heading because GitHub supplies the release title. Keep notes concise and useful to someone installing or upgrading.
+`releases/vX.Y.Z.md` is the source for the GitHub release body. Write it before tagging; the workflow reads the file from the tagged commit and fails if it is missing, has the wrong title or lacks a nonempty `Changes` section. The script omits the file's heading because GitHub supplies the release title. Keep notes concise and useful to someone installing or upgrading.
 
 ```markdown
 # Kaferry vX.Y.Z
