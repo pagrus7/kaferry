@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -119,7 +120,7 @@ func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
 	var output bytes.Buffer
 
 	// When
-	executeCode := app.Execute(ctx, []string{"run", "-e", statement}, nil, &output)
+	executeCode := app.Execute(ctx, []string{"run", "-e", statement}, nil, io.Discard, &output)
 
 	// Then
 	if executeCode != 2 || !strings.Contains(output.String(), "source topic identity mismatch") {

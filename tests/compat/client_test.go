@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"testing"
@@ -40,7 +41,7 @@ func TestTopicToTopicSlice(t *testing.T) {
 	var output bytes.Buffer
 
 	// When
-	executeCode := app.Execute(ctx, []string{"run", "--sql", statement}, nil, &output)
+	executeCode := app.Execute(ctx, []string{"run", "--sql", statement}, nil, io.Discard, &output)
 
 	// Then
 	if executeCode != 0 {
@@ -66,7 +67,7 @@ func TestTopicToTopicSlice(t *testing.T) {
 		}
 	}
 	output.Reset()
-	if code := app.Execute(ctx, []string{"run", "--sql", statement}, nil, &output); code != 0 {
+	if code := app.Execute(ctx, []string{"run", "--sql", statement}, nil, io.Discard, &output); code != 0 {
 		t.Fatalf("resume exit=%d: %s", code, output.String())
 	}
 }

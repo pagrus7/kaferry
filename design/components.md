@@ -106,7 +106,9 @@ Missing measurements are unavailable. Coverage and Go vulnerability scans exclud
 
 ### Release evidence
 
-The release workflow produces per-platform SPDX SBOMs, native inventory/license text, archive provenance and binary SBOM attestations. Syft inventories the binary; the native supplement identifies the selected librdkafka archive and observed version strings. Bundled licenses do not prove every component was linked; native vulnerability coverage is incomplete.
+Release archives contain the binary, MIT license and third-party notices for linked Go modules, Go runtime and the reviewed native bundle. `--version` reports the build version, commit, Go and linked librdkafka. CI and packaging check all supported native archives against `licenses/native.json`; bundle changes require reviewing their notices in `licenses/native.txt`.
+
+The workflow also produces per-platform SPDX SBOMs, native inventory/license text, archive provenance and binary SBOM attestations. Syft inventories the binary; the native supplement identifies the selected librdkafka archive and observed version strings. Bundle notices may include unlinked components; native vulnerability coverage is incomplete.
 
 For downloads with attestation bundles, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document`. Attestations establish build origin. Downloads without these bundles can be checked against `SHA256SUMS` for file integrity.
 

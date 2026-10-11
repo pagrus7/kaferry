@@ -11,7 +11,14 @@ import (
 	"go.uber.org/fx"
 )
 
-func Execute(ctx context.Context, args []string, stdin io.Reader, stderr io.Writer) int {
+func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 1 && args[0] == "--version" {
+		if _, err := fmt.Fprintln(stdout, versionString()); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	}
 	options, err := parseArgs(args, stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -50,7 +57,7 @@ type commandOptions struct {
 func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 	var options commandOptions
 	if len(args) == 0 || args[0] != "run" {
-		err := fmt.Errorf("usage: kaferry run (--sql statement | --file path | --file -) [--config path]")
+		err := fmt.Errorf("usage: kaferry --version | run (--sql statement | --file path | --file -) [--config path]")
 		fmt.Fprintln(stderr, err)
 		return options, err
 	}
