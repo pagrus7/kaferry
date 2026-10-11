@@ -53,7 +53,7 @@ func topicEndpoint(input string) (string, string, error) {
 		return "", "", fmt.Errorf("invalid topic endpoint; use a nonempty topic and an alias starting with a letter or underscore")
 	}
 	if !validTopicName(name) {
-		return "", "", fmt.Errorf("invalid Kafka topic name; use 1–249 ASCII letters, digits, dots, underscores or hyphens, excluding . and ..")
+		return "", "", fmt.Errorf("invalid Kafka topic name; use 1–249 ASCII letters, digits, dots, underscores or hyphens, excluding names made of one or two dots")
 	}
 	return name, alias, nil
 }
