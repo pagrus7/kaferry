@@ -292,13 +292,16 @@ func (p *producerMock) GetMetadata(*string, bool, int) (*k.Metadata, error) {
 
 type adminMock struct {
 	AdminClient
-	described    k.DescribeTopicsResult
-	describeErr  error
-	groupOffsets k.ListConsumerGroupOffsetsResult
-	requested    []k.ConsumerGroupTopicPartitions
-	offsetResult k.ListOffsetsResult
-	groups       k.DescribeConsumerGroupsResult
-	closed       bool
+	described     k.DescribeTopicsResult
+	describeErr   error
+	groupOffsets  k.ListConsumerGroupOffsetsResult
+	requested     []k.ConsumerGroupTopicPartitions
+	offsetResult  k.ListOffsetsResult
+	groups        k.DescribeConsumerGroupsResult
+	configs       []k.ConfigResourceResult
+	configErr     error
+	configRequest []k.ConfigResource
+	closed        bool
 }
 
 func (a *adminMock) DescribeTopics(context.Context, k.TopicCollection, ...k.DescribeTopicsAdminOption) (k.DescribeTopicsResult, error) {
@@ -319,3 +322,8 @@ func (a *adminMock) DescribeConsumerGroups(context.Context, []string, ...k.Descr
 }
 
 func (a *adminMock) Close() { a.closed = true }
+
+func (a *adminMock) DescribeConfigs(_ context.Context, request []k.ConfigResource, _ ...k.DescribeConfigsAdminOption) ([]k.ConfigResourceResult, error) {
+	a.configRequest = request
+	return a.configs, a.configErr
+}

@@ -71,7 +71,39 @@ func TestSourceFactoryRequiresCheckpointDirectoryBeforeOpeningArchive(t *testing
 	if source != nil || !errors.As(err, &stateConflict) || !strings.Contains(err.Error(), "to resume") {
 		t.Fatal("directory gate did not fail first", err)
 	}
-	if _, err := os.Stat(limits.CheckpointDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(*limits.CheckpointDir); !os.IsNotExist(err) {
 		t.Fatal("startup created a fresh checkpoint directory", err)
+	}
+}
+
+func TestSourceFactoryResolvesDefaultCheckpointDirectoryLazily(t *testing.T) {
+	for _, available := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no home", true: "home available"}[available], func(t *testing.T) {
+			// Given a file-source job with an omitted checkpoint directory.
+			home := ""
+			if available {
+				home = t.TempDir()
+			}
+			t.Setenv("HOME", home)
+			limits := config.Defaults("").Worker
+			p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Name: filepath.Join(t.TempDir(), "missing.cbor")}, Group: "restore"}
+			factory := NewFactory(core.RealClock{}, logger(), DurableWriter{}, NewPublisher())
+
+			// When opening the file source without provisioning checkpoint storage.
+			source, err := factory.OpenSource(p, "fp", limits)
+
+			// Then startup reports the unresolved default or the actual default path.
+			var stateConflict *Conflict
+			if source != nil || !errors.As(err, &stateConflict) || !strings.Contains(err.Error(), "worker.checkpoint_dir") {
+				t.Fatal("missing actionable checkpoint diagnostic", err)
+			}
+			if available {
+				if !strings.Contains(err.Error(), filepath.Join(home, ".kaferry", "checkpoints")) {
+					t.Fatal("default directory resolved incorrectly", err)
+				}
+			} else if !strings.Contains(err.Error(), "set HOME") {
+				t.Fatal("missing home guidance", err)
+			}
+		})
 	}
 }
