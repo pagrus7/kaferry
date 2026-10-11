@@ -114,10 +114,10 @@ OPTIONS (GROUP = 'clicks-backfill-1', CUTOFF = INTERVAL '5' MINUTE, ON_ERROR = S
 
 ## Invalid examples
 
-SQL errors identify the first failure by one-based line and rune column; tabs count as one column. File and stdin input include their source name. Input values and SQL excerpts are omitted. Fix the reported error, then rerun.
+SQL errors identify the first error found by one-based line and character (code point) column. LF ends a line; tabs count as one column. File and stdin input include their source name. Input values and SQL excerpts are omitted. Related declarations include their locations. Fix the reported error, then rerun.
 
 ```text
-"copy.sql": line 3, column 29: ON_ERROR must be FAIL or SKIP
+"copy.sql": line 3, column 29: expected FAIL or SKIP; found identifier
 ```
 
 | Statement or fragment | Rejected because |

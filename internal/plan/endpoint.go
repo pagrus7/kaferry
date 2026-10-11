@@ -7,7 +7,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/sql"
 )
 
-func endpoint(source sql.Endpoint, profiles Profiles) (Endpoint, error) {
+func endpoint(source sql.Endpoint, profiles Profiles, inline []sql.Connection) (Endpoint, error) {
 	e := Endpoint{Kind: source.Kind, Name: source.Name, Format: source.Format}
 	if e.Name == "" {
 		return Endpoint{}, fmt.Errorf("endpoint name is empty")
@@ -30,15 +30,28 @@ func endpoint(source sql.Endpoint, profiles Profiles) (Endpoint, error) {
 	values, exists := profiles[e.Alias]
 	if !exists {
 		if e.Alias == "default" {
-			return Endpoint{}, fmt.Errorf("default connection is not defined; add [connections.default] or specify topic@alias")
+			return Endpoint{}, fmt.Errorf("default connection is not defined; add WITH CONNECTION default or TOML [connections.default]")
 		}
 		return Endpoint{}, fmt.Errorf("connection alias is not defined; add it with WITH CONNECTION or TOML [connections.alias]")
 	}
-	if values["bootstrap.servers"] == "" {
-		return Endpoint{}, fmt.Errorf("connection requires bootstrap.servers; set it in WITH CONNECTION or TOML")
+	bootstrap, present := values["bootstrap.servers"]
+	if !present {
+		return Endpoint{}, fmt.Errorf("connection requires bootstrap.servers; add it to %s", connectionOrigin(e.Alias, inline))
+	}
+	if bootstrap == "" {
+		return Endpoint{}, fmt.Errorf("bootstrap.servers is empty; set a nonempty value in %s", connectionOrigin(e.Alias, inline))
 	}
 	e.Properties = Properties{values: values}
 	return e, nil
+}
+
+func connectionOrigin(alias string, inline []sql.Connection) string {
+	for _, connection := range inline {
+		if connection.Alias == alias {
+			return "the inline connection" + sql.Reference(connection.Position)
+		}
+	}
+	return "the configured connection (TOML or defaults)"
 }
 
 func topicEndpoint(input string) (string, string, error) {
@@ -50,10 +63,10 @@ func topicEndpoint(input string) (string, string, error) {
 		name, alias, _ = strings.Cut(input, "@")
 	}
 	if name == "" || !validAlias(alias) {
-		return "", "", fmt.Errorf("invalid topic endpoint; use a nonempty topic and an alias starting with a letter or underscore")
+		return "", "", fmt.Errorf("invalid topic endpoint; use a nonempty topic and an alias starting with an ASCII letter or underscore, containing only ASCII letters, digits and underscores")
 	}
 	if !validTopicName(name) {
-		return "", "", fmt.Errorf("invalid Kafka topic name; use 1–249 ASCII letters, digits, dots, underscores or hyphens, excluding names made of one or two dots")
+		return "", "", fmt.Errorf("invalid Kafka topic name; use 1-249 ASCII letters, digits, dots, underscores or hyphens, excluding names made of one or two dots")
 	}
 	return name, alias, nil
 }

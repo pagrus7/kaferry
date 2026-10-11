@@ -90,6 +90,10 @@ func FuzzParse(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, input string) {
 		_, err := NewParser().Parse(input)
+		_, changedErr := NewParser().Parse(swapInputText(input))
+		if (err == nil) != (changedErr == nil) || err != nil && err.Error() != changedErr.Error() {
+			t.Fatalf("diagnostic depends on arbitrary token text: %v vs %v", err, changedErr)
+		}
 		if err == nil {
 			return
 		}
@@ -103,4 +107,19 @@ func FuzzParse(f *testing.F) {
 			t.Fatalf("diagnostic outside input: %v", err)
 		}
 	})
+}
+
+func swapInputText(input string) string {
+	changed := []byte(input)
+	for i, c := range changed {
+		switch {
+		case c >= 'a' && c <= 'z':
+			changed[i] = c - 'a' + 'A'
+		case c >= 'A' && c <= 'Z':
+			changed[i] = c - 'A' + 'a'
+		case c >= '0' && c <= '9':
+			changed[i] = '0' + (c-'0'+1)%10
+		}
+	}
+	return string(changed)
 }

@@ -9,12 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/sql"
 )
 
 func TestCLIInputsAndExitCodes(t *testing.T) {
@@ -189,11 +191,11 @@ func TestCLISQLDiagnosticsIdentifyInputWithoutCreatingOutput(t *testing.T) {
 			dir := t.TempDir()
 			destination := filepath.Join(dir, "output.cbor")
 			query := "INSERT INTO FILE cbor('" + destination + "')\nSELECT 'sensitive_SENTINEL_5c27' FROM FILE cbor('missing.cbor')\nOPTIONS(GROUP='g')"
-			want := "line 2, column 8: expected *; found string literal"
+			want := "line 2, column 8: expected \"*\"; found string literal"
 			if input == "file validation" {
 				query = strings.Replace(query, "'sensitive_SENTINEL_5c27'", "*", 1)
 				query = strings.Replace(query, "GROUP='g'", "ON_ERROR=SKIP", 1)
-				want = "line 3, column 1: GROUP is required"
+				want = "line 3, column 1: GROUP is required; add GROUP = 'name' or GROUP = ONE_OFF to OPTIONS"
 			}
 			config := filepath.Join(dir, "config.toml")
 			if err := os.WriteFile(config, []byte("[worker]\ncheckpoint_dir = '"+dir+"'\n"), 0600); err != nil {
@@ -207,7 +209,7 @@ func TestCLISQLDiagnosticsIdentifyInputWithoutCreatingOutput(t *testing.T) {
 				args = append(args, "-e", query)
 			case "stdin":
 				args = append(args, "-f", "-")
-				stdin, source = strings.NewReader(query), "stdin"
+				stdin, source = strings.NewReader(query), "<stdin>"
 			default:
 				source = filepath.Join(dir, "copy.sql")
 				if err := os.WriteFile(source, []byte(query), 0600); err != nil {
@@ -219,11 +221,12 @@ func TestCLISQLDiagnosticsIdentifyInputWithoutCreatingOutput(t *testing.T) {
 			// When running the public command.
 			code := Execute(t.Context(), args, stdin, &stdout, &stderr)
 			// Then exit 2 with source/location and no credentials, copies or checkpoints.
-			if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), want) || strings.Contains(stderr.String(), "sensitive_SENTINEL_5c27") {
-				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			expected := want + "\n"
+			if source != "" {
+				expected = "\"" + source + "\": " + expected
 			}
-			if source != "" && !strings.HasPrefix(stderr.String(), "\""+source+"\": ") {
-				t.Fatal("SQL input source missing", stderr.String())
+			if code != 2 || stdout.Len() != 0 || stderr.String() != expected || strings.Contains(stderr.String(), "sensitive_SENTINEL_5c27") {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
 			if _, err := os.Stat(destination); !os.IsNotExist(err) {
 				t.Fatal("invalid SQL created output", err)
@@ -233,5 +236,19 @@ func TestCLISQLDiagnosticsIdentifyInputWithoutCreatingOutput(t *testing.T) {
 				t.Fatal("invalid SQL created progress", err)
 			}
 		})
+	}
+}
+
+func TestSQLDiagnosticSourceLabelsEscapeControlCharacters(t *testing.T) {
+	// Given a SQL input name containing quotes, a newline and terminal escape.
+	source := "copy\"\n\x1b.sql"
+	err := sql.At(sql.Position{Line: 2, Column: 8}, errors.New("invalid value"))
+	var output bytes.Buffer
+	// When rendering the diagnostic's source label.
+	printCommandError(&output, source, err)
+	// Then keep the error on one line without embedding terminal controls.
+	want := strconv.Quote(source) + ": line 2, column 8: invalid value\n"
+	if output.String() != want || strings.Count(output.String(), "\n") != 1 || strings.ContainsRune(output.String(), '\x1b') {
+		t.Fatalf("unsafe source label: %q", output.String())
 	}
 }

@@ -18,6 +18,9 @@ type Diagnostic struct {
 }
 
 func (d *Diagnostic) Error() string {
+	if d == nil || d.Err == nil {
+		return "invalid SQL"
+	}
 	if d.Position.Line == 0 {
 		return d.Err.Error()
 	}
@@ -32,8 +35,16 @@ func At(position Position, err error) error {
 		return nil
 	}
 	var diagnostic *Diagnostic
-	if errors.As(err, &diagnostic) && diagnostic.Position.Line != 0 {
+	if errors.As(err, &diagnostic) && diagnostic != nil && diagnostic.Position.Line != 0 {
 		return err
 	}
 	return &Diagnostic{Position: position, Err: err}
+}
+
+// Reference adds a related declaration's location without exposing its text.
+func Reference(position Position) string {
+	if position.Line == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" at line %d, column %d", position.Line, position.Column)
 }

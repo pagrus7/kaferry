@@ -67,13 +67,13 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 		return Plan{}, err
 	}
 	var plan Plan
-	plan.Source, err = endpoint(statement.Source, connections)
-	if err != nil {
-		return Plan{}, sql.At(statement.Source.Position, fmt.Errorf("FROM endpoint: %w", err))
-	}
-	plan.Destination, err = endpoint(statement.Destination, connections)
+	plan.Destination, err = endpoint(statement.Destination, connections, statement.Connections)
 	if err != nil {
 		return Plan{}, sql.At(statement.Destination.Position, fmt.Errorf("INTO endpoint: %w", err))
+	}
+	plan.Source, err = endpoint(statement.Source, connections, statement.Connections)
+	if err != nil {
+		return Plan{}, sql.At(statement.Source.Position, fmt.Errorf("FROM endpoint: %w", err))
 	}
 	plan.Window, err = normalize(statement.Bounds)
 	if err != nil {
@@ -104,7 +104,7 @@ func (p *Planner) connections(inline []sql.Connection, profiles Profiles) (Profi
 	connections := make(Profiles, len(profiles)+len(inline))
 	for alias, properties := range profiles {
 		if !validAlias(alias) {
-			return nil, fmt.Errorf("invalid connection alias")
+			return nil, fmt.Errorf("configuration: connection aliases must start with an ASCII letter or underscore and contain only ASCII letters, digits and underscores")
 		}
 		copy := make(map[string]string, len(properties))
 		for key, value := range properties {
@@ -112,33 +112,33 @@ func (p *Planner) connections(inline []sql.Connection, profiles Profiles) (Profi
 		}
 		connections[alias] = copy
 	}
-	seen := make(map[string]bool)
+	seen := make(map[string]sql.Position)
 	for _, connection := range inline {
 		if !validAlias(connection.Alias) {
 			return nil, sql.At(connection.Position, fmt.Errorf("invalid connection alias; use ASCII letters, digits and underscores, starting with a letter or underscore"))
 		}
-		if seen[connection.Alias] {
-			return nil, sql.At(connection.Position, fmt.Errorf("connection alias repeats; declare each alias once"))
+		if first, exists := seen[connection.Alias]; exists {
+			return nil, sql.At(connection.Position, fmt.Errorf("connection alias repeats; first declaration%s", sql.Reference(first)))
 		}
-		seen[connection.Alias] = true
+		seen[connection.Alias] = connection.Position
 		values := connections[connection.Alias]
 		if values == nil {
 			values = make(map[string]string)
 			connections[connection.Alias] = values
 		}
-		keys := make(map[string]bool)
+		keys := make(map[string]sql.Position)
 		for _, property := range connection.Properties {
 			if property.Name == "" {
 				return nil, sql.At(property.Position, fmt.Errorf("inline connection property name must not be empty"))
 			}
-			if keys[property.Name] {
-				return nil, sql.At(property.Position, fmt.Errorf("inline connection property repeats; specify it once per CONNECTION"))
+			if first, exists := keys[property.Name]; exists {
+				return nil, sql.At(property.Position, fmt.Errorf("inline connection property repeats; first declaration%s", sql.Reference(first)))
 			}
-			keys[property.Name] = true
+			keys[property.Name] = property.Position
 			value := property.Value
 			if property.Environment {
 				if p.environment == nil {
-					return nil, sql.At(property.ValuePosition, fmt.Errorf("ENV(...) cannot be resolved: environment lookup is unavailable"))
+					return nil, fmt.Errorf("environment lookup is unavailable")
 				}
 				var ok bool
 				value, ok = p.environment.LookupEnv(property.Value)

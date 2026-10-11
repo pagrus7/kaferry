@@ -53,7 +53,7 @@ func printCommandError(output io.Writer, source string, err error) {
 	var diagnostic *sql.Diagnostic
 	if source != "" && errors.As(err, &diagnostic) && diagnostic.Position.Line != 0 {
 		if source == "-" {
-			source = "stdin"
+			source = "<stdin>"
 		}
 		fmt.Fprintf(output, "%q: %v\n", source, err)
 		return

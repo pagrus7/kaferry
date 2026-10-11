@@ -10,20 +10,20 @@ import (
 func (p *Plan) options(options []sql.Option, position sql.Position) error {
 	p.Policies = Policies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}
 	p.CutoffMS = 60000
-	seen := make(map[string]bool)
+	seen := make(map[string]sql.Position)
 	for _, option := range options {
-		if seen[option.Name] {
-			return sql.At(option.Position, fmt.Errorf("option %s repeats; specify it once", option.Name))
+		if first, exists := seen[option.Name]; exists {
+			return sql.At(option.Position, fmt.Errorf("option %s repeats; first declaration%s", option.Name, sql.Reference(first)))
 		}
-		if conflictingPolicy(option.Name, seen) {
-			return sql.At(option.Position, fmt.Errorf("ON_ERROR cannot be combined with specific error policies; choose ON_ERROR or the specific policies"))
+		if first, conflict := conflictingPolicy(option.Name, seen); conflict {
+			return sql.At(option.Position, fmt.Errorf("ON_ERROR cannot be combined with specific error policies; conflicting declaration%s", sql.Reference(first)))
 		}
-		seen[option.Name] = true
+		seen[option.Name] = option.Position
 		if err := p.applyOption(option); err != nil {
 			return sql.At(option.ValuePosition, err)
 		}
 	}
-	if !seen["GROUP"] {
+	if _, exists := seen["GROUP"]; !exists {
 		return sql.At(position, fmt.Errorf("GROUP is required; add GROUP = 'name' or GROUP = ONE_OFF to OPTIONS"))
 	}
 	if p.Source.Kind != "TOPIC" || p.Window.Upper == nil {
@@ -32,14 +32,19 @@ func (p *Plan) options(options []sql.Option, position sql.Position) error {
 	return nil
 }
 
-func conflictingPolicy(name string, seen map[string]bool) bool {
+func conflictingPolicy(name string, seen map[string]sql.Position) (sql.Position, bool) {
 	switch name {
 	case "ON_ERROR":
-		return seen["ON_MISSING_TIMESTAMP"] || seen["ON_REJECTED_TIMESTAMP"]
+		if first, exists := seen["ON_MISSING_TIMESTAMP"]; exists {
+			return first, true
+		}
+		first, exists := seen["ON_REJECTED_TIMESTAMP"]
+		return first, exists
 	case "ON_MISSING_TIMESTAMP", "ON_REJECTED_TIMESTAMP":
-		return seen["ON_ERROR"]
+		first, exists := seen["ON_ERROR"]
+		return first, exists
 	}
-	return false
+	return sql.Position{}, false
 }
 
 func optionPosition(options []sql.Option, name string, fallback sql.Position) sql.Position {
@@ -72,7 +77,7 @@ func (p *Plan) applyOption(option sql.Option) error {
 
 func (p *Plan) groupOption(option sql.Option) error {
 	if strings.TrimSpace(option.Value) == "" {
-		return fmt.Errorf("GROUP must not be empty")
+		return fmt.Errorf("GROUP must not be blank; use a quoted name or ONE_OFF")
 	}
 	p.Group = option.Value
 	p.OneOff = !option.Quoted && option.Value == "ONE_OFF"
@@ -80,8 +85,11 @@ func (p *Plan) groupOption(option sql.Option) error {
 }
 
 func (p *Plan) cutoffOption(option sql.Option) error {
-	if p.Source.Kind != "TOPIC" || p.Window.Upper == nil {
-		return sql.At(option.Position, fmt.Errorf("CUTOFF requires a topic source with an upper bound in WHERE"))
+	if p.Source.Kind != "TOPIC" {
+		return sql.At(option.Position, fmt.Errorf("CUTOFF requires a topic source; remove CUTOFF for FILE sources"))
+	}
+	if p.Window.Upper == nil {
+		return sql.At(option.Position, fmt.Errorf("CUTOFF requires an upper timestamp bound in WHERE"))
 	}
 	if option.Interval == nil {
 		return fmt.Errorf("CUTOFF requires an interval")

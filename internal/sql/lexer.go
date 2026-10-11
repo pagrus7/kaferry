@@ -71,7 +71,7 @@ func (l *lexer) next() (token, error) {
 	if err := l.space(); err != nil {
 		return token{}, err
 	}
-	t := token{Position: l.position(), kind: "end of statement"}
+	t := token{Position: l.position(), kind: "end of input"}
 	if l.index == len(l.input) {
 		return t, nil
 	}
@@ -115,7 +115,24 @@ func (l *lexer) next() (token, error) {
 		}
 		return t, nil
 	}
-	return token{}, At(t.Position, fmt.Errorf("unexpected character; use single quotes for literals and supported SQL operators"))
+	return token{}, At(t.Position, fmt.Errorf("%s", characterHint(r)))
+}
+
+func characterHint(r rune) string {
+	switch {
+	case r == '\uFEFF':
+		return "UTF-8 byte-order mark is not supported; save without a BOM"
+	case r == '"':
+		return "double quotes are not supported; use ASCII single quotes for strings"
+	case r == '\u2018' || r == '\u2019' || r == '\u201C' || r == '\u201D':
+		return "typographic quotes are not supported; use ASCII single quotes"
+	case r >= '0' && r <= '9':
+		return "numbers must be single-quoted, for example INTERVAL '7' DAY"
+	case !unicode.IsPrint(r):
+		return "unexpected invisible or control character; remove it"
+	default:
+		return "unexpected character; use single quotes for literals and supported SQL operators"
+	}
 }
 
 func (t token) description() string {

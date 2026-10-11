@@ -89,23 +89,28 @@ func (s WindowSpec) ValidateStored(w Window, cutoff int64) error {
 
 func normalize(bounds []sql.Bound) (WindowSpec, error) {
 	var window WindowSpec
+	var lowerPosition, upperPosition sql.Position
 	for _, bound := range bounds {
 		e, err := expression(bound.Time)
 		if err != nil {
 			return WindowSpec{}, sql.At(bound.Time.Position, err)
 		}
 		var target **Expression
+		var position *sql.Position
 		switch bound.Operator {
 		case ">", ">=":
 			target = &window.Lower
+			position = &lowerPosition
 		case "<", "<=":
 			target = &window.Upper
+			position = &upperPosition
 		default:
 			return WindowSpec{}, sql.At(bound.Position, fmt.Errorf("unsupported timestamp comparison; use <, <=, >, or >="))
 		}
 		if *target != nil {
-			return WindowSpec{}, sql.At(bound.Position, fmt.Errorf("at most one lower and one upper bound are allowed; remove this repeated bound"))
+			return WindowSpec{}, sql.At(bound.Position, fmt.Errorf("at most one lower and one upper bound are allowed; first bound%s", sql.Reference(*position)))
 		}
+		*position = bound.Position
 		if bound.Operator == ">" || bound.Operator == "<=" {
 			e.AdjustmentMS, err = checkedAdd(e.AdjustmentMS, 1)
 			if err != nil {
@@ -125,7 +130,7 @@ func normalize(bounds []sql.Bound) (WindowSpec, error) {
 	if window.Lower != nil && window.Upper != nil {
 		lo, hi := window.Lower, window.Upper
 		if lo.Now == hi.Now && (lo.Now && lo.AdjustmentMS >= hi.AdjustmentMS || !lo.Now && lo.LiteralMS >= hi.LiteralMS) {
-			return WindowSpec{}, sql.At(bounds[len(bounds)-1].Position, fmt.Errorf("time range is empty; lower bound must precede upper bound"))
+			return WindowSpec{}, sql.At(bounds[len(bounds)-1].Position, fmt.Errorf("time range is empty; lower bound%s must precede upper bound%s", sql.Reference(lowerPosition), sql.Reference(upperPosition)))
 		}
 	}
 	return window, nil
@@ -142,7 +147,7 @@ func expression(t sql.Time) (Expression, error) {
 			hours, _ := strconv.Atoi(zone[1:3])
 			minutes, _ := strconv.Atoi(zone[4:6])
 			if hours > 23 || minutes > 59 {
-				return Expression{}, sql.At(t.Position, fmt.Errorf("invalid timestamp zone; offset hours must be 00–23 and minutes 00–59"))
+				return Expression{}, sql.At(t.Position, fmt.Errorf("invalid timestamp zone; offset hours must be 00-23 and minutes 00-59"))
 			}
 		}
 		instant, err := time.Parse(time.RFC3339Nano, t.Literal)
