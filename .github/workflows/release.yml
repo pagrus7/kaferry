@@ -48,7 +48,7 @@ jobs:
             test "$REF_TYPE" = tag
             [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]
             test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
-            python3 scripts/release_notes.py "$RELEASE_TAG" > release-notes.txt
+            python3 scripts/release_notes.py "$RELEASE_TAG" > /dev/null
           fi
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:

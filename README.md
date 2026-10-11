@@ -15,7 +15,7 @@ Preserves raw keys, values, nulls, ordered headers and timestamps where possible
 
 Implementation is AI-driven, using Codex and Claude Code under human direction.
 
-**Known issue:** A [librdkafka bug](https://github.com/confluentinc/librdkafka/pull/5397) can crash Kafka-source startup during coordinator failures. Current source mitigates the tested timeout cases; v0.2.0 downloads lack this workaround. The affected checks run before copying; production frequency is unknown. [Details and limits](design/client-compatibility.md).
+**Known issue:** A [librdkafka bug](https://github.com/confluentinc/librdkafka/pull/5397) can crash Kafka-source startup during coordinator failures, before copying or saving progress. Rerun after recovery. Current source mitigates tested timeouts; releases through v0.2.0 lack this workaround. Production frequency is unknown. [Details](design/client-compatibility.md#known-issues).
 
 ## Install
 
@@ -29,7 +29,7 @@ cd kaferry
 make build
 ```
 
-Broker baseline: Apache Kafka 3.9.0.
+Tested with Apache Kafka 3.9.0.
 
 ## Quick start
 

@@ -4,18 +4,11 @@ Deployment limits and Kafka access requirements. See [copy behavior](decisions.m
 
 ## Known issues
 
-A [librdkafka use-after-free bug](https://github.com/confluentinc/librdkafka/pull/5397) can abort the process during coordinator failures. In Kaferry, the affected admin calls inspect source groups at startup, before that worker copies records. File-source runs skip these calls.
+A [librdkafka use-after-free bug](https://github.com/confluentinc/librdkafka/pull/5397) can crash the process during group-coordinator failures. Kaferry sends the affected admin requests only at Kafka-source startup, before writing records or saving progress. File sources and runs already copying do not send these requests.
 
-**Risk:** startup failure with a process crash; production frequency is unknown. Current source mitigates the tested timeout cases by using a 10 s Go deadline, a 20 s native timeout and immediate failed-source cleanup. Cleanup delayed past native expiry can still crash. The upstream fix is not in bundled librdkafka 2.16.0; published v0.2.0 uses 2.15.0 and lacks this workaround.
+**Impact:** the affected worker exits with a signal status before copying. Rerun after coordinator recovery. Production frequency is unknown.
 
-[Native regression tests](../internal/kafka/native_test.go) pass five timeout/recovery cases, including brokers that remain unavailable. The [extended test run](https://github.com/pagrus7/kaferry/actions/runs/38117769179) passed a 30-minute soak with destination stalls. These results establish tested behavior, not a production failure rate.
-
-Other limits:
-
-| Limit | Behavior |
-| --- | --- |
-| Transient inspection errors | Startup or assignment can fail; inspection errors are not retried. Restart after broker recovery |
-| No hard deadline for native commit or close | The ten-second write-drain budget does not bound total shutdown. Current cleanup tests finish successfully |
+**Mitigation:** current source uses a 10 s Go deadline and a 20 s native timeout, then closes the failed source handle immediately: roughly a 10 s cleanup window. Five [mock-cluster regression cases](../internal/kafka/native_test.go) pass with shorter 2 s/4 s timeouts; deliberately delayed cleanup past native expiry still reproduces the crash. Broker tests warm the coordinator and do not cover this path. The workaround mitigates tested timeouts; the upstream fix is not in bundled librdkafka 2.16.0. Releases through v0.2.0 use 2.15.0 and lack the workaround.
 
 ## Tested configurations
 
@@ -78,6 +71,8 @@ Fixture administrators create, alter and delete test resources; those permission
 
 ## Binding limits
 
+- Transient inspection errors can fail startup or assignment; they are not retried. Restart after broker recovery.
+- Native commit and close have no enforced overall deadline. The ten-second write-drain limit does not bound total shutdown; use a supervisor stop timeout when a hard limit is required.
 - Kafka output uses the destination's timestamp type. Known LogAppendTime restamps records. Otherwise timestamps ≤ 0 or above 9,223,372,036,854 Unix milliseconds cannot be preserved by the Go client and follow the timestamp error policy. Files retain timestamp values and types.
 - The client truncates consumed header names at NUL. Source Kafka headers must be NUL-free; lost suffixes cannot be detected or restored. File→Kafka rejects NUL names before publishing; files preserve arbitrary name bytes.
 - Group checks cannot verify subscriptions of unassigned members. [Topic identity checks and limits](decisions.md#identity).
