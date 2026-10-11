@@ -5,6 +5,10 @@
   <img src="assets/kaferry-logo.svg" alt="Kaferry logo: a ferry carrying record blocks" width="600">
 </picture>
 
+[![CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml)
+[![Go coverage](https://codecov.io/gh/pagrus7/kaferry/branch/main/graph/badge.svg?flag=go)](https://codecov.io/gh/pagrus7/kaferry)
+[![Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml/badge.svg?branch=main)](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml)
+
 Copy Kafka records between topics and CBOR files with one SQL-like statement.
 
 Preserves raw keys, values, nulls, ordered headers and timestamps where possible. No transformations or Schema Registry access.
@@ -17,7 +21,7 @@ Implementation is AI-driven, using Codex and Claude Code under human direction.
 
 [Download Kaferry](https://github.com/pagrus7/kaferry/releases/latest): Linux AMD64/ARM64 (glibc 2.34+) or macOS 14+ ARM64, with `SHA256SUMS`. Source builds need Go 1.26+, a C compiler and CGO; librdkafka is bundled.
 
-Extract the archive and run `kaferry`. `GROUP = ONE_OFF` generates IDs with the `kaferry-` prefix; authorize that prefix when using Kafka groups.
+Extract and run `kaferry`. Authorize the `kaferry-` group prefix for `GROUP = ONE_OFF`.
 
 ```sh
 git clone https://github.com/pagrus7/kaferry.git
@@ -25,11 +29,11 @@ cd kaferry
 make build
 ```
 
-Verified broker baseline: Apache Kafka 3.9.0. See [compatibility](design/client-compatibility.md) for other deployment limits.
+Broker baseline: Apache Kafka 3.9.0. [Deployment limits](design/client-compatibility.md).
 
 ## Quick start
 
-Both topics must exist. Replace the example addresses below and add security settings as needed; they use no TLS or authentication. On one cluster, use a different destination topic.
+Both topics must exist. Replace these unauthenticated addresses and add security settings. On one cluster, use a different destination topic.
 
 **`connections.toml`:**
 
@@ -53,15 +57,15 @@ OPTIONS (GROUP = 'orders-backfill');
 
 `@prod` and `@backup` select connections. `GROUP` names the consumer group, or a local checkpoint for file sources.
 
-Run the source build:
+Run:
 
 ```sh
 bin/kaferry run --file copy.sql --config connections.toml
 ```
 
-On completion, the run logs a JSON `copy summary` with counts to stderr and exits `0`. The cutoff rule below can omit records.
+Completion logs a JSON `copy summary` to stderr and exits `0`. The cutoff rule below can omit records.
 
-Use `bin/kaferry` after building, or the extracted `kaferry` binary. `-e` takes inline SQL; `-f -` reads stdin.
+Use `kaferry` for downloads. `-e` takes inline SQL; `-f -` reads stdin.
 
 ## More examples
 
@@ -90,7 +94,7 @@ Filters use Kafka record time, not payload event time. Files read up to their si
 
 Use [librdkafka properties](https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html); quote dotted TOML keys and use string values. SQL overrides TOML. Topics without `@alias` use `default`.
 
-Secure connection example, using the tested PLAIN over TLS mechanism:
+PLAIN over TLS example:
 
 ```toml
 [connections.prod]
@@ -107,7 +111,7 @@ Prefix the statement to read its password from the environment:
 WITH CONNECTION prod AS ('sasl.password' = ENV('PROD_PASSWORD'))
 ```
 
-`ENV` works only in SQL and must be set. SQL can define a complete connection. Logs redact properties; keep passwords out of literals and shell arguments. Settings that break copy guarantees are rejected.
+`ENV` works only in SQL and must be set. SQL can define complete connections. Logs redact properties; keep passwords out of literals and shell arguments. Settings that break copy guarantees are rejected.
 
 <details>
 <summary>Optional worker settings and defaults</summary>
@@ -154,4 +158,4 @@ make broker integration
 make broker-down
 ```
 
-Kafka tests need Docker. [CI checks](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) run on changes; [qualification](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) retains results for 30 days. More: [test targets](design/components.md#test-targets), [component design](design/components.md).
+Kafka tests need Docker. CI results and measurements are retained for 30 days. Go coverage excludes native code; passing tests do not establish production readiness. [Checks and reports](design/components.md#quality-indicators) · [Test targets](design/components.md#test-targets).

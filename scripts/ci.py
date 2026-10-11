@@ -2,6 +2,7 @@
 """Capture a CI command and environment; summarize optional load metrics."""
 
 import hashlib
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,9 @@ import platform
 import subprocess
 import sys
 import time
+
+from quality import benchmarks, markdown
+from history import comparison
 
 
 def capture(command):
@@ -22,9 +26,12 @@ def run(label, command, directory):
     binary = Path("bin/kaferry")
     environment = {
         "commit": capture(["git", "rev-parse", "HEAD"]),
+        "started_at": datetime.now(timezone.utc).isoformat(),
         "working_tree_dirty": bool(capture(["git", "status", "--porcelain"])),
         "go": capture(["go", "version"]),
         "platform": platform.platform(),
+        "system": platform.system(),
+        "machine": platform.machine(),
         "cpu_count": os.cpu_count(),
         "runner": os.environ.get("RUNNER_NAME"),
         "run_url": f"https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}",
@@ -48,16 +55,33 @@ def run(label, command, directory):
 
 
 def summarize(directory):
-    rows = ["## Build results", "", "| Command | Result | Seconds |", "| --- | --- | ---: |"]
+    rows = ["## Build results", ""]
+    environments = sorted(directory.glob("*.environment.json"))
+    if environments:
+        env = json.loads(environments[0].read_text())
+        rows += [f"Commit: `{env['commit']}` · Date: {env.get('started_at', 'unavailable')} · "
+                 f"{env['go']}", ""]
+    rows += ["| Command | Result | Seconds |", "| --- | --- | ---: |"]
     for filename in sorted(directory.glob("*.result.json")):
         result = json.loads(filename.read_text())
         rows.append(f"| {filename.stem.removesuffix('.result')} | {'PASS' if result['exit_code'] == 0 else 'FAIL'} | {result['elapsed_seconds']:.1f} |")
-    rows.extend(["", "| Test | Result | Records | Records/s | Sampled peak RSS MiB | Peak uncommitted records / bytes | Shutdown s |",
-                 "| --- | --- | ---: | ---: | ---: | ---: | ---: |"])
+    rows.extend(["", "| Test | Result | Records | Records/s | Sampled peak RSS MiB | RSS growth MiB | Peak uncommitted records / bytes | Sampled max lag | Shutdown s |",
+                 "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"])
     for filename in sorted(directory.glob("*.metrics.json")):
         r = json.loads(filename.read_text())
         status = "SKIP" if r["skipped"] else "PASS" if r["passed"] else "FAIL"
-        rows.append(f"| {r['test']} | {status} | {r['records']} | {r['records_per_second']:.0f} | {r['sampled_peak_rss_bytes'] / (1 << 20):.1f} | {r['peak_uncommitted_records']} / {r['peak_uncommitted_bytes']} | {r.get('shutdown_seconds', 0):.3f} |")
+        growth = ((r["final_median_rss_bytes"] - r["warm_median_rss_bytes"]) / (1 << 20)
+                  if "final_median_rss_bytes" in r and "warm_median_rss_bytes" in r else None)
+        shutdown = f"{r['shutdown_seconds']:.3f}" if "shutdown_seconds" in r else "—"
+        rows.append(f"| {r['test']} | {status} | {r['records']} | {r['records_per_second']:.0f} | {r['sampled_peak_rss_bytes'] / (1 << 20):.1f} | {f'{growth:.1f}' if growth is not None else '—'} | {r['peak_uncommitted_records']} / {r['peak_uncommitted_bytes']} | {r.get('max_sampled_commit_lag', '—')} | {shutdown} |")
+    benchmark = directory / "benchmark.log"
+    if benchmark.exists():
+        rows += ["", "### CBOR microbenchmarks", "", "| Benchmark | ns/op | B/op | allocs/op |",
+                 "| --- | ---: | ---: | ---: |"]
+        for name, (ns, size, allocations) in benchmarks(benchmark.read_text()).items():
+            rows.append(f"| {name} | {ns} | {size} | {allocations} |")
+    rows.extend(markdown(directory))
+    rows.extend(comparison(directory))
     rows.extend(["", "Throughput is informational on shared runners. JSON metrics, environment, coverage and logs are retained in this run's artifacts.", ""])
     text = "\n".join(rows)
     directory.mkdir(parents=True, exist_ok=True)

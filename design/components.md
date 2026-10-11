@@ -91,3 +91,25 @@ python3 scripts/ci.py soak make soak
 ```
 
 [CI checks](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) run on pushes to main, pull requests and manual dispatch. [Qualification](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) runs load, soak, fault, security/failover, fuzz and benchmark suites weekly and on manual dispatch. Both retain build artifacts for 30 days; measurements belong there, not in tracked status documents.
+
+### Quality indicators
+
+| Indicator | Where / meaning |
+| --- | --- |
+| CI | README badge; vet, race-enabled tests, build and broker integration |
+| Go coverage | README badge and Codecov PR/file view; weighted statement coverage from unit/mock/file-component tests, excluding native C/C++ |
+| Static analysis | [Quality workflow](https://github.com/pagrus7/kaferry/actions/workflows/quality.yml): Staticcheck and CodeQL for Go, Python and workflows |
+| Security | govulncheck fails on reachable Go advisories; CodeQL findings and Dependabot alerts appear in GitHub Security. Dependency review checks PRs; updates require review |
+| Complexity / duplication | Quality summary/artifact: gocyclo maximum/top ten, exact clones ≥100 tokens and ≥10 lines. Identical tools scan the PR base; no arbitrary score gates |
+| Extended tests | README badge; weekly default 30-minute soak plus load, fault, ACL/failover, fuzz and CBOR benchmarks |
+| Performance | Dated SHA/environment JSON and summaries: throughput, sampled RSS/growth, lag, caps, shutdown, ns/op and allocations. Prior successful measurements compare only matching settings; shared runners provide no regression gate |
+
+Missing measurements are unavailable, not zero. Badge success describes its workflow's scope; it does not override the [native defects](client-compatibility.md#known-native-defects). Go security scans do not cover all native dependencies.
+
+### Release evidence
+
+Future release builds produce per-platform SPDX SBOMs, native inventory/license text, archive provenance and binary SBOM attestations. Syft inventories the built binary; the native supplement identifies the selected static librdkafka archive and observed version strings. Bundle licenses alone do not prove that every component was linked; this is not a complete native vulnerability scan.
+
+Verify an archive with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`; verify the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document`. Attestations establish build origin, not correctness or safety. Historical releases are unchanged.
+
+Manual release dispatch defaults to building validation artifacts without publishing. Publishing requires selecting the actual version tag as the workflow ref; attested checkout must match the workflow SHA.

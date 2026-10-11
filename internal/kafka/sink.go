@@ -98,7 +98,7 @@ func (s *Sink) inspectRouting() {
 func (s *Sink) validate(record copy.Record) error {
 	for _, header := range record.Headers {
 		if strings.ContainsRune(header.Name, 0) {
-			return &copy.RecordError{Class: "validation", Err: fmt.Errorf("Kafka client cannot preserve NUL in header names")}
+			return &copy.RecordError{Class: "validation", Err: fmt.Errorf("kafka client cannot preserve NUL in header names")}
 		}
 	}
 	if record.TimestampMS == nil {

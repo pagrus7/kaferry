@@ -1,0 +1,8 @@
+coverage:
+  status:
+    project: off
+    patch: off
+comment:
+  layout: 'diff, files'
+  behavior: default
+  require_changes: true

@@ -169,7 +169,7 @@ func (p Plan) Fingerprint(sourceClusterID, destinationClusterID string) (string,
 			return identity{Kind: "FILE"}, nil
 		}
 		if clusterID == "" {
-			return identity{}, fmt.Errorf("Kafka fingerprint requires verified cluster IDs")
+			return identity{}, fmt.Errorf("kafka fingerprint requires verified cluster IDs")
 		}
 		return identity{Kind: "TOPIC", ClusterID: clusterID, Topic: endpoint.Name}, nil
 	}

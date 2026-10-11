@@ -1,0 +1,99 @@
+name: quality
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '37 8 * * 1'
+permissions:
+  contents: read
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.9'
+          cache: true
+      - name: Install pinned analyzers
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          go install github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0
+          mkdir -p .cache/quality-tools
+          curl --fail --location --retry 3 https://github.com/kucherenko/jscpd/releases/download/v5.4.1/jscpd-linux-x64-gnu.tar.gz -o .cache/quality-tools/jscpd.tar.gz
+          echo 'f2017a17de2a8d5708f8354c6e7223f82da3dc6489675bce543ba00d9d529468  .cache/quality-tools/jscpd.tar.gz' | sha256sum --check
+          tar -xzf .cache/quality-tools/jscpd.tar.gz -C .cache/quality-tools
+      - name: Report integrity tests
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Staticcheck
+        run: python3 scripts/ci.py staticcheck staticcheck ./...
+      - name: Maintainability reports
+        if: success() || failure()
+        run: |
+          .cache/quality-tools/jscpd cmd internal --format go --ignore '**/*_test.go' --min-tokens 100 --min-lines 10 --reporters json,sarif --output build-results/duplication --fail-on-empty --baseline-from-ref "${QUALITY_BASE_SHA:-HEAD}" --no-tips
+          python3 scripts/quality.py maintainability
+      - name: Go vulnerability gate
+        id: vulnerabilities
+        if: success() || failure()
+        run: python3 scripts/ci.py govulncheck govulncheck ./...
+      - name: Go vulnerability annotations
+        if: success() || failure()
+        run: govulncheck -format sarif ./... > build-results/govulncheck.sarif
+      - name: Upload Go findings
+        if: (success() || failure()) && steps.vulnerabilities.outcome != 'skipped'
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: build-results/govulncheck.sarif
+          category: govulncheck-go
+      - if: always()
+        run: python3 scripts/ci.py summary
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quality-go
+          path: build-results/
+          retention-days: 30
+  codeql:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [go, python, actions]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: matrix.language == 'go'
+        with:
+          go-version: '1.26.9'
+          cache: true
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.language == 'go' && 'manual' || 'none' }}
+      - if: matrix.language == 'go'
+        run: make build
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: codeql-${{ matrix.language }}
+  dependencies:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
