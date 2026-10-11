@@ -99,7 +99,7 @@ func topic(t *testing.T, a *k.AdminClient, partitions int) string {
 	return name
 }
 
-// Topic creation acknowledgement can precede visibility to a new client.
+// Topic creation acknowledgement and leader metadata can precede offset availability.
 func waitTopicReady(t *testing.T, a *k.AdminClient, name string, partitions int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -119,9 +119,24 @@ func waitTopicReady(t *testing.T, a *k.AdminClient, name string, partitions int)
 			}
 		}
 		if ready {
-			return
+			request, done := context.WithTimeout(ctx, 5*time.Second)
+			queries := make(map[k.TopicPartition]k.OffsetSpec, partitions)
+			for id := range partitions {
+				queries[k.TopicPartition{Topic: &name, Partition: int32(id)}] = k.EarliestOffsetSpec
+			}
+			offsets, offsetErr := a.ListOffsets(request, queries, k.SetAdminRequestTimeout(4*time.Second))
+			done()
+			ready = offsetErr == nil && len(offsets.ResultInfos) == partitions
+			for _, offset := range offsets.ResultInfos {
+				ready = ready && offset.Error.Code() == k.ErrNoError && offset.Offset >= 0
+			}
+			if ready {
+				return
+			}
+			last = fmt.Sprintf("offset error=%v results=%+v", offsetErr, offsets.ResultInfos)
+		} else {
+			last = fmt.Sprintf("error=%v description=%+v", err, result.TopicDescriptions)
 		}
-		last = fmt.Sprintf("error=%v description=%+v", err, result.TopicDescriptions)
 		select {
 		case <-ctx.Done():
 			t.Fatalf("topic %s did not become ready: %s", name, last)

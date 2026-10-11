@@ -64,7 +64,7 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 
 Time-window arithmetic, boundaries and overflow use deterministic unit tests in `make check`. Set `FUZZ_ITERATIONS` to change the per-target fuzz budget; failures remain fatal.
 
-Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The qualification workflow defaults to 30 minutes, configurable on manual dispatch, and stalls the destination. Broker fixtures wait for readiness; startup coordinator-outage regressions use isolated mock-cluster subprocesses. [Native limits](client-compatibility.md#known-native-defects).
+Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The qualification workflow defaults to 30 minutes, configurable on manual dispatch, and stalls the destination. Plaintext fixtures warm the group coordinator with the Java CLI; TLS fixtures check readiness with consumer `Committed`. Broker integration therefore does not cover cold coordinator startup; isolated mock-cluster subprocesses test coordinator outages. [Native limits](client-compatibility.md#known-native-defects).
 
 ### Test results
 

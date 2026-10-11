@@ -152,7 +152,7 @@ func runNativeSubprocess(t *testing.T, s nativeScenario, helper string) nativeOu
 func TestInspectorCoordinatorTimeoutAndCleanup(t *testing.T) {
 	scenarios := map[string]nativeScenario{}
 	for _, operation := range []string{"groups", "offsets"} {
-		// The Go deadline must beat the 1 s socket default; the Inspector overrides native expiry to 4 s.
+		// The Inspector overrides the configured 1 s socket timeout with a 4 s native expiry.
 		recovered := nativeScenario{Operation: operation, GoTimeout: 2 * time.Second, RecoverAfter: 2200 * time.Millisecond, CloseAfter: time.Second}
 		scenarios[operation+" timeout, brokers recover before close"] = recovered
 		scenarios[operation+" timeout, brokers never recover"] = nativeScenario{Operation: operation, GoTimeout: 2 * time.Second}

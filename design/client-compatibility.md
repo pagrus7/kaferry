@@ -9,6 +9,7 @@ Deployment limits and Kafka access requirements. See [copy behavior](decisions.m
 | Gap | Limit / mitigation |
 | --- | --- |
 | Startup coordinator requests can abort in native code | Group inspection uses a 10 s Go deadline and a 20 s native timeout; failed-source cleanup runs before destination cleanup. Delaying close past the native timeout can still abort |
+| Transient inspection errors can stop startup or assignment | Coordinator and offset inspection errors are not retried; restart after broker readiness or recovery |
 | Native close can hang | Pending-lookup mock tests close successfully; the earlier hang's cause remains unconfirmed. Go contexts do not bound native close |
 | Blocking native commits are not bounded by Go contexts or socket timeout | The ten-second write-drain budget does not bound total shutdown |
 
