@@ -135,19 +135,23 @@ func TestNowRemainsSymbolicAndUsesOneInstant(t *testing.T) {
 
 func TestInvalidTimeExpressions(t *testing.T) {
 	// Given
-	filters := []string{
-		"RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00'",
-		"RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00.0000Z'",
-		"RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00,001Z'",
-		"RECORD_TIMESTAMP >= NOW() - INTERVAL '-1' SECOND",
-		"RECORD_TIMESTAMP >= NOW() - INTERVAL '9223372036854775807' HOUR",
-		"RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP < NOW()",
-		"RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP < NOW() - INTERVAL '1' SECOND",
-		"RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP > NOW()",
-		"RECORD_TIMESTAMP >= TIMESTAMP '2026-10-02T00:00:00Z' AND RECORD_TIMESTAMP < TIMESTAMP '2026-10-01T00:00:00Z'",
+	filters := []struct{ filter, want string }{
+		{"RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00'", "RFC 3339"},
+		{"RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00.0000Z'", "RFC 3339"},
+		{"RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00,001Z'", "RFC 3339"},
+		{"RECORD_TIMESTAMP >= TIMESTAMP '2026-02-30T00:00:00Z'", "RFC 3339"},
+		{"RECORD_TIMESTAMP >= NOW() - INTERVAL '-1' SECOND", "non-negative integer"},
+		{"RECORD_TIMESTAMP >= NOW() - INTERVAL '9223372036854775807' HOUR", "overflows"},
+		{"RECORD_TIMESTAMP >= NOW() + INTERVAL '9223372036854775808' SECOND", "too large"},
+		{"RECORD_TIMESTAMP >= NOW() + INTERVAL '9223372036854775' SECOND + INTERVAL '9223372036854775' SECOND", "overflows"},
+		{"RECORD_TIMESTAMP >= TIMESTAMP '9999-12-31T23:59:59Z' + INTERVAL '9223372036854775' SECOND", "overflows"},
+		{"RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP < NOW()", "empty"},
+		{"RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP < NOW() - INTERVAL '1' SECOND", "empty"},
+		{"RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP > NOW()", "at most one"},
+		{"RECORD_TIMESTAMP >= TIMESTAMP '2026-10-02T00:00:00Z' AND RECORD_TIMESTAMP < TIMESTAMP '2026-10-01T00:00:00Z'", "empty"},
 	}
-	for _, filter := range filters {
-		statement, err := sql.NewParser().Parse("INSERT INTO FILE cbor('b') SELECT * FROM FILE cbor('a') WHERE " + filter + " OPTIONS(GROUP='g')")
+	for _, tc := range filters {
+		statement, err := sql.NewParser().Parse("INSERT INTO FILE cbor('b') SELECT * FROM FILE cbor('a') WHERE " + tc.filter + " OPTIONS(GROUP='g')")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -156,9 +160,25 @@ func TestInvalidTimeExpressions(t *testing.T) {
 		_, buildErr := NewPlanner(environment{}).Build(statement, nil)
 
 		// Then
-		if buildErr == nil {
-			t.Errorf("accepted invalid filter: %s", filter)
+		if buildErr == nil || !strings.Contains(buildErr.Error(), tc.want) {
+			t.Errorf("filter %s: error = %v, want %q", tc.filter, buildErr, tc.want)
 		}
+	}
+}
+
+func TestPlannerRejectsOverflowingCutoff(t *testing.T) {
+	// Given valid SQL whose upper timestamp plus cutoff exceeds int64 milliseconds.
+	statement, err := sql.NewParser().Parse("INSERT INTO TOPIC 'b@staging' SELECT * FROM TOPIC 'a@prod' WHERE RECORD_TIMESTAMP < TIMESTAMP '9999-12-31T23:59:59Z' OPTIONS(GROUP='g', CUTOFF=INTERVAL '9223372036854775' SECOND)")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When compiling the copy plan, before any endpoint is opened.
+	_, err = NewPlanner(environment{}).Build(statement, profiles)
+
+	// Then the stopping threshold cannot wrap into an earlier time.
+	if err == nil || !strings.Contains(err.Error(), "overflows") {
+		t.Fatal("overflowing cutoff accepted", err)
 	}
 }
 
@@ -183,8 +203,10 @@ func TestInlinePrecedenceAndSecretRedaction(t *testing.T) {
 	if profiles["prod"]["bootstrap.servers"] != "prod:9092" {
 		t.Fatal("planner mutated input profiles")
 	}
-	if strings.Contains(fmt.Sprint(p), secret) {
-		t.Fatal("plan exposes secret in diagnostics")
+	for _, format := range []string{"%v", "%+v", "%#v"} {
+		if strings.Contains(fmt.Sprintf(format, p), secret) {
+			t.Fatal("plan exposes secret in diagnostics", format)
+		}
 	}
 	values := p.Source.Properties.Values()
 	values["sasl.password"] = "changed"
@@ -245,14 +267,22 @@ func TestStrictRFC3339AndPersistedWindow(t *testing.T) {
 	}
 	lo, hi := int64(100), int64(200)
 	spec := WindowSpec{Lower: &Expression{LiteralMS: lo}, Upper: &Expression{Now: true}}
-	for _, window := range []Window{{Upper: &hi}, {Lower: &lo}, {Lower: &hi, Upper: &lo}} {
+	for _, tc := range []struct {
+		window Window
+		want   string
+	}{
+		{Window{Upper: &hi}, "different bounds"},
+		{Window{Lower: &lo}, "different bounds"},
+		{Window{Lower: &hi, Upper: &lo}, "literal time bound differs"},
+		{Window{Lower: &lo, Upper: &lo}, "stored time range is empty"},
+	} {
 
 		// When
-		validateStoredErr := spec.ValidateStored(window, 0)
+		validateStoredErr := spec.ValidateStored(tc.window, 0)
 
 		// Then
-		if validateStoredErr == nil {
-			t.Fatal("accepted incompatible persisted window")
+		if validateStoredErr == nil || !strings.Contains(validateStoredErr.Error(), tc.want) {
+			t.Fatalf("stored window error = %v, want %q", validateStoredErr, tc.want)
 		}
 	}
 	if err := spec.ValidateStored(Window{Lower: &lo, Upper: &hi}, 0); err != nil {

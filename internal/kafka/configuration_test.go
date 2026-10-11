@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"errors"
 	"fmt"
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/config"
@@ -180,5 +181,34 @@ func TestConsumerPolicyReportsConflictsWithoutLeakingValues(t *testing.T) {
 	// Then the first protected property is deterministic and its value stays private.
 	if err == nil || err.Error() != `protected Kafka property "group.id" cannot be overridden` {
 		t.Fatal("wrong conflict diagnostic", err)
+	}
+}
+
+func TestConsumerFetchQueueOverrideRespectsByteBudget(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		valid bool
+	}{{"1", true}, {"2", true}, {"3", false}, {"0", false}, {"-1", false}, {"abc", false}} {
+		t.Run(tc.value, func(t *testing.T) {
+			// Given a 1,500-byte worker budget, rounded up to a 2 KiB fetch queue ceiling.
+			p := plan.Plan{Source: sinkEndpoint(t, map[string]string{"queued.max.messages.kbytes": tc.value}), Group: "copy-group"}
+			limits := config.Defaults("home").Worker
+			limits.ByteCap = 1500
+
+			// When applying the user's native consumer queue override.
+			properties, err := consumerConfig(p, limits)
+
+			// Then valid overrides are retained; excess or invalid capacity cannot disable the bound.
+			if tc.valid {
+				if err != nil || properties["queued.max.messages.kbytes"] != tc.value {
+					t.Fatal("valid queue override lost", properties, err)
+				}
+			} else {
+				var conflict *Conflict
+				if properties != nil || !errors.As(err, &conflict) {
+					t.Fatal("unsafe fetch queue accepted", properties, err)
+				}
+			}
+		})
 	}
 }

@@ -99,3 +99,41 @@ func TestControlRecordCursorAndTimestampStop(t *testing.T) {
 		t.Fatal("trigger marker retained")
 	}
 }
+
+func TestBackwardsSourceCursorCannotChangeProgressOrWork(t *testing.T) {
+	// Given saved progress followed by one outstanding write.
+	tracker := NewTracker()
+	tracker.Assign(Cursor{0, 10})
+	first, err := tracker.Observe(Cursor{0, 10}, 11, 7)
+	if err != nil || !tracker.Settle(first, true) {
+		t.Fatal("initial progress failed", err)
+	}
+	tracker.Committed(Cursor{0, 11})
+	pending, err := tracker.Observe(Cursor{0, 11}, 12, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When a source supplies a backwards record, next position, or EOF cursor.
+	for _, operation := range []func() error{
+		func() error { _, err := tracker.Observe(Cursor{0, 9}, 10, 100); return err },
+		func() error { _, err := tracker.Observe(Cursor{0, 12}, 11, 100); return err },
+		func() error { return tracker.Advance(Cursor{0, 5}) },
+	} {
+		err := operation()
+
+		// Then rejection leaves both saved progress and the outstanding work unchanged.
+		if records, bytes := tracker.Total(); err == nil || records != 1 || bytes != 9 || tracker.Saved(0) != 11 || tracker.Confirmed(0).Position != 11 {
+			t.Fatal("invalid cursor changed progress or work", err, records, bytes)
+		}
+	}
+
+	// When the legitimate outstanding write succeeds, then it still advances normally.
+	if !tracker.Settle(pending, true) || tracker.Confirmed(0).Position != 12 {
+		t.Fatal("cursor rejection damaged pending delivery")
+	}
+	tracker.Committed(Cursor{0, 12})
+	if records, bytes := tracker.Total(); records != 0 || bytes != 0 || tracker.Saved(0) != 12 {
+		t.Fatal("legitimate work could not be committed")
+	}
+}

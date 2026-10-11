@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pagrus7/kaferry/internal/plan"
 )
@@ -177,5 +179,37 @@ func TestDeferredRecordRetainsFollowingEOFUntilBudgetIsReleased(t *testing.T) {
 	// Then completion and saved progress include the whole source.
 	if err != nil || !r.finished() || store.saves[len(store.saves)-1][0].Position != 2 {
 		t.Fatal("deferred source did not finish", err, store.saves)
+	}
+}
+
+func TestDeferredRecordIsValidatedAfterBudgetIsReleased(t *testing.T) {
+	// Given a valid write and a timestamp-less input too large for the remaining byte budget.
+	r, source, sink, store, _ := fixture(t)
+	r.limits.ByteCap, r.limits.PartitionByteCap = 150, 150
+	lower := int64(1000)
+	r.plan.Window.Lower = &plan.Expression{LiteralMS: lower}
+	source.assignments[0].Window.Lower = &lower
+	first, second := incoming(0, 0, 30), incoming(0, 1, 200)
+	first.Record.TimestampMS = &lower
+	eof := Cursor{0, 2}
+	source.events = []Event{{Input: &first}, {Input: &second}, {EOF: &eof}}
+	acknowledged := false
+	sink.flush = func() error {
+		if r.deferred != nil && !acknowledged {
+			acknowledged = true
+			sink.reports <- Delivery{Token: sink.writes[0]}
+		}
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	// When the first write is confirmed, committed, and the held input is admitted.
+	err := r.Run(ctx)
+
+	// Then deferred admission keeps FAIL semantics and cannot publish or save the invalid record.
+	var invalid *RecordError
+	if !acknowledged || !errors.As(err, &invalid) || invalid.Class != "missing_timestamp" || exitCode(err) != 1 || len(sink.writes) != 1 || !reflect.DeepEqual(store.saves, [][]Cursor{{{0, 1}}}) {
+		t.Fatal("held input bypassed validation or failed to stop", err, store.saves, sink.writes)
 	}
 }

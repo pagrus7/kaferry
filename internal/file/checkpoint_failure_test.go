@@ -117,6 +117,41 @@ func TestCorruptCheckpointFailsAndReleasesLock(t *testing.T) {
 	}
 }
 
+func TestUnreadableCheckpointFailsAndReleasesLock(t *testing.T) {
+	// Given a checkpoint path that cannot be read as a file.
+	dir := t.TempDir()
+	path := checkpointPath(dir, "group")
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	// When a job attempts to resume that group's progress.
+	store, err := NewCheckpoints(dir, "group", DurableWriter{})
+
+	// Then a read failure cannot silently initialize fresh progress or alter the path.
+	if store != nil {
+		store.Close()
+		t.Fatal("unreadable checkpoint accepted")
+	}
+	info, statErr := os.Stat(path)
+	if err == nil || statErr != nil || !info.IsDir() {
+		t.Fatal("read failure was ignored or changed the checkpoint", err, statErr)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+
+	// When the path is repaired, then a new owner can acquire the released lock.
+	store, err = NewCheckpoints(dir, "group", DurableWriter{})
+	if err != nil {
+		t.Fatal("failed read retained the group lock", err)
+	}
+	defer store.Close()
+	if store.Existing() != nil {
+		t.Fatal("failed read persisted fresh progress")
+	}
+}
+
 func TestCheckpointRejectsInvalidSaveWithoutChangingDurableProgress(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
