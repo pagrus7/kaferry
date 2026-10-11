@@ -31,7 +31,7 @@ Tested with Apache Kafka 3.9.0.
 
 ## Known issues
 
-Since v0.2.1, a workaround turns tested coordinator timeouts at Kafka-source startup into a normal error (exit `1`) instead of a [librdkafka crash](https://github.com/confluentinc/librdkafka/pull/5397); other cases can still crash. This worker copies nothing and leaves saved progress unchanged; rerun after coordinator recovery. Production frequency is unknown. [Details](design/client-compatibility.md#known-issues).
+Since v0.2.1, a workaround turns tested coordinator timeouts at Kafka-source startup into a normal error (exit `1`) instead of a [librdkafka crash](https://github.com/confluentinc/librdkafka/pull/5397); other cases can still crash. Either way, the worker copies nothing and leaves saved progress unchanged; rerun after coordinator recovery. Production frequency is unknown. [Details](design/client-compatibility.md#known-issues).
 
 ## Quick start
 
