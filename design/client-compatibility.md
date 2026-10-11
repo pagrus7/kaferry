@@ -4,15 +4,15 @@ Deployment limits and Kafka access requirements. See [copy behavior](decisions.m
 
 ## Known native defects
 
-**Kaferry is not production-qualified.** Its bundled client has these unresolved limits:
+**Kaferry is not production-qualified.** Its bundled client has these limits:
 
-| Gap | Impact |
+| Gap | Limit / mitigation |
 | --- | --- |
-| Coordinator failures during Kafka-source startup | Native code can abort during `DescribeConsumerGroups` or `ListConsumerGroupOffsets` |
-| Cleanup after startup coordinator failures | Native close can hang indefinitely |
+| Startup coordinator requests can abort in native code | Group inspection uses a 10 s Go deadline and a 20 s native timeout; failed-source cleanup runs before destination cleanup. Delaying close past the native timeout can still abort |
+| Native close can hang | Pending-lookup mock tests close successfully; the earlier hang's cause remains unconfirmed. Go contexts do not bound native close |
 | Blocking native commits are not bounded by Go contexts or socket timeout | The ten-second write-drain budget does not bound total shutdown |
 
-No reliable mitigation is implemented. File-source runs do not perform startup group inspection.
+The timeout workaround requires closing the failed source handle before native expiry. The underlying use-after-free paths are addressed by [librdkafka PR 5397](https://github.com/confluentinc/librdkafka/pull/5397), not included in bundled 2.16.0. [Native regression tests](../internal/kafka/native_test.go) isolate coordinator timeout, recovery and cleanup under external deadlines. File-source runs do not inspect source groups.
 
 ## Verified baseline
 

@@ -64,7 +64,24 @@ type Inspector struct {
 	description k.TopicDescription
 	topicID     string
 	log         *slog.Logger
+	timeout     time.Duration // Go deadline per admin call; zero selects inspectTimeout
 }
+
+const inspectTimeout = 10 * time.Second
+
+func (i *Inspector) deadline() time.Duration {
+	if i.timeout <= 0 {
+		return inspectTimeout
+	}
+	return i.timeout
+}
+func (i *Inspector) context() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), i.deadline())
+}
+
+// Keep coordinator requests alive past the Go deadline until the engine closes the failed handle.
+// This mitigates native timeout crashes; see design/client-compatibility.md and native_test.go.
+func (i *Inspector) coordinatorTimeout() time.Duration { return 2 * i.deadline() }
 
 func NewInspector(clients Clients, properties plan.Properties, topic string, logger *slog.Logger) (Metadata, error) {
 	cfg := native(properties)
@@ -73,7 +90,7 @@ func NewInspector(clients Clients, properties plan.Properties, topic string, log
 		return nil, conflict("invalid Kafka connection configuration")
 	}
 	i := &Inspector{admin: a, topic: topic, log: logger}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := i.context()
 	defer cancel()
 	result, err := a.DescribeTopics(ctx, k.NewTopicCollectionOfTopicNames([]string{topic}))
 	if err != nil {
@@ -98,7 +115,7 @@ func NewInspector(clients Clients, properties plan.Properties, topic string, log
 }
 func (i *Inspector) Close() { i.admin.Close() }
 func (i *Inspector) ClusterID() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := i.context()
 	defer cancel()
 	return i.admin.ClusterID(ctx)
 }
@@ -112,7 +129,7 @@ func (i *Inspector) Parts() []k.TopicPartition {
 	return parts
 }
 func (i *Inspector) CurrentPartitions() ([]k.TopicPartition, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := i.context()
 	defer cancel()
 	return i.currentPartitions(ctx)
 }
@@ -135,13 +152,19 @@ func (i *Inspector) currentPartitions(ctx context.Context) ([]k.TopicPartition, 
 	return i.Parts(), nil
 }
 func (i *Inspector) Progress(group string) ([]k.TopicPartition, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := i.context()
 	defer cancel()
 	parts, err := i.currentPartitions(ctx)
 	if err != nil {
 		return nil, err
 	}
-	result, err := i.admin.ListConsumerGroupOffsets(ctx, []k.ConsumerGroupTopicPartitions{{Group: group, Partitions: parts}})
+	return i.groupOffsets(ctx, group, parts)
+}
+
+// groupOffsets reads the group's commits for parts; after CheckMembers it is the only coordinator request.
+func (i *Inspector) groupOffsets(ctx context.Context, group string, parts []k.TopicPartition) ([]k.TopicPartition, error) {
+	request := []k.ConsumerGroupTopicPartitions{{Group: group, Partitions: parts}}
+	result, err := i.admin.ListConsumerGroupOffsets(ctx, request, k.SetAdminRequestTimeout(i.coordinatorTimeout()))
 	if err != nil {
 		return nil, err
 	}
@@ -198,9 +221,9 @@ func validateWindow(progress Progress, spec plan.WindowSpec, cutoff int64) error
 	return nil
 }
 func (i *Inspector) CheckMembers(group string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := i.context()
 	defer cancel()
-	result, err := i.admin.DescribeConsumerGroups(ctx, []string{group})
+	result, err := i.admin.DescribeConsumerGroups(ctx, []string{group}, k.SetAdminRequestTimeout(i.coordinatorTimeout()))
 	if err != nil {
 		return err
 	}
@@ -227,7 +250,7 @@ func (i *Inspector) CheckMembers(group string) error {
 
 // Offsets lists one offset kind for many partitions in a single request.
 func (i *Inspector) Offsets(partitions []int32, spec k.OffsetSpec, readCommitted bool) (map[int32]int64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := i.context()
 	defer cancel()
 	request := make(map[k.TopicPartition]k.OffsetSpec, len(partitions))
 	for _, partition := range partitions {
@@ -267,7 +290,7 @@ func partitionInfos(result k.ListOffsetsResult, topic string) map[int32]k.ListOf
 	return infos
 }
 func (i *Inspector) Config() map[string]string {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := i.context()
 	defer cancel()
 	result, err := i.admin.DescribeConfigs(ctx, []k.ConfigResource{{Type: k.ResourceTopic, Name: i.topic}})
 	if err != nil || len(result) != 1 || result[0].Error.Code() != k.ErrNoError || result[0].Type != k.ResourceTopic || result[0].Name != i.topic {

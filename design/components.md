@@ -51,7 +51,7 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 
 | Command | Scope / prerequisite |
 | --- | --- |
-| `make check` | Vet and race-enabled unit/mock/file-component tests; no broker |
+| `make check` | Vet and race-enabled unit/mock/component tests, including native subprocess regressions; no external broker |
 | `make broker` | Start disposable source/destination Kafka clusters |
 | `make integration` | Broker/CLI paths, fidelity, resume and rebalances; run `make broker` first |
 | `make fault` | Outages and ownership loss; run `make broker` first |
@@ -64,7 +64,7 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 
 Time-window arithmetic, boundaries and overflow use deterministic unit tests in `make check`. Set `FUZZ_ITERATIONS` to change the per-target fuzz budget; failures remain fatal.
 
-Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The qualification workflow defaults to 30 minutes, configurable on manual dispatch, and stalls the destination. Fixtures warm the coordinator; passing them does not cover the [startup failure path](client-compatibility.md#known-native-defects).
+Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The qualification workflow defaults to 30 minutes, configurable on manual dispatch, and stalls the destination. Broker fixtures wait for readiness; startup coordinator-outage regressions use isolated mock-cluster subprocesses. [Native limits](client-compatibility.md#known-native-defects).
 
 ### Test results
 

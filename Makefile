@@ -14,7 +14,7 @@ check:
 	$(GO) test -race ./...
 broker:
 	docker compose -p kaferry-compat --profile cross-cluster up -d --wait --wait-timeout 60
-	# Initialize group coordinators in these disposable fixtures before native clients run.
+	# Listening sockets precede cold group-coordinator readiness.
 	docker compose -p kaferry-compat --profile cross-cluster exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group kaferry-compat-warmup --timeout 60000
 	docker compose -p kaferry-compat --profile cross-cluster exec -T kafka-dr /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group kaferry-compat-warmup --timeout 60000
 broker-down:
