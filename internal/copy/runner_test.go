@@ -79,6 +79,7 @@ func (*testSink) Close() {}
 type testStore struct {
 	saves  [][]Cursor
 	fail   map[int32]error
+	omit   map[int32]bool
 	onSave func()
 }
 
@@ -89,7 +90,9 @@ func (s *testStore) Save(_ context.Context, cursors []Cursor) (map[int32]error, 
 	}
 	out := make(map[int32]error)
 	for _, c := range cursors {
-		out[c.Partition] = s.fail[c.Partition]
+		if !s.omit[c.Partition] {
+			out[c.Partition] = s.fail[c.Partition]
+		}
 	}
 	return out, nil
 }
@@ -264,29 +267,43 @@ func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 }
 
 func TestPartialCommitReleasesSuccessfulPartitionsOnly(t *testing.T) {
-	// Given
-	r, _, d, p, _ := fixture(t)
-	_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}}, {Cursor: Cursor{1, 0}}})
-	for _, id := range []int32{0, 1} {
-		_ = r.input(incoming(id, 0, 1))
-	}
-	for _, tok := range d.writes {
-		d.reports <- Delivery{Token: tok}
-	}
-	_ = r.deliveries()
-	p.fail = map[int32]error{1: errors.New("commit failed")}
+	for _, scenario := range []string{"failed result", "missing result"} {
+		t.Run(scenario, func(t *testing.T) {
+			// Given confirmed writes on two partitions and one unconfirmed commit result.
+			r, _, d, p, _ := fixture(t)
+			if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}, {Cursor: Cursor{1, 0}}}); err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range []int32{0, 1} {
+				if err := r.input(incoming(id, 0, 1)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, tok := range d.writes {
+				d.reports <- Delivery{Token: tok}
+			}
+			if err := r.deliveries(); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "missing result" {
+				p.omit = map[int32]bool{1: true}
+			} else {
+				p.fail = map[int32]error{1: errors.New("commit failed")}
+			}
 
-	// When
-	commitErr := r.commit(r.ids())
+			// When saving both partitions' confirmed progress.
+			err := r.commit(r.ids())
 
-	// Then
-	if commitErr == nil {
-		t.Fatal("partial commit accepted")
-	}
-	n0, _ := r.tracker.Work(0)
-	n1, _ := r.tracker.Work(1)
-	if n0 != 0 || n1 != 1 {
-		t.Fatalf("released work=%d/%d", n0, n1)
+			// Then only the successful partition releases its work and advances saved progress.
+			n0, _ := r.tracker.Work(0)
+			n1, _ := r.tracker.Work(1)
+			if err == nil || n0 != 0 || n1 != 1 || r.tracker.Saved(0) != 1 || r.tracker.Saved(1) != 0 {
+				t.Fatalf("partial commit released work=%d/%d: %v", n0, n1, err)
+			}
+			if scenario == "missing result" && !strings.Contains(err.Error(), "missing commit result for partition 1") {
+				t.Fatal("missing result accepted", err)
+			}
+		})
 	}
 }
 

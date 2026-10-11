@@ -93,6 +93,41 @@ func TestFileSourceCannotAssignBeforeInitialCheckpoint(t *testing.T) {
 	}
 }
 
+func TestFileSourcePausePreservesTheNextFrame(t *testing.T) {
+	// Given one valid frame and a paused file source.
+	payload := []byte("record")
+	data := frame(payload)
+	decoder := &decoderMock{record: core.Record{Value: payload}}
+	checkpoints := &checkpointsMock{remembered: make(map[int64]FrameIdentity)}
+	source := &Source{file: readerCloser{bytes.NewReader(data)}, codec: decoder, checkpoints: checkpoints, size: int64(len(data))}
+	if err := source.Pause(0, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// When polling while paused, then no frame is decoded or checkpointed.
+	event, err := source.Poll(0)
+	if err != nil || event.Input != nil || event.EOF != nil || source.position != 0 || decoder.payload != nil || len(checkpoints.remembered) != 0 {
+		t.Fatal("paused source consumed its frame", event, err)
+	}
+
+	// When resumed, then that same first frame is delivered once, followed by EOF.
+	if err := source.Pause(0, false); err != nil {
+		t.Fatal(err)
+	}
+	event, err = source.Poll(0)
+	if err != nil || event.Input == nil || event.Input.Cursor.Position != 0 || event.Input.Next != int64(len(data)) || !bytes.Equal(event.Input.Record.Value, payload) {
+		t.Fatal("resume skipped or changed the frame", event, err)
+	}
+	event, err = source.Poll(0)
+	if err != nil || event.EOF == nil || event.EOF.Position != int64(len(data)) {
+		t.Fatal("EOF missing", event, err)
+	}
+	event, err = source.Poll(0)
+	if err != nil || event.Input != nil || event.EOF != nil {
+		t.Fatal("ended source emitted again", event, err)
+	}
+}
+
 type encoderMock struct{ err error }
 
 func (e encoderMock) EncodeRecord(core.Record) ([]byte, error) { return []byte("frame"), e.err }

@@ -144,6 +144,7 @@ type consumerMock struct {
 	commitErr, assignErr    error
 	resumeErr, watermarkErr error
 	resumed                 []k.TopicPartition
+	paused                  []k.TopicPartition
 	high                    int64
 	commits                 []k.TopicPartition
 	committed               []k.TopicPartition
@@ -188,6 +189,11 @@ func (c *consumerMock) Resume(parts []k.TopicPartition) error {
 	c.action("resume")
 	c.resumed = append(c.resumed, parts...)
 	return c.resumeErr
+}
+
+func (c *consumerMock) Pause(parts []k.TopicPartition) error {
+	c.paused = append(c.paused, parts...)
+	return nil
 }
 
 func (c *consumerMock) QueryWatermarkOffsets(string, int32, int) (int64, int64, error) {
@@ -297,6 +303,7 @@ type adminMock struct {
 	groupOffsets  k.ListConsumerGroupOffsetsResult
 	requested     []k.ConsumerGroupTopicPartitions
 	offsetResult  k.ListOffsetsResult
+	offsetErr     error
 	groups        k.DescribeConsumerGroupsResult
 	configs       []k.ConfigResourceResult
 	configErr     error
@@ -314,7 +321,7 @@ func (a *adminMock) ListConsumerGroupOffsets(_ context.Context, request []k.Cons
 }
 
 func (a *adminMock) ListOffsets(context.Context, map[k.TopicPartition]k.OffsetSpec, ...k.ListOffsetsAdminOption) (k.ListOffsetsResult, error) {
-	return a.offsetResult, nil
+	return a.offsetResult, a.offsetErr
 }
 
 func (a *adminMock) DescribeConsumerGroups(context.Context, []string, ...k.DescribeConsumerGroupsAdminOption) (k.DescribeConsumerGroupsResult, error) {

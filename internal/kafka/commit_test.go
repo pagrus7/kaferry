@@ -71,3 +71,31 @@ func TestKafkaFileCommitUsesDurableExtent(t *testing.T) {
 		}
 	}
 }
+
+func TestCommitterRejectsCanceledOrForeignOutputBeforeNativeCommit(t *testing.T) {
+	for _, scenario := range []string{"canceled", "foreign output"} {
+		t.Run(scenario, func(t *testing.T) {
+			// Given saved output identity and a canceled query or replacement archive.
+			native := &capturedCommits{}
+			progress := Progress{Fingerprint: "fp", TopicID: "topic-id", FileID: "archive-id", Extent: 128}
+			if scenario == "foreign output" {
+				progress.FileID = "another-archive"
+			}
+			store := &Committer{consumer: native, topic: "orders", output: &durableExtent{extent: 256}, metadata: map[int32]Progress{0: progress}}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if scenario == "canceled" {
+				cancel()
+			}
+
+			// When attempting to save confirmed progress.
+			results, err := store.Save(ctx, []core.Cursor{{Position: 5}})
+
+			// Then no offset or metadata is changed; the cause distinguishes conflicts.
+			var conflict *Conflict
+			if results != nil || len(native.parts) != 0 || store.metadata[0] != progress || scenario == "canceled" && !errors.Is(err, context.Canceled) || scenario == "foreign output" && !errors.As(err, &conflict) {
+				t.Fatal("invalid save reached native commit", results, native.parts, err)
+			}
+		})
+	}
+}

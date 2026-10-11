@@ -195,3 +195,91 @@ func TestInspectorRecognizesKaferryWorkers(t *testing.T) {
 		})
 	}
 }
+
+func TestInspectorOffsetsRequireEverySuccessfulPartition(t *testing.T) {
+	for _, scenario := range []string{"success", "RPC failed", "partition denied"} {
+		t.Run(scenario, func(t *testing.T) {
+			// Given distinct offsets for two partitions returned with fresh topic pointers.
+			topic := "orders"
+			failure := k.NewError(k.ErrTopicAuthorizationFailed, "denied", false)
+			admin := &adminMock{offsetResult: k.ListOffsetsResult{ResultInfos: map[k.TopicPartition]k.ListOffsetsResultInfo{
+				{Topic: &topic, Partition: 0}: {Offset: 17},
+				{Topic: &topic, Partition: 3}: {Offset: 42},
+			}}}
+			if scenario == "RPC failed" {
+				admin.offsetErr = failure
+			} else if scenario == "partition denied" {
+				admin.offsetResult.ResultInfos[k.TopicPartition{Topic: &topic, Partition: 3}] = k.ListOffsetsResultInfo{Error: failure}
+			}
+			inspector := &Inspector{admin: admin, topic: "orders", log: quietLogger()}
+
+			// When requesting the read-committed end offsets together.
+			got, err := inspector.Offsets([]int32{0, 3}, k.LatestOffsetSpec, true)
+
+			// Then complete results preserve each offset; failures never return partial starts.
+			if scenario == "success" {
+				if err != nil || !reflect.DeepEqual(got, map[int32]int64{0: 17, 3: 42}) {
+					t.Fatal("partition offsets changed", got, err)
+				}
+			} else if !errors.Is(err, failure) || got != nil {
+				t.Fatal("failed offset lookup returned usable starts", got, err)
+			}
+		})
+	}
+}
+
+func TestInspectorAllowsAbsentGroupButRejectsDeniedGroup(t *testing.T) {
+	for _, code := range []k.ErrorCode{k.ErrGroupIDNotFound, k.ErrGroupAuthorizationFailed} {
+		t.Run(code.String(), func(t *testing.T) {
+			// Given a group that is absent or inaccessible to this principal.
+			failure := k.NewError(code, "group unavailable", false)
+			admin := &adminMock{groups: k.DescribeConsumerGroupsResult{ConsumerGroupDescriptions: []k.ConsumerGroupDescription{{Error: failure}}}}
+			inspector := &Inspector{admin: admin, topic: "orders", log: quietLogger()}
+
+			// When checking whether workers may use the group.
+			err := inspector.CheckMembers("group")
+
+			// Then a fresh group is allowed, while denied access preserves its cause.
+			if code == k.ErrGroupIDNotFound && err != nil || code == k.ErrGroupAuthorizationFailed && !errors.Is(err, failure) {
+				t.Fatal("group absence confused with authorization failure", err)
+			}
+		})
+	}
+}
+
+func TestInspectorStartupFailuresDoNotLeakAdminOrConfiguration(t *testing.T) {
+	for _, scenario := range []string{"configuration", "RPC failed", "topic denied"} {
+		t.Run(scenario, func(t *testing.T) {
+			// Given a connection or topic inspection failure.
+			failure := errors.New("unique-connection-secret")
+			admin := &adminMock{}
+			clients := &mockClients{admin: admin}
+			switch scenario {
+			case "configuration":
+				clients.err = failure
+			case "RPC failed":
+				admin.describeErr = failure
+			case "topic denied":
+				admin.described.TopicDescriptions = []k.TopicDescription{{Name: "orders", Error: k.NewError(k.ErrTopicAuthorizationFailed, "denied", false)}}
+			}
+
+			// When opening metadata inspection.
+			metadata, err := NewInspector(clients, plan.Properties{}, "orders", quietLogger())
+
+			// Then startup fails and closes each successfully created native handle.
+			if metadata != nil || err == nil || admin.closed != (scenario != "configuration") {
+				t.Fatal("failed startup leaked its handle", metadata, err, admin.closed)
+			}
+			if scenario == "RPC failed" {
+				if !errors.Is(err, failure) {
+					t.Fatal("RPC cause lost", err)
+				}
+			} else {
+				var conflict *Conflict
+				if !errors.As(err, &conflict) || strings.Contains(err.Error(), "unique-connection-secret") {
+					t.Fatal("startup conflict exposed connection properties", err)
+				}
+			}
+		})
+	}
+}
