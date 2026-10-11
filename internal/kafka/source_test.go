@@ -256,20 +256,39 @@ func TestSourceAppliesPositioningAndRequiresEveryInitialCommitResult(t *testing.
 }
 
 func TestSourceDecodesFullRecordWithoutNativeClient(t *testing.T) {
-	// Given
-	timestamp := time.UnixMilli(12345)
-	message := &k.Message{TopicPartition: k.TopicPartition{Partition: 3, Offset: 42}, Key: nil, Value: []byte{}, Timestamp: timestamp, TimestampType: k.TimestampLogAppendTime, Headers: []k.Header{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}}
-	source, _ := sourceWithMocks(t, &consumerMock{events: []k.Event{message}}, &sourceMetadataMock{}, nil)
+	for _, tc := range []struct {
+		name string
+		kind k.TimestampType
+		want string
+	}{
+		{"broker timestamp", k.TimestampLogAppendTime, "log_append_time"},
+		{"producer timestamp", k.TimestampCreateTime, "create_time"},
+		{"unavailable timestamp", k.TimestampNotAvailable, "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given a Kafka record with nulls, duplicate headers and a timestamp type.
+			topic := "orders"
+			message := &k.Message{TopicPartition: k.TopicPartition{Topic: &topic, Partition: 3, Offset: 42}, Key: nil, Value: []byte{}, Timestamp: time.UnixMilli(12345), TimestampType: tc.kind, Headers: []k.Header{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}}
+			source, _ := sourceWithMocks(t, &consumerMock{events: []k.Event{message}}, &sourceMetadataMock{}, nil)
 
-	// When
-	event, err := source.Poll(0)
+			// When polling through the source interface.
+			event, err := source.Poll(0)
 
-	// Then
-	if err != nil || event.Input == nil {
-		t.Fatal("record missing", err)
-	}
-	record := event.Input.Record
-	if record.Key != nil || record.Value == nil || record.TimestampMS == nil || *record.TimestampMS != 12345 || record.TimestampType != "log_append_time" || !reflect.DeepEqual(record.Headers, []core.Header{{Name: "dup", Value: nil}, {Name: "dup", Value: []byte{}}}) || record.Source.Offset != 42 || event.Input.Next != 43 {
-		t.Fatal("logical record changed", record)
+			// Then all logical fields and the next offset are preserved.
+			if err != nil || event.Input == nil {
+				t.Fatal("record missing", err)
+			}
+			record := event.Input.Record
+			if record.Key != nil || record.Value == nil || record.TimestampType != tc.want || !reflect.DeepEqual(record.Headers, []core.Header{{Name: "dup", Value: nil}, {Name: "dup", Value: []byte{}}}) || record.Source.Topic != topic || record.Source.Partition != 3 || record.Source.Offset != 42 || event.Input.Next != 43 {
+				t.Fatal("logical record changed", record)
+			}
+			if tc.kind == k.TimestampNotAvailable {
+				if record.TimestampMS != nil {
+					t.Fatal("absent timestamp invented", record.TimestampMS)
+				}
+			} else if record.TimestampMS == nil || *record.TimestampMS != 12345 {
+				t.Fatal("timestamp changed", record.TimestampMS)
+			}
+		})
 	}
 }

@@ -16,7 +16,7 @@ import (
 
 func TestSinkRoutesRawRecordsAndAttributesDeliveryFailures(t *testing.T) {
 	// Given
-	producer := &producerMock{events: make(chan k.Event, 4)}
+	producer := &producerMock{events: make(chan k.Event, 6)}
 	clients := &mockClients{producer: producer}
 	clock := &fixedClock{now: time.UnixMilli(12345)}
 	metadata := destinationMetadataMock{cfg: map[string]string{"message.timestamp.type": "CreateTime", "max.message.bytes": "10000"}, count: 5}
@@ -45,6 +45,9 @@ func TestSinkRoutesRawRecordsAndAttributesDeliveryFailures(t *testing.T) {
 	}
 	failure := k.NewError(k.ErrTopicAuthorizationFailed, "denied", false)
 	message.TopicPartition.Error = failure
+	// Untagged deliveries and nonfatal connection notices must not settle a record.
+	producer.events <- &k.Message{}
+	producer.events <- k.NewError(k.ErrTransport, "reconnecting", false)
 	producer.events <- message
 	producer.events <- k.NewError(k.ErrAllBrokersDown, "fatal", true)
 	for _, fatal := range []bool{false, true} {
@@ -61,6 +64,11 @@ func TestSinkRoutesRawRecordsAndAttributesDeliveryFailures(t *testing.T) {
 	var busy *core.Busy
 	if err := sink.Submit(record, token); !errors.As(err, &busy) {
 		t.Fatal("queue-full error lost", err)
+	}
+	producer.err = k.NewError(k.ErrMsgSizeTooLarge, "too large", false)
+	var rejected *core.RecordError
+	if err := sink.Submit(record, token); !errors.As(err, &rejected) || rejected.Class != "validation" {
+		t.Fatal("synchronous rejection was not a record error", err)
 	}
 }
 

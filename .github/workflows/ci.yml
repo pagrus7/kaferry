@@ -24,7 +24,7 @@ jobs:
           cache: true
       - run: test -z "$(gofmt -l cmd internal tests)"
       - run: python3 scripts/ci.py vet go vet ./...
-      - run: python3 scripts/ci.py unit go test -count=1 -json -race -coverprofile=build-results/coverage.out ./...
+      - run: python3 scripts/ci.py unit go test -count=1 -json -race -coverpkg=./... -coverprofile=build-results/coverage.out ./...
       - name: Coverage reports
         run: |
           python3 scripts/quality.py coverage
@@ -51,6 +51,9 @@ jobs:
   kafka:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
     env:
       KAFKA_TEST_BROKERS: 127.0.0.1:39092
       KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
@@ -61,7 +64,20 @@ jobs:
           go-version: '1.26.9'
           cache: true
       - run: python3 scripts/ci.py broker make broker
-      - run: python3 scripts/ci.py integration go test -count=1 -json -race -tags=integration ./...
+      - run: python3 scripts/ci.py integration go test -count=1 -json -race -tags=integration -coverpkg=./... -coverprofile=build-results/coverage.out ./...
+      - name: Coverage reports
+        run: |
+          python3 scripts/quality.py coverage
+          go tool cover -html=build-results/coverage.out -o=build-results/coverage.html
+      - name: Publish Go coverage
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: build-results/coverage.out
+          disable_search: true
+          flags: go
+          use_oidc: true
+          version: v11.3.1
+          fail_ci_if_error: true
       - if: always()
         run: |
           mkdir -p build-results

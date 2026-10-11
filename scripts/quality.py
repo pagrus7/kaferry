@@ -104,7 +104,7 @@ def markdown(directory):
     if profile.exists():
         r = json.loads(profile.read_text())
         rows += ["## Go coverage", "", f"**{r['percent']:.1f}% of statements** ({r['covered']}/{r['statements']}). "
-                 "Race-enabled unit, mock and file-component tests; excludes native C/C++.", "",
+                 "All Go packages instrumented; excludes native C/C++.", "",
                  "| Package | Statement coverage |", "| --- | ---: |"]
         for name, counts in sorted(r["packages"].items()):
             percent = f"{counts['covered'] * 100 / counts['statements']:.1f}%" if counts["statements"] else "—"
