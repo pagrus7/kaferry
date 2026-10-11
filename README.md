@@ -15,7 +15,7 @@ Preserves raw keys, values, nulls, ordered headers and timestamps where possible
 
 Implementation is AI-driven, using Codex and Claude Code under human direction.
 
-**Status:** Kaferry is not production-qualified. Kafka-source coordinator timeouts have a cleanup-dependent workaround; native shutdown remains unbounded. [Client limits and permissions](design/client-compatibility.md).
+**Known issue:** A [librdkafka bug](https://github.com/confluentinc/librdkafka/pull/5397) can crash Kafka-source startup during coordinator failures. Current source mitigates the tested timeout cases; v0.2.0 downloads lack this workaround. The affected checks run before copying; production frequency is unknown. [Details and limits](design/client-compatibility.md).
 
 ## Install
 

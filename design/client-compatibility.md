@@ -2,20 +2,22 @@
 
 Deployment limits and Kafka access requirements. See [copy behavior](decisions.md) and [installation](../README.md#install).
 
-## Known native defects
+## Known issues
 
-**Kaferry is not production-qualified.** Its bundled client has these limits:
+A [librdkafka use-after-free bug](https://github.com/confluentinc/librdkafka/pull/5397) can abort the process during coordinator failures. In Kaferry, the affected admin calls inspect source groups at startup, before that worker copies records. File-source runs skip these calls.
 
-| Gap | Limit / mitigation |
+**Risk:** startup failure with a process crash; production frequency is unknown. Current source mitigates the tested timeout cases by using a 10 s Go deadline, a 20 s native timeout and immediate failed-source cleanup. Cleanup delayed past native expiry can still crash. The upstream fix is not in bundled librdkafka 2.16.0; published v0.2.0 uses 2.15.0 and lacks this workaround.
+
+[Native regression tests](../internal/kafka/native_test.go) pass five timeout/recovery cases, including brokers that remain unavailable. The [extended test run](https://github.com/pagrus7/kaferry/actions/runs/38117769179) passed a 30-minute soak with destination stalls. These results establish tested behavior, not a production failure rate.
+
+Other limits:
+
+| Limit | Behavior |
 | --- | --- |
-| Startup coordinator requests can abort in native code | Group inspection uses a 10 s Go deadline and a 20 s native timeout; failed-source cleanup runs before destination cleanup. Delaying close past the native timeout can still abort |
-| Transient inspection errors can stop startup or assignment | Coordinator and offset inspection errors are not retried; restart after broker readiness or recovery |
-| Native close can hang | Pending-lookup mock tests close successfully; the earlier hang's cause remains unconfirmed. Go contexts do not bound native close |
-| Blocking native commits are not bounded by Go contexts or socket timeout | The ten-second write-drain budget does not bound total shutdown |
+| Transient inspection errors | Startup or assignment can fail; inspection errors are not retried. Restart after broker recovery |
+| No hard deadline for native commit or close | The ten-second write-drain budget does not bound total shutdown. Current cleanup tests finish successfully |
 
-The timeout workaround requires closing the failed source handle before native expiry. The underlying use-after-free paths are addressed by [librdkafka PR 5397](https://github.com/confluentinc/librdkafka/pull/5397), not included in bundled 2.16.0. [Native regression tests](../internal/kafka/native_test.go) isolate coordinator timeout, recovery and cleanup under external deadlines. File-source runs do not inspect source groups.
-
-## Verified baseline
+## Tested configurations
 
 | Area | Tested configuration |
 | --- | --- |
@@ -25,9 +27,9 @@ The timeout workaround requires closing the failed source handle before native e
 | Client authentication | SASL/PLAIN over TLS |
 | Failover | Replication factor 3, minimum ISR 2, destination-leader failure |
 
-Other brokers, authorizers, authentication mechanisms and deployment workloads require validation. Test fixtures use plaintext internal broker/controller listeners; encrypted internal traffic is untested. Passing fixtures do not establish reliable recovery from the native defects above.
+Test other brokers, authorizers, authentication mechanisms and deployment workloads before relying on them. Fixtures use plaintext internal broker/controller listeners; encrypted internal traffic is untested.
 
-[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) and [qualification](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) retain results for 30 days. [Test commands](components.md#test-targets).
+[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) and [extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) retain results for 30 days. [Test commands](components.md#test-targets).
 
 ## Permissions
 
