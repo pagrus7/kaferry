@@ -108,6 +108,6 @@ Missing measurements are unavailable. Coverage and Go vulnerability scans exclud
 
 The release workflow produces per-platform SPDX SBOMs, native inventory/license text, archive provenance and binary SBOM attestations. Syft inventories the binary; the native supplement identifies the selected librdkafka archive and observed version strings. Bundled licenses do not prove every component was linked; native vulnerability coverage is incomplete.
 
-For releases built by the current workflow, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document`. Attestations establish build origin. Releases through v0.2.0 have checksums/build information but lack these SBOMs and attestations.
+For downloads with attestation bundles, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document`. Attestations establish build origin. Downloads without these bundles can be checked against `SHA256SUMS` for file integrity.
 
 Pushing a `v*` tag publishes after successful builds. Manual dispatch defaults to validation only; publishing requires selecting the version tag as the workflow ref. Checkout must match the attested workflow SHA. [Release procedure and note format](../releases/README.md).

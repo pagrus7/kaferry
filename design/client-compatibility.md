@@ -4,13 +4,15 @@ Deployment limits and Kafka access requirements. See [copy behavior](decisions.m
 
 ## Known issues
 
-Since v0.2.1, a workaround turns tested group-coordinator timeouts at Kafka-source startup into a normal error (exit `1`) instead of a [librdkafka crash](https://github.com/confluentinc/librdkafka/pull/5397); other cases can still crash.
+On a coordinator timeout, Kafka-source startup closes its client so it can exit `1`; slow cleanup or other coordinator failures can still cause a [librdkafka crash](https://github.com/confluentinc/librdkafka/pull/5397) (signal exit).
 
-**Scope and impact:** the affected [coordinator requests](#production-admin-inventory) run before Kaferry creates the consumer or opens output. File sources and runs already copying do not send them. Whether startup fails normally or crashes, this worker copies nothing and leaves saved progress unchanged. Rerun after coordinator recovery.
+**Scope and impact:** these [coordinator requests](#production-admin-inventory) run before Kaferry creates the consumer or opens output. File sources and runs already copying do not send them. Whether startup fails normally or crashes, this worker copies nothing and leaves saved progress unchanged. Rerun the same query and group after the coordinator recovers.
 
-**Workaround:** coordinator requests have a 10 s Go deadline and a 20 s librdkafka timeout. At the Go deadline, startup fails with `context deadline exceeded` and closes the source admin client immediately, leaving about 10 s for cleanup before the native timeout. Five [mock-cluster cases](../internal/kafka/native_test.go) pass with shortened timeouts, including brokers that remain unavailable or recover. Broker tests warm the coordinator and do not exercise this path.
+**Timeout handling:** each request has a 10 s Go deadline and a 20 s librdkafka timeout. The Go deadline returns `context deadline exceeded` without cancelling the native request. Startup begins closing the source admin client immediately, giving cleanup about 10 s before native expiry. Native close has no enforced overall deadline, so this does not bound total startup time.
 
-**Remaining risk:** the underlying use-after-free bug remains. Cleanup delayed past the native timeout can still crash; the workaround is not verified for every upstream error path, including dropped connections. A crash uses a signal exit status. Production frequency is unknown. Bundled librdkafka 2.16.0 lacks the upstream fix; releases through v0.2.0 use 2.15.0 and lack the workaround.
+**Remaining risk:** bundled librdkafka 2.16.0 lacks the upstream use-after-free fix. Cleanup delayed past native expiry can still crash, and other error paths, including dropped connections, are not all verified. Crash frequency in production is unknown.
+
+**Test coverage:** five [isolated mock-cluster cases](../internal/kafka/native_test.go) pass with shortened timeouts: four cover both coordinator requests timing out while brokers stay down or recover after the deadline; one covers offsets succeeding after early recovery. Broker integration warms the coordinator and does not exercise cold startup.
 
 ## Tested configurations
 

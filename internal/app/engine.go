@@ -65,6 +65,7 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Work
 	}
 	input, progress, err := e.sourceProgress(p, fp, limits, sourceEndpoint.connection)
 	if err != nil {
+		// Begin cleanup before native coordinator requests expire; see design/client-compatibility.md#known-issues.
 		sourceEndpoint.close()
 		return err
 	}

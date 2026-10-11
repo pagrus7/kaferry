@@ -18,6 +18,14 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check current-behavior wording
+        run: |
+          wording_status=0
+          git grep -nEi '(since|as of|starting (in|with)|introduced in)[[:space:]]+v[0-9]+\.[0-9]+|first[[:space:]]+observed[[:space:]]+(on|in)[[:space:]]+[0-9]{4}' -- README.md docs design cmd internal ':!design/debates' || wording_status=$?
+          if [ "$wording_status" -ne 1 ]; then
+            echo 'Living docs, comments and diagnostics must describe current behavior; keep release and investigation history in release notes, commits or PRs.'
+            exit 1
+          fi
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.9'
