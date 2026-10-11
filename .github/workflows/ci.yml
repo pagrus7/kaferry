@@ -21,7 +21,7 @@ jobs:
       - name: Check current-behavior wording
         run: |
           wording_status=0
-          git grep -nEi '(since|as of|starting (in|with)|introduced in)[[:space:]]+v[0-9]+\.[0-9]+|first[[:space:]]+observed[[:space:]]+(on|in)[[:space:]]+[0-9]{4}' -- README.md docs design cmd internal ':!design/debates' || wording_status=$?
+          git grep -nEi '(since|as of|through|until|prior to|starting (in|with)|introduced in)[[:space:]]+v[0-9]+\.[0-9]+|first[[:space:]]+observed[[:space:]]+(on|in)[[:space:]]+[0-9]{4}' -- README.md docs design cmd internal ':!design/debates' || wording_status=$?
           if [ "$wording_status" -ne 1 ]; then
             echo 'Living docs, comments and diagnostics must describe current behavior; keep release and investigation history in release notes, commits or PRs.'
             exit 1
