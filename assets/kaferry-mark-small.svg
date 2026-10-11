@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="16" height="16" role="img" aria-labelledby="title desc">
+<title id="title">Kaferry small mark</title>
+<desc id="desc">A ferry carrying three record blocks; waves omitted for small sizes.</desc>
+<rect x="24" y="44" width="22" height="20" rx="3" fill="#0E2A47"/>
+<rect x="50" y="44" width="22" height="20" rx="3" fill="#0E2A47"/>
+<rect x="76" y="44" width="22" height="20" rx="3" fill="#E8662E"/>
+<path d="M14 68H108L95 90H21Z" fill="#0E2A47"/>
+</svg>

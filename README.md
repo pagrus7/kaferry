@@ -1,6 +1,9 @@
 # Kaferry
 
-<img src="assets/kaferry-logo.svg" alt="Kaferry — a ferry carrying a SQL asterisk" width="600">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/kaferry-logo-dark.svg">
+  <img src="assets/kaferry-logo.svg" alt="Kaferry — a ferry carrying record blocks; copy Kafka records with SQL" width="600">
+</picture>
 
 Copy Kafka records between topics and CBOR files with one SQL-like statement.
 
