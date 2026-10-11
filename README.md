@@ -12,7 +12,7 @@ Implementation is AI-driven, using Codex and Claude Code under human direction.
 
 ## Install
 
-[Download Kaferry](https://github.com/pagrus7/kaferry/releases/latest): Linux AMD64/ARM64 (glibc 2.34+) or macOS ARM64, with `SHA256SUMS`. Source builds need Go 1.26+, a C compiler and CGO; librdkafka is bundled.
+[Download Kaferry](https://github.com/pagrus7/kaferry/releases/latest): Linux AMD64/ARM64 (glibc 2.34+) or macOS 14+ ARM64, with `SHA256SUMS`. Source builds need Go 1.26+, a C compiler and CGO; librdkafka is bundled.
 
 Extract the archive and run `kaferry`. `GROUP = ONE_OFF` generates IDs with the `kaferry-` prefix; authorize that prefix when using Kafka groups.
 
