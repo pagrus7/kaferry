@@ -7,7 +7,7 @@ require (
 	github.com/fxamacker/cbor/v2 v2.9.6
 	github.com/pelletier/go-toml/v2 v2.4.3
 	go.uber.org/fx v1.24.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
