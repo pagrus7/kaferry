@@ -28,7 +28,7 @@ type Progress struct {
 	Extent      int64        `json:"extent,omitempty"`
 }
 
-// The v1 wire prefix stays stable across the Kaferry rename.
+// The v1 wire prefix is fixed; changing it makes saved progress unreadable.
 func (p Progress) Encode() string { data, _ := json.Marshal(p); return "kfwd2:1;" + string(data) }
 func decodeProgress(metadata *string, fp, topicID string, relative bool) (Progress, error) {
 	var progress Progress
