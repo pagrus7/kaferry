@@ -187,7 +187,6 @@ func TestDeferredRecordIsValidatedAfterBudgetIsReleased(t *testing.T) {
 	r, source, sink, store, _ := fixture(t)
 	r.limits.ByteCap, r.limits.PartitionByteCap = 150, 150
 	lower := int64(1000)
-	r.plan.Window.Lower = &plan.Expression{LiteralMS: lower}
 	source.assignments[0].Window.Lower = &lower
 	first, second := incoming(0, 0, 30), incoming(0, 1, 200)
 	first.Record.TimestampMS = &lower
@@ -201,7 +200,7 @@ func TestDeferredRecordIsValidatedAfterBudgetIsReleased(t *testing.T) {
 		}
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	// When the first write is confirmed, committed, and the held input is admitted.

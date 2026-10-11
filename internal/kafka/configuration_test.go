@@ -187,21 +187,25 @@ func TestConsumerPolicyReportsConflictsWithoutLeakingValues(t *testing.T) {
 func TestConsumerFetchQueueOverrideRespectsByteBudget(t *testing.T) {
 	for _, tc := range []struct {
 		value string
-		valid bool
-	}{{"1", true}, {"2", true}, {"3", false}, {"0", false}, {"-1", false}, {"abc", false}} {
+		want  string
+	}{{"", "2"}, {"1", "1"}, {"2", "2"}, {"3", ""}, {"0", ""}, {"-1", ""}, {"abc", ""}} {
 		t.Run(tc.value, func(t *testing.T) {
 			// Given a 1,500-byte worker budget, rounded up to a 2 KiB fetch queue ceiling.
-			p := plan.Plan{Source: sinkEndpoint(t, map[string]string{"queued.max.messages.kbytes": tc.value}), Group: "copy-group"}
+			overrides := map[string]string{}
+			if tc.value != "" {
+				overrides["queued.max.messages.kbytes"] = tc.value
+			}
+			p := plan.Plan{Source: sinkEndpoint(t, overrides), Group: "copy-group"}
 			limits := config.Defaults("home").Worker
 			limits.ByteCap = 1500
 
-			// When applying the user's native consumer queue override.
+			// When deriving the native consumer queue size.
 			properties, err := consumerConfig(p, limits)
 
-			// Then valid overrides are retained; excess or invalid capacity cannot disable the bound.
-			if tc.valid {
-				if err != nil || properties["queued.max.messages.kbytes"] != tc.value {
-					t.Fatal("valid queue override lost", properties, err)
+			// Then defaults and valid overrides respect the bound; unsafe capacity is rejected.
+			if tc.want != "" {
+				if err != nil || properties["queued.max.messages.kbytes"] != tc.want {
+					t.Fatal("wrong fetch queue bound", properties, err)
 				}
 			} else {
 				var conflict *Conflict

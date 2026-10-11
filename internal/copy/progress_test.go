@@ -109,6 +109,12 @@ func TestBackwardsSourceCursorCannotChangeProgressOrWork(t *testing.T) {
 		t.Fatal("initial progress failed", err)
 	}
 	tracker.Committed(Cursor{0, 11})
+	// When a source redelivers below the saved position with no outstanding work.
+	_, err = tracker.Observe(Cursor{0, 10}, 11, 1)
+	// Then rejection keeps the durable cursor and budget unchanged.
+	if records, bytes := tracker.Total(); err == nil || records != 0 || bytes != 0 || tracker.Saved(0) != 11 || tracker.Confirmed(0).Position != 11 {
+		t.Fatal("backwards record changed saved progress", err, records, bytes)
+	}
 	pending, err := tracker.Observe(Cursor{0, 11}, 12, 9)
 	if err != nil {
 		t.Fatal(err)

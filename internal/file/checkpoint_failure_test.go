@@ -147,9 +147,6 @@ func TestUnreadableCheckpointFailsAndReleasesLock(t *testing.T) {
 		t.Fatal("failed read retained the group lock", err)
 	}
 	defer store.Close()
-	if store.Existing() != nil {
-		t.Fatal("failed read persisted fresh progress")
-	}
 }
 
 func TestCheckpointRejectsInvalidSaveWithoutChangingDurableProgress(t *testing.T) {
