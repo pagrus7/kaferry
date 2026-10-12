@@ -64,7 +64,7 @@ OPTIONS (GROUP = 'orders-backfill');
 bin/kaferry run --file copy.sql --config connections.toml
 ```
 
-Completion logs a JSON `copy summary` to stderr and exits `0`. The cutoff rule below can omit records.
+Each worker logs a JSON `copy summary` to stderr.
 
 `-e` takes inline SQL; `-f -` reads stdin.
 
@@ -141,12 +141,19 @@ tip_wait = '15m'
 - **Delivery:** at least once. Crashing after writing but before saving progress, or rebalancing, can duplicate writes. Kafka sources read committed records.
 - **Kafka output:** keep original keys; let the destination choose partitions. Default Java-compatible partitioning keeps equal non-null keys together with a fixed partition count. The destination controls timestamp type; `LogAppendTime` replaces timestamps. [Ordering details](design/decisions.md#kafka-output).
 - **Payloads:** ensure bytes and Schema Registry IDs work at the destination. Old records may expire under destination retention.
-- **Workers:** topic-to-topic processes may share a group; use literal times for one window. All exiting 0 does not prove completion. After they leave, rerun alone with the same query/group and check there is no `local idle exit`.
+- **Workers:** topic-to-topic workers share a named group; use literal times for one window. Surplus workers can exit `3`. [Worker termination](design/decisions.md#groups-and-workers).
 - **Files:** one process per query on one machine, using a local filesystem with locks and hard links. For a new file-source job, run `mkdir -p ~/.kaferry/checkpoints`. To resume, use the existing checkpoint directory. Keep output and progress; losing either prevents resuming file output. Use a new group and output path to start over.
 - **Permissions:** source topic READ and group READ for Kafka sources; destination WRITE for Kafka output. Kafka-source `ONE_OFF` needs the `kaferry-` group prefix authorized. [Details](design/client-compatibility.md#permissions).
 - **Errors:** fail by default. Use `ON_ERROR = SKIP` or specific timestamp policies. Broker rejections, authentication errors and corruption still fail. [Skippable errors](design/decisions.md#errors).
 
-Signals stop reading, drain writes for up to ten seconds and save progress; native calls can extend shutdown. Logs go to stderr: JSON events and a plain-text final error. Normal exit codes: `0` finished or stopped while following; `1` failed or interrupted before finishing; `2` invalid usage/configuration or a conflict before copying. Native aborts use signal exit status.
+Signals stop intake, drain writes for up to ten seconds and save progress; native calls can extend shutdown. JSON logs and final nonzero-exit messages go to stderr.
+
+- `0`: currently assigned partitions stopped, or follow stopped cleanly by signal.
+- `1`: runtime failure or an interrupted bounded run.
+- `2`: usage/configuration error or conflict before intake.
+- `3`: bounded Kafka-source worker was unassigned for `worker.idle_exit`; group completion is unknown.
+
+Native aborts use signal exit status.
 
 [Detailed behavior](design/decisions.md) · [File format and recovery](docs/file-format.md) · [Client limits and permissions](design/client-compatibility.md)
 

@@ -104,15 +104,19 @@ func (r *Runner) Run(ctx context.Context) error {
 	return nil
 }
 
-// exit classifies by the first failure, not whichever coded error a join holds.
+// exit preserves classified outcomes; other errors use the first failure and
+// execution stage to distinguish conflicts before intake from runtime failures.
 func (r *Runner) exit(err error) error {
 	primary := r.failure
 	if primary == nil {
 		primary = err
 	}
 	code := 1
+	var classified *Exit
 	var coded interface{ ExitCode() int }
-	if !r.intake && errors.As(primary, &coded) {
+	if errors.As(primary, &classified) {
+		code = classified.Code
+	} else if !r.intake && errors.As(primary, &coded) {
 		code = coded.ExitCode()
 	}
 	return &Exit{Err: err, Code: code}
@@ -159,7 +163,11 @@ func (r *Runner) step(ctx context.Context) (bool, error) {
 	if err := r.advance(); err != nil {
 		return false, err
 	}
-	if r.finished() {
+	if r.readyToExit() {
+		if len(r.partitions) == 0 {
+			r.log.Info("local idle exit", "idle_exit", r.limits.IdleExit, "exit_code", 3)
+			return true, &Exit{Err: fmt.Errorf("worker held no partitions for %s", r.limits.IdleExit), Code: 3}
+		}
 		return true, r.commit(r.ids())
 	}
 	if err := r.checkpoint(); err != nil {
@@ -537,14 +545,13 @@ func (r *Runner) pause() error {
 	return nil
 }
 func (r *Runner) bounded() bool { return r.plan.Source.Kind == "FILE" || r.plan.Window.Upper != nil }
-func (r *Runner) finished() bool {
+func (r *Runner) readyToExit() bool {
 	if r.deferred != nil || r.pending != nil {
 		return false
 	}
 	if len(r.partitions) == 0 {
 		idle, _ := time.ParseDuration(r.limits.IdleExit)
 		if r.bounded() && r.assignmentSeen && r.clock.Now().Sub(r.idleSince) >= idle {
-			r.log.Info("local idle exit")
 			return true
 		}
 		return false

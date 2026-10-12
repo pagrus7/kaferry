@@ -111,8 +111,8 @@ type Recoverable struct{ Err error }
 func (e *Recoverable) Error() string { return e.Err.Error() }
 func (e *Recoverable) Unwrap() error { return e.Err }
 
-// Exit carries the exit code implied by the stage a run failed in: conflicts
-// found before intake need operator action (2); anything after intake is 1.
+// Exit carries a classified CLI outcome, including an unassigned timeout (3).
+// Unclassified conflicts use 2 before intake and 1 after intake.
 type Exit struct {
 	Err  error
 	Code int

@@ -55,8 +55,10 @@ File sources read from their checkpoint or first frame to the size observed at o
 - `GROUP` identifies a Kafka consumer group or a file-source checkpoint. `GROUP = ONE_OFF` generates and logs `kaferry-<hex>` for a single worker. Resume an interrupted run using that ID as a named group. Successful file-source ONE_OFF runs delete the checkpoint but retain its stable lock; Kafka progress expires under broker offset retention.
 - Topic→topic workers share a named group and progress independently using classic `cooperative-sticky` assignment. There is no group-wide done marker or external coordinator.
 - Before subscription, group inspection rejects foreign/invalid progress and active members without the protected client-ID prefix or assigned to another topic. An absent group passes; an unavailable check fails. Unassigned subscriptions cannot be checked. Positioning validates progress again after assignment. Stop workers before upgrading a group.
-- A worker exits when all assigned partitions stop. A temporary empty assignment during rebalance is not completion. In bounded runs, no partitions for `worker.idle_exit` (default 30 s) after a successful assignment causes a logged idle exit with code 0. Follow workers remain as standbys.
-- All workers exiting 0 does not prove coverage: idle exit can coincide with a partition handoff. After members leave, rerun the same query/group with one worker; its partition completion, rather than idle exit, confirms the bounded run under the cutoff rule. This can copy late arrivals.
+- A worker exits `0` after all currently assigned partitions stop, outstanding writes are acknowledged and progress is committed. Follow workers remain as standbys until signalled.
+- A bounded Kafka-source worker exits `3` after a processed empty assignment leaves it unassigned for `worker.idle_exit` (default 30 s). Waiting for the first assignment callback or losing all partitions during a rebalance does not start this timer; an empty assignment callback does. The exit logs `local idle exit`, the timeout and the code.
+- Exit `3` can mean surplus capacity or a delayed partition handoff; it does not establish group completion or incompletion. If the last workers leave during a handoff, a partition can remain unfinished. Rerunning the same query/group resumes saved positions and may copy late arrivals.
+- Surplus workers can normally exit `3`; account for this outcome in supervisor restart policies.
 - On revocation, stop intake, commit the confirmed prefix and release without waiting for outstanding deliveries. Discard their late outcomes; the new owner replays uncommitted records. Ownership loss never commits.
 - Recoverable rebalance/coordinator/timeout/transport errors during revocation commit are logged and released for replay. Authorization, fencing, fatal/unknown errors, oversized metadata and missing results fail. Initial and periodic commits fail on any error.
 - Rebalancing can discover added source partitions; additions after workers exit need another run. Groups cannot seed from another group's offsets.
@@ -174,12 +176,13 @@ Consumer `queued.max.messages.kbytes` is capped by worker bytes; producer `queue
 
 ### CLI and exit codes
 
-Exactly one input: `run --file/-f path`, `run --sql/-e statement`, or `run --file -`. `--config/-c path` loads TOML. Events are JSON on stderr; the final error is plain text after cleanup, so hung cleanup can delay it indefinitely.
+Exactly one input: `run --file/-f path`, `run --sql/-e statement`, or `run --file -`. `--config/-c path` loads TOML. Events are JSON on stderr; nonzero exits also print a plain-text message after cleanup, so hung cleanup can delay it indefinitely.
 
 | Normal exit | Meaning |
 | --- | --- |
-| 0 | Completed, or follow run stopped cleanly by a signal; SKIP counts do not change the code |
+| 0 | All currently assigned partitions stopped, or a follow run stopped cleanly by a signal; SKIP counts do not change the code |
 | 1 | Runtime failure, bounded run interrupted, or conflict after intake starts |
 | 2 | Usage/parse/plan/configuration error, or identity/ownership/self-copy conflict before the first consumed record |
+| 3 | Bounded Kafka-source worker remained unassigned for `worker.idle_exit`; group completion is unknown |
 
 Busy locks and broker/record failures exit 1. Conflicts include foreign progress/members, changed input and unowned/short/corrupt acknowledged output. The first failure determines the code; cleanup cannot replace it. Native aborts and forced termination use system signal status.
