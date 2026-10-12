@@ -89,7 +89,7 @@ func TestCommandPlansBeforeExecutingAndStopsOnFailure(t *testing.T) {
 }
 func TestCommandPreservesExecutionExitCode(t *testing.T) {
 	// Given
-	for _, code := range []int{1, 2} {
+	for _, code := range []int{1, 2, 3} {
 		failure := &core.Exit{Code: code, Err: errors.New("execution failure")}
 		m := &commandMocks{t: t, fail: "execute", failure: failure, ctx: context.Background()}
 

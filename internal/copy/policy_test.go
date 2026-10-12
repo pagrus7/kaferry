@@ -165,7 +165,7 @@ func TestDeferredRecordRetainsFollowingEOFUntilBudgetIsReleased(t *testing.T) {
 	err = r.admitDeferred()
 
 	// Then both input and EOF are consumed in order, with the second delivery still pending.
-	if err != nil || len(sink.writes) != 2 || r.deferred != nil || r.deferredEOF != nil || !r.partitions[0].stopped || r.finished() {
+	if err != nil || len(sink.writes) != 2 || r.deferred != nil || r.deferredEOF != nil || !r.partitions[0].stopped || r.readyToExit() {
 		t.Fatal("held EOF was lost or completed unresolved work", err)
 	}
 
@@ -177,7 +177,7 @@ func TestDeferredRecordRetainsFollowingEOFUntilBudgetIsReleased(t *testing.T) {
 	err = r.commit(r.ids())
 
 	// Then completion and saved progress include the whole source.
-	if err != nil || !r.finished() || store.saves[len(store.saves)-1][0].Position != 2 {
+	if err != nil || !r.readyToExit() || store.saves[len(store.saves)-1][0].Position != 2 {
 		t.Fatal("deferred source did not finish", err, store.saves)
 	}
 }

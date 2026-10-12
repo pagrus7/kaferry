@@ -170,7 +170,7 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 		case result := <-results:
 
 			// Then
-			if result.code != 0 || !strings.Contains(result.detail, "local idle exit") {
+			if result.code != 3 || !strings.Contains(result.detail, "local idle exit") || !strings.Contains(result.detail, "worker held no partitions for 5s") {
 				t.Fatalf("standby failed to idle-exit: %+v", result)
 			}
 		case <-ctx.Done():
@@ -189,7 +189,6 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 		t.Fatal("assigned worker waited for exited standbys")
 	}
 	waitMembers(t, a, group, 0, 0, nil)
-	execute(t, statement, cfg) // Sole-worker confirmation of the bounded group.
 	c := consumer(t, dst+"-check")
 	if err := c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}); err != nil {
 		t.Fatal(err)

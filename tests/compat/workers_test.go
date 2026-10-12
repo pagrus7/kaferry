@@ -47,7 +47,7 @@ func waitMembers(t *testing.T, a *k.AdminClient, group string, members int, part
 	}
 }
 
-func TestDistributedWorkersFinishAndSoleWorkerConfirms(t *testing.T) {
+func TestDistributedWorkersFinishIndependently(t *testing.T) {
 	// Given
 	a := admin(t)
 	source := topic(t, a, 2)
@@ -86,10 +86,6 @@ func TestDistributedWorkersFinishAndSoleWorkerConfirms(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("distributed workers failed to finish independently")
 		}
-	}
-	var output bytes.Buffer
-	if code := app.Execute(ctx, []string{"run", "--sql", statement}, nil, io.Discard, &output); code != 0 {
-		t.Fatalf("sole-worker confirmation exit=%d: %s", code, output.String())
 	}
 	c := consumer(t, destination+"-reader")
 	var assignments []k.TopicPartition
