@@ -39,7 +39,7 @@ func endpoint(source sql.Endpoint, profiles Profiles, inline []sql.Connection) (
 		return Endpoint{}, fmt.Errorf("connection requires bootstrap.servers; add it to %s", connectionOrigin(e.Alias, inline))
 	}
 	if bootstrap == "" {
-		return Endpoint{}, fmt.Errorf("bootstrap.servers is empty; set a nonempty value in %s", connectionOrigin(e.Alias, inline))
+		return Endpoint{}, emptyBootstrapError(e.Alias, inline)
 	}
 	e.Properties = Properties{values: values}
 	return e, nil
@@ -51,7 +51,25 @@ func connectionOrigin(alias string, inline []sql.Connection) string {
 			return "the inline connection" + sql.Reference(connection.Position)
 		}
 	}
-	return "the configured connection (TOML or defaults)"
+	return "the configured connection profile"
+}
+
+func emptyBootstrapError(alias string, inline []sql.Connection) error {
+	for _, connection := range inline {
+		if connection.Alias != alias {
+			continue
+		}
+		for _, property := range connection.Properties {
+			if property.Name != "bootstrap.servers" {
+				continue
+			}
+			if property.Environment {
+				return fmt.Errorf("ENV(...) value for bootstrap.servers is empty; set the variable referenced%s to a nonempty value", sql.Reference(property.ValuePosition))
+			}
+			return fmt.Errorf("bootstrap.servers is empty; set a nonempty literal value%s", sql.Reference(property.ValuePosition))
+		}
+	}
+	return fmt.Errorf("bootstrap.servers is empty in the configured connection profile; set a nonempty value there")
 }
 
 func topicEndpoint(input string) (string, string, error) {

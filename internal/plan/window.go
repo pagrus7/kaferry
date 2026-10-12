@@ -108,7 +108,7 @@ func normalize(bounds []sql.Bound) (WindowSpec, error) {
 			return WindowSpec{}, sql.At(bound.Position, fmt.Errorf("unsupported timestamp comparison; use <, <=, >, or >="))
 		}
 		if *target != nil {
-			return WindowSpec{}, sql.At(bound.Position, fmt.Errorf("at most one lower and one upper bound are allowed; first bound%s", sql.Reference(*position)))
+			return WindowSpec{}, sql.At(bound.Position, fmt.Errorf("at most one lower and one upper bound are allowed; remove this repeated bound%s", sql.Related(*position, "first bound")))
 		}
 		*position = bound.Position
 		if bound.Operator == ">" || bound.Operator == "<=" {

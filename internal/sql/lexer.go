@@ -115,12 +115,12 @@ func (l *lexer) next() (token, error) {
 		}
 		return t, nil
 	}
-	return token{}, At(t.Position, fmt.Errorf("%s", characterHint(r)))
+	return token{}, At(t.Position, fmt.Errorf("%s", characterHint(r, t.Position)))
 }
 
-func characterHint(r rune) string {
+func characterHint(r rune, position Position) string {
 	switch {
-	case r == '\uFEFF':
+	case r == '\uFEFF' && position == (Position{Line: 1, Column: 1}):
 		return "UTF-8 byte-order mark is not supported; save without a BOM"
 	case r == '"':
 		return "double quotes are not supported; use ASCII single quotes for strings"

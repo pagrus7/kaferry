@@ -13,10 +13,10 @@ func (p *Plan) options(options []sql.Option, position sql.Position) error {
 	seen := make(map[string]sql.Position)
 	for _, option := range options {
 		if first, exists := seen[option.Name]; exists {
-			return sql.At(option.Position, fmt.Errorf("option %s repeats; first declaration%s", option.Name, sql.Reference(first)))
+			return sql.At(option.Position, fmt.Errorf("option %s repeats; specify it once%s", option.Name, sql.Related(first, "first declaration")))
 		}
 		if first, conflict := conflictingPolicy(option.Name, seen); conflict {
-			return sql.At(option.Position, fmt.Errorf("ON_ERROR cannot be combined with specific error policies; conflicting declaration%s", sql.Reference(first)))
+			return sql.At(option.Position, fmt.Errorf("ON_ERROR cannot be combined with specific error policies; choose ON_ERROR or the specific policies%s", sql.Related(first, "conflicting declaration")))
 		}
 		seen[option.Name] = option.Position
 		if err := p.applyOption(option); err != nil {

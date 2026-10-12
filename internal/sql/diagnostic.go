@@ -48,3 +48,10 @@ func Reference(position Position) string {
 	}
 	return fmt.Sprintf(" at line %d, column %d", position.Line, position.Column)
 }
+
+func Related(position Position, label string) string {
+	if position.Line == 0 {
+		return ""
+	}
+	return "; " + label + Reference(position)
+}

@@ -21,6 +21,7 @@ func TestParserDiagnosticsLocateTheOffendingToken(t *testing.T) {
 		{"missing comma", prefix + "OPTIONS(GROUP='g' START=EARLIEST)", "expected \",\" or \")\"; found identifier", Position{3, 19}},
 		{"missing WHERE", prefix + "WHER RECORD_TIMESTAMP < NOW()", "expected WHERE or OPTIONS; found identifier", Position{3, 1}},
 		{"BOM", "\uFEFFINSERT", "UTF-8 byte-order mark is not supported; save without a BOM", Position{1, 1}},
+		{"interior FEFF", "INSERT\uFEFF INTO", "unexpected invisible or control character; remove it", Position{1, 7}},
 		{"double quote", "INSERT INTO TOPIC \"b\"", "double quotes are not supported; use ASCII single quotes for strings", Position{1, 19}},
 		{"typographic quote", "\u2018secret\u2019", "typographic quotes are not supported; use ASCII single quotes", Position{1, 1}},
 		{"unquoted number", "7", "numbers must be single-quoted, for example INTERVAL '7' DAY", Position{1, 1}},
@@ -81,7 +82,7 @@ func TestParserDiagnosticsNeverEchoArbitraryInput(t *testing.T) {
 		// When reporting the first parse error.
 		_, err := NewParser().Parse(query)
 		// Then never print arbitrary token text or SQL source.
-		if err == nil || strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "sasl.password") {
+		if err == nil || strings.Contains(strings.ToLower(err.Error()), strings.ToLower(secret)) || strings.Contains(err.Error(), "sasl.password") {
 			t.Fatal("unsafe diagnostic", err)
 		}
 	}

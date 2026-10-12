@@ -118,7 +118,7 @@ func (p *Planner) connections(inline []sql.Connection, profiles Profiles) (Profi
 			return nil, sql.At(connection.Position, fmt.Errorf("invalid connection alias; use ASCII letters, digits and underscores, starting with a letter or underscore"))
 		}
 		if first, exists := seen[connection.Alias]; exists {
-			return nil, sql.At(connection.Position, fmt.Errorf("connection alias repeats; first declaration%s", sql.Reference(first)))
+			return nil, sql.At(connection.Position, fmt.Errorf("connection alias repeats; declare each alias once%s", sql.Related(first, "first declaration")))
 		}
 		seen[connection.Alias] = connection.Position
 		values := connections[connection.Alias]
@@ -132,7 +132,7 @@ func (p *Planner) connections(inline []sql.Connection, profiles Profiles) (Profi
 				return nil, sql.At(property.Position, fmt.Errorf("inline connection property name must not be empty"))
 			}
 			if first, exists := keys[property.Name]; exists {
-				return nil, sql.At(property.Position, fmt.Errorf("inline connection property repeats; first declaration%s", sql.Reference(first)))
+				return nil, sql.At(property.Position, fmt.Errorf("inline connection property repeats; specify it once per CONNECTION%s", sql.Related(first, "first declaration")))
 			}
 			keys[property.Name] = property.Position
 			value := property.Value
