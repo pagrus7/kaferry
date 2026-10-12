@@ -29,6 +29,8 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 		{"interval too large", files + "WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '9223372036854775808' SECOND\nOPTIONS(GROUP='g')", "'9223372036854775808'", "interval is too large; reduce its magnitude"},
 		{"interval overflow", files + "WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '9223372036854775807' HOUR\nOPTIONS(GROUP='g')", "'9223372036854775807'", "interval arithmetic overflows milliseconds; reduce its magnitude"},
 		{"CUTOFF overflow", topics + "WHERE RECORD_TIMESTAMP < TIMESTAMP '9999-12-31T23:59:59Z'\nOPTIONS(GROUP='g', CUTOFF=INTERVAL '9223372036854775' SECOND)", "CUTOFF", "upper bound plus CUTOFF: timestamp arithmetic overflows milliseconds"},
+		{"default CUTOFF overflow", topics + "WHERE RECORD_TIMESTAMP < TIMESTAMP '1970-01-01T00:00:00Z' + INTERVAL '9223372036854775' SECOND\nOPTIONS(GROUP='g')", "WHERE", "upper bound plus CUTOFF: timestamp arithmetic overflows milliseconds"},
+		{"empty range", files + "WHERE RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP < NOW()\nOPTIONS(GROUP='g')", "< NOW()", "time range is empty; lower bound at line 3, column 24 must precede upper bound at line 3, column 54"},
 		{"default connection", "INSERT INTO FILE cbor('out')\nSELECT * FROM TOPIC 'a'\nOPTIONS(GROUP='g', START=EARLIEST)", "'a'", "FROM endpoint: default connection is not defined; add WITH CONNECTION default or TOML [connections.default]"},
 		{"conflicting policies", topics + "WHERE RECORD_TIMESTAMP < NOW()\nOPTIONS(GROUP='g', ON_ERROR=SKIP, ON_MISSING_TIMESTAMP=FAIL)", "ON_MISSING_TIMESTAMP", "ON_ERROR cannot be combined with specific error policies; conflicting declaration at line 4, column 20"},
 		{"reversed policy conflict", topics + "WHERE RECORD_TIMESTAMP < NOW()\nOPTIONS(GROUP='g', ON_MISSING_TIMESTAMP=FAIL, ON_ERROR=SKIP)", "ON_ERROR", "ON_ERROR cannot be combined with specific error policies; conflicting declaration at line 4, column 20"},
@@ -150,7 +152,7 @@ func TestConnectionErrorsDistinguishUndefinedAndMissingSettings(t *testing.T) {
 	for _, tc := range []struct {
 		profiles Profiles
 		message  string
-	}{{Profiles{"empty": {}}, "connection requires bootstrap.servers"}, {nil, "connection alias is not defined"}} {
+	}{{Profiles{"empty": {}}, "connection requires bootstrap.servers"}, {Profiles{"empty": {"bootstrap.servers": ""}}, "bootstrap.servers is empty"}, {nil, "connection alias is not defined"}} {
 		_, err := NewPlanner(environment{}).Build(statement, tc.profiles)
 		// Then the corrective action matches the actual missing configuration.
 		if err == nil || !strings.Contains(err.Error(), tc.message) {
