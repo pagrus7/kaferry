@@ -4,7 +4,7 @@ Contributor reference for boundaries, ownership and checks. See [copy behavior](
 
 ## Composition
 
-Constructors receive dependencies through narrow interfaces. [Fx modules](../internal/app/modules.go) compose the application; domain packages do not depend on Fx. Passive records, cursors and pure helpers stay concrete.
+Constructors receive dependencies through narrow interfaces. [Fx modules](../internal/app/modules.go) compose the application; domain packages do not depend on Fx. Records, cursors and pure helper functions use concrete types.
 
 Command parses, configures and plans; Engine acquires adapters; Runner copies through shared source, sink and progress contracts.
 

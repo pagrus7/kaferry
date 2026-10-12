@@ -79,5 +79,5 @@ Fixture administrators create, alter and delete test resources; those permission
 - Native commit and close have no enforced overall deadline. The ten-second write-drain limit does not bound total shutdown; use a supervisor stop timeout when a hard limit is required.
 - Kafka output uses the destination's timestamp type. Known LogAppendTime restamps records. Otherwise timestamps ≤ 0 or above 9,223,372,036,854 Unix milliseconds cannot be preserved by the Go client and follow the timestamp error policy. Files retain timestamp values and types.
 - The client truncates consumed header names at NUL. Source Kafka headers must be NUL-free; lost suffixes cannot be detected or restored. File→Kafka rejects NUL names before publishing; files preserve arbitrary name bytes.
-- Group checks cannot verify subscriptions of unassigned members. [Topic identity checks and limits](decisions.md#identity).
+- The group topic check sees assigned partitions, so it cannot check the subscriptions of members with no partitions. [Topic identity checks and limits](decisions.md#identity).
 - Consumer transient-error retries have no total deadline.
