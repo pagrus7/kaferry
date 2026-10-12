@@ -102,7 +102,7 @@ WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z'
 OPTIONS (GROUP = ONE_OFF);
 ```
 
-Topic→topic, relative window with cutoff, fixed per partition when first positioned:
+Topic→topic, relative window with cutoff. Each partition fixes its time window when first assigned and saves it with progress:
 
 ```sql
 INSERT INTO TOPIC 'clicks@analytics'
