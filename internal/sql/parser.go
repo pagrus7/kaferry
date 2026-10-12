@@ -2,21 +2,31 @@ package sql
 
 import (
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
 
 type parser struct {
-	lexer   lexer
-	current token
-	err     error
+	lexer    lexer
+	current  token
+	err      error
+	expected []string // alternatives tried at the current token
 }
 
 func (s *StatementParser) Parse(input string) (Statement, error) {
+	l := lexer{input: input, line: 1, column: 1}
 	if !utf8.ValidString(input) {
-		return Statement{}, fmt.Errorf("statement is not valid UTF-8")
+		for l.index < len(input) {
+			_, width := utf8.DecodeRuneInString(input[l.index:])
+			if width == 1 && input[l.index] >= utf8.RuneSelf {
+				return Statement{}, At(l.position(), fmt.Errorf("statement is not valid UTF-8; save it as UTF-8"))
+			}
+			l.advance()
+		}
 	}
-	p := parser{lexer: lexer{input: input, line: 1, column: 1}}
+	p := parser{lexer: l}
 	p.next()
 	statement := p.statement()
 	if p.err != nil {
@@ -28,10 +38,22 @@ func (s *StatementParser) Parse(input string) (Statement, error) {
 func (p *parser) next() {
 	if p.err == nil {
 		p.current, p.err = p.lexer.next()
+		p.expected = p.expected[:0]
+	}
+}
+
+// want records an alternative accepted at the current token.
+func (p *parser) want(alternative string) {
+	if !slices.Contains(p.expected, alternative) {
+		p.expected = append(p.expected, alternative)
 	}
 }
 func (p *parser) is(word string) bool {
-	return p.err == nil && p.current.kind != "string" && strings.EqualFold(p.current.text, word)
+	if p.err != nil {
+		return false
+	}
+	p.want(word)
+	return p.current.kind != "string" && strings.EqualFold(p.current.text, word)
 }
 func (p *parser) take(word string) bool {
 	if !p.is(word) {
@@ -40,27 +62,54 @@ func (p *parser) take(word string) bool {
 	p.next()
 	return true
 }
-func (p *parser) fail(expected string) {
+func (p *parser) fail() {
 	if p.err == nil {
-		p.err = fmt.Errorf("line %d, column %d: expected %s", p.current.line, p.current.column, expected)
+		p.err = At(p.current.Position, fmt.Errorf("expected %s; found %s", alternatives(p.expected), p.current.description()))
 	}
 }
 func (p *parser) expect(word string) {
 	if !p.take(word) {
-		p.fail(word)
+		p.fail()
 	}
+}
+func (p *parser) oneOf(words ...string) string {
+	for _, word := range words {
+		if p.take(word) {
+			return word
+		}
+	}
+	p.fail()
+	return ""
 }
 func (p *parser) text(kind string) string {
 	if p.err != nil {
 		return ""
 	}
 	if p.current.kind != kind {
-		p.fail(kind)
+		p.want(kind)
+		p.fail()
 		return ""
 	}
 	value := p.current.text
 	p.next()
 	return value
+}
+
+func alternatives(words []string) string {
+	shown := make([]string, len(words))
+	for i, word := range words {
+		shown[i] = word
+		if word == "string" {
+			shown[i] = "single-quoted string"
+		}
+		if r, _ := utf8.DecodeRuneInString(word); !identifierStart(r) {
+			shown[i] = strconv.Quote(word)
+		}
+	}
+	if len(shown) < 2 {
+		return strings.Join(shown, "")
+	}
+	return strings.Join(shown[:len(shown)-1], ", ") + " or " + shown[len(shown)-1]
 }
 
 func (p *parser) statement() Statement {
@@ -80,9 +129,12 @@ func (p *parser) statement() Statement {
 	p.expect("*")
 	p.expect("FROM")
 	s.Source = p.endpoint()
-	if p.take("WHERE") {
+	if p.is("WHERE") {
+		s.WherePosition = p.current.Position
+		p.next()
 		s.Bounds = p.bounds()
 	}
+	s.OptionsPosition = p.current.Position
 	p.expect("OPTIONS")
 	p.expect("(")
 	for p.err == nil {
@@ -93,41 +145,48 @@ func (p *parser) statement() Statement {
 	}
 	p.expect(")")
 	p.take(";")
-	if p.err == nil && p.current.kind != "end of statement" {
-		p.fail("end of statement")
+	if p.err == nil && p.current.kind != "end of input" {
+		p.want("end of input")
+		p.fail()
 	}
 	return s
 }
 
 func (p *parser) endpoint() Endpoint {
 	if p.take("TOPIC") {
-		return Endpoint{Kind: "TOPIC", Name: p.text("string")}
+		position := p.current.Position
+		return Endpoint{Position: position, Kind: "TOPIC", Name: p.text("string")}
 	}
-	p.expect("FILE")
-	format := p.text("identifier")
-	if !strings.EqualFold(format, "cbor") {
-		p.fail("cbor")
+	if !p.take("FILE") {
+		p.fail()
+		return Endpoint{}
 	}
+	p.expect("cbor")
 	p.expect("(")
+	position := p.current.Position
 	name := p.text("string")
 	p.expect(")")
-	return Endpoint{Kind: "FILE", Name: name, Format: "cbor"}
+	return Endpoint{Position: position, Kind: "FILE", Name: name, Format: "cbor"}
 }
 
 func (p *parser) connection() Connection {
 	p.expect("CONNECTION")
-	c := Connection{Alias: p.text("identifier")}
+	position := p.current.Position
+	c := Connection{Position: position, Alias: p.text("identifier")}
 	p.expect("AS")
 	p.expect("(")
 	for p.err == nil {
-		property := Property{Name: p.text("string")}
+		position := p.current.Position
+		property := Property{Position: position, Name: p.text("string")}
 		p.expect("=")
 		if p.take("ENV") {
 			p.expect("(")
+			property.ValuePosition = p.current.Position
 			property.Value = p.text("string")
 			p.expect(")")
 			property.Environment = true
 		} else {
+			property.ValuePosition = p.current.Position
 			property.Value = p.text("string")
 		}
 		c.Properties = append(c.Properties, property)
@@ -145,7 +204,7 @@ func (p *parser) bounds() []Bound {
 		lo := p.time()
 		p.expect("AND")
 		hi := p.time()
-		return []Bound{{Operator: ">=", Time: lo}, {Operator: "<=", Time: hi}}
+		return []Bound{{Position: lo.Position, Operator: ">=", Time: lo}, {Position: hi.Position, Operator: "<=", Time: hi}}
 	}
 	bounds := []Bound{p.bound()}
 	if p.take("AND") {
@@ -156,24 +215,25 @@ func (p *parser) bounds() []Bound {
 }
 
 func (p *parser) bound() Bound {
-	op := p.current.text
-	if p.current.kind != "symbol" || (op != ">" && op != ">=" && op != "<" && op != "<=") {
-		p.fail("timestamp comparison")
+	position := p.current.Position
+	op := p.oneOf(">=", ">", "<", "<=")
+	if op == "" {
 		return Bound{}
 	}
-	p.next()
-	return Bound{Operator: op, Time: p.time()}
+	return Bound{Position: position, Operator: op, Time: p.time()}
 }
 
 func (p *parser) time() Time {
-	var t Time
+	t := Time{Position: p.current.Position}
 	if p.take("NOW") {
 		p.expect("(")
 		p.expect(")")
 		t.Now = true
-	} else {
-		p.expect("TIMESTAMP")
+	} else if p.take("TIMESTAMP") {
+		t.Position = p.current.Position
 		t.Literal = p.text("string")
+	} else {
+		p.fail()
 	}
 	for p.is("+") || p.is("-") {
 		subtract := p.take("-")
@@ -189,21 +249,25 @@ func (p *parser) time() Time {
 
 func (p *parser) interval() Interval {
 	p.expect("INTERVAL")
-	i := Interval{Magnitude: p.text("string"), Unit: strings.ToUpper(p.text("identifier"))}
-	if i.Unit != "SECOND" && i.Unit != "MINUTE" && i.Unit != "HOUR" && i.Unit != "DAY" {
-		p.fail("SECOND, MINUTE, HOUR, or DAY")
-	}
+	position := p.current.Position
+	i := Interval{Position: position, Magnitude: p.text("string")}
+	i.Unit = p.oneOf("SECOND", "MINUTE", "HOUR", "DAY")
 	return i
 }
 
 func (p *parser) option() Option {
-	o := Option{Name: strings.ToUpper(p.text("identifier"))}
+	o := Option{Position: p.current.Position}
+	if o.Name = p.oneOf("GROUP", "START", "CUTOFF", "ON_ERROR", "ON_MISSING_TIMESTAMP", "ON_REJECTED_TIMESTAMP"); o.Name == "" {
+		return o
+	}
 	p.expect("=")
+	o.ValuePosition = p.current.Position
 	switch o.Name {
 	case "CUTOFF":
 		i := p.interval()
 		o.Interval = &i
 	case "GROUP":
+		p.want("string")
 		if p.current.kind == "string" {
 			o.Quoted = true
 			o.Value = p.text("string")
@@ -211,10 +275,10 @@ func (p *parser) option() Option {
 			p.expect("ONE_OFF")
 			o.Value = "ONE_OFF"
 		}
-	case "START", "ON_ERROR", "ON_MISSING_TIMESTAMP", "ON_REJECTED_TIMESTAMP":
-		o.Value = strings.ToUpper(p.text("identifier"))
+	case "START":
+		o.Value = p.oneOf("EARLIEST", "LATEST")
 	default:
-		p.fail("supported option name")
+		o.Value = p.oneOf("FAIL", "SKIP")
 	}
 	return o
 }

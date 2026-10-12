@@ -1,9 +1,11 @@
 package sql
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestDocumentedExamples(t *testing.T) {
@@ -86,5 +88,38 @@ func FuzzParse(f *testing.F) {
 	for _, seed := range []string{"", "INSERT INTO FILE cbor('b') SELECT * FROM FILE cbor('a') OPTIONS(GROUP=ONE_OFF)", "/*", "'", "NOW()"} {
 		f.Add(seed)
 	}
-	f.Fuzz(func(t *testing.T, input string) { _, _ = NewParser().Parse(input) })
+	f.Fuzz(func(t *testing.T, input string) {
+		_, err := NewParser().Parse(input)
+		_, changedErr := NewParser().Parse(swapInputText(input))
+		if (err == nil) != (changedErr == nil) || err != nil && err.Error() != changedErr.Error() {
+			t.Fatalf("diagnostic depends on arbitrary token text: %v vs %v", err, changedErr)
+		}
+		if err == nil {
+			return
+		}
+		var diagnostic *Diagnostic
+		if !errors.As(err, &diagnostic) {
+			t.Fatalf("unstructured parser error: %v", err)
+		}
+		lines := strings.Split(input, "\n")
+		position := diagnostic.Position
+		if position.Line < 1 || position.Line > len(lines) || position.Column < 1 || position.Column > utf8.RuneCountInString(lines[position.Line-1])+1 {
+			t.Fatalf("diagnostic outside input: %v", err)
+		}
+	})
+}
+
+func swapInputText(input string) string {
+	changed := []byte(input)
+	for i, c := range changed {
+		switch {
+		case c >= 'a' && c <= 'z':
+			changed[i] = c - 'a' + 'A'
+		case c >= 'A' && c <= 'Z':
+			changed[i] = c - 'A' + 'a'
+		case c >= '0' && c <= '9':
+			changed[i] = '0' + (c-'0'+1)%10
+		}
+	}
+	return string(changed)
 }

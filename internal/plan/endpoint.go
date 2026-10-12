@@ -7,7 +7,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/sql"
 )
 
-func endpoint(source sql.Endpoint, profiles Profiles) (Endpoint, error) {
+func endpoint(source sql.Endpoint, profiles Profiles, inline []sql.Connection) (Endpoint, error) {
 	e := Endpoint{Kind: source.Kind, Name: source.Name, Format: source.Format}
 	if e.Name == "" {
 		return Endpoint{}, fmt.Errorf("endpoint name is empty")
@@ -28,11 +28,48 @@ func endpoint(source sql.Endpoint, profiles Profiles) (Endpoint, error) {
 		return Endpoint{}, fmt.Errorf("unsupported endpoint kind")
 	}
 	values, exists := profiles[e.Alias]
-	if !exists || values["bootstrap.servers"] == "" {
-		return Endpoint{}, fmt.Errorf("connection %q requires bootstrap.servers", e.Alias)
+	if !exists {
+		if e.Alias == "default" {
+			return Endpoint{}, fmt.Errorf("default connection is not defined; add WITH CONNECTION default or TOML [connections.default]")
+		}
+		return Endpoint{}, fmt.Errorf("connection alias is not defined; add it with WITH CONNECTION or TOML [connections.alias]")
+	}
+	bootstrap, present := values["bootstrap.servers"]
+	if !present {
+		return Endpoint{}, fmt.Errorf("connection requires bootstrap.servers; add it to %s", connectionOrigin(e.Alias, inline))
+	}
+	if bootstrap == "" {
+		return Endpoint{}, emptyBootstrapError(e.Alias, inline)
 	}
 	e.Properties = Properties{values: values}
 	return e, nil
+}
+
+func connectionOrigin(alias string, inline []sql.Connection) string {
+	for _, connection := range inline {
+		if connection.Alias == alias {
+			return "the inline connection" + sql.Reference(connection.Position)
+		}
+	}
+	return "the configured connection profile"
+}
+
+func emptyBootstrapError(alias string, inline []sql.Connection) error {
+	for _, connection := range inline {
+		if connection.Alias != alias {
+			continue
+		}
+		for _, property := range connection.Properties {
+			if property.Name != "bootstrap.servers" {
+				continue
+			}
+			if property.Environment {
+				return fmt.Errorf("ENV(...) value for bootstrap.servers is empty; set the variable referenced%s to a nonempty value", sql.Reference(property.ValuePosition))
+			}
+			return fmt.Errorf("bootstrap.servers is empty; set a nonempty literal value%s", sql.Reference(property.ValuePosition))
+		}
+	}
+	return fmt.Errorf("bootstrap.servers is empty in the configured connection profile; set a nonempty value there")
 }
 
 func topicEndpoint(input string) (string, string, error) {
@@ -44,10 +81,10 @@ func topicEndpoint(input string) (string, string, error) {
 		name, alias, _ = strings.Cut(input, "@")
 	}
 	if name == "" || !validAlias(alias) {
-		return "", "", fmt.Errorf("invalid topic endpoint")
+		return "", "", fmt.Errorf("invalid topic endpoint; use a nonempty topic and an alias starting with an ASCII letter or underscore, containing only ASCII letters, digits and underscores")
 	}
 	if !validTopicName(name) {
-		return "", "", fmt.Errorf("invalid Kafka topic name")
+		return "", "", fmt.Errorf("invalid Kafka topic name; use 1-249 ASCII letters, digits, dots, underscores or hyphens, excluding names made of one or two dots")
 	}
 	return name, alias, nil
 }

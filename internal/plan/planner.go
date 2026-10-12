@@ -67,32 +67,35 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 		return Plan{}, err
 	}
 	var plan Plan
-	plan.Source, err = endpoint(statement.Source, connections)
+	plan.Destination, err = endpoint(statement.Destination, connections, statement.Connections)
 	if err != nil {
-		return Plan{}, err
+		return Plan{}, sql.At(statement.Destination.Position, fmt.Errorf("INTO endpoint: %w", err))
 	}
-	plan.Destination, err = endpoint(statement.Destination, connections)
+	plan.Source, err = endpoint(statement.Source, connections, statement.Connections)
 	if err != nil {
-		return Plan{}, err
+		return Plan{}, sql.At(statement.Source.Position, fmt.Errorf("FROM endpoint: %w", err))
 	}
 	plan.Window, err = normalize(statement.Bounds)
 	if err != nil {
-		return Plan{}, err
+		return Plan{}, sql.At(statement.WherePosition, err)
 	}
-	if err = plan.options(statement.Options); err != nil {
+	if err = plan.options(statement.Options, statement.OptionsPosition); err != nil {
 		return Plan{}, err
 	}
 	if hi := plan.Window.Upper; hi != nil && !hi.Now {
 		if _, err := checkedAdd(hi.LiteralMS, plan.CutoffMS); err != nil {
-			return Plan{}, err
+			return Plan{}, sql.At(optionPosition(statement.Options, "CUTOFF", statement.WherePosition), fmt.Errorf("upper bound plus CUTOFF: %w", err))
 		}
 	}
 	if plan.Source.Kind == "TOPIC" {
-		if (len(statement.Bounds) > 0) == (plan.Start != "") {
-			return Plan{}, fmt.Errorf("topic sources require exactly one of WHERE and START")
+		if len(statement.Bounds) == 0 && plan.Start == "" {
+			return Plan{}, sql.At(statement.OptionsPosition, fmt.Errorf("topic sources require WHERE or START; add START = EARLIEST or START = LATEST to OPTIONS"))
+		}
+		if len(statement.Bounds) > 0 && plan.Start != "" {
+			return Plan{}, sql.At(optionPosition(statement.Options, "START", statement.OptionsPosition), fmt.Errorf("START cannot be combined with WHERE; remove START"))
 		}
 	} else if plan.Start != "" {
-		return Plan{}, fmt.Errorf("START requires a topic source")
+		return Plan{}, sql.At(optionPosition(statement.Options, "START", statement.OptionsPosition), fmt.Errorf("START requires a topic source; remove START for FILE sources"))
 	}
 	return plan, nil
 }
@@ -101,7 +104,7 @@ func (p *Planner) connections(inline []sql.Connection, profiles Profiles) (Profi
 	connections := make(Profiles, len(profiles)+len(inline))
 	for alias, properties := range profiles {
 		if !validAlias(alias) {
-			return nil, fmt.Errorf("invalid connection alias")
+			return nil, fmt.Errorf("configuration: connection aliases must start with an ASCII letter or underscore and contain only ASCII letters, digits and underscores")
 		}
 		copy := make(map[string]string, len(properties))
 		for key, value := range properties {
@@ -109,23 +112,29 @@ func (p *Planner) connections(inline []sql.Connection, profiles Profiles) (Profi
 		}
 		connections[alias] = copy
 	}
-	seen := make(map[string]bool)
+	seen := make(map[string]sql.Position)
 	for _, connection := range inline {
-		if !validAlias(connection.Alias) || seen[connection.Alias] {
-			return nil, fmt.Errorf("invalid or repeated connection alias")
+		if !validAlias(connection.Alias) {
+			return nil, sql.At(connection.Position, fmt.Errorf("invalid connection alias; use ASCII letters, digits and underscores, starting with a letter or underscore"))
 		}
-		seen[connection.Alias] = true
+		if first, exists := seen[connection.Alias]; exists {
+			return nil, sql.At(connection.Position, fmt.Errorf("connection alias repeats; declare each alias once%s", sql.Related(first, "first declaration")))
+		}
+		seen[connection.Alias] = connection.Position
 		values := connections[connection.Alias]
 		if values == nil {
 			values = make(map[string]string)
 			connections[connection.Alias] = values
 		}
-		keys := make(map[string]bool)
+		keys := make(map[string]sql.Position)
 		for _, property := range connection.Properties {
-			if property.Name == "" || keys[property.Name] {
-				return nil, fmt.Errorf("empty or repeated inline connection property")
+			if property.Name == "" {
+				return nil, sql.At(property.Position, fmt.Errorf("inline connection property name must not be empty"))
 			}
-			keys[property.Name] = true
+			if first, exists := keys[property.Name]; exists {
+				return nil, sql.At(property.Position, fmt.Errorf("inline connection property repeats; specify it once per CONNECTION%s", sql.Related(first, "first declaration")))
+			}
+			keys[property.Name] = property.Position
 			value := property.Value
 			if property.Environment {
 				if p.environment == nil {
@@ -134,7 +143,7 @@ func (p *Planner) connections(inline []sql.Connection, profiles Profiles) (Profi
 				var ok bool
 				value, ok = p.environment.LookupEnv(property.Value)
 				if !ok {
-					return nil, fmt.Errorf("required environment variable is unset")
+					return nil, sql.At(property.ValuePosition, fmt.Errorf("ENV(...) variable is unset; set it before running"))
 				}
 			}
 			values[property.Name] = value

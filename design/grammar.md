@@ -114,6 +114,12 @@ OPTIONS (GROUP = 'clicks-backfill-1', CUTOFF = INTERVAL '5' MINUTE, ON_ERROR = S
 
 ## Invalid examples
 
+SQL errors identify the first error found by one-based line and character (code point) column. LF ends a line; tabs count as one column. File and stdin input include their source name. Input values and SQL excerpts are omitted. Related declarations include their locations. Fix the reported error, then rerun.
+
+```text
+"copy.sql": line 3, column 29: expected FAIL or SKIP; found identifier
+```
+
 | Statement or fragment | Rejected because |
 | --- | --- |
 | `... WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` cannot be combined with a time filter |
