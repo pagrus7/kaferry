@@ -13,7 +13,10 @@ import (
 
 // consumerConfig protects manual commits and bounds the native fetch queue.
 func consumerConfig(p plan.Plan, limits config.Worker) (k.ConfigMap, error) {
-	cfg := native(p.Source.Properties)
+	cfg, err := clientConfig(p.Source.Properties, consumerClient)
+	if err != nil {
+		return nil, err
+	}
 	queueKB := (limits.ByteCap + 1023) / 1024
 	if existing, ok := cfg["queued.max.messages.kbytes"]; !ok {
 		cfg["queued.max.messages.kbytes"] = fmt.Sprint(queueKB)
@@ -29,21 +32,24 @@ func consumerConfig(p plan.Plan, limits config.Worker) (k.ConfigMap, error) {
 		{"auto.offset.reset", "error"}, {"isolation.level", "read_committed"},
 		{"enable.partition.eof", true}, {"partition.assignment.strategy", "cooperative-sticky"},
 		{"group.protocol", "classic"}, {"allow.auto.create.topics", false},
-		{"go.events.channel.enable", false},
+		{"go.events.channel.enable", false}, {"go.application.rebalance.enable", false},
 	}); err != nil {
 		return nil, err
 	}
 	return cfg, nil
 }
 
-// producerConfig rejects incompatible properties before any metadata RPC.
+// producerConfig rejects incompatible properties before destination config lookup.
 func producerConfig(endpoint plan.Endpoint, limits config.Worker) (k.ConfigMap, error) {
-	properties := native(endpoint.Properties)
+	properties, err := clientConfig(endpoint.Properties, producerClient)
+	if err != nil {
+		return nil, err
+	}
 	if err := canonicalTimeout(properties); err != nil {
 		return nil, err
 	}
 	if err := protectConfig(properties, []protectedProperty{
-		{"go.delivery.reports", true}, {"go.batch.producer", false}, {"allow.auto.create.topics", false},
+		{"go.delivery.reports", true}, {"go.batch.producer", false}, {"delivery.report.only.error", false}, {"allow.auto.create.topics", false},
 	}); err != nil {
 		return nil, err
 	}
@@ -51,6 +57,9 @@ func producerConfig(endpoint plan.Endpoint, limits config.Worker) (k.ConfigMap, 
 		return nil, conflict("transactional.id is incompatible with the copy producer")
 	}
 	if err := boundQueue(properties, "go.events.channel.size", int64(limits.RecordCap)+1); err != nil {
+		return nil, err
+	}
+	if err := boundQueue(properties, "go.produce.channel.size", int64(limits.RecordCap)); err != nil {
 		return nil, err
 	}
 	if value, ok := properties["enable.idempotence"]; ok && fmt.Sprint(value) != "true" {

@@ -65,11 +65,11 @@ Size preflight is approximate because of framing and compression. Clock skew or 
 | ClusterID (`rd_kafka_clusterid`) | Startup: fingerprint cluster identity from metadata; no DescribeCluster RPC | No |
 | DescribeConsumerGroups | Source startup: check active group members and assigned topics | Yes |
 | ListConsumerGroupOffsets | Source startup, after membership check: read and validate saved commits | Yes |
-| ListOffsets | Source positioning: retained/log-end bounds and read-committed end | No |
+| ListOffsets | Source positioning and completion: retained/log-end bounds, read-committed end and the log end including open transactions | No |
 | DescribeConfigs | Destination startup: optional size and timestamp checks | No |
 | AdminClient.Close | Release handles, including startup-failure cleanup | — |
 
-Assignment uses consumer `Committed` for progress; the consumer also handles commits, timestamp lookup and live watermarks. The producer refreshes routing metadata.
+Assignment uses consumer `Committed` for progress; the consumer also handles commits and timestamp lookup. Completion samples the admin client's read-uncommitted log end, since a read-committed consumer's watermark excludes open transactions. The producer refreshes routing metadata.
 
 Fixture administrators create, alter and delete test resources; those permissions are not CLI requirements.
 

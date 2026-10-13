@@ -3,7 +3,6 @@
 package compat
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -104,7 +103,7 @@ func TestBlockingCommitAcrossBrokerOutage(t *testing.T) {
 	if r.err == nil {
 		for _, p := range r.parts {
 			if p.Error != nil {
-				t.Log(fmt.Sprintf("partition commit error: %v", p.Error))
+				t.Logf("partition commit error: %v", p.Error)
 			}
 		}
 	}

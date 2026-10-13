@@ -52,7 +52,8 @@ func TestKafkaFileCommitUsesDurableExtent(t *testing.T) {
 	// Given
 	native := &capturedCommits{}
 	output := &durableExtent{extent: 256}
-	store := &Committer{consumer: native, topic: "orders", output: output, metadata: map[int32]Progress{0: {Fingerprint: "fp", TopicID: "topic-id"}}}
+	store := &Committer{consumer: native, topic: "orders", metadata: map[int32]Progress{0: {Fingerprint: "fp", TopicID: "topic-id"}}}
+	store.BindOutput(output)
 	for _, extent := range []int64{256, 1024, 1024} {
 		// Failed I/O cannot move DurableOutput; a later commit keeps the last E.
 		output.extent = extent

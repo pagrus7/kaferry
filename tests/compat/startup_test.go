@@ -1,0 +1,50 @@
+//go:build integration
+
+package compat
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestConsumerConfigurationFailureDoesNotCreateArchiveOrBlockRetry(t *testing.T) {
+	for _, setting := range []struct{ name, properties string }{
+		{"protected isolation", ",'isolation.level'='read_uncommitted'"},
+		{"native consumer validation", ",'session.timeout.ms'='6000','max.poll.interval.ms'='1000'"},
+	} {
+		t.Run(setting.name, func(t *testing.T) {
+			// Given a new archive and a source configuration rejected before subscription.
+			a := admin(t)
+			src := topic(t, a, 1)
+			path := filepath.Join(t.TempDir(), "out.cbor")
+			end := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+			query := func(properties string) string {
+				return fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'%s) INSERT INTO FILE cbor('%s') SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", broker(t), properties, path, src, end.Format(time.RFC3339Nano), src+"-copy")
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+			defer cancel()
+
+			// When rejecting the source settings.
+			first := loggedWorker(ctx, query(setting.properties), "")
+
+			// Then the output was never created and the corrected query can succeed.
+			if first.code != 2 {
+				t.Fatalf("configuration exit=%d: %s", first.code, first.detail)
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatal("invalid source configuration created an archive", err)
+			}
+			corrected := loggedWorker(ctx, query(""), "")
+			if corrected.code != 0 {
+				t.Fatalf("corrected query blocked: %d %s", corrected.code, corrected.detail)
+			}
+			if records := archiveRecords(t, path); len(records) != 0 {
+				t.Fatal("empty source produced records", records)
+			}
+		})
+	}
+}

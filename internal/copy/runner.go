@@ -449,6 +449,7 @@ func (r *Runner) sampleHigh(id int32, p *partition) error {
 	}
 	p.high = &high
 	p.waitStarted = r.clock.Now()
+	r.log.Info("tip watermark sampled", "partition", id, "high_watermark", high, "stable", p.stable, "position", p.position)
 	return nil
 }
 func (r *Runner) ids() []int32 {

@@ -132,7 +132,7 @@ func probeSource(t *testing.T, name, group string) *adapter.Source {
 		t.Fatal(err)
 	}
 	t.Cleanup(metadata.Close)
-	source, _, err := adapter.NewSource(clients, metadata, adapter.NewPositionerFactory(core.RealClock{}, logger), p, "pause-probe", config.Defaults(t.TempDir()).Worker, logger, nil)
+	source, _, err := adapter.NewSource(clients, metadata, adapter.NewPositionerFactory(core.RealClock{}, logger), p, "pause-probe", config.Defaults(t.TempDir()).Worker, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

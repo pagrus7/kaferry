@@ -3,17 +3,34 @@
 package compat
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
+	"log/slog"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/pagrus7/kaferry/internal/app"
 )
+
+func tipSamples(samples chan<- int64) func(slog.Record) {
+	return func(record slog.Record) {
+		if record.Message != "tip watermark sampled" {
+			return
+		}
+		record.Attrs(func(attr slog.Attr) bool {
+			if attr.Key == "high_watermark" {
+				select {
+				case samples <- attr.Value.Int64():
+				default:
+				}
+			}
+			return true
+		})
+	}
+}
 
 func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 	// Given
@@ -37,12 +54,10 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 			cfg := configuration(t)
 			statement := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", path, src, stamp.Add(-time.Second).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano), group)
 			result := make(chan workerResult, 1)
+			samples := make(chan int64, 1)
 			go func() {
-				var output bytes.Buffer
-
 				// When
-				code := app.Execute(ctx, []string{"run", "-e", statement, "-c", cfg}, nil, io.Discard, &output)
-				result <- workerResult{code, output.String()}
+				result <- loggedWorker(ctx, statement, cfg, tipSamples(samples))
 			}()
 			finished := false
 			t.Cleanup(func() {
@@ -76,6 +91,19 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 			if !initialized {
 				t.Fatal("no-match lookup did not initialize at LSO")
 			}
+			// When the worker samples the tip while the transaction remains open.
+			select {
+			case high := <-samples:
+				// Then H includes the unread transaction, rather than the stable offset 0.
+				if high != 1 {
+					t.Fatalf("sampled high watermark=%d, want 1", high)
+				}
+			case r := <-result:
+				finished = true
+				t.Fatalf("copy ended before sampling the open transaction: %d %s", r.code, r.detail)
+			case <-ctx.Done():
+				t.Fatal("open transaction was not included in the tip sample")
+			}
 			if abort {
 				if err := p.AbortTransaction(ctx); err != nil {
 					t.Fatal(err)
@@ -106,5 +134,46 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 				t.Fatal("control cursor failed to prevent recopy")
 			}
 		})
+	}
+}
+
+func TestOpenTransactionReachesTipWaitInsteadOfSuccessfulCompletion(t *testing.T) {
+	// Given an in-window record in a transaction that stays open past tip_wait.
+	a := admin(t)
+	src, dst := topic(t, a, 1), topic(t, a, 1)
+	p := producer(t, k.ConfigMap{"transactional.id": src + "-open"})
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	if err := p.InitTransactions(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		_ = p.AbortTransaction(cleanup)
+	}()
+	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: []byte("transactional"), Timestamp: stamp})
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", dst, src, stamp.Add(-time.Second).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano), src+"-wait")
+	cfg := configuration(t)
+	f, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString("tip_wait='100ms'\n")
+	_ = f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When the worker drains toward the sampled log end without a transaction commit.
+	r := loggedWorker(ctx, statement, cfg)
+
+	// Then it fails with the pending end/stable positions, without publishing.
+	if r.code != 1 || !strings.Contains(r.detail, "tip wait exceeded: H=1 stable=0 consumed=0") || !strings.Contains(r.detail, `"submitted":0,"confirmed":0`) {
+		t.Fatalf("open transaction falsely completed: %d %s", r.code, r.detail)
 	}
 }
