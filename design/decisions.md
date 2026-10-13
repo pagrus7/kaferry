@@ -125,7 +125,7 @@ Output holds an exclusive inode lock. A file-source group holds a stable checkpo
 
 ### Creation
 
-Kafka consumers are constructed and their configuration validated before creating output. Destination durability is bound to source progress before subscription. Output stays locked until consumer shutdown completes, including any progress saves in its callbacks.
+For Kafka-to-file copies, Kaferry creates the Kafka consumer and checks its settings before opening the output file. Before reading any messages, it sets up progress tracking so saved Kafka offsets include the file ID and the last safely written byte position. On shutdown, Kaferry keeps the file open and locked until the consumer finishes closing, because its shutdown callbacks can still save offsets.
 
 Before copying records (before subscription for Kafka→file):
 
