@@ -27,6 +27,7 @@ type engineFixture struct {
 	store   kafka.SourceProgress
 	groups  []string
 	saved   map[int32]kafka.Progress
+	onStage func(string)
 }
 
 func newEngineFixture() *engineFixture {
@@ -38,6 +39,9 @@ func newEngineFixture() *engineFixture {
 }
 func (f *engineFixture) stage(name string) error {
 	f.trace = append(f.trace, name)
+	if f.onStage != nil {
+		f.onStage(name)
+	}
 	if f.fail == name {
 		return f.failure
 	}
@@ -275,6 +279,42 @@ func TestEngineSkipsAcquisitionWhenStartupIsCancelled(t *testing.T) {
 	// Then no connection, file or saved progress is created.
 	if !errors.Is(err, context.Canceled) || len(f.trace) != 0 {
 		t.Fatal("cancelled startup acquired resources", err, f.trace)
+	}
+}
+
+func TestStartupCancellationClosesInputWithoutCreatingOutput(t *testing.T) {
+	for _, kind := range []string{"TOPIC", "FILE"} {
+		t.Run(kind, func(t *testing.T) {
+			// Given cancellation while the source adapter is being created.
+			f := newEngineFixture()
+			f.store = f.input
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			stage, closed := "topic-input", []string{"close-topic-input", "close-source"}
+			if kind == "FILE" {
+				stage, closed = "file-input", []string{"close-file-input"}
+			}
+			f.onStage = func(name string) {
+				if name == stage {
+					cancel()
+				}
+			}
+
+			// When starting a copy into a file.
+			err := newEngine(f, f, f, engineLogger()).Run(ctx, enginePlan(kind, "FILE"), config.Worker{})
+
+			// Then cancellation preserves its cause, closes acquired input, and creates no output.
+			var afterCancellation []string
+			for index, name := range f.trace {
+				if name == stage {
+					afterCancellation = f.trace[index+1:]
+					break
+				}
+			}
+			if !errors.Is(err, context.Canceled) || !reflect.DeepEqual(afterCancellation, closed) {
+				t.Fatal("incorrect cancellation cleanup", err, f.trace)
+			}
+		})
 	}
 }
 
