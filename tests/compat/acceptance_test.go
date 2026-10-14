@@ -27,11 +27,29 @@ import (
 	"go.uber.org/fx"
 )
 
-func loggedWorker(ctx context.Context, statement, cfg string) workerResult {
+type recordObserver struct {
+	slog.Handler
+	observers []func(slog.Record)
+}
+
+func (h recordObserver) Handle(ctx context.Context, record slog.Record) error {
+	for _, observe := range h.observers {
+		observe(record)
+	}
+	return h.Handler.Handle(ctx, record)
+}
+func (h recordObserver) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return recordObserver{h.Handler.WithAttrs(attrs), h.observers}
+}
+func (h recordObserver) WithGroup(name string) slog.Handler {
+	return recordObserver{h.Handler.WithGroup(name), h.observers}
+}
+
+func loggedWorker(ctx context.Context, statement, cfg string, observers ...func(slog.Record)) workerResult {
 	var output bytes.Buffer
 	var command app.Command
 	graph := fx.New(fx.NopLogger, app.RuntimeModules, fx.Decorate(func(*slog.Logger) *slog.Logger {
-		return slog.New(slog.NewJSONHandler(&output, nil))
+		return slog.New(recordObserver{slog.NewJSONHandler(&output, nil), observers})
 	}), fx.Populate(&command))
 	if err := graph.Err(); err != nil {
 		return workerResult{2, err.Error()}

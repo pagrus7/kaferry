@@ -13,7 +13,7 @@ type Connection interface {
 	ClusterID() (string, error)
 	CheckMembers(string) error
 	ReadProgress(string, string, plan.WindowSpec, int64) (map[int32]Progress, error)
-	Source(plan.Plan, string, config.Worker, copy.OutputProgress) (copy.Source, copy.ProgressStore, error)
+	Source(plan.Plan, string, config.Worker) (copy.Source, SourceProgress, error)
 	Sink(config.Worker) (copy.Sink, error)
 	Close()
 }
@@ -43,8 +43,8 @@ type connection struct {
 	factory  *Factory
 }
 
-func (c *connection) Source(p plan.Plan, fp string, limits config.Worker, output copy.OutputProgress) (copy.Source, copy.ProgressStore, error) {
-	return NewSource(c.factory.clients, c.Metadata, c.factory.positioning, p, fp, limits, c.factory.logger, output)
+func (c *connection) Source(p plan.Plan, fp string, limits config.Worker) (copy.Source, SourceProgress, error) {
+	return NewSource(c.factory.clients, c.Metadata, c.factory.positioning, p, fp, limits, c.factory.logger)
 }
 
 func (c *connection) Sink(limits config.Worker) (copy.Sink, error) {

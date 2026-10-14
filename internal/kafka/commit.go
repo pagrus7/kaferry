@@ -23,6 +23,8 @@ func (c *Committer) SetMetadata(partition int32, progress Progress) {
 	c.metadata[partition] = progress
 }
 
+func (c *Committer) BindOutput(output copy.OutputProgress) { c.output = output }
+
 func (c *Committer) Save(ctx context.Context, cursors []copy.Cursor) (map[int32]error, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

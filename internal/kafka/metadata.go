@@ -84,7 +84,10 @@ func (i *Inspector) context() (context.Context, context.CancelFunc) {
 func (i *Inspector) coordinatorTimeout() time.Duration { return 2 * i.deadline() }
 
 func NewInspector(clients Clients, properties plan.Properties, topic string, logger *slog.Logger) (Metadata, error) {
-	cfg := native(properties)
+	cfg, err := clientConfig(properties, adminClient)
+	if err != nil {
+		return nil, err
+	}
 	a, err := clients.Admin(cfg)
 	if err != nil {
 		return nil, conflict("invalid Kafka connection configuration")

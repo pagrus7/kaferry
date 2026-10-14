@@ -31,7 +31,9 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 ## Ownership
 
 - Factories create fresh mutable runner/progress/adapter state for each query; assignment state is generation-specific.
-- Engine owns query resources and closes them in reverse acquisition order. Adapters own their native clients, files and locks.
+- The engine manages each query's resources. Adapters manage Kafka clients, files and locks.
+- For Kafka-to-file copies, Kaferry creates the Kafka consumer and checks its settings before opening the output file. Before reading any messages, it sets up progress tracking so saved Kafka offsets include the file ID and the last safely written byte position.
+- On shutdown, Kaferry keeps the output file open and locked until the consumer finishes closing, because its shutdown callbacks can still save offsets.
 - Runner mutates progress in one event loop. Late outcomes from an old assignment cannot advance current progress.
 - Sources provide owned record buffers; sinks retain them until the corresponding write outcome.
 - Source cursors are distinct from record provenance. Progress persists confirmed next positions and identity metadata.

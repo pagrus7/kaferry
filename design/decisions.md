@@ -44,7 +44,7 @@ A Kafka partition with an upper bound stops when either:
 
 ### Catching up
 
-After the time threshold passes and the partition reaches its read-committed tip, sample the high watermark H once for that attempt. Complete when the consumed cursor reaches H, including aborted/control records, and all prior work resolves. H = 0 completes immediately. An open transaction can delay this; `worker.tip_wait` (default 15 min) bounds waiting after H is sampled. Timeout fails with H and the stable/consumed positions. H is neither shared nor persisted.
+After the time threshold passes and the partition reaches its read-committed tip, sample the read-uncommitted log end H once for that attempt. H includes records in open transactions; the consumer continues to read only committed records. Complete when the consumed cursor reaches H, including aborted/control records, and all prior work resolves. H = 0 completes immediately. An open transaction delays completion until it commits or aborts; `worker.tip_wait` (default 15 min) bounds waiting after H is sampled. Timeout fails with H and the stable/consumed positions. Sampling logs H and the current positions. H is neither shared nor persisted.
 
 A timestamp stop commits at the trigger record, so rerunning stops there again. A tip stop commits the next position, so rerunning may copy later arrivals. Without an upper bound, Kafka sources follow indefinitely.
 
@@ -125,6 +125,8 @@ Output holds an exclusive inode lock. A file-source group holds a stable checkpo
 
 ### Creation
 
+For Kafka-to-file copies, Kaferry creates the Kafka consumer and checks its settings before opening the output file. Before reading any messages, it sets up progress tracking so saved Kafka offsets include the file ID and the last safely written byte position. On shutdown, Kaferry keeps the file open and locked until the consumer finishes closing, because its shutdown callbacks can still save offsets.
+
 Before copying records (before subscription for Kafka→file):
 
 1. Write/fsync a complete header to a locked temporary file.
@@ -132,7 +134,7 @@ Before copying records (before subscription for Kafka→file):
 3. Save destination ID and header extent with initial source progress, checking every partition result or the file checkpoint.
 4. Begin copying. Cleanup removes only temporary files whose locks it acquires.
 
-An existing output without saved ownership fails, including a header-only file left by a creation crash. Only after verifying it is header-only, delete it manually and rerun. Missing output named by progress is never recreated automatically.
+An existing output without saved ownership fails. Startup failure, interruption or a crash before the first successful progress save can leave a header-only file. Delete the file manually only after verifying it is header-only and saved progress does not name it, then rerun. Missing output named by progress is never recreated automatically.
 
 ### Output recovery
 
@@ -156,6 +158,8 @@ The checkpoint directory must exist. For new file jobs, create it first. To resu
 ## Configuration and CLI
 
 Connections use TOML profiles or `WITH CONNECTION`; SQL keys override TOML. `ENV('NAME')` resolves at startup, fails if unset and is redacted. Worker settings are in TOML.
+
+Known Go binding options are passed only to clients that support them; profiles can be shared by producers and consumers. Admin clients exclude their producer/consumer Go options. Booleans and positive integer capacities are converted from configuration strings. Unknown Go or native property names fail, without displaying property values.
 
 ### Worker settings
 
@@ -187,11 +191,11 @@ Conflicting values fail configuration; matching values are allowed.
 | `auto.offset.reset`, `isolation.level` | `error`, `read_committed` |
 | `partition.assignment.strategy`, `group.protocol` | `cooperative-sticky`, `classic` |
 | `enable.partition.eof` | `true` |
-| `allow.auto.create.topics`, `go.events.channel.enable` | `false` |
+| `allow.auto.create.topics`, `go.events.channel.enable`, `go.application.rebalance.enable` | `false` |
 
-Producer requires `enable.idempotence=true`, `go.delivery.reports=true`, `go.batch.producer=false` and `allow.auto.create.topics=false`; nonempty `transactional.id` is rejected. Unknown librdkafka keys also fail.
+Producer requires `enable.idempotence=true`, `go.delivery.reports=true`, `go.batch.producer=false`, `delivery.report.only.error=false` and `allow.auto.create.topics=false`; nonempty `transactional.id` is rejected. All clients require `go.logs.channel.enable=false`; the CLI does not consume Go log channels. Unknown librdkafka keys also fail.
 
-Consumer `queued.max.messages.kbytes` is capped by worker bytes; producer `queue.buffering.max.messages` by worker records and `go.events.channel.size` by worker records + 1. Producer `queue.buffering.max.kbytes` allows the larger of worker bytes or the effective message-size limit. Byte limits round up to KiB; overrides must be positive and no larger than these bounds.
+Consumer `queued.max.messages.kbytes` is capped by worker bytes; producer `queue.buffering.max.messages` and `go.produce.channel.size` by worker records, and `go.events.channel.size` by worker records + 1. Producer `queue.buffering.max.kbytes` allows the larger of worker bytes or the effective message-size limit. Byte limits round up to KiB; overrides must be positive and no larger than these bounds.
 
 ### CLI and exit codes
 
@@ -200,7 +204,7 @@ Exactly one input: `run --file/-f path`, `run --sql/-e statement`, or `run --fil
 | Normal exit | Meaning |
 | --- | --- |
 | 0 | Every partition the worker held at exit stopped, or a Kafka copy without an end time stopped cleanly by signal; SKIP counts do not change the code |
-| 1 | Runtime failure, interrupted file copy or Kafka copy with an end time, or conflict after the first consumed record |
+| 1 | Runtime failure, any startup interruption, interruption of a file copy or a Kafka copy with an end time, or conflict after the first consumed record |
 | 2 | Usage/parse/plan/configuration error, or identity/ownership/self-copy conflict before the first consumed record |
 | 3 | Kafka copy with an end time received no assigned partitions for `worker.idle_exit` after an empty-assignment notification; does not say whether other workers finished |
 

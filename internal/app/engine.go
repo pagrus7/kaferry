@@ -41,6 +41,9 @@ func newEngine(kafka KafkaFactory, files FileFactory, runner RunnerFactory, logg
 }
 
 func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Worker) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if p.OneOff {
 		var err error
 		p.Group, err = oneOffGroup()
@@ -72,26 +75,41 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Work
 	if input != nil {
 		defer input.Close()
 	}
-	sink, output, err := e.openSink(p, fp, limits, destinationEndpoint.connection, progress)
-	if err != nil {
-		return err
-	}
-	defer sink.Close()
+	var sink copy.Sink
+	// Consumer.Close can save progress through its revoke callback. Keep output
+	// ownership until it returns, even though the consumer is constructed first.
+	defer func() {
+		if sink != nil {
+			sink.Close()
+		}
+	}()
 	var source copy.Source
 	var store copy.ProgressStore
+	var bindOutput func(copy.OutputProgress)
 	if input != nil {
-		input.BindOutput(output)
 		source, store = input, input
+		bindOutput = input.BindOutput
 	} else {
 		if p.Window.Upper != nil {
 			e.log.Warn("bounded copy can omit late and out-of-order timestamps after a cutoff stop")
 		}
-		source, store, err = sourceEndpoint.connection.Source(p, fp, limits, output)
+		var sourceProgress kafka.SourceProgress
+		source, sourceProgress, err = sourceEndpoint.connection.Source(p, fp, limits)
 		if err != nil {
 			return err
 		}
 		defer source.Close()
+		store, bindOutput = sourceProgress, sourceProgress.BindOutput
 	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	opened, output, err := e.openSink(p, fp, limits, destinationEndpoint.connection, progress)
+	if err != nil {
+		return err
+	}
+	sink = opened
+	bindOutput(output)
 	if err := e.runner.New(source, sink, store, p, limits).Run(ctx); err != nil {
 		return err
 	}

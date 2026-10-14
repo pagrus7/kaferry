@@ -151,6 +151,8 @@ func (*countedDestination) PartitionCount() int         { return 1 }
 func TestProducerPolicyFailsBeforeDestinationLookup(t *testing.T) {
 	for _, properties := range []map[string]string{
 		{"go.delivery.reports": "false"}, {"go.batch.producer": "true"}, {"allow.auto.create.topics": "true"},
+		{"delivery.report.only.error": "true"},
+		{"go.events.channel.size": "private-option-secret"}, {"go.events.channel.size": fmt.Sprint(config.Defaults("home").Worker.RecordCap + 2)},
 		{"transactional.id": "private-transaction"}, {"enable.idempotence": "false"}, {"go.events.channel.size": "0"},
 		{"message.timeout.ms": "1000", "delivery.timeout.ms": "2000"},
 	} {
@@ -170,6 +172,55 @@ func TestProducerPolicyFailsBeforeDestinationLookup(t *testing.T) {
 	}
 }
 
+func TestInvalidConsumerBindingOptionsDoNotConstructAClient(t *testing.T) {
+	// Given an invalid Go channel capacity and a factory that records construction.
+	clients := &mockClients{}
+	p := plan.Plan{Source: sinkEndpoint(t, map[string]string{"go.events.channel.size": "private-option-secret"}), Group: "copy-group"}
+	// When creating the source through its adapter boundary.
+	source, progress, err := NewSource(clients, &sourceMetadataMock{}, &positioningMock{}, p, "fp", config.Defaults("home").Worker, quietLogger())
+	// Then configuration fails before the native consumer is constructed, without echoing the value.
+	var conflict *Conflict
+	if source != nil || progress != nil || !errors.As(err, &conflict) || clients.cfg != nil || err.Error() != `Go client property "go.events.channel.size" requires a positive integer` {
+		t.Fatal("invalid binding option reached native startup", source, progress, err, clients.cfg)
+	}
+}
+
+func TestNativeProducerQueuesRespectEffectiveLimits(t *testing.T) {
+	for _, queue := range []struct{ key, maximum, oversized string }{
+		{"queue.buffering.max.messages", "8", "9"},
+		{"queue.buffering.max.kbytes", "977", "978"}, // 1,000,000-byte message limit rounds up to 977 KiB.
+	} {
+		for _, value := range []string{queue.maximum, queue.oversized} {
+			t.Run(queue.key+"-"+value, func(t *testing.T) {
+				// Given native queue capacities at or above the effective worker limits.
+				limits := config.Defaults("home").Worker
+				limits.RecordCap, limits.ByteCap = 8, 1500
+				clients := &mockClients{producer: &producerMock{events: make(chan k.Event)}}
+				destination := &countedDestination{}
+
+				// When sizing the producer against destination settings.
+				sink, err := NewSink(clients, destination, sinkEndpoint(t, map[string]string{queue.key: value}), limits, core.RealClock{}, quietLogger())
+				if sink != nil {
+					t.Cleanup(sink.Close)
+				}
+
+				// Then exact limits are accepted; oversized queues fail before native allocation.
+				if value == queue.maximum {
+					if err != nil || sink == nil || destination.calls != 1 || clients.cfg[queue.key] != value {
+						t.Fatal("queue limit incorrectly rejected", sink, err, destination.calls, clients.cfg)
+					}
+				} else {
+					var conflict *Conflict
+					want := fmt.Sprintf("%s must be positive and no larger than %s", queue.key, queue.maximum)
+					if sink != nil || !errors.As(err, &conflict) || destination.calls != 1 || clients.cfg != nil || err.Error() != want {
+						t.Fatal("wrong queue validation failure", sink, err, destination.calls, clients.cfg)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestConsumerPolicyReportsConflictsWithoutLeakingValues(t *testing.T) {
 	// Given multiple unsafe overrides including a private group value.
 	endpoint := sinkEndpoint(t, map[string]string{"group.id": "private-group-value", "enable.auto.commit": "true"})
@@ -181,6 +232,44 @@ func TestConsumerPolicyReportsConflictsWithoutLeakingValues(t *testing.T) {
 	// Then the first protected property is deterministic and its value stays private.
 	if err == nil || err.Error() != `protected Kafka property "group.id" cannot be overridden` {
 		t.Fatal("wrong conflict diagnostic", err)
+	}
+}
+
+func TestConsumerKeepsDefaultRebalanceAcknowledgement(t *testing.T) {
+	// Given an override that disables default acknowledgements after callback errors.
+	p := plan.Plan{Source: sinkEndpoint(t, map[string]string{"go.application.rebalance.enable": "true"}), Group: "copy-group"}
+	// When preparing the consumer configuration.
+	_, err := consumerConfig(p, config.Defaults("home").Worker)
+	// Then it fails before construction instead of allowing shutdown to hang.
+	if err == nil || err.Error() != `protected Kafka property "go.application.rebalance.enable" cannot be overridden` {
+		t.Fatal("unsafe rebalance mode accepted", err)
+	}
+}
+
+func TestUnusedProduceChannelRespectsWorkerRecordLimit(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int
+	}{{"", 8}, {"4", 4}, {"9", 0}} {
+		t.Run("capacity-"+tc.value, func(t *testing.T) {
+			// Given a binding-allocated channel, even though direct Produce does not use it.
+			properties := map[string]string{}
+			if tc.value != "" {
+				properties["go.produce.channel.size"] = tc.value
+			}
+			limits := config.Defaults("home").Worker
+			limits.RecordCap = 8
+			// When preparing producer configuration.
+			cfg, err := producerConfig(sinkEndpoint(t, properties), limits)
+			// Then default and explicit capacities stay bounded before any allocation.
+			if tc.want == 0 {
+				if err == nil || cfg != nil {
+					t.Fatal("oversized produce channel accepted", cfg, err)
+				}
+			} else if err != nil || cfg["go.produce.channel.size"] != tc.want {
+				t.Fatal("wrong produce channel bound", cfg, err)
+			}
+		})
 	}
 }
 

@@ -138,20 +138,19 @@ func (m *positioningMock) Locate([]k.TopicPartition, map[int32]k.TopicPartition,
 
 type consumerMock struct {
 	ConsumerClient
-	callback                k.RebalanceCb
-	actions                 *[]string
-	events                  []k.Event
-	commitErr, assignErr    error
-	resumeErr, watermarkErr error
-	resumed                 []k.TopicPartition
-	paused                  []k.TopicPartition
-	high                    int64
-	commits                 []k.TopicPartition
-	committed               []k.TopicPartition
-	committedErr            error
-	committedRequests       []k.TopicPartition
-	committedTimeout        int
-	lost, closed            bool
+	callback             k.RebalanceCb
+	actions              *[]string
+	events               []k.Event
+	commitErr, assignErr error
+	resumeErr            error
+	resumed              []k.TopicPartition
+	paused               []k.TopicPartition
+	commits              []k.TopicPartition
+	committed            []k.TopicPartition
+	committedErr         error
+	committedRequests    []k.TopicPartition
+	committedTimeout     int
+	lost, closed         bool
 }
 
 func (c *consumerMock) action(name string) {
@@ -194,10 +193,6 @@ func (c *consumerMock) Resume(parts []k.TopicPartition) error {
 func (c *consumerMock) Pause(parts []k.TopicPartition) error {
 	c.paused = append(c.paused, parts...)
 	return nil
-}
-
-func (c *consumerMock) QueryWatermarkOffsets(string, int32, int) (int64, int64, error) {
-	return 0, c.high, c.watermarkErr
 }
 
 func (c *consumerMock) Committed(parts []k.TopicPartition, timeout int) ([]k.TopicPartition, error) {
@@ -251,7 +246,7 @@ func sourceWithMocks(t *testing.T, consumer *consumerMock, metadata *sourceMetad
 	consumer.committed = metadata.parts
 	clients := &mockClients{consumer: consumer}
 	p := plan.Plan{Source: plan.Endpoint{Name: "orders"}, Group: "group", Start: "EARLIEST"}
-	source, _, err := NewSource(clients, metadata, positioning, p, "fp", config.Defaults("home").Worker, quietLogger(), nil)
+	source, _, err := NewSource(clients, metadata, positioning, p, "fp", config.Defaults("home").Worker, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

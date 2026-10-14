@@ -136,6 +136,19 @@ func TestInspectorClosesAdminWhenPreflightFails(t *testing.T) {
 	}
 }
 
+func TestInvalidBindingOptionStopsBeforeAdminConstruction(t *testing.T) {
+	// Given a misspelled Go option in a shared connection profile.
+	clients := &mockClients{}
+	properties := sinkEndpoint(t, map[string]string{"go.events.channel.szie": "private-option-secret"}).Properties
+	// When constructing the metadata inspector.
+	metadata, err := NewInspector(clients, properties, "orders", quietLogger())
+	// Then it fails without creating an admin handle or exposing the option value.
+	var conflict *Conflict
+	if metadata != nil || !errors.As(err, &conflict) || clients.cfg != nil || err.Error() != `unsupported Go client property "go.events.channel.szie"` {
+		t.Fatal("invalid binding option reached admin startup", metadata, err, clients.cfg)
+	}
+}
+
 func TestInspectorRequestsCurrentPartitions(t *testing.T) {
 	// Given
 	description := k.TopicDescription{Name: "orders", Partitions: []k.TopicPartitionInfo{{Partition: 0}, {Partition: 2}}}
