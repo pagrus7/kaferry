@@ -32,7 +32,7 @@ Tested with Apache Kafka 3.9.0.
 
 ## Known issues
 
-When starting a copy from Kafka, Kaferry closes its client on a group coordinator timeout so it can exit with error code `1`. Cleanup can hang; slow cleanup or other coordinator failures can still cause a [librdkafka crash](https://github.com/confluentinc/librdkafka/pull/5397). This worker copies nothing and leaves saved progress unchanged. Rerun after the coordinator recovers. Production crash frequency is unknown. [Details](design/client-compatibility.md#known-issues).
+When starting a copy from Kafka, Kaferry closes its client on a group coordinator timeout so it can exit with error code `1`. Cleanup can hang; slow cleanup or other coordinator errors can still cause a [librdkafka crash](https://github.com/confluentinc/librdkafka/pull/5397). The affected worker copies nothing and leaves saved progress unchanged. Rerun after the coordinator recovers. Production crash rate is unknown. [Details](design/client-compatibility.md#known-issues).
 
 ## Quick start
 
