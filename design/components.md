@@ -4,9 +4,11 @@ Contributor reference for boundaries, ownership and checks. See [copy behavior](
 
 ## Composition
 
-Constructors receive dependencies through narrow interfaces. [Fx modules](../internal/app/modules.go) compose the application; domain packages do not depend on Fx. Passive records, cursors and pure helpers stay concrete.
+Constructors receive dependencies through narrow interfaces. [Fx modules](../internal/app/modules.go) compose the application; domain packages do not depend on Fx. Records, cursors and pure helper functions use concrete types.
 
 Command parses, configures and plans; Engine acquires adapters; Runner copies through shared source, sink and progress contracts.
+
+SQL syntax and validation errors share `sql.Diagnostic`, which carries a source position and preserves its cause. AST positions stay out of normalized plans, fingerprints and checkpoints. The CLI adds SQL file/stdin names; errors report token categories and fixed syntax hints without echoing input values or SQL excerpts. Caller-created ASTs without positions produce plain messages; configuration and operational errors keep their own context.
 
 ## Components
 
@@ -29,7 +31,9 @@ Command parses, configures and plans; Engine acquires adapters; Runner copies th
 ## Ownership
 
 - Factories create fresh mutable runner/progress/adapter state for each query; assignment state is generation-specific.
-- Engine owns query resources and closes them in reverse acquisition order. Adapters own their native clients, files and locks.
+- The engine manages each query's resources. Adapters manage Kafka clients, files and locks.
+- For Kafka-to-file copies, Kaferry creates the Kafka consumer and checks its settings before opening the output file. Before reading any messages, it sets up progress tracking so saved Kafka offsets include the file ID and the last safely written byte position.
+- On shutdown, Kaferry keeps the output file open and locked until the consumer finishes closing, because its shutdown callbacks can still save offsets.
 - Runner mutates progress in one event loop. Late outcomes from an old assignment cannot advance current progress.
 - Sources provide owned record buffers; sinks retain them until the corresponding write outcome.
 - Source cursors are distinct from record provenance. Progress persists confirmed next positions and identity metadata.
@@ -106,8 +110,10 @@ Missing measurements are unavailable. Coverage and Go vulnerability scans exclud
 
 ### Release evidence
 
-The release workflow produces per-platform SPDX SBOMs, native inventory/license text, archive provenance and binary SBOM attestations. Syft inventories the binary; the native supplement identifies the selected librdkafka archive and observed version strings. Bundled licenses do not prove every component was linked; native vulnerability coverage is incomplete.
+Release archives contain the binary, MIT license and third-party notices for linked Go modules, Go runtime and the reviewed native bundle. `--version` reports the build version, commit, Go and linked librdkafka. CI and packaging check all supported native archives against `licenses/native.json`; bundle changes require reviewing their notices in `licenses/native.txt`.
 
-For releases built by the current workflow, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document`. Attestations establish build origin. Releases through v0.2.0 have checksums/build information but lack these SBOMs and attestations.
+The workflow also produces per-platform SPDX SBOMs, native inventory/license text, archive provenance and binary SBOM attestations. Syft inventories the binary; the native supplement identifies the selected librdkafka archive and observed version strings. Bundle notices may include unlinked components; native vulnerability coverage is incomplete.
+
+For downloads with attestation bundles, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document`. Attestations establish build origin. Downloads without these bundles can be checked against `SHA256SUMS` for file integrity.
 
 Pushing a `v*` tag publishes after successful builds. Manual dispatch defaults to validation only; publishing requires selecting the version tag as the workflow ref. Checkout must match the attested workflow SHA. [Release procedure and note format](../releases/README.md).

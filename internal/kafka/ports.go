@@ -11,6 +11,12 @@ type AssignmentStore interface {
 	SetMetadata(int32, Progress)
 }
 
+// SourceProgress binds destination durability before the source is started.
+type SourceProgress interface {
+	copy.ProgressStore
+	BindOutput(copy.OutputProgress)
+}
+
 type OffsetReader interface {
 	Offsets([]int32, k.OffsetSpec, bool) (map[int32]int64, error)
 }

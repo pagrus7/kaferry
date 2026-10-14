@@ -11,7 +11,7 @@
 
 Copy Kafka records between topics and CBOR files with one SQL-like statement.
 
-Preserves raw keys, values, nulls, ordered headers and timestamps where possible. No transformations or Schema Registry access.
+Preserves raw keys, values, nulls, ordered headers and timestamps where possible; no transformations or Schema Registry access.
 
 Implementation is AI-driven, using Codex and Claude Code under human direction.
 
@@ -25,13 +25,14 @@ Extract and run `kaferry`.
 git clone https://github.com/pagrus7/kaferry.git
 cd kaferry
 make build
+bin/kaferry --version
 ```
 
 Tested with Apache Kafka 3.9.0.
 
 ## Known issues
 
-Since v0.2.1, a workaround turns tested coordinator timeouts at Kafka-source startup into a normal error (exit `1`) instead of a [librdkafka crash](https://github.com/confluentinc/librdkafka/pull/5397); other cases can still crash. Either way, the worker copies nothing and leaves saved progress unchanged; rerun after coordinator recovery. Production frequency is unknown. [Details](design/client-compatibility.md#known-issues).
+On a coordinator timeout, Kafka-source startup closes its client so it can exit `1`; slow cleanup or other coordinator failures can still cause a [librdkafka crash](https://github.com/confluentinc/librdkafka/pull/5397) (signal exit). The worker copies nothing and leaves saved progress unchanged; rerun after coordinator recovery. Crash frequency in production is unknown. [Details](design/client-compatibility.md#known-issues).
 
 ## Quick start
 
@@ -57,21 +58,19 @@ WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
 OPTIONS (GROUP = 'orders-backfill');
 ```
 
-`@prod` and `@backup` select connections. `GROUP` names the consumer group, or a local checkpoint for file sources.
-
-Run:
+`@alias` selects a connection. `GROUP` names the consumer group or file-source checkpoint.
 
 ```sh
 bin/kaferry run --file copy.sql --config connections.toml
 ```
 
-Completion logs a JSON `copy summary` to stderr and exits `0`. The cutoff rule below can omit records.
+Each worker logs a JSON `copy summary` to stderr.
 
 `-e` takes inline SQL; `-f -` reads stdin.
 
 ## More examples
 
-**Archive from the earliest retained record, then keep following.** Create the output directory first.
+**Archive from earliest and keep reading new records.** Create the output directory first.
 
 ```sql
 INSERT INTO FILE cbor('/data/orders.cbor')
@@ -79,7 +78,7 @@ SELECT * FROM TOPIC 'orders@prod'
 OPTIONS (GROUP = 'orders-archive', START = EARLIEST);
 ```
 
-**Restore the last seven days.** Skip timestamps known to be outside the destination's accepted bounds.
+**Restore the last seven days.** Skip timestamps outside the destination's bounds.
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
@@ -90,7 +89,7 @@ OPTIONS (GROUP = 'orders-restore', ON_REJECTED_TIMESTAMP = SKIP);
 
 **File to file:** [extract an inclusive time range](design/grammar.md#valid-examples) with `BETWEEN` and `GROUP = ONE_OFF`, which generates and logs a group name.
 
-Filters use Kafka record time, not payload event time. Files read up to their size at startup; later appends wait for another run. [Full syntax](design/grammar.md) covers timestamps, intervals and `SELECT *`.
+Filters use Kafka record time, not payload event time. Files read up to their size at startup; later appends wait for another run. [Full syntax](design/grammar.md).
 
 ## Connections
 
@@ -113,43 +112,32 @@ Prefix the statement to read its password from the environment:
 WITH CONNECTION prod AS ('sasl.password' = ENV('PROD_PASSWORD'))
 ```
 
-`ENV` works only in SQL and must be set. SQL can define complete connections. Logs redact properties; keep passwords out of literals and shell arguments. Settings that break copy guarantees are rejected.
+`ENV` works only in SQL and must be set. SQL can define connections. Logs redact properties; keep passwords out of literals and shell arguments. Settings that break copy guarantees are rejected.
 
-<details>
-<summary>Optional worker settings and defaults</summary>
-
-Limits count uncommitted work, including delivered records. [Details](design/decisions.md#delivery-and-progress).
-
-```toml
-[worker]
-partition_record_cap = 5000
-partition_byte_cap = 16777216
-record_cap = 20000
-byte_cap = 134217728
-max_frame_bytes = 67108864
-delivery_timeout = '60s'
-idle_exit = '30s'
-tip_wait = '15m'
-# checkpoint_dir = '/var/lib/kaferry/checkpoints'
-```
-
-</details>
+Put optional limits and timeouts in TOML's `[worker]` table. [Settings and defaults](design/decisions.md#worker-settings).
 
 ## Before you run
 
 - **Resume:** rerun the same query and `GROUP` to continue from saved progress. New windows or `CUTOFF` need a new group. `NOW()` is saved per partition or file. Expired offsets, deleted checkpoints or a different checkpoint directory can cause a fresh copy.
-- **Window end:** Kafka follows without an upper bound. Otherwise each partition stops at its first timestamp after `end + CUTOFF` (default one minute), or after catching up once that time passes. Records past the stop point can still be within the window and be missed, even if already present before the run. [Details](design/decisions.md#completion).
+- **Window end:** without an end time, Kafka copies keep reading new records. With one, each partition stops at its first timestamp after `end + CUTOFF` (default one minute), or after catching up once that time passes. Records past the stop point can still be within the window and be missed, even if already present before the run. [Details](design/decisions.md#completion).
 - **Delivery:** at least once. Crashing after writing but before saving progress, or rebalancing, can duplicate writes. Kafka sources read committed records.
 - **Kafka output:** keep original keys; let the destination choose partitions. Default Java-compatible partitioning keeps equal non-null keys together with a fixed partition count. The destination controls timestamp type; `LogAppendTime` replaces timestamps. [Ordering details](design/decisions.md#kafka-output).
 - **Payloads:** ensure bytes and Schema Registry IDs work at the destination. Old records may expire under destination retention.
-- **Workers:** topic-to-topic processes may share a group; use literal times for one window. All exiting 0 does not prove completion. After they leave, rerun alone with the same query/group and check there is no `local idle exit`.
+- **Workers:** for topic-to-topic copies, give each process the same query and consumer group name, such as `GROUP = 'orders-backfill'`. Use explicit timestamps for the same window. With four workers and three topic partitions, Kafka may give one worker no partitions to read. For copies with an end time, that worker waits `worker.idle_exit` (30 seconds by default), then exits with code `3`. [Details](design/decisions.md#groups-and-workers).
 - **Files:** one process per query on one machine, using a local filesystem with locks and hard links. For a new file-source job, run `mkdir -p ~/.kaferry/checkpoints`. To resume, use the existing checkpoint directory. Keep output and progress; losing either prevents resuming file output. Use a new group and output path to start over.
 - **Permissions:** source topic READ and group READ for Kafka sources; destination WRITE for Kafka output. Kafka-source `ONE_OFF` needs the `kaferry-` group prefix authorized. [Details](design/client-compatibility.md#permissions).
 - **Errors:** fail by default. Use `ON_ERROR = SKIP` or specific timestamp policies. Broker rejections, authentication errors and corruption still fail. [Skippable errors](design/decisions.md#errors).
 
-Signals stop reading, drain writes for up to ten seconds and save progress; native calls can extend shutdown. Logs go to stderr: JSON events and a plain-text final error. Normal exit codes: `0` finished or stopped while following; `1` failed or interrupted before finishing; `2` invalid usage/configuration or a conflict before copying. Native aborts use signal exit status.
+Signals stop reading, drain writes for up to ten seconds and save progress; native calls can extend shutdown. JSON logs and final nonzero-exit messages go to stderr.
 
-[Detailed behavior](design/decisions.md) · [File format and recovery](docs/file-format.md) · [Client limits and permissions](design/client-compatibility.md)
+- `0`: this worker finished the work still assigned to it, or a Kafka copy without an end time stopped cleanly by signal.
+- `1`: the copy failed, or was interrupted before its stopping rule.
+- `2`: invalid command/configuration, or a conflict detected before reading records.
+- `3`: for a copy with an end time, Kafka assigned this worker no partitions for `worker.idle_exit`. This does not say whether other workers finished.
+
+Native aborts use signal exit status.
+
+[Detailed behavior](design/decisions.md) · [File format](docs/file-format.md) · [Client limits and permissions](design/client-compatibility.md)
 
 ## Development
 
@@ -160,3 +148,5 @@ make broker-down
 ```
 
 Kafka tests need Docker. [Checks and reports](design/components.md#quality-indicators) · [Test targets](design/components.md#test-targets).
+
+[MIT license](LICENSE); dependencies retain their licenses. [Security reporting](SECURITY.md).

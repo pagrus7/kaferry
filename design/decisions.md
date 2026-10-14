@@ -44,7 +44,7 @@ A Kafka partition with an upper bound stops when either:
 
 ### Catching up
 
-After the time threshold passes and the partition reaches its read-committed tip, sample the high watermark H once for that attempt. Complete when the consumed cursor reaches H, including aborted/control records, and all prior work resolves. H = 0 completes immediately. An open transaction can delay this; `worker.tip_wait` (default 15 min) bounds waiting after H is sampled. Timeout fails with H and the stable/consumed positions. H is neither shared nor persisted.
+After the time threshold passes and the partition reaches its read-committed tip, sample the read-uncommitted log end H once for that attempt. H includes records in open transactions; the consumer continues to read only committed records. Complete when the consumed cursor reaches H, including aborted/control records, and all prior work resolves. H = 0 completes immediately. An open transaction delays completion until it commits or aborts; `worker.tip_wait` (default 15 min) bounds waiting after H is sampled. Timeout fails with H and the stable/consumed positions. Sampling logs H and the current positions. H is neither shared nor persisted.
 
 A timestamp stop commits at the trigger record, so rerunning stops there again. A tip stop commits the next position, so rerunning may copy later arrivals. Without an upper bound, Kafka sources follow indefinitely.
 
@@ -54,10 +54,12 @@ File sources read from their checkpoint or first frame to the size observed at o
 
 - `GROUP` identifies a Kafka consumer group or a file-source checkpoint. `GROUP = ONE_OFF` generates and logs `kaferry-<hex>` for a single worker. Resume an interrupted run using that ID as a named group. Successful file-source ONE_OFF runs delete the checkpoint but retain its stable lock; Kafka progress expires under broker offset retention.
 - Topic→topic workers share a named group and progress independently using classic `cooperative-sticky` assignment. There is no group-wide done marker or external coordinator.
-- Before subscription, group inspection rejects foreign/invalid progress and active members without the protected client-ID prefix or assigned to another topic. An absent group passes; an unavailable check fails. Unassigned subscriptions cannot be checked. Positioning validates progress again after assignment. Stop workers before upgrading a group.
-- A worker exits when all assigned partitions stop. A temporary empty assignment during rebalance is not completion. In bounded runs, no partitions for `worker.idle_exit` (default 30 s) after a successful assignment causes a logged idle exit with code 0. Follow workers remain as standbys.
-- All workers exiting 0 does not prove coverage: idle exit can coincide with a partition handoff. After members leave, rerun the same query/group with one worker; its partition completion, rather than idle exit, confirms the bounded run under the cutoff rule. This can copy late arrivals.
-- On revocation, stop intake, commit the confirmed prefix and release without waiting for outstanding deliveries. Discard their late outcomes; the new owner replays uncommitted records. Ownership loss never commits.
+- Before subscription, group inspection rejects foreign/invalid progress and active members without the protected client-ID prefix or assigned to another topic. An absent group passes; an unavailable check fails. The topic check sees assigned partitions, so it cannot check the subscriptions of members with no partitions. Positioning validates progress again after assignment. Stop workers before upgrading a group.
+- A worker exits `0` after every partition it still holds stops, its outstanding writes are acknowledged and progress is committed. Partitions released during a rebalance do not count. Kafka copies without an end time keep waiting for new records or assignments until signalled.
+- For a Kafka copy with an end time, the wait starts when Kafka reports an empty assignment while the worker holds no partitions. If it still has none after `worker.idle_exit` (30 seconds by default), it exits `3`. Another empty-assignment notification restarts the timer. Waiting for the first assignment notification or losing all partitions during a rebalance does not start it. The exit logs `local idle exit`, the timeout and the code. A worker assigned an empty partition does not exit this way.
+- More workers than source partitions can leave some workers with no partitions to read. This can also happen while Kafka moves partitions between workers. Code `3` does not tell you whether other workers finished. If the last workers exit before a partition reaches its new owner, that partition can remain unfinished. Rerunning the same query and group resumes saved positions and may copy late arrivals.
+- If your supervisor restarts workers on nonzero exits, set a policy for code `3`. Restarting rejoins the group and can give the worker partitions to copy.
+- On revocation, stop reading the revoked partitions, commit the confirmed prefix and release without waiting for outstanding deliveries. Discard their late outcomes; the new owner replays uncommitted records. Ownership loss never commits.
 - Recoverable rebalance/coordinator/timeout/transport errors during revocation commit are logged and released for replay. Authorization, fencing, fatal/unknown errors, oversized metadata and missing results fail. Initial and periodic commits fail on any error.
 - Rebalancing can discover added source partitions; additions after workers exit need another run. Groups cannot seed from another group's offsets.
 
@@ -81,7 +83,7 @@ Policies can therefore change to SKIP when resuming a failed record. `NOW()` bou
 - Send original key bytes with partition unset. Default `partitioner=murmur2_random` matches Java routing; connection properties may override it. Equal non-null keys stay together with a stable partitioner/count. Source partitions/offsets are never routing instructions. Topics must exist; destination partition-count changes are logged.
 - Submission order is preserved for records from one source partition routed to one destination partition during an uninterrupted producer session with stable routing. Null keys can spread. Replay and rebalances can duplicate and reorder output; there is no cross-partition order guarantee.
 - Client delivery retries default to `worker.delivery_timeout` (60 s). Connection `message.timeout.ms` / `delivery.timeout.ms` overrides it; 0 is unbounded, conflicting aliases fail. Exhausted delivery fails the run.
-- Queue-full refusal pauses intake and retries the same record first, up to `worker.delivery_timeout`. Accepted records are not submitted again within that assignment.
+- Queue-full refusal pauses reading and retries the same record first, up to `worker.delivery_timeout`. Accepted records are not submitted again within that assignment.
 - Optional destination configuration supports size/timestamp preflight; denial logs a warning. [Checks and fallbacks](client-compatibility.md#optional-destination-configuration). Preflight cannot guarantee broker acceptance: clocks, settings, framing and compression may differ.
 - The destination determines timestamp type. Known LogAppendTime restamps records. Otherwise the Go client cannot preserve timestamps ≤ 0 or above 9,223,372,036,854 Unix milliseconds; apply the timestamp policy. A missing timestamp without `WHERE` gets producer time, counted and warned about.
 - Destination retention is not checked; old CreateTime records may be deleted soon after copying.
@@ -92,9 +94,9 @@ Policies can therefore change to SKIP when resuming a failed record. `NOW()` bou
 - Kafka sources read committed records. A Kafka delivery report or file fsync acknowledges output before source progress is saved.
 - Batches are bounded and non-atomic. Commit only each partition's contiguous resolved prefix: filtered, delivered or explicitly skipped. Consumed positions account for Kafka offset gaps.
 - A later failure leaves earlier output intact. Restart can duplicate output acknowledged after the last saved position, and revisits the failing record unless conditions or policy change.
-- Default uncommitted caps: 5,000 records / 16 MiB per partition; 20,000 records / 128 MiB per worker. Pause intake at a cap until commit succeeds; a single oversized record may proceed alone. These bound tracked work, not total process memory, which also includes native buffers and overhead.
+- Default uncommitted caps: 5,000 records / 16 MiB per partition; 20,000 records / 128 MiB per worker. Pause reading at a cap until commit succeeds; a single oversized record may proceed alone. These bound tracked work, not total process memory, which also includes native buffers and overhead.
 - Commit all worker partitions in one request, with at most one request in flight: every second, at 50% of a worker/partition cap, while paused at a cap with confirmed progress, and on shutdown/revocation. Check results per partition.
-- Shutdown stops intake, drains writes for up to ten seconds, then commits confirmed progress. Native commits/close and filesystem calls can extend shutdown; `socket.timeout.ms` is not a total commit deadline.
+- Shutdown stops reading, drains writes for up to ten seconds, then commits confirmed progress. Native commits/close and filesystem calls can extend shutdown; `socket.timeout.ms` is not a total commit deadline.
 
 ## Errors
 
@@ -123,14 +125,16 @@ Output holds an exclusive inode lock. A file-source group holds a stable checkpo
 
 ### Creation
 
-Before source intake (before subscription for Kafka→file):
+For Kafka-to-file copies, Kaferry creates the Kafka consumer and checks its settings before opening the output file. Before reading any messages, it sets up progress tracking so saved Kafka offsets include the file ID and the last safely written byte position. On shutdown, Kaferry keeps the file open and locked until the consumer finishes closing, because its shutdown callbacks can still save offsets.
+
+Before copying records (before subscription for Kafka→file):
 
 1. Write/fsync a complete header to a locked temporary file.
 2. Publish without replacing an existing path; fsync the directory. A losing creator opens and locks the published file.
 3. Save destination ID and header extent with initial source progress, checking every partition result or the file checkpoint.
 4. Begin copying. Cleanup removes only temporary files whose locks it acquires.
 
-An existing output without saved ownership fails, including a header-only file left by a creation crash. Only after verifying it is header-only, delete it manually and rerun. Missing output named by progress is never recreated automatically.
+An existing output without saved ownership fails. Startup failure, interruption or a crash before the first successful progress save can leave a header-only file. Delete the file manually only after verifying it is header-only and saved progress does not name it, then rerun. Missing output named by progress is never recreated automatically.
 
 ### Output recovery
 
@@ -155,6 +159,27 @@ The checkpoint directory must exist. For new file jobs, create it first. To resu
 
 Connections use TOML profiles or `WITH CONNECTION`; SQL keys override TOML. `ENV('NAME')` resolves at startup, fails if unset and is redacted. Worker settings are in TOML.
 
+Known Go binding options are passed only to clients that support them; profiles can be shared by producers and consumers. Admin clients exclude their producer/consumer Go options. Booleans and positive integer capacities are converted from configuration strings. Unknown Go or native property names fail, without displaying property values.
+
+### Worker settings
+
+Optional defaults in TOML's `[worker]` table:
+
+```toml
+[worker]
+partition_record_cap = 5000
+partition_byte_cap = 16777216
+record_cap = 20000
+byte_cap = 134217728
+max_frame_bytes = 67108864
+delivery_timeout = '60s'
+idle_exit = '30s'
+tip_wait = '15m'
+# checkpoint_dir = '/var/lib/kaferry/checkpoints'
+```
+
+Limits include delivered records whose source progress is not yet saved. [Delivery and progress](#delivery-and-progress).
+
 ### Protected client properties
 
 Conflicting values fail configuration; matching values are allowed.
@@ -166,20 +191,21 @@ Conflicting values fail configuration; matching values are allowed.
 | `auto.offset.reset`, `isolation.level` | `error`, `read_committed` |
 | `partition.assignment.strategy`, `group.protocol` | `cooperative-sticky`, `classic` |
 | `enable.partition.eof` | `true` |
-| `allow.auto.create.topics`, `go.events.channel.enable` | `false` |
+| `allow.auto.create.topics`, `go.events.channel.enable`, `go.application.rebalance.enable` | `false` |
 
-Producer requires `enable.idempotence=true`, `go.delivery.reports=true`, `go.batch.producer=false` and `allow.auto.create.topics=false`; nonempty `transactional.id` is rejected. Unknown librdkafka keys also fail.
+Producer requires `enable.idempotence=true`, `go.delivery.reports=true`, `go.batch.producer=false`, `delivery.report.only.error=false` and `allow.auto.create.topics=false`; nonempty `transactional.id` is rejected. All clients require `go.logs.channel.enable=false`; the CLI does not consume Go log channels. Unknown librdkafka keys also fail.
 
-Consumer `queued.max.messages.kbytes` is capped by worker bytes; producer `queue.buffering.max.messages` by worker records and `go.events.channel.size` by worker records + 1. Producer `queue.buffering.max.kbytes` allows the larger of worker bytes or the effective message-size limit. Byte limits round up to KiB; overrides must be positive and no larger than these bounds.
+Consumer `queued.max.messages.kbytes` is capped by worker bytes; producer `queue.buffering.max.messages` and `go.produce.channel.size` by worker records, and `go.events.channel.size` by worker records + 1. Producer `queue.buffering.max.kbytes` allows the larger of worker bytes or the effective message-size limit. Byte limits round up to KiB; overrides must be positive and no larger than these bounds.
 
 ### CLI and exit codes
 
-Exactly one input: `run --file/-f path`, `run --sql/-e statement`, or `run --file -`. `--config/-c path` loads TOML. Events are JSON on stderr; the final error is plain text after cleanup, so hung cleanup can delay it indefinitely.
+Exactly one input: `run --file/-f path`, `run --sql/-e statement`, or `run --file -`. `--config/-c path` loads TOML. Events are JSON on stderr; nonzero exits also print a plain-text message after cleanup, so hung cleanup can delay it indefinitely.
 
 | Normal exit | Meaning |
 | --- | --- |
-| 0 | Completed, or follow run stopped cleanly by a signal; SKIP counts do not change the code |
-| 1 | Runtime failure, bounded run interrupted, or conflict after intake starts |
+| 0 | Every partition the worker held at exit stopped, or a Kafka copy without an end time stopped cleanly by signal; SKIP counts do not change the code |
+| 1 | Runtime failure, any startup interruption, interruption of a file copy or a Kafka copy with an end time, or conflict after the first consumed record |
 | 2 | Usage/parse/plan/configuration error, or identity/ownership/self-copy conflict before the first consumed record |
+| 3 | Kafka copy with an end time received no assigned partitions for `worker.idle_exit` after an empty-assignment notification; does not say whether other workers finished |
 
 Busy locks and broker/record failures exit 1. Conflicts include foreign progress/members, changed input and unowned/short/corrupt acknowledged output. The first failure determines the code; cleanup cannot replace it. Native aborts and forced termination use system signal status.

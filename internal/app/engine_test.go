@@ -24,9 +24,10 @@ type engineFixture struct {
 	input   *engineInput
 	output  *engineOutput
 	source  *engineSource
-	store   core.ProgressStore
+	store   kafka.SourceProgress
 	groups  []string
 	saved   map[int32]kafka.Progress
+	onStage func(string)
 }
 
 func newEngineFixture() *engineFixture {
@@ -38,6 +39,9 @@ func newEngineFixture() *engineFixture {
 }
 func (f *engineFixture) stage(name string) error {
 	f.trace = append(f.trace, name)
+	if f.onStage != nil {
+		f.onStage(name)
+	}
 	if f.fail == name {
 		return f.failure
 	}
@@ -80,8 +84,7 @@ func (c *engineConnection) CheckMembers(string) error { return c.fixture.stage("
 func (c *engineConnection) ReadProgress(string, string, plan.WindowSpec, int64) (map[int32]kafka.Progress, error) {
 	return c.fixture.saved, c.fixture.stage("progress")
 }
-func (c *engineConnection) Source(_ plan.Plan, _ string, _ config.Worker, output core.OutputProgress) (core.Source, core.ProgressStore, error) {
-	c.fixture.source.output = output
+func (c *engineConnection) Source(_ plan.Plan, _ string, _ config.Worker) (core.Source, kafka.SourceProgress, error) {
 	return c.fixture.source, c.fixture.store, c.fixture.stage("topic-input")
 }
 func (c *engineConnection) Sink(config.Worker) (core.Sink, error) {
@@ -91,11 +94,16 @@ func (c *engineConnection) Close() { _ = c.fixture.stage("close-" + c.name) }
 
 type engineSource struct {
 	core.Source
-	fixture *engineFixture
-	output  core.OutputProgress
+	fixture     *engineFixture
+	beforeClose func()
 }
 
-func (s *engineSource) Close() error { return s.fixture.stage("close-topic-input") }
+func (s *engineSource) Close() error {
+	if s.beforeClose != nil {
+		s.beforeClose()
+	}
+	return s.fixture.stage("close-topic-input")
+}
 
 type engineInput struct {
 	core.Source
@@ -116,9 +124,13 @@ func (i *engineInput) DeleteCheckpoint() error            { return i.fixture.sta
 type engineOutput struct {
 	core.Sink
 	fixture *engineFixture
+	closed  bool
 }
 
-func (o *engineOutput) Close()                       { _ = o.fixture.stage("close-output") }
+func (o *engineOutput) Close() {
+	o.closed = true
+	_ = o.fixture.stage("close-output")
+}
 func (*engineOutput) DurableOutput() (string, int64) { return "file-id", 100 }
 
 func enginePlan(source, destination string) plan.Plan {
@@ -151,7 +163,7 @@ func TestRuntimeCompositionAcceptsReplacementFactories(t *testing.T) {
 			if runErr != nil {
 				t.Fatal(runErr)
 			}
-			if kinds[0] == "TOPIC" && kinds[1] == "FILE" && f.source.output != f.output {
+			if kinds[0] == "TOPIC" && kinds[1] == "FILE" && f.input.output != f.output {
 				t.Fatal("Kafka input did not receive durable output")
 			}
 			if kinds[0] == "FILE" {
@@ -168,8 +180,8 @@ func TestRuntimeCompositionAcceptsReplacementFactories(t *testing.T) {
 				output = "file-output"
 			}
 			joined := strings.Join(f.trace, ",")
-			if kinds[0] == "TOPIC" && strings.Index(joined, output) > strings.Index(joined, "topic-input") {
-				t.Fatal("Kafka intake constructed before destination", f.trace)
+			if kinds[0] == "TOPIC" && strings.Index(joined, "topic-input") > strings.Index(joined, output) {
+				t.Fatal("Kafka consumer constructed after destination", f.trace)
 			}
 			if strings.Count(joined, "close-output") != 1 {
 				t.Fatal("destination was not closed exactly once", f.trace)
@@ -192,8 +204,10 @@ func TestEngineClosesOnlyAcquiredResourcesOnFailure(t *testing.T) {
 		{"TOPIC", "TOPIC", "progress", []string{"close-source", "close-destination"}},
 		{"TOPIC", "FILE", "members", []string{"close-source"}},
 		{"TOPIC", "FILE", "progress", []string{"close-source"}},
-		{"TOPIC", "TOPIC", "topic-output", []string{"close-destination", "close-source"}},
-		{"TOPIC", "TOPIC", "topic-input", []string{"close-output", "close-destination", "close-source"}},
+		{"TOPIC", "FILE", "topic-input", []string{"close-source"}},
+		{"TOPIC", "FILE", "file-output", []string{"close-topic-input", "close-source"}},
+		{"TOPIC", "TOPIC", "topic-output", []string{"close-topic-input", "close-destination", "close-source"}},
+		{"TOPIC", "TOPIC", "topic-input", []string{"close-destination", "close-source"}},
 		{"TOPIC", "TOPIC", "run", []string{"close-topic-input", "close-output", "close-destination", "close-source"}},
 		{"FILE", "TOPIC", "file-input", []string{"close-destination"}},
 		{"FILE", "FILE", "file-output", []string{"close-file-input"}},
@@ -220,6 +234,85 @@ func TestEngineClosesOnlyAcquiredResourcesOnFailure(t *testing.T) {
 			}
 			if !reflect.DeepEqual(closed, test.closed) {
 				t.Fatalf("closed %v, want %v", closed, test.closed)
+			}
+		})
+	}
+}
+
+func TestConsumerShutdownKeepsDestinationProgressAvailable(t *testing.T) {
+	for _, fail := range []string{"", "run"} {
+		t.Run("after-"+fail, func(t *testing.T) {
+			// Given file output borrowed by a consumer's shutdown progress callback.
+			f := newEngineFixture()
+			f.fail, f.store = fail, f.input
+			savedOnClose := false
+			f.source.beforeClose = func() {
+				savedOnClose = true
+				if f.output.closed || f.input.output != f.output {
+					t.Error("output ownership released before shutdown progress save")
+				}
+				id, extent := f.input.output.DurableOutput()
+				if id != "file-id" || extent != 100 {
+					t.Error("shutdown cannot access durable output progress")
+				}
+			}
+			engine := newEngine(f, f, f, engineLogger())
+
+			// When shutting down after normal execution or an execution failure.
+			err := engine.Run(context.Background(), enginePlan("TOPIC", "FILE"), config.Worker{})
+
+			// Then the callback precedes output release and preserves the outcome.
+			if !savedOnClose || !f.output.closed || (fail == "" && err != nil) || (fail != "" && !errors.Is(err, f.failure)) {
+				t.Fatal("incorrect shutdown or execution outcome", err, f.trace)
+			}
+		})
+	}
+}
+
+func TestEngineSkipsAcquisitionWhenStartupIsCancelled(t *testing.T) {
+	// Given a query cancelled before execution starts.
+	f := newEngineFixture()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	// When preparing Kafka input and file output.
+	err := newEngine(f, f, f, engineLogger()).Run(ctx, enginePlan("TOPIC", "FILE"), config.Worker{})
+	// Then no connection, file or saved progress is created.
+	if !errors.Is(err, context.Canceled) || len(f.trace) != 0 {
+		t.Fatal("cancelled startup acquired resources", err, f.trace)
+	}
+}
+
+func TestStartupCancellationClosesInputWithoutCreatingOutput(t *testing.T) {
+	for _, kind := range []string{"TOPIC", "FILE"} {
+		t.Run(kind, func(t *testing.T) {
+			// Given cancellation while the source adapter is being created.
+			f := newEngineFixture()
+			f.store = f.input
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			stage, closed := "topic-input", []string{"close-topic-input", "close-source"}
+			if kind == "FILE" {
+				stage, closed = "file-input", []string{"close-file-input"}
+			}
+			f.onStage = func(name string) {
+				if name == stage {
+					cancel()
+				}
+			}
+
+			// When starting a copy into a file.
+			err := newEngine(f, f, f, engineLogger()).Run(ctx, enginePlan(kind, "FILE"), config.Worker{})
+
+			// Then cancellation preserves its cause, closes acquired input, and creates no output.
+			var afterCancellation []string
+			for index, name := range f.trace {
+				if name == stage {
+					afterCancellation = f.trace[index+1:]
+					break
+				}
+			}
+			if !errors.Is(err, context.Canceled) || !reflect.DeepEqual(afterCancellation, closed) {
+				t.Fatal("incorrect cancellation cleanup", err, f.trace)
 			}
 		})
 	}

@@ -2,52 +2,63 @@
 package sql
 
 type Endpoint struct {
-	Kind   string // TOPIC or FILE
-	Name   string
-	Format string
+	Position Position `json:"-"`
+	Kind     string   // TOPIC or FILE
+	Name     string
+	Format   string
 }
 
 type Property struct {
-	Name        string
-	Value       string
-	Environment bool
+	Position      Position `json:"-"`
+	ValuePosition Position `json:"-"`
+	Name          string
+	Value         string
+	Environment   bool
 }
 
 type Connection struct {
+	Position   Position `json:"-"`
 	Alias      string
 	Properties []Property
 }
 
 type Interval struct {
+	Position  Position `json:"-"`
 	Magnitude string
 	Unit      string
 	Subtract  bool
 }
 
 type Time struct {
+	Position    Position `json:"-"`
 	Now         bool
 	Literal     string
 	Adjustments []Interval
 }
 
 type Bound struct {
+	Position Position `json:"-"`
 	Operator string
 	Time     Time
 }
 
 type Option struct {
-	Name     string
-	Value    string
-	Quoted   bool
-	Interval *Interval
+	Position      Position `json:"-"`
+	ValuePosition Position `json:"-"`
+	Name          string
+	Value         string
+	Quoted        bool
+	Interval      *Interval
 }
 
 type Statement struct {
-	Connections []Connection
-	Source      Endpoint
-	Destination Endpoint
-	Bounds      []Bound
-	Options     []Option
+	OptionsPosition Position `json:"-"`
+	WherePosition   Position `json:"-"`
+	Connections     []Connection
+	Source          Endpoint
+	Destination     Endpoint
+	Bounds          []Bound
+	Options         []Option
 }
 
 type Parser interface {

@@ -391,14 +391,14 @@ func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 	}
 }
 
-func TestEmptyAssignmentIdleExitRequiresCompletedAssignment(t *testing.T) {
+func TestIdleExitRequiresProcessedEmptyAssignment(t *testing.T) {
 	// Given a bounded worker that has never received an assignment.
 	r, _, _, _, c := fixture(t)
 	r.limits.IdleExit = "1s"
 	c.Sleep(time.Hour)
 
 	// When its idle deadline elapses before assignment.
-	finished := r.finished()
+	finished := r.readyToExit()
 
 	// Then it remains available for a first assignment.
 	if finished {
@@ -406,7 +406,7 @@ func TestEmptyAssignmentIdleExitRequiresCompletedAssignment(t *testing.T) {
 	}
 	_ = r.Assign(nil)
 	c.Sleep(2 * time.Second)
-	if !r.finished() {
+	if !r.readyToExit() {
 		t.Fatal("bounded idle worker did not exit")
 	}
 	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
@@ -414,7 +414,7 @@ func TestEmptyAssignmentIdleExitRequiresCompletedAssignment(t *testing.T) {
 	}
 	_ = r.Revoke([]int32{0}, false)
 	c.Sleep(time.Hour)
-	if r.finished() {
+	if r.readyToExit() {
 		t.Fatal("empty rebalance treated as completion")
 	}
 }
@@ -593,7 +593,7 @@ func exitCode(err error) int {
 }
 
 func TestExitCodeFollowsExecutionStage(t *testing.T) {
-	for _, stage := range []string{"before intake", "after intake", "runtime then cleanup", "cleanup then runtime"} {
+	for _, stage := range []string{"before intake", "after intake", "runtime then cleanup", "cleanup then runtime", "runtime then idle outcome"} {
 		t.Run(stage, func(t *testing.T) {
 			// Given a conflict at a particular stage of execution.
 			r, source, _, _, _ := fixture(t)
@@ -614,6 +614,9 @@ func TestExitCodeFollowsExecutionStage(t *testing.T) {
 			case "cleanup then runtime":
 				r.failure = runtime
 				action = func() error { return r.exit(errors.Join(conflict, runtime)) }
+			case "runtime then idle outcome":
+				r.failure = runtime
+				action = func() error { return r.exit(&Exit{Code: 3, Err: errors.New("worker held no partitions for 1s")}) }
 			}
 
 			// When that stage fails.

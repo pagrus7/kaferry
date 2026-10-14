@@ -216,6 +216,9 @@ func (c *Codec) recordFields(fields map[string]cbor.RawMessage, record *core.Rec
 		if len(raw) == 1 && (raw[0] == 0xf7 || key == "headers" && raw[0] == 0xf6) {
 			return nil, fmt.Errorf("invalid record field %s", key)
 		}
+		if (key == "key" || key == "value") && !byteString(raw) && !(len(raw) == 1 && raw[0] == 0xf6) {
+			return nil, fmt.Errorf("invalid record field %s; requires byte string or null", key)
+		}
 		if err := c.decoder.Unmarshal(raw, target); err != nil {
 			return nil, fmt.Errorf("invalid record field %s", key)
 		}

@@ -4,13 +4,15 @@ Deployment limits and Kafka access requirements. See [copy behavior](decisions.m
 
 ## Known issues
 
-Since v0.2.1, a workaround turns tested group-coordinator timeouts at Kafka-source startup into a normal error (exit `1`) instead of a [librdkafka crash](https://github.com/confluentinc/librdkafka/pull/5397); other cases can still crash.
+On a coordinator timeout, Kafka-source startup closes its client so it can exit `1`; slow cleanup or other coordinator failures can still cause a [librdkafka crash](https://github.com/confluentinc/librdkafka/pull/5397) (signal exit).
 
-**Scope and impact:** the affected [coordinator requests](#production-admin-inventory) run before Kaferry creates the consumer or opens output. File sources and runs already copying do not send them. Whether startup fails normally or crashes, this worker copies nothing and leaves saved progress unchanged. Rerun after coordinator recovery.
+**Scope and impact:** these [coordinator requests](#production-admin-inventory) run before Kaferry creates the consumer or opens output. File sources and runs already copying do not send them. Whether startup fails normally or crashes, this worker copies nothing and leaves saved progress unchanged. Rerun the same query and group after the coordinator recovers.
 
-**Workaround:** coordinator requests have a 10 s Go deadline and a 20 s librdkafka timeout. At the Go deadline, startup fails with `context deadline exceeded` and closes the source admin client immediately, leaving about 10 s for cleanup before the native timeout. Five [mock-cluster cases](../internal/kafka/native_test.go) pass with shortened timeouts, including brokers that remain unavailable or recover. Broker tests warm the coordinator and do not exercise this path.
+**Timeout handling:** each request has a 10 s Go deadline and a 20 s librdkafka timeout. The Go deadline returns `context deadline exceeded` without cancelling the native request. Startup begins closing the source admin client immediately, giving cleanup about 10 s before native expiry. Native close has no enforced overall deadline, so this does not bound total startup time.
 
-**Remaining risk:** the underlying use-after-free bug remains. Cleanup delayed past the native timeout can still crash; the workaround is not verified for every upstream error path, including dropped connections. A crash uses a signal exit status. Production frequency is unknown. Bundled librdkafka 2.16.0 lacks the upstream fix; releases through v0.2.0 use 2.15.0 and lack the workaround.
+**Remaining risk:** bundled librdkafka 2.16.0 lacks the upstream use-after-free fix. Cleanup delayed past native expiry can still crash, and other error paths, including dropped connections, are not all verified. Crash frequency in production is unknown.
+
+**Test coverage:** five [isolated mock-cluster cases](../internal/kafka/native_test.go) pass with shortened timeouts: four cover both coordinator requests timing out while brokers stay down or recover after the deadline; one covers offsets succeeding after early recovery. Broker integration warms the coordinator and does not exercise cold startup.
 
 ## Tested configurations
 
@@ -63,11 +65,11 @@ Size preflight is approximate because of framing and compression. Clock skew or 
 | ClusterID (`rd_kafka_clusterid`) | Startup: fingerprint cluster identity from metadata; no DescribeCluster RPC | No |
 | DescribeConsumerGroups | Source startup: check active group members and assigned topics | Yes |
 | ListConsumerGroupOffsets | Source startup, after membership check: read and validate saved commits | Yes |
-| ListOffsets | Source positioning: retained/log-end bounds and read-committed end | No |
+| ListOffsets | Source positioning and completion: retained/log-end bounds, read-committed end and the log end including open transactions | No |
 | DescribeConfigs | Destination startup: optional size and timestamp checks | No |
 | AdminClient.Close | Release handles, including startup-failure cleanup | — |
 
-Assignment uses consumer `Committed` for progress; the consumer also handles commits, timestamp lookup and live watermarks. The producer refreshes routing metadata.
+Assignment uses consumer `Committed` for progress; the consumer also handles commits and timestamp lookup. Completion samples the admin client's read-uncommitted log end, since a read-committed consumer's watermark excludes open transactions. The producer refreshes routing metadata.
 
 Fixture administrators create, alter and delete test resources; those permissions are not CLI requirements.
 
@@ -77,5 +79,5 @@ Fixture administrators create, alter and delete test resources; those permission
 - Native commit and close have no enforced overall deadline. The ten-second write-drain limit does not bound total shutdown; use a supervisor stop timeout when a hard limit is required.
 - Kafka output uses the destination's timestamp type. Known LogAppendTime restamps records. Otherwise timestamps ≤ 0 or above 9,223,372,036,854 Unix milliseconds cannot be preserved by the Go client and follow the timestamp error policy. Files retain timestamp values and types.
 - The client truncates consumed header names at NUL. Source Kafka headers must be NUL-free; lost suffixes cannot be detected or restored. File→Kafka rejects NUL names before publishing; files preserve arbitrary name bytes.
-- Group checks cannot verify subscriptions of unassigned members. [Topic identity checks and limits](decisions.md#identity).
+- The group topic check sees assigned partitions, so it cannot check the subscriptions of members with no partitions. [Topic identity checks and limits](decisions.md#identity).
 - Consumer transient-error retries have no total deadline.

@@ -37,7 +37,7 @@ type RetentionCheck struct {
 	Lower int64
 }
 
-func NewSource(clients Clients, inspector SourceMetadata, positioning PositionerFactory, p plan.Plan, fp string, limits config.Worker, logger *slog.Logger, output copy.OutputProgress) (*Source, copy.ProgressStore, error) {
+func NewSource(clients Clients, inspector SourceMetadata, positioning PositionerFactory, p plan.Plan, fp string, limits config.Worker, logger *slog.Logger) (*Source, SourceProgress, error) {
 	cfg, err := consumerConfig(p, limits)
 	if err != nil {
 		return nil, nil, err
@@ -46,7 +46,7 @@ func NewSource(clients Clients, inspector SourceMetadata, positioning Positioner
 	if err != nil {
 		return nil, nil, conflict("invalid Kafka consumer configuration")
 	}
-	store := &Committer{consumer: c, topic: p.Source.Name, metadata: make(map[int32]Progress), output: output}
+	store := &Committer{consumer: c, topic: p.Source.Name, metadata: make(map[int32]Progress)}
 	s := &Source{consumer: c, events: c, offsets: inspector, times: c, inspector: inspector, positioning: positioning, committer: store, plan: p, fingerprint: fp, log: logger, retentionChecks: make(map[int32]RetentionCheck)}
 	return s, store, nil
 }
@@ -111,6 +111,9 @@ func (s *Source) saved() (map[int32]k.TopicPartition, map[int32]Progress, error)
 	return decodeCommitted(parts, s.fingerprint, s.inspector.TopicID(), s.plan.Window, s.plan.CutoffMS)
 }
 func (s *Source) position(parts []k.TopicPartition) ([]copy.Assignment, error) {
+	if len(parts) == 0 {
+		return nil, nil
+	}
 	saved, metadata, err := s.saved()
 	if err != nil {
 		return nil, err
@@ -238,12 +241,21 @@ func (s *Source) Pause(partition int32, pause bool) error {
 	return s.consumer.Resume(parts)
 }
 func (s *Source) HighWatermark(partition int32) (int64, error) {
-	_, high, err := s.consumer.QueryWatermarkOffsets(s.plan.Source.Name, partition, 5000)
+	// A read-committed consumer's watermark is its last stable offset. Sample
+	// the actual log end so open transactions remain eligible until tip_wait.
+	offsets, err := s.offsets.Offsets([]int32{partition}, k.LatestOffsetSpec, false)
 	var native k.Error
-	if errors.As(err, &native) && watermarkTransient(native) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &native) && watermarkTransient(native) {
 		return 0, &copy.Recoverable{Err: err}
 	}
-	return high, err
+	if err != nil {
+		return 0, err
+	}
+	high, present := offsets[partition]
+	if !present || high < 0 {
+		return 0, fmt.Errorf("missing or invalid high watermark for partition %d", partition)
+	}
+	return high, nil
 }
 
 // Watermark queries return leader-change errors that ordinary Poll handles internally.

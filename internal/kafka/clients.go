@@ -34,7 +34,6 @@ type ConsumerClient interface {
 	AssignmentLost() bool
 	Pause([]k.TopicPartition) error
 	Resume([]k.TopicPartition) error
-	QueryWatermarkOffsets(string, int32, int) (int64, int64, error)
 	Close() error
 }
 

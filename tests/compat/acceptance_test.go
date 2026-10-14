@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -26,11 +27,29 @@ import (
 	"go.uber.org/fx"
 )
 
-func loggedWorker(ctx context.Context, statement, cfg string) workerResult {
+type recordObserver struct {
+	slog.Handler
+	observers []func(slog.Record)
+}
+
+func (h recordObserver) Handle(ctx context.Context, record slog.Record) error {
+	for _, observe := range h.observers {
+		observe(record)
+	}
+	return h.Handler.Handle(ctx, record)
+}
+func (h recordObserver) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return recordObserver{h.Handler.WithAttrs(attrs), h.observers}
+}
+func (h recordObserver) WithGroup(name string) slog.Handler {
+	return recordObserver{h.Handler.WithGroup(name), h.observers}
+}
+
+func loggedWorker(ctx context.Context, statement, cfg string, observers ...func(slog.Record)) workerResult {
 	var output bytes.Buffer
 	var command app.Command
 	graph := fx.New(fx.NopLogger, app.RuntimeModules, fx.Decorate(func(*slog.Logger) *slog.Logger {
-		return slog.New(slog.NewJSONHandler(&output, nil))
+		return slog.New(recordObserver{slog.NewJSONHandler(&output, nil), observers})
 	}), fx.Populate(&command))
 	if err := graph.Err(); err != nil {
 		return workerResult{2, err.Error()}
@@ -119,7 +138,7 @@ func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
 	var output bytes.Buffer
 
 	// When
-	executeCode := app.Execute(ctx, []string{"run", "-e", statement}, nil, &output)
+	executeCode := app.Execute(ctx, []string{"run", "-e", statement}, nil, io.Discard, &output)
 
 	// Then
 	if executeCode != 2 || !strings.Contains(output.String(), "source topic identity mismatch") {
@@ -169,7 +188,7 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 		case result := <-results:
 
 			// Then
-			if result.code != 0 || !strings.Contains(result.detail, "local idle exit") {
+			if result.code != 3 || !strings.Contains(result.detail, "local idle exit") || !strings.Contains(result.detail, "worker held no partitions for 5s") {
 				t.Fatalf("standby failed to idle-exit: %+v", result)
 			}
 		case <-ctx.Done():
@@ -188,7 +207,6 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 		t.Fatal("assigned worker waited for exited standbys")
 	}
 	waitMembers(t, a, group, 0, 0, nil)
-	execute(t, statement, cfg) // Sole-worker confirmation of the bounded group.
 	c := consumer(t, dst+"-check")
 	if err := c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}); err != nil {
 		t.Fatal(err)

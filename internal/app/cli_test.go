@@ -3,24 +3,29 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/sql"
 )
 
 func TestCLIInputsAndExitCodes(t *testing.T) {
 	// Given
-	for _, args := range [][]string{{}, {"bad"}, {"run"}, {"run", "--sql", "SELECT *", "--file", "x"}, {"run", "--sql", "SELECT *"}, {"run", "--file", "-"}, {"run", "--unknown"}} {
+	for _, args := range [][]string{{}, {"bad"}, {"--version", "run"}, {"run"}, {"run", "--sql", "SELECT *", "--file", "x"}, {"run", "--sql", "SELECT *"}, {"run", "--file", "-"}, {"run", "--unknown"}} {
 		var out bytes.Buffer
 
 		// When
-		executeCode := Execute(context.Background(), args, nil, &out)
+		executeCode := Execute(context.Background(), args, nil, io.Discard, &out)
 
 		// Then
 		if executeCode != 2 {
@@ -28,10 +33,47 @@ func TestCLIInputsAndExitCodes(t *testing.T) {
 		}
 	}
 	var out bytes.Buffer
-	if code := Execute(context.Background(), []string{"run", "--help"}, nil, &out); code != 0 {
+	if code := Execute(context.Background(), []string{"run", "--help"}, nil, io.Discard, &out); code != 0 {
 		t.Fatal("help failed")
 	}
 }
+
+func TestCLIVersionWithoutConfigurationOrInput(t *testing.T) {
+	// Given no home directory and a reader that cannot supply SQL.
+	t.Setenv("HOME", "")
+	var stdout, stderr bytes.Buffer
+	_, native := kafka.LibraryVersion()
+	want := "kaferry " + version + " (commit " + revision + "; " + runtime.Version() + "; librdkafka " + native + ")\n"
+
+	// When requesting build information.
+	code := Execute(t.Context(), []string{"--version"}, forbiddenInput{}, &stdout, &stderr)
+
+	// Then report the build on stdout without loading configuration or reading SQL.
+	if code != 0 || stdout.String() != want || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+type forbiddenInput struct{}
+
+func (forbiddenInput) Read([]byte) (int, error) { panic("version must not read SQL") }
+
+func TestCLIVersionOutputFailure(t *testing.T) {
+	// Given an output stream that has closed.
+	var stderr bytes.Buffer
+
+	// When requesting build information.
+	code := Execute(t.Context(), []string{"--version"}, nil, closedOutput{}, &stderr)
+
+	// Then report a failure instead of claiming the version was printed.
+	if code != 1 || !strings.Contains(stderr.String(), "output closed") {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+}
+
+type closedOutput struct{}
+
+func (closedOutput) Write([]byte) (int, error) { return 0, errors.New("output closed") }
 func TestFileCLIAndOneOffCleanup(t *testing.T) {
 	for _, input := range []string{"stdin", "file"} {
 		t.Run(input, func(t *testing.T) {
@@ -72,7 +114,7 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 				}
 			}
 			// When running a file-to-file copy through the selected SQL input.
-			executeCode := Execute(context.Background(), []string{"run", "-f", inputPath, "-c", cfg}, stdin, &out)
+			executeCode := Execute(context.Background(), []string{"run", "-f", inputPath, "-c", cfg}, stdin, io.Discard, &out)
 
 			// Then
 			if executeCode != 0 {
@@ -83,7 +125,7 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 				t.Fatal("successful one-off checkpoint not removed")
 			}
 			statement = "INSERT INTO FILE cbor('" + src + "') SELECT * FROM FILE cbor('" + src + "') OPTIONS(GROUP='self')"
-			if code := Execute(context.Background(), []string{"run", "-e", statement, "-c", cfg}, nil, &out); code != 2 {
+			if code := Execute(context.Background(), []string{"run", "-e", statement, "-c", cfg}, nil, io.Discard, &out); code != 2 {
 				t.Fatal("file self-copy was allowed")
 			}
 		})
@@ -105,7 +147,7 @@ func TestCLIMissingHomeReportsConfigurationErrors(t *testing.T) {
 			var out bytes.Buffer
 
 			// When the CLI loads configuration and opens the source.
-			code := Execute(context.Background(), args, nil, &out)
+			code := Execute(context.Background(), args, nil, io.Discard, &out)
 
 			// Then startup diagnostics identify the required configuration.
 			if code != 2 || !strings.Contains(out.String(), want) || strings.Contains(out.String(), "composition failed") {
@@ -131,12 +173,82 @@ func TestCLIRejectsUnavailableOrOversizedStatementInputs(t *testing.T) {
 			var diagnostics bytes.Buffer
 
 			// When executing the supplied statement input.
-			code := Execute(t.Context(), tc.args, tc.stdin, &diagnostics)
+			code := Execute(t.Context(), tc.args, tc.stdin, io.Discard, &diagnostics)
 
 			// Then fail as an input error before opening endpoints or creating progress.
 			if code != 2 || !strings.Contains(diagnostics.String(), tc.want) {
 				t.Fatalf("exit=%d: %s", code, diagnostics.String())
 			}
 		})
+	}
+}
+
+func TestCLISQLDiagnosticsIdentifyInputWithoutCreatingOutput(t *testing.T) {
+	for _, input := range []string{"inline", "file", "stdin", "file validation"} {
+		t.Run(input, func(t *testing.T) {
+			// Given malformed SQL, explicit configuration and an output that does not exist.
+			t.Setenv("HOME", "")
+			dir := t.TempDir()
+			destination := filepath.Join(dir, "output.cbor")
+			query := "INSERT INTO FILE cbor('" + destination + "')\nSELECT 'sensitive_SENTINEL_5c27' FROM FILE cbor('missing.cbor')\nOPTIONS(GROUP='g')"
+			want := "line 2, column 8: expected \"*\"; found string literal"
+			if input == "file validation" {
+				query = strings.Replace(query, "'sensitive_SENTINEL_5c27'", "*", 1)
+				query = strings.Replace(query, "GROUP='g'", "ON_ERROR=SKIP", 1)
+				want = "line 3, column 1: GROUP is required; add GROUP = 'name' or GROUP = ONE_OFF to OPTIONS"
+			}
+			config := filepath.Join(dir, "config.toml")
+			if err := os.WriteFile(config, []byte("[worker]\ncheckpoint_dir = '"+dir+"'\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"run", "-c", config}
+			var stdin io.Reader
+			source := ""
+			switch input {
+			case "inline":
+				args = append(args, "-e", query)
+			case "stdin":
+				args = append(args, "-f", "-")
+				stdin, source = strings.NewReader(query), "<stdin>"
+			default:
+				source = filepath.Join(dir, "copy.sql")
+				if err := os.WriteFile(source, []byte(query), 0600); err != nil {
+					t.Fatal(err)
+				}
+				args = append(args, "-f", source)
+			}
+			var stdout, stderr bytes.Buffer
+			// When running the public command.
+			code := Execute(t.Context(), args, stdin, &stdout, &stderr)
+			// Then exit 2 with source/location and no credentials, copies or checkpoints.
+			expected := want + "\n"
+			if source != "" {
+				expected = "\"" + source + "\": " + expected
+			}
+			if code != 2 || stdout.Len() != 0 || stderr.String() != expected || strings.Contains(stderr.String(), "sensitive_SENTINEL_5c27") {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if _, err := os.Stat(destination); !os.IsNotExist(err) {
+				t.Fatal("invalid SQL created output", err)
+			}
+			checkpoints, err := filepath.Glob(filepath.Join(dir, "*.json"))
+			if err != nil || len(checkpoints) != 0 {
+				t.Fatal("invalid SQL created progress", err)
+			}
+		})
+	}
+}
+
+func TestSQLDiagnosticSourceLabelsEscapeControlCharacters(t *testing.T) {
+	// Given a SQL input name containing quotes, a newline and terminal escape.
+	source := "copy\"\n\x1b.sql"
+	err := sql.At(sql.Position{Line: 2, Column: 8}, errors.New("invalid value"))
+	var output bytes.Buffer
+	// When rendering the diagnostic's source label.
+	printCommandError(&output, source, err)
+	// Then keep the error on one line without embedding terminal controls.
+	want := strconv.Quote(source) + ": line 2, column 8: invalid value\n"
+	if output.String() != want || strings.Count(output.String(), "\n") != 1 || strings.ContainsRune(output.String(), '\x1b') {
+		t.Fatalf("unsafe source label: %q", output.String())
 	}
 }

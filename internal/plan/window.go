@@ -89,34 +89,39 @@ func (s WindowSpec) ValidateStored(w Window, cutoff int64) error {
 
 func normalize(bounds []sql.Bound) (WindowSpec, error) {
 	var window WindowSpec
+	var lowerPosition, upperPosition sql.Position
 	for _, bound := range bounds {
 		e, err := expression(bound.Time)
 		if err != nil {
-			return WindowSpec{}, err
+			return WindowSpec{}, sql.At(bound.Time.Position, err)
 		}
 		var target **Expression
+		var position *sql.Position
 		switch bound.Operator {
 		case ">", ">=":
 			target = &window.Lower
+			position = &lowerPosition
 		case "<", "<=":
 			target = &window.Upper
+			position = &upperPosition
 		default:
-			return WindowSpec{}, fmt.Errorf("unsupported timestamp comparison")
+			return WindowSpec{}, sql.At(bound.Position, fmt.Errorf("unsupported timestamp comparison; use <, <=, >, or >="))
 		}
 		if *target != nil {
-			return WindowSpec{}, fmt.Errorf("at most one lower and one upper bound are allowed")
+			return WindowSpec{}, sql.At(bound.Position, fmt.Errorf("at most one lower and one upper bound are allowed; remove this repeated bound%s", sql.Related(*position, "first bound")))
 		}
+		*position = bound.Position
 		if bound.Operator == ">" || bound.Operator == "<=" {
 			e.AdjustmentMS, err = checkedAdd(e.AdjustmentMS, 1)
 			if err != nil {
-				return WindowSpec{}, err
+				return WindowSpec{}, sql.At(bound.Position, err)
 			}
 		}
 		// Collapse literal arithmetic so equivalent literal queries fingerprint alike.
 		if !e.Now {
 			e.LiteralMS, err = checkedAdd(e.LiteralMS, e.AdjustmentMS)
 			if err != nil {
-				return WindowSpec{}, err
+				return WindowSpec{}, sql.At(bound.Time.Position, err)
 			}
 			e.AdjustmentMS = 0
 		}
@@ -125,7 +130,7 @@ func normalize(bounds []sql.Bound) (WindowSpec, error) {
 	if window.Lower != nil && window.Upper != nil {
 		lo, hi := window.Lower, window.Upper
 		if lo.Now == hi.Now && (lo.Now && lo.AdjustmentMS >= hi.AdjustmentMS || !lo.Now && lo.LiteralMS >= hi.LiteralMS) {
-			return WindowSpec{}, fmt.Errorf("normalized time range is empty")
+			return WindowSpec{}, sql.At(bounds[len(bounds)-1].Position, fmt.Errorf("time range is empty; lower bound%s must precede upper bound%s", sql.Reference(lowerPosition), sql.Reference(upperPosition)))
 		}
 	}
 	return window, nil
@@ -135,33 +140,33 @@ func expression(t sql.Time) (Expression, error) {
 	e := Expression{Now: t.Now}
 	if !t.Now {
 		if !timestampSyntax.MatchString(t.Literal) {
-			return Expression{}, fmt.Errorf("timestamp must be RFC 3339 with a zone and at most milliseconds")
+			return Expression{}, sql.At(t.Position, fmt.Errorf("timestamp must be RFC 3339 with an explicit zone and at most 3 fractional digits, for example '2026-10-01T09:00:00Z'"))
 		}
 		if t.Literal[len(t.Literal)-1] != 'Z' {
 			zone := t.Literal[len(t.Literal)-6:]
 			hours, _ := strconv.Atoi(zone[1:3])
 			minutes, _ := strconv.Atoi(zone[4:6])
 			if hours > 23 || minutes > 59 {
-				return Expression{}, fmt.Errorf("invalid timestamp zone")
+				return Expression{}, sql.At(t.Position, fmt.Errorf("invalid timestamp zone; offset hours must be 00-23 and minutes 00-59"))
 			}
 		}
 		instant, err := time.Parse(time.RFC3339Nano, t.Literal)
 		if err != nil {
-			return Expression{}, fmt.Errorf("timestamp must be RFC 3339 with an explicit zone")
+			return Expression{}, sql.At(t.Position, fmt.Errorf("invalid RFC 3339 calendar date or clock time; check day, month and time fields"))
 		}
 		e.LiteralMS = instant.UnixMilli()
 	}
 	for _, adjustment := range t.Adjustments {
 		delta, err := intervalMS(adjustment)
 		if err != nil {
-			return Expression{}, err
+			return Expression{}, sql.At(adjustment.Position, err)
 		}
 		if adjustment.Subtract {
 			delta = -delta
 		}
 		e.AdjustmentMS, err = checkedAdd(e.AdjustmentMS, delta)
 		if err != nil {
-			return Expression{}, err
+			return Expression{}, sql.At(adjustment.Position, err)
 		}
 	}
 	return e, nil
@@ -169,24 +174,24 @@ func expression(t sql.Time) (Expression, error) {
 
 func intervalMS(interval sql.Interval) (int64, error) {
 	if interval.Magnitude == "" {
-		return 0, fmt.Errorf("interval must be a non-negative integer")
+		return 0, sql.At(interval.Position, fmt.Errorf("interval must be a non-negative integer, for example INTERVAL '7' DAY"))
 	}
 	for _, c := range interval.Magnitude {
 		if c < '0' || c > '9' {
-			return 0, fmt.Errorf("interval must be a non-negative integer")
+			return 0, sql.At(interval.Position, fmt.Errorf("interval must be a non-negative integer, for example INTERVAL '7' DAY"))
 		}
 	}
 	n, err := strconv.ParseInt(interval.Magnitude, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("interval is too large")
+		return 0, sql.At(interval.Position, fmt.Errorf("interval is too large; reduce its magnitude"))
 	}
 	units := map[string]int64{"SECOND": 1000, "MINUTE": 60000, "HOUR": 3600000, "DAY": 86400000}
 	unit, ok := units[interval.Unit]
 	if !ok {
-		return 0, fmt.Errorf("unsupported interval unit")
+		return 0, sql.At(interval.Position, fmt.Errorf("unsupported interval unit; use SECOND, MINUTE, HOUR, or DAY"))
 	}
 	if n > math.MaxInt64/unit {
-		return 0, fmt.Errorf("interval arithmetic overflows milliseconds")
+		return 0, sql.At(interval.Position, fmt.Errorf("interval arithmetic overflows milliseconds; reduce its magnitude"))
 	}
 	return n * unit, nil
 }

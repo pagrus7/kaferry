@@ -28,7 +28,7 @@ type Progress struct {
 	Extent      int64        `json:"extent,omitempty"`
 }
 
-// The v1 wire prefix stays stable across the Kaferry rename.
+// The v1 wire prefix is fixed; changing it makes saved progress unreadable.
 func (p Progress) Encode() string { data, _ := json.Marshal(p); return "kfwd2:1;" + string(data) }
 func decodeProgress(metadata *string, fp, topicID string, relative bool) (Progress, error) {
 	var progress Progress
@@ -84,7 +84,10 @@ func (i *Inspector) context() (context.Context, context.CancelFunc) {
 func (i *Inspector) coordinatorTimeout() time.Duration { return 2 * i.deadline() }
 
 func NewInspector(clients Clients, properties plan.Properties, topic string, logger *slog.Logger) (Metadata, error) {
-	cfg := native(properties)
+	cfg, err := clientConfig(properties, adminClient)
+	if err != nil {
+		return nil, err
+	}
 	a, err := clients.Admin(cfg)
 	if err != nil {
 		return nil, conflict("invalid Kafka connection configuration")

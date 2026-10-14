@@ -54,14 +54,22 @@ jobs:
         with:
           go-version: '1.26.9'
           cache: true
-      - run: make check build
-      - name: Package binary and build information
+      - run: make check
+      - name: Build versioned binary
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          make build KAFERRY_VERSION="$RELEASE_TAG" KAFERRY_REVISION="$SOURCE_SHA"
+          version=$(bin/kaferry --version)
+          echo "$version"
+          [[ "$version" == "kaferry $RELEASE_TAG (commit $SOURCE_SHA; "* ]]
+      - name: Build information and platform requirements
         shell: bash
         env:
           PLATFORM: ${{ matrix.platform }}
         run: |
           mkdir -p release
-          COPYFILE_DISABLE=1 tar -czf "release/kaferry-$RELEASE_TAG-$PLATFORM.tar.gz" -C bin kaferry
           go version -m bin/kaferry > "release/build-$PLATFORM.txt"
           if [[ "$PLATFORM" == linux-* ]]; then
             python3 - <<'PY'
@@ -91,6 +99,12 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
         run: python3 scripts/native_inventory.py bin/kaferry "release/sbom-$PLATFORM.spdx.json" "release/native-$PLATFORM.json"
+      - name: Package licenses and binary
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          python3 scripts/notices.py bin/kaferry bin/THIRD_PARTY_NOTICES.txt
+          COPYFILE_DISABLE=1 tar -czf "release/kaferry-$RELEASE_TAG-$PLATFORM.tar.gz" -C bin kaferry THIRD_PARTY_NOTICES.txt -C "$GITHUB_WORKSPACE" LICENSE
       - name: Attest archive provenance
         id: provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2

@@ -2,10 +2,10 @@ package kafka
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/plan"
 	"io"
 	"log/slog"
 	"math"
@@ -14,6 +14,30 @@ import (
 	"testing"
 	"time"
 )
+
+type watermarkOffsets struct {
+	result    map[int32]int64
+	err       error
+	requested []int32
+	spec      k.OffsetSpec
+	committed bool
+}
+
+func TestEmptySourceAssignmentNeedsNoBrokerQueries(t *testing.T) {
+	// Given a worker assigned no partitions, with no usable broker ports.
+	source := &Source{}
+	// When processing its empty assignment.
+	assignments, err := source.position(nil)
+	// Then no positioning or progress lookup is needed.
+	if err != nil || len(assignments) != 0 {
+		t.Fatal(assignments, err)
+	}
+}
+
+func (m *watermarkOffsets) Offsets(ids []int32, spec k.OffsetSpec, committed bool) (map[int32]int64, error) {
+	m.requested, m.spec, m.committed = ids, spec, committed
+	return m.result, m.err
+}
 
 func TestWatermarkErrorsAndDNSRespectRuntimeRetryClassification(t *testing.T) {
 	for _, scenario := range []struct {
@@ -36,7 +60,7 @@ func TestWatermarkErrorsAndDNSRespectRuntimeRetryClassification(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			// Given an independently mocked watermark query failure.
 			native := k.NewError(scenario.code, "query failure", scenario.fatal)
-			source := &Source{consumer: &consumerMock{watermarkErr: native}, plan: plan.Plan{Source: plan.Endpoint{Name: "orders"}}}
+			source := &Source{offsets: &watermarkOffsets{err: native}}
 
 			// When sampling a partition's high watermark.
 			_, err := source.HighWatermark(0)
@@ -51,15 +75,42 @@ func TestWatermarkErrorsAndDNSRespectRuntimeRetryClassification(t *testing.T) {
 			}
 		})
 	}
-	// Given a successful native query.
-	source := &Source{consumer: &consumerMock{high: math.MaxInt32}}
+	// Given an uncommitted log end distinct from the consumer's readable tip.
+	offsets := &watermarkOffsets{result: map[int32]int64{3: math.MaxInt32}}
+	source := &Source{offsets: offsets}
 
 	// When reading the high watermark.
-	high, err := source.HighWatermark(0)
+	high, err := source.HighWatermark(3)
 
 	// Then its exact offset is returned without a retry marker.
-	if err != nil || high != math.MaxInt32 {
+	if err != nil || high != math.MaxInt32 || !reflect.DeepEqual(offsets.requested, []int32{3}) || offsets.spec != k.LatestOffsetSpec || offsets.committed {
 		t.Fatal(high, err)
+	}
+}
+
+func TestWatermarkRequiresValidResultAndRetriesAdminDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result map[int32]int64
+		err    error
+		retry  bool
+	}{
+		{"deadline", nil, context.DeadlineExceeded, true},
+		{"cancelled", nil, context.Canceled, false},
+		{"missing", map[int32]int64{1: 42}, nil, false},
+		{"negative", map[int32]int64{0: -1}, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given an expired admin request or an unusable offset response.
+			source := &Source{offsets: &watermarkOffsets{result: tc.result, err: tc.err}}
+			// When sampling the log end.
+			_, err := source.HighWatermark(0)
+			// Then only a timeout is retried; invalid results cannot complete input.
+			var recoverable *core.Recoverable
+			if err == nil || errors.As(err, &recoverable) != tc.retry || tc.err != nil && !errors.Is(err, tc.err) {
+				t.Fatal("invalid watermark classification", err)
+			}
+		})
 	}
 }
 

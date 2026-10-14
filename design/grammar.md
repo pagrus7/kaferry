@@ -102,7 +102,7 @@ WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z'
 OPTIONS (GROUP = ONE_OFF);
 ```
 
-Topic→topic, relative window with cutoff, fixed per partition when first positioned:
+Topic→topic, relative window with cutoff. Each partition fixes its time window when first assigned and saves it with progress:
 
 ```sql
 INSERT INTO TOPIC 'clicks@analytics'
@@ -113,6 +113,12 @@ OPTIONS (GROUP = 'clicks-backfill-1', CUTOFF = INTERVAL '5' MINUTE, ON_ERROR = S
 ```
 
 ## Invalid examples
+
+SQL errors identify the first error found by one-based line and character (code point) column. LF ends a line; tabs count as one column. File and stdin input include their source name. Input values and SQL excerpts are omitted. Related declarations include their locations. Fix the reported error, then rerun.
+
+```text
+"copy.sql": line 3, column 29: expected FAIL or SKIP; found identifier
+```
 
 | Statement or fragment | Rejected because |
 | --- | --- |
