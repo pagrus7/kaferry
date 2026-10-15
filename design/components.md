@@ -20,6 +20,8 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Command | [app](../internal/app) | Order planning stages; classify failures | Parser, Reader, Builder, Engine |
 | Engine | [app](../internal/app) | Validate endpoints/progress; acquire and close query resources | KafkaFactory, FileFactory, RunnerFactory |
 | Runner | [copy](../internal/copy) | Consume, filter, submit, process outcomes/lifecycle events | Source, Sink, ProgressStore, ProgressTracker, Clock |
+| Partition completion | [copy/partition.go](../internal/copy/partition.go) | Decide timestamp stops, tip sampling and waits for a fixed sampled end | Pure assignment state; runner performs I/O and logs outcomes |
+| Flow control | [copy/flow.go](../internal/copy/flow.go) | Hold unsent input; decide admission, worker-wide pause and commit cadence | Narrow work-count port; runner applies partition pauses and saves progress |
 | Progress tracker | [copy](../internal/copy) | Track consumed/resolved prefixes, ownership and caps | ProgressTracker, fresh instance through ProgressFactory |
 | Kafka metadata | [kafka](../internal/kafka) | Inspect topic/group identities, offsets and optional destination config | SourceMetadata, DestinationMetadata, AdminClient |
 | Kafka positioning | [kafka](../internal/kafka) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetReader, TimeReader |
