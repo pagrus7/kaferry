@@ -5,30 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/config"
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
-type partition struct {
-	window      plan.Window
-	stopped     bool
-	paused      bool
-	position    int64
-	stable      int64
-	atTip       bool
-	high        *int64
-	waitStarted time.Time
-	sampling    retrySchedule
-}
-type submission struct {
-	input     Input
-	token     Token
-	busySince time.Time
-}
 type Runner struct {
+	flow
 	source         Source
 	sink           Sink
 	store          ProgressStore
@@ -38,18 +22,12 @@ type Runner struct {
 	limits         config.Worker
 	tracker        ProgressTracker
 	partitions     map[int32]*partition
-	pending        *submission
-	deferred       *Input
-	deferredEOF    *Cursor
 	submitted      uint64
 	confirmed      uint64
 	filtered       uint64
 	skipped        uint64
-	peakRecords    int
-	peakBytes      int64
 	timestampStops uint64
 	tipStops       uint64
-	lastCommit     time.Time
 	assignmentSeen bool
 	idleSince      time.Time
 	failure        error
@@ -78,12 +56,7 @@ func (r *Runner) Revoke(partitions []int32, lost bool) error {
 		}
 	}
 	for _, id := range partitions {
-		if r.deferred != nil && r.deferred.Cursor.Partition == id {
-			r.deferred, r.deferredEOF = nil, nil
-		}
-		if r.pending != nil && r.pending.token.Partition == id {
-			r.pending = nil
-		}
+		r.flow.revoke(id)
 		r.tracker.Revoke(id)
 		delete(r.partitions, id)
 		r.log.Info("partition revoked", "partition", id)
@@ -102,24 +75,6 @@ func (r *Runner) Run(ctx context.Context) error {
 		return r.exit(err)
 	}
 	return nil
-}
-
-// exit preserves classified outcomes; other errors use the first failure and
-// execution stage to distinguish conflicts before intake from runtime failures.
-func (r *Runner) exit(err error) error {
-	primary := r.failure
-	if primary == nil {
-		primary = err
-	}
-	code := 1
-	var classified *Exit
-	var coded interface{ ExitCode() int }
-	if errors.As(primary, &classified) {
-		code = classified.Code
-	} else if !r.intake && errors.As(primary, &coded) {
-		code = coded.ExitCode()
-	}
-	return &Exit{Err: err, Code: code}
 }
 
 func (r *Runner) run(ctx context.Context) error {
@@ -143,20 +98,6 @@ func (r *Runner) run(ctx context.Context) error {
 			continue
 		}
 	}
-}
-
-func (r *Runner) interrupted() error {
-	err := r.drain()
-	if r.failure != nil {
-		return errors.Join(r.failure, err)
-	}
-	if err != nil {
-		return err
-	}
-	if r.bounded() {
-		return fmt.Errorf("bounded copy interrupted before completion")
-	}
-	return nil
 }
 
 func (r *Runner) step(ctx context.Context) (bool, error) {
@@ -237,7 +178,7 @@ func (r *Runner) input(input Input) error {
 		return fmt.Errorf("source delivered a record while intake was paused")
 	}
 	p.atTip = false
-	if p.high != nil && input.Cursor.Position >= *p.high {
+	if p.reachedHigh(input.Cursor.Position) {
 		cursor := Cursor{Partition: input.Cursor.Partition, Position: *p.high}
 		err := r.tracker.Advance(cursor)
 		p.position = cursor.Position
@@ -256,13 +197,7 @@ func (r *Runner) input(input Input) error {
 		return err
 	}
 	p.position = input.Next
-	n, b := r.tracker.Total()
-	if n > r.peakRecords {
-		r.peakRecords = n
-	}
-	if b > r.peakBytes {
-		r.peakBytes = b
-	}
+	r.flow.observe(r.tracker)
 	if filtered, err := r.filter(p.window, input.Record, token); filtered || err != nil {
 		return err
 	}
@@ -271,15 +206,12 @@ func (r *Runner) input(input Input) error {
 	return r.submitPending()
 }
 func (r *Runner) stopAtTimestamp(p *partition, input Input) (bool, error) {
-	if input.Record.TimestampMS == nil || p.window.Upper == nil || r.plan.Source.Kind != "TOPIC" {
+	if r.plan.Source.Kind != "TOPIC" {
 		return false, nil
 	}
-	threshold, err := stopThreshold(p.window, r.plan.CutoffMS)
-	if err != nil {
+	stop, err := p.pastTimestamp(input.Record.TimestampMS, r.plan.CutoffMS)
+	if !stop || err != nil {
 		return false, err
-	}
-	if *input.Record.TimestampMS <= threshold {
-		return false, nil
 	}
 	if err := r.tracker.Advance(input.Cursor); err != nil {
 		return false, err
@@ -383,20 +315,8 @@ func (r *Runner) eof(cursor Cursor) error {
 	if err != nil {
 		return err
 	}
-	p.atTip = true
-	p.position = cursor.Position
-	p.stable = cursor.Position
-	if r.plan.Source.Kind == "FILE" {
-		p.stopped = true
-	}
+	p.reachedTip(cursor.Position, r.plan.Source.Kind == "FILE")
 	return nil
-}
-func stopThreshold(window plan.Window, cutoff int64) (int64, error) {
-	hi := *window.Upper
-	if cutoff > 0 && hi > int64(^uint64(0)>>1)-cutoff {
-		return 0, fmt.Errorf("cutoff overflows timestamp")
-	}
-	return hi + cutoff, nil
 }
 func (r *Runner) tips() error {
 	wait, _ := time.ParseDuration(r.limits.TipWait)
@@ -405,27 +325,29 @@ func (r *Runner) tips() error {
 		if p.stopped || p.window.Upper == nil || r.plan.Source.Kind != "TOPIC" {
 			continue
 		}
-		threshold, err := stopThreshold(p.window, r.plan.CutoffMS)
+		action, err := p.tipAction(r.clock.Now(), r.plan.CutoffMS, wait)
 		if err != nil {
 			return err
 		}
-		if p.high == nil {
-			if sampled || !p.atTip || r.clock.Now().UnixMilli() <= threshold || !p.sampling.due(r.clock.Now()) {
+		if action == tipSample {
+			if sampled {
 				continue
 			}
 			sampled = true
 			if err := r.sampleHigh(id, p); err != nil {
 				return err
 			}
-			if p.high == nil {
-				continue
+			action, err = p.tipAction(r.clock.Now(), r.plan.CutoffMS, wait)
+			if err != nil {
+				return err
 			}
 		}
-		if p.position >= *p.high {
+		switch action {
+		case tipStop:
 			p.stopped = true
 			r.tipStops++
 			r.log.Info("partition stopped", "reason", "tip", "partition", id, "position", p.position, "high_watermark", *p.high)
-		} else if r.clock.Now().Sub(p.waitStarted) > wait {
+		case tipTimeout:
 			return fmt.Errorf("partition %d tip wait exceeded: H=%d stable=%d consumed=%d", id, *p.high, p.stable, p.position)
 		}
 	}
@@ -447,173 +369,8 @@ func (r *Runner) sampleHigh(id int32, p *partition) error {
 	if attempts := p.sampling.recovered(); attempts > 0 {
 		r.log.Info("tip watermark query recovered", "partition", id, "attempts", attempts)
 	}
-	p.high = &high
-	p.waitStarted = r.clock.Now()
+	p.sampled(high, r.clock.Now())
 	r.log.Info("tip watermark sampled", "partition", id, "high_watermark", high, "stable", p.stable, "position", p.position)
-	return nil
-}
-func (r *Runner) ids() []int32 {
-	ids := make([]int32, 0, len(r.partitions))
-	for id := range r.partitions {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	return ids
-}
-func (r *Runner) commit(ids []int32) error { return r.save(ids, false) }
-
-// save commits confirmed progress. When releasing revoked partitions, a
-// recoverable failure only replays work, so the partition is released anyway.
-func (r *Runner) save(ids []int32, releasing bool) error {
-	r.lastCommit = r.clock.Now()
-	var cursors []Cursor
-	for _, id := range ids {
-		if r.tracker.HasProgress(id) {
-			cursors = append(cursors, r.tracker.Confirmed(id))
-		}
-	}
-	if len(cursors) == 0 {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	results, err := r.store.Save(ctx, cursors)
-	if err != nil {
-		if !r.released(releasing, cursors, err) {
-			return err
-		}
-		return nil
-	}
-	var failed error
-	for _, cursor := range cursors {
-		err, present := results[cursor.Partition]
-		if !present {
-			err = fmt.Errorf("missing commit result for partition %d", cursor.Partition)
-		}
-		if err != nil {
-			if !r.released(releasing, []Cursor{cursor}, err) {
-				failed = errors.Join(failed, err)
-			}
-			continue
-		}
-		r.tracker.Committed(cursor)
-		r.log.Debug("progress committed", "partition", cursor.Partition, "position", cursor.Position)
-	}
-	return failed
-}
-func (r *Runner) released(releasing bool, cursors []Cursor, err error) bool {
-	var recoverable *Recoverable
-	if !releasing || !errors.As(err, &recoverable) {
-		return false
-	}
-	for _, cursor := range cursors {
-		r.log.Warn("revoked partition released without saving progress; the next owner replays", "partition", cursor.Partition, "saved", r.tracker.Saved(cursor.Partition), "confirmed", cursor.Position, "reason", err.Error())
-	}
-	return true
-}
-func (r *Runner) shouldCommit() bool {
-	if r.deferred != nil {
-		return true
-	}
-	if r.clock.Now().Sub(r.lastCommit) >= time.Second {
-		return true
-	}
-	n, b := r.tracker.Total()
-	if n*2 >= r.limits.RecordCap || b*2 >= r.limits.ByteCap {
-		return true
-	}
-	for id := range r.partitions {
-		n, b := r.tracker.Work(id)
-		if n*2 >= r.limits.PartitionRecordCap || b*2 >= r.limits.PartitionByteCap {
-			return true
-		}
-	}
-	return false
-}
-func (r *Runner) pause() error {
-	n, b := r.tracker.Total()
-	full := n >= r.limits.RecordCap || b >= r.limits.ByteCap || r.pending != nil || r.deferred != nil
-	for id, p := range r.partitions {
-		n, b := r.tracker.Work(id)
-		paused := full || p.stopped || n >= r.limits.PartitionRecordCap || b >= r.limits.PartitionByteCap
-		if paused != p.paused {
-			if err := r.source.Pause(id, paused); err != nil {
-				return err
-			}
-			p.paused = paused
-		}
-	}
-	return nil
-}
-func (r *Runner) bounded() bool { return r.plan.Source.Kind == "FILE" || r.plan.Window.Upper != nil }
-func (r *Runner) readyToExit() bool {
-	if r.deferred != nil || r.pending != nil {
-		return false
-	}
-	if len(r.partitions) == 0 {
-		idle, _ := time.ParseDuration(r.limits.IdleExit)
-		if r.bounded() && r.assignmentSeen && r.clock.Now().Sub(r.idleSince) >= idle {
-			return true
-		}
-		return false
-	}
-	for id, p := range r.partitions {
-		if !p.stopped || !r.tracker.Resolved(id) {
-			return false
-		}
-	}
-	return true
-}
-func (r *Runner) drain() error {
-	r.pending = nil // Unsubmitted input replays from the confirmed cursor.
-	r.deferred, r.deferredEOF = nil, nil
-	deadline := r.clock.Now().Add(10 * time.Second)
-	var failed error
-	for id := range r.partitions {
-		if err := r.source.Pause(id, true); err != nil {
-			failed = errors.Join(failed, err)
-		}
-	}
-	if err := r.sink.Flush(); err != nil {
-		return errors.Join(failed, err, r.commit(r.ids()))
-	}
-	for r.clock.Now().Before(deadline) {
-		if err := r.deliveries(); err != nil {
-			failed = errors.Join(failed, err)
-		}
-		if !r.tracker.InFlight() {
-			return errors.Join(failed, r.commit(r.ids()))
-		}
-		r.clock.Sleep(10 * time.Millisecond)
-	}
-	if err := r.commit(r.ids()); err != nil {
-		return err
-	}
-	return errors.Join(failed, fmt.Errorf("outstanding writes did not finish within 10 seconds"))
-}
-
-func (r *Runner) admits(input Input) bool {
-	n, b := r.tracker.Total()
-	if n == 0 {
-		return true
-	} // One oversized record is admitted alone.
-	pn, pb := r.tracker.Work(input.Cursor.Partition)
-	size := input.Record.Size()
-	return n < r.limits.RecordCap && pn < r.limits.PartitionRecordCap && size <= r.limits.ByteCap-b && size <= r.limits.PartitionByteCap-pb
-}
-
-func (r *Runner) admitDeferred() error {
-	if r.deferred == nil || !r.admits(*r.deferred) {
-		return nil
-	}
-	input, eof := *r.deferred, r.deferredEOF
-	r.deferred, r.deferredEOF = nil, nil
-	if err := r.input(input); err != nil {
-		return err
-	}
-	if eof != nil {
-		return r.eof(*eof)
-	}
 	return nil
 }
 func (r *Runner) flush() error {
