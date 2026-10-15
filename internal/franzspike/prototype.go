@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/config"
@@ -73,6 +75,7 @@ type Source struct {
 	events               chan lifeEvent
 	fetched              chan fetchResult
 	pending              *fetchResult
+	held                 map[int32]*kgo.Record
 	positions            map[int32]int64
 	metadata             map[int32]progress
 	paused               map[int32]bool
@@ -88,7 +91,7 @@ func NewSource(p plan.Plan, fp, topicID string) (*Source, error) {
 		cancel()
 		return nil, err
 	}
-	s := &Source{admin: kadm.NewClient(a), adminClient: a, plan: p, fingerprint: fp, topicID: topicID, ctx: background, cancel: cancel, events: make(chan lifeEvent), fetched: make(chan fetchResult), positions: make(map[int32]int64), metadata: make(map[int32]progress), paused: make(map[int32]bool)}
+	s := &Source{admin: kadm.NewClient(a), adminClient: a, plan: p, fingerprint: fp, topicID: topicID, ctx: background, cancel: cancel, events: make(chan lifeEvent), fetched: make(chan fetchResult), positions: make(map[int32]int64), metadata: make(map[int32]progress), paused: make(map[int32]bool), held: make(map[int32]*kgo.Record)}
 	desired := make(map[int32]int64) // Accessed only by serialized group callbacks.
 	notify := func(event lifeEvent) error {
 		event.done = make(chan error, 1)
@@ -254,17 +257,18 @@ func (s *Source) Poll(timeout time.Duration) (core.Event, error) {
 	for len(s.readyEOF) > 0 {
 		cursor := s.readyEOF[0]
 		s.readyEOF = s.readyEOF[1:]
-		if !s.paused[cursor.Partition] {
+		if _, owned := s.positions[cursor.Partition]; owned && !s.paused[cursor.Partition] {
 			return core.Event{EOF: &cursor}, nil
 		}
 	}
-	if s.pending != nil && (len(s.pending.records) == 0 || !s.paused[s.pending.records[0].Partition]) {
+	if s.pending != nil {
 		return s.deliverPending()
 	}
-	// The held record has not reached the core; allow ownership to change
-	// while it waits behind a pause, then discard it if its partition is revoked.
-	if s.pending != nil {
-		s.client.AllowRebalance()
+	for id, record := range s.held {
+		if !s.paused[id] {
+			delete(s.held, id)
+			return s.deliverRecord(record)
+		}
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -275,7 +279,9 @@ func (s *Source) Poll(timeout time.Duration) (core.Event, error) {
 			err = s.life.Revoke(event.revoke, event.lost)
 			for _, id := range event.revoke {
 				delete(s.positions, id)
+				s.client.ResumeFetchPartitions(map[string][]int32{s.plan.Source.Name: {id}})
 				delete(s.paused, id)
+				delete(s.held, id)
 				delete(s.metadata, id)
 				if s.pending != nil && len(s.pending.records) > 0 && s.pending.records[0].Partition == id {
 					close(s.pending.done)
@@ -329,10 +335,13 @@ func (s *Source) Poll(timeout time.Duration) (core.Event, error) {
 		if err != nil {
 			return core.Event{}, err
 		}
+		if err := ends.Error(); err != nil {
+			return core.Event{}, err
+		}
 		for id, position := range s.positions {
-			end := ends[s.plan.Source.Name][id]
-			if end.Err != nil {
-				return core.Event{}, end.Err
+			end, ok := ends.Lookup(s.plan.Source.Name, id)
+			if !ok {
+				return core.Event{}, fmt.Errorf("offset response omitted partition %d", id)
 			}
 			if position >= end.Offset && !s.paused[id] {
 				s.readyEOF = append(s.readyEOF, core.Cursor{Partition: id, Position: position})
@@ -348,17 +357,22 @@ func (s *Source) Poll(timeout time.Duration) (core.Event, error) {
 }
 func (s *Source) deliverPending() (core.Event, error) {
 	result := s.pending
+	s.pending = nil
+	close(result.done)
 	if len(result.records) == 0 {
-		close(result.done)
-		s.pending = nil
 		return core.Event{}, nil
 	}
 	r := result.records[0]
 	if s.paused[r.Partition] {
+		if s.held[r.Partition] != nil {
+			return core.Event{}, fmt.Errorf("multiple held records for paused partition")
+		}
+		s.held[r.Partition] = r
 		return core.Event{}, nil
 	}
-	s.pending = nil
-	close(result.done)
+	return s.deliverRecord(r)
+}
+func (s *Source) deliverRecord(r *kgo.Record) (core.Event, error) {
 	s.positions[r.Partition] = r.Offset + 1
 	cursor := core.Cursor{Partition: r.Partition, Position: r.Offset}
 	if r.Attrs.IsControl() {
@@ -396,7 +410,13 @@ func (s *Source) HighWatermark(id int32) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	r := ends[s.plan.Source.Name][id]
+	if err := ends.Error(); err != nil {
+		return 0, err
+	}
+	r, ok := ends.Lookup(s.plan.Source.Name, id)
+	if !ok {
+		return 0, fmt.Errorf("offset response omitted partition %d", id)
+	}
 	return r.Offset, r.Err
 }
 func (s *Source) BindOutput(output core.OutputProgress) { s.output = output }
@@ -460,6 +480,8 @@ type Sink struct {
 	reports         chan core.Delivery
 	limits          config.Worker
 	deliveryTimeout time.Duration
+	flushing        atomic.Bool
+	flushes         sync.WaitGroup
 	ctx             context.Context
 	cancel          context.CancelFunc
 }
@@ -493,7 +515,7 @@ func (s *Sink) Submit(record core.Record, token core.Token) error {
 	if s.client.BufferedProduceRecords() >= int64(s.limits.RecordCap) {
 		return &core.Busy{}
 	}
-	if s.client.BufferedProduceRecords() > 0 && s.client.BufferedProduceBytes()+int64(len(record.Key)+len(record.Value)) > s.limits.ByteCap {
+	if s.client.BufferedProduceRecords() > 0 && s.client.BufferedProduceBytes()+record.Size() > s.limits.ByteCap {
 		return &core.Busy{}
 	}
 	r := &kgo.Record{Key: record.Key, Value: record.Value}
@@ -518,9 +540,15 @@ func (s *Sink) Submit(record core.Record, token core.Token) error {
 	})
 	return nil
 }
-func (s *Sink) Flush() error                     { return nil }
+func (s *Sink) Flush() error {
+	if s.flushing.CompareAndSwap(false, true) {
+		s.flushes.Add(1)
+		go func() { defer s.flushes.Done(); defer s.flushing.Store(false); _ = s.client.Flush(s.ctx) }()
+	}
+	return nil
+}
 func (s *Sink) Deliveries() <-chan core.Delivery { return s.reports }
-func (s *Sink) Close()                           { s.cancel(); s.client.Close() }
+func (s *Sink) Close()                           { s.cancel(); s.client.Close(); s.flushes.Wait() }
 
 func EndpointIdentity(ctx context.Context, e plan.Endpoint) (cluster, topicID string, err error) {
 	if e.Kind == "FILE" {

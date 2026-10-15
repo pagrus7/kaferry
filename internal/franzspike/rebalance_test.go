@@ -21,8 +21,10 @@ type lifeProbe struct {
 func (p *lifeProbe) Assign(as []core.Assignment) error {
 	p.assignments += len(as)
 	for _, a := range as {
-		if err := p.src.Pause(a.Cursor.Partition, p.paused); err != nil {
-			return err
+		if p.paused {
+			if err := p.src.Pause(a.Cursor.Partition, true); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -109,7 +111,7 @@ func TestSpikePausedHeldRecordAllowsCooperativeRebalance(t *testing.T) {
 		_ = first.client.LeaveGroupContext(nil)
 		pollUntil(t, first, func() bool { _, owned := first.positions[held]; return !owned })
 	}
-	if first.pending != nil && len(first.pending.records) > 0 && first.pending.records[0].Partition == held {
+	if first.held[held] != nil || (first.pending != nil && len(first.pending.records) > 0 && first.pending.records[0].Partition == held) {
 		t.Fatal("revoked held input survived")
 	}
 }
