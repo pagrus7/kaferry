@@ -109,11 +109,11 @@ Keep passwords out of SQL literals and shell arguments. [Configuration rules](do
 
 ## Before you run
 
-- **Time windows:** Kafka input follows without an end time. With one, the [cutoff rule](design/decisions.md#completion) can miss records within the range, including those present before the run.
+- **Time windows:** Kafka input without an end time runs until stopped. With one, the [cutoff rule](design/decisions.md#completion) can miss records within the range, including those present before the run.
 - **Delivery:** at least once; crashes and rebalances can duplicate or reorder writes. Expired offsets or lost checkpoints can start fresh. Kafka input reads committed records.
-- **Destination:** original key bytes use destination routing; source partitions are not copied. Ensure bytes and Schema Registry IDs work there. `LogAppendTime` replaces timestamps; retention may delete old records. [Routing](design/decisions.md#kafka-output).
+- **Destination:** Kafka output chooses a destination partition using the original key bytes; null keys can spread. Source partitions are not copied. Ensure bytes and Schema Registry IDs work there. `LogAppendTime` replaces timestamps; retention may delete old records. [Routing](design/decisions.md#kafka-output).
 - **Files:** one process per query on one machine, using a local filesystem with locks and hard links. [Resume](docs/usage.md#resume-or-start-over).
-- **Permissions:** source topic/group READ, destination WRITE. [Grants](docs/usage.md#permissions).
+- **Permissions:** Kafka sources need topic and group READ; Kafka destinations need topic WRITE. [Grants](docs/usage.md#permissions).
 
 [Usage guide](docs/usage.md) · [File format](docs/file-format.md)
 

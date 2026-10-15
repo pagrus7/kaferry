@@ -34,7 +34,7 @@ Required grants and optional destination access are listed in the [usage guide](
 
 ### Optional destination configuration
 
-Startup attempts `DescribeConfigs` on the destination topic. DESCRIBE_CONFIGS is optional: denial or failure logs a warning and disables checks that require the configuration.
+Startup attempts `DescribeConfigs` on the destination topic. DESCRIBE_CONFIGS is optional under every error policy: denial or failure logs a warning and disables checks that require the configuration. Checks against client limits still run.
 
 | Setting | Use | Fallback when unreadable |
 | --- | --- | --- |

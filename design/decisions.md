@@ -203,7 +203,7 @@ Exactly one input: `run --file/-f path`, `run --sql/-e statement`, or `run --fil
 
 | Normal exit | Meaning |
 | --- | --- |
-| 0 | This worker finished its remaining assigned work, or a signal cleanly stopped a copy from Kafka with no end time. SKIP counts do not change the code |
+| 0 | This worker finished its file input or remaining assigned Kafka partitions, or a signal cleanly stopped a copy from Kafka with no end time. SKIP counts do not change the code |
 | 1 | The copy failed, or a signal interrupted startup, any copy from a file, or a copy from Kafka with an end time. Conflicts after the first consumed record also exit 1 |
 | 2 | Usage/parse/plan/configuration error, or identity/ownership/self-copy conflict before the first consumed record |
 | 3 | For a copy from Kafka with an end time, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |
