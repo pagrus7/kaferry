@@ -1,6 +1,6 @@
 # Kaferry copy behavior
 
-Completion, delivery and restart rules. See [syntax](grammar.md), [components and tests](components.md), and [client limits and permissions](client-compatibility.md).
+Completion, delivery and restart contracts. See the [usage guide](../docs/usage.md) for operating instructions, [syntax](grammar.md), [components and tests](components.md), and [client limits](client-compatibility.md).
 
 ## Scope
 
@@ -52,11 +52,11 @@ File sources read from their checkpoint or first frame to the size observed at o
 
 ## Groups and workers
 
-- `GROUP` identifies a Kafka consumer group or a file-source checkpoint. `GROUP = ONE_OFF` generates and logs `kaferry-<hex>` for a single worker. Resume an interrupted run using that ID as a named group. Successful file-source ONE_OFF runs delete the checkpoint but retain its stable lock; Kafka progress expires under broker offset retention.
+- `GROUP` identifies a Kafka consumer group or a file-source checkpoint. `GROUP = ONE_OFF` generates and logs `kaferry-<hex>` for a single worker. Successful file-source ONE_OFF runs delete the checkpoint but retain its stable lock; Kafka progress expires under broker offset retention.
 - Topic→topic workers share a named group and progress independently using classic `cooperative-sticky` assignment. There is no group-wide done marker or external coordinator.
-- Before subscription, group inspection rejects foreign/invalid progress and active members without the protected client-ID prefix or assigned to another topic. An absent group passes; an unavailable check fails. The topic check sees assigned partitions, so it cannot check the subscriptions of members with no partitions. Positioning validates progress again after assignment. Stop workers before upgrading a group.
-- A worker exits `0` after every partition it still holds stops, its outstanding writes are acknowledged and progress is committed. Partitions released during a rebalance do not count. Kafka copies without an end time keep waiting for new records or assignments until signalled.
-- For a Kafka copy with an end time, the wait starts when Kafka reports an empty assignment while the worker holds no partitions. If it still has none after `worker.idle_exit` (30 seconds by default), it exits `3`. Another empty-assignment notification restarts the timer. Waiting for the first assignment notification or losing all partitions during a rebalance does not start it. The exit logs `local idle exit`, the timeout and the code. A worker assigned an empty partition does not exit this way.
+- Before subscription, group inspection rejects foreign/invalid progress and active members without the protected client-ID prefix or assigned to another topic. An absent group passes; an unavailable check fails. The topic check sees assigned partitions, so it cannot check the subscriptions of members with no partitions. Positioning validates progress again after assignment.
+- A worker exits `0` after every partition it still holds stops, its outstanding writes are acknowledged and progress is committed. Partitions released during a rebalance do not count. Copies from Kafka without an end time keep waiting for new records or assignments until signalled.
+- For a copy from Kafka with an end time, the wait starts when Kafka reports an empty assignment while the worker holds no partitions. If it still has none after `worker.idle_exit` (30 seconds by default), it exits `3`. Another empty-assignment notification restarts the timer. Waiting for the first assignment notification or losing all partitions during a rebalance does not start it. The exit logs `local idle exit`, the timeout and the code. A worker assigned an empty partition does not exit this way.
 - More workers than source partitions can leave some workers with no partitions to read. This can also happen while Kafka moves partitions between workers. Code `3` does not tell you whether other workers finished. If the last workers exit before a partition reaches its new owner, that partition can remain unfinished. Rerunning the same query and group resumes saved positions and may copy late arrivals.
 - If your supervisor restarts workers on nonzero exits, set a policy for code `3`. Restarting rejoins the group and can give the worker partitions to copy.
 - On revocation, stop reading the revoked partitions, commit the confirmed prefix and release without waiting for outstanding deliveries. Discard their late outcomes; the new owner replays uncommitted records. Ownership loss never commits.
@@ -153,7 +153,7 @@ Without valid ownership, never infer E or delete data. Full-output validation ma
 
 File-source checkpoints are atomically replaced in `~/.kaferry/checkpoints`, or `worker.checkpoint_dir`, with filenames derived safely from `GROUP`. Output/checkpoint creation and checkpoint renames fsync the parent directory.
 
-The checkpoint directory must exist. For new file jobs, create it first. To resume, use the existing directory; Kaferry does not search or migrate. Another directory starts fresh for Kafka output and fails for existing file output. Keep checkpoint files and stable locks together; stop workers before moving progress or upgrading. Different directories can duplicate a copy.
+The checkpoint directory must exist; Kaferry does not search or migrate it. Another directory starts fresh for Kafka output and fails for existing file output. Locks belong to that directory, so different directories can duplicate a copy. [Resume and recovery instructions](../docs/usage.md#resume-or-start-over).
 
 ## Configuration and CLI
 
@@ -203,9 +203,9 @@ Exactly one input: `run --file/-f path`, `run --sql/-e statement`, or `run --fil
 
 | Normal exit | Meaning |
 | --- | --- |
-| 0 | Every partition the worker held at exit stopped, or a Kafka copy without an end time stopped cleanly by signal; SKIP counts do not change the code |
-| 1 | Runtime failure, any startup interruption, interruption of a file copy or a Kafka copy with an end time, or conflict after the first consumed record |
+| 0 | This worker finished its file input or remaining assigned Kafka partitions, or a signal cleanly stopped a copy from Kafka with no end time. SKIP counts do not change the code |
+| 1 | The copy failed, or a signal interrupted startup, any copy from a file, or a copy from Kafka with an end time. Conflicts after the first consumed record also exit 1 |
 | 2 | Usage/parse/plan/configuration error, or identity/ownership/self-copy conflict before the first consumed record |
-| 3 | Kafka copy with an end time received no assigned partitions for `worker.idle_exit` after an empty-assignment notification; does not say whether other workers finished |
+| 3 | For a copy from Kafka with an end time, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |
 
 Busy locks and broker/record failures exit 1. Conflicts include foreign progress/members, changed input and unowned/short/corrupt acknowledged output. The first failure determines the code; cleanup cannot replace it. Native aborts and forced termination use system signal status.
