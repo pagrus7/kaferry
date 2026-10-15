@@ -1,12 +1,12 @@
-# Client compatibility and permissions
+# Client compatibility
 
-Deployment limits and Kafka access requirements. See [copy behavior](decisions.md) and [installation](../README.md#install).
+Native-client and deployment constraints. See [permissions](../docs/usage.md#permissions), [copy behavior](decisions.md), and [installation](../README.md#install).
 
 ## Known issues
 
-On a coordinator timeout, Kafka-source startup closes its client so it can exit `1`; slow cleanup or other coordinator failures can still cause a [librdkafka crash](https://github.com/confluentinc/librdkafka/pull/5397) (signal exit).
+When starting a copy from Kafka, Kaferry closes its client on a group coordinator timeout so it can exit with error code `1`. Cleanup can hang; slow cleanup or other coordinator errors can still cause a [librdkafka crash](https://github.com/confluentinc/librdkafka/pull/5397).
 
-**Scope and impact:** these [coordinator requests](#production-admin-inventory) run before Kaferry creates the consumer or opens output. File sources and runs already copying do not send them. Whether startup fails normally or crashes, this worker copies nothing and leaves saved progress unchanged. Rerun the same query and group after the coordinator recovers.
+**Scope and impact:** these [coordinator requests](#production-admin-inventory) run before Kaferry creates the consumer or opens output. File sources and runs already copying do not send them. The affected process copies nothing and leaves saved progress unchanged, whether startup fails normally, hangs or crashes. Rerun the same query and group after the coordinator recovers.
 
 **Timeout handling:** each request has a 10 s Go deadline and a 20 s librdkafka timeout. The Go deadline returns `context deadline exceeded` without cancelling the native request. Startup begins closing the source admin client immediately, giving cleanup about 10 s before native expiry. Native close has no enforced overall deadline, so this does not bound total startup time.
 
@@ -30,18 +30,7 @@ Test other brokers, authorizers, authentication mechanisms and deployment worklo
 
 ## Permissions
 
-With existing topics and Kafka 3.9 StandardAuthorizer, Kaferry needs the same grants as a grouped consumer and nontransactional idempotent producer:
-
-| Direction | Required grants |
-| --- | --- |
-| Topic→topic | Source topic READ, source group READ, destination topic WRITE |
-| Topic→file | Source topic READ, source group READ |
-| File→topic | Destination topic WRITE |
-| File→file | None |
-
-READ/WRITE imply the associated DESCRIBE operations. No cluster-DESCRIBE, source-config or destination-READ grant is required. Source and destination credentials can be separate. [Kafka ACL reference](https://kafka.apache.org/39/security/authorization-and-acls/).
-
-A named `GROUP` permits an exact group grant. Kafka-source `GROUP = ONE_OFF` generates `kaferry-<hex>` names; authorize that prefix. The ACL fixture tests literal topic grants and a prefixed group grant. Other authorizers or broker versions may require different grants, including cluster IDEMPOTENT_WRITE for idempotent production.
+Required grants and optional destination access are listed in the [usage guide](../docs/usage.md#permissions). The ACL fixture tests literal topic grants and a prefixed group grant with Kafka 3.9 StandardAuthorizer. READ/WRITE include the related DESCRIBE operations; see the [Kafka ACL reference](https://kafka.apache.org/39/security/authorization-and-acls/).
 
 ### Optional destination configuration
 

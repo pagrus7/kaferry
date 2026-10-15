@@ -40,7 +40,17 @@ jobs:
       - run: make build
       - name: Validate release license notices
         run: python3 scripts/notices.py bin/kaferry bin/THIRD_PARTY_NOTICES.txt
-      - run: python3 -c "from pathlib import Path; assert sum(len(p.read_text()) for p in [Path('README.md'),Path('docs/file-format.md')]) < 10000"
+      - name: Check documentation size
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          readme = Path('README.md').read_text()
+          paths = ['README.md', 'docs/usage.md', 'docs/file-format.md']
+          total = sum(len(Path(path).read_text()) for path in paths)
+          assert len(readme) <= 5500, f'README: {len(readme)} characters; limit 5,500'
+          assert total < 10000, f'User docs: {total} characters; limit fewer than 10,000'
+          print(f'README: {len(readme)}; combined user docs: {total} characters')
+          PY
       - name: Publish Go coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
