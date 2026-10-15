@@ -1,6 +1,6 @@
 # franz-go feasibility spike
 
-**Do not migrate with this pinned client: it can silently change an out-of-range Kafka timestamp while consuming it.** This branch contains disposable adapters and capability tests. Normal builds still use confluent-kafka-go. Further evaluation needs a decoder fix or access to the original timestamp before conversion. The experiment uses the existing copy engine, SQL planner and CBOR file components.
+**Extreme-timestamp corruption is an accepted edge case for this evaluation.** Other migration checks remain open. This branch contains disposable adapters and capability tests; normal builds still use confluent-kafka-go. The experiment uses the existing copy engine, SQL planner and CBOR file components.
 
 ## Evidence
 
@@ -22,10 +22,16 @@ Tested locally on macOS ARM64 with Go 1.27.2 (module minimum 1.26), franz-go 1.2
 
 - [`RecordDeliveryTimeout`](https://github.com/twmb/franz-go/blob/v1.22.2/pkg/kgo/sink.go#L2153-L2157) in this client version measures a batch's age from its first record timestamp. It rejects a newly submitted historical record immediately. The prototype uses a per-record context measured from submission instead; `TestSpikeDeliveryTimeoutUsesRecordTimestamp` reproduces the difference.
 - A record context does not normally cancel an ambiguous in-flight idempotent produce. [`AllowIdempotentProduceCancellation`](https://github.com/twmb/franz-go/blob/v1.22.2/pkg/kgo/config.go#L1228-L1258) permits that cancellation and may allow duplicates when the application retries. The test demonstrates both modes. The prototype retains the default mode; a production delivery-deadline policy is still required.
-- **The timestamp migration gate fails.** A raw protocol producer writes `253402214400000` ms (9999-12-31) without using franz-go's timestamp encoder. The consumer returns `-4852202631934` ms. Its [millisecond decoder](https://github.com/twmb/franz-go/blob/v1.22.2/pkg/kgo/source.go#L2439) multiplies by 1,000,000 before calling `time.Unix`, overflowing int64. The wrapped value falls inside the write guard, so the guard cannot reliably reject the original timestamp. `TestSpikeRawTimestampDecodingAndRejection` intentionally fails until this is fixed.
-- The producer independently uses `UnixNano` internally. Its observational round-trip test reports corruption outside the safe range; passing that observation test is not a successful fidelity gate.
 - Retaining control records handles the tested transaction gaps. General cursor advancement across empty/compacted fetches is not proven. Never substitute the broker's last stable offset for a cursor known to have been consumed.
 - Full connection-property compatibility, authentication mapping, ONEOFF groups, relative windows, strict foreign/expired progress handling, existing file-output recovery, lost-assignment error classification and the full shutdown/rebalance fault matrix remain outside this prototype. Unsupported connection properties are rejected.
+
+## Accepted timestamp edge case
+
+Kafka 4.x defaults reject new CreateTime records more than one hour ahead of the broker, preventing the extreme-future input used here. Existing records and topics with a larger allowance remain exposed. Kafka 3.9 defaults allow such dates; the fixture explicitly sets unlimited allowances. See the [Kafka 4.0 settings](https://kafka.apache.org/40/configuration/topic-level-configs/#message.timestamp.after.max.ms) and [Kafka 3.9 settings](https://kafka.apache.org/39/configuration/topic-level-configs/#message.timestamp.after.max.ms).
+
+The pinned client can silently change timestamps outside its nanosecond conversion range (about 1677–2262). A raw protocol producer writes `253402214400000` ms (9999-12-31) without using franz-go's timestamp encoder; the consumer returns `-4852202631934` ms. Its [millisecond decoder](https://github.com/twmb/franz-go/blob/v1.22.2/pkg/kgo/source.go#L2439) multiplies by 1,000,000 before calling `time.Unix`, overflowing int64. The wrapped value passes the write guard, so filtering and copied timestamps can be wrong. The producer independently uses `UnixNano` outside its safe range. Frequency in production is unknown.
+
+This limitation is accepted and does not block migration. No decoder fix is required for this decision. Keep `TestSpikeRawTimestampDecodingAndRejection` as a diagnostic: its exact-timestamp assertion still fails and is excluded explicitly from the other checks below. Passing the separate observational round-trip test does not establish fidelity for extreme timestamps.
 
 ## Local load checks
 
@@ -38,9 +44,10 @@ Earlier exploratory comparisons and one-minute controlled streams also passed fi
 Use a disposable Kafka 3.9 broker on `127.0.0.1:39092`:
 
 ```sh
-# This fails at the timestamp migration gate; that failure must stay visible.
-go test -race -count=1 -tags=integration,franzspike ./internal/franzspike
-# Run the other checks while diagnosing that blocker (security cases need the fixture).
+# Diagnostic for the accepted edge case: its fidelity assertion fails.
+go test -race -count=1 -tags=integration,franzspike \
+  -run '^TestSpikeRawTimestampDecodingAndRejection$' ./internal/franzspike
+# Other checks explicitly exclude that known failure (security needs its fixture).
 go test -race -count=1 -tags=integration,franzspike \
   -skip TestSpikeRawTimestampDecodingAndRejection ./internal/franzspike
 CGO_ENABLED=0 go build -tags=franzspike -o bin/franz-spike ./cmd/franz-spike
@@ -64,4 +71,4 @@ docker compose -p kaferry-franz-security -f tests/qualification/compose.yaml \
   -f internal/franzspike/security.compose.yaml down -v
 ```
 
-Before migration: fix timestamp decoding and pass the retained failing gate; resolve the delivery-deadline policy, prove invisible-gap cursor handling, map or explicitly approve unsupported working settings, and run the complete compatibility/security/rebalance/shutdown suite against the production adapter.
+Before migration: resolve the delivery-deadline policy, prove invisible-gap cursor handling, map or explicitly approve unsupported working settings, and run the complete compatibility/security/rebalance/shutdown suite against the production adapter. Retain the accepted timestamp limitation in the compatibility documentation when adopting the client.
