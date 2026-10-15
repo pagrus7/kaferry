@@ -1,35 +1,60 @@
 # Using Kaferry
 
+## Run a copy
+
+Use [quick start](../README.md#quick-start) SQL and profiles; add its authentication prefix where needed. Use your binary path. Choose one of `-f file`, `-f -` (stdin) or `-e "SQL"`; `-c` loads TOML. Flags: `kaferry run -h`.
+
+**Archive retained records, then follow new ones.** Create the output directory:
+
+```sh
+mkdir -p archive
+kaferry run -c connections.toml -f - <<'SQL'
+INSERT INTO FILE cbor('archive/orders.cbor')
+SELECT * FROM TOPIC 'orders@prod'
+OPTIONS (GROUP = 'orders-archive', START = EARLIEST);
+SQL
+```
+
+Press Ctrl+C to stop archiving before restoring. For a new file-input job, create the checkpoint directory (default shown):
+
+```sh
+mkdir -p ~/.kaferry/checkpoints
+kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM FILE cbor('archive/orders.cbor') OPTIONS (GROUP = 'orders-restore');"
+```
+
+Kafka input needs `WHERE` or `START` (`EARLIEST`: retained; `LATEST`: readable end), not both. Saved commits win; `WHERE` filters record timestamps. Use a dedicated `GROUP`. File input has no `START` and ends at startup size. [File-to-file and other examples](../design/grammar.md#valid-examples).
+
 ## Resume or start over
 
-Rerun the same SQL and `GROUP`; use a new group to change the time filter or `CUTOFF`. Saved progress overrides `START` and reuses each partition's or file's `NOW()` bounds; expired offsets or lost checkpoints can start fresh.
+Resume with the same `GROUP`, endpoints, time filter and `CUTOFF`; use a new group for a new query. Error policies may change. Saved `NOW()` bounds are reused.
 
-`GROUP = ONE_OFF` logs a new name each run. To resume an interrupted run, use that name as a quoted `GROUP`.
+`GROUP = ONE_OFF` logs a new `group` in `one-off group generated`. To resume an interrupted run, quote that name as `GROUP`.
 
-Keep file output, checkpoints and lock files. Reuse `worker.checkpoint_dir` (default `~/.kaferry/checkpoints`). If output or saved progress is lost, start over with a new group; if the destination is a file, also use a new path. Never recreate missing output under the old group. [Recovery rules](../design/decisions.md#output-recovery).
+Keep output, checkpoints and locks. Resume with the same `worker.checkpoint_dir` (default `~/.kaferry/checkpoints`). Lost output or progress requires a new group and, for file output, a new path. [Recovery rules](../design/decisions.md#output-recovery).
 
 ## Workers
 
-Each Kaferry process is a worker. Topic-to-topic workers share SQL and a named group. Use fixed timestamps; workers can resolve `NOW()` differently. Stop all of a group's workers before moving progress or upgrading Kaferry. File queries use one worker.
+For topic-to-topic copies, run the same command on each machine with identical SQL and named `GROUP`. Each process is a worker. Use fixed timestamps; `NOW()` can differ. Stop workers before moving progress or upgrading Kaferry. File queries use one process.
 
 ## Configuration
 
-SQL overrides TOML; topics without `@alias` use `default`. `ENV()` works only in SQL; its value is hidden in diagnostics, and an unset variable fails. Conflicting [protected settings](../design/decisions.md#protected-client-properties) fail. `[worker]` sets [limits, timeouts and checkpoints](../design/decisions.md#worker-settings).
+Without `-c`, no TOML is loaded. SQL overrides TOML; topics without `@alias` use `default`. `ENV()` is SQL-only and fails if unset. [Worker limits and protected settings](../design/decisions.md#configuration-and-cli).
 
 ## Permissions
 
 For existing topics on Kafka 3.9 StandardAuthorizer, Kafka input needs only source topic/group READ; Kafka output needs only destination WRITE. These imply DESCRIBE. File-only copies need no Kafka grants. Other brokers/authorizers may require cluster IDEMPOTENT_WRITE.
 
-Named groups permit exact grants; Kafka-source `ONE_OFF` needs the `kaferry-` group prefix.
+Kafka-source `ONE_OFF` needs the `kaferry-` group prefix.
 
 Destination DESCRIBE_CONFIGS is optional; without it, Kaferry warns and skips checks that need those settings. [Fallbacks](../design/client-compatibility.md#optional-destination-configuration).
 
 ## Errors
 
-Errors stop the copy by default (`FAIL`). `SKIP` drops only identified records rejected before sending; the broker can still reject records that pass. `ON_MISSING_TIMESTAMP` and `ON_REJECTED_TIMESTAMP` can be used together, but not with `ON_ERROR`. Under every policy, broker rejections (including timestamps), authentication, authorization and corruption errors stop the run. [Policies](../design/decisions.md#errors).
+Errors stop the copy by default. `ON_ERROR = SKIP` drops only identified records rejected before sending; broker rejections cannot be skipped. [Policies](../design/decisions.md#errors), [SQL errors](../design/grammar.md#invalid-examples).
 
 ## Stopping and exit codes
 
-SIGINT/SIGTERM stop reading, allow up to ten seconds for writes and save confirmed progress. Kafka or filesystem calls can hang shutdown; use a supervisor timeout if needed. JSON logs, including `copy summary`, and final errors go to stderr.
+SIGINT/SIGTERM stop reading, allow up to ten seconds for writes and save confirmed progress. Kafka or filesystem calls can hang shutdown; use a supervisor timeout if needed. Read stderr for errors and JSON logs; `copy summary` reports `confirmed`, `filtered` and `skipped` counts.
 
 [Exit codes](../design/decisions.md#cli-and-exit-codes) describe only the exiting worker's outcome, not whether other workers finished. A native crash may end by signal.

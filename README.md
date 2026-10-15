@@ -19,16 +19,7 @@ Implementation is AI-driven with Codex and Claude Code under human direction.
 
 [Download Kaferry](https://github.com/pagrus7/kaferry/releases/latest) for Linux AMD64/ARM64 (glibc 2.34+) or macOS 14+ ARM64. Check the archive against `SHA256SUMS`, then extract and run `kaferry`.
 
-Or build from source with Go 1.26+, a C compiler and CGO enabled. librdkafka is bundled.
-
-```sh
-git clone https://github.com/pagrus7/kaferry.git
-cd kaferry
-make build
-bin/kaferry --version
-```
-
-Tested with Apache Kafka 3.9.0.
+Or clone this repository and run `make build` with Go 1.26+, a C compiler and CGO enabled. librdkafka is bundled. Check with `bin/kaferry --version`.
 
 ## Known issues
 
@@ -66,26 +57,6 @@ bin/kaferry run --file copy.sql --config connections.toml
 
 For downloads, use your binary's path instead of `bin/kaferry`.
 
-## Files
-
-**Archive retained and new records.** Create the output directory first.
-
-```sql
-INSERT INTO FILE cbor('/data/orders.cbor')
-SELECT * FROM TOPIC 'orders@prod'
-OPTIONS (GROUP = 'orders-archive', START = EARLIEST);
-```
-
-**Restore:** for a new file-source job, run `mkdir -p ~/.kaferry/checkpoints` first.
-
-```sql
-INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM FILE cbor('/data/orders.cbor')
-OPTIONS (GROUP = 'orders-restore');
-```
-
-Files are read to their startup size; rerun for later appends. [File-to-file and other SQL examples](design/grammar.md#valid-examples).
-
 ## Connections
 
 Use [librdkafka properties](https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html) as strings; quote dotted TOML keys. SASL/PLAIN over TLS:
@@ -112,10 +83,10 @@ Keep passwords out of SQL literals and shell arguments. [Configuration rules](do
 - **Time windows:** Kafka input without an end time runs until stopped. With one, the [cutoff rule](design/decisions.md#completion) can miss records within the range, including those present before the run.
 - **Delivery:** at least once; crashes and rebalances can duplicate or reorder writes. Expired offsets or lost checkpoints can start fresh. Kafka input reads committed records.
 - **Destination:** Kafka output chooses a destination partition using the original key bytes; null keys can spread. Source partitions are not copied. Ensure bytes and Schema Registry IDs work there. `LogAppendTime` replaces timestamps; retention may delete old records. [Routing](design/decisions.md#kafka-output).
-- **Files:** one process per query on one machine, using a local filesystem with locks and hard links. [Resume](docs/usage.md#resume-or-start-over).
+- **Files:** one process per query on one machine, using a local filesystem with locks and hard links. [File setup and resume](docs/usage.md#run-a-copy).
 - **Permissions:** Kafka sources need topic and group READ; Kafka destinations need topic WRITE. [Grants](docs/usage.md#permissions).
 
-[Usage guide](docs/usage.md) · [File format](docs/file-format.md)
+[Usage guide](docs/usage.md)
 
 ## Development
 
