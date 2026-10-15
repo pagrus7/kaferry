@@ -64,8 +64,7 @@ func TestPartitionSamplesOnlyAfterThresholdAndRetryDeadline(t *testing.T) {
 
 	// Then a successful sample fixes the end and later input cannot request another.
 	p.sampled(3, now)
-	p.atTip = false
-	p.position = 1
+	p.reachedTip(1, false)
 	assertAction(tipWait)
 	if p.reachedHigh(2) || !p.reachedHigh(3) || !p.reachedHigh(100) {
 		t.Fatal("fixed end was not respected")

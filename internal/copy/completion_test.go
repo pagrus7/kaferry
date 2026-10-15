@@ -114,6 +114,7 @@ func TestRunnerFixedTipWaitsForAcknowledgementAndDoesNotCopyLaterRecords(t *test
 		t.Fatal("sampled end changed", store.saves)
 	}
 	var messages []string
+	var details []map[string]any
 	for _, line := range bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte{'\n'}) {
 		var event struct {
 			Message string `json:"msg"`
@@ -122,8 +123,25 @@ func TestRunnerFixedTipWaitsForAcknowledgementAndDoesNotCopyLaterRecords(t *test
 			t.Fatal(err)
 		}
 		messages = append(messages, event.Message)
+		var attributes map[string]any
+		if err := json.Unmarshal(line, &attributes); err != nil {
+			t.Fatal(err)
+		}
+		details = append(details, attributes)
 	}
 	if !reflect.DeepEqual(messages, []string{"partition assigned", "tip watermark sampled", "partition stopped", "progress committed"}) {
 		t.Fatal("completion diagnostics changed", messages)
+	}
+	for i, expected := range []map[string]any{
+		{"partition": float64(0), "position": float64(0)},
+		{"partition": float64(0), "position": float64(0), "stable": float64(0), "high_watermark": float64(3)},
+		{"partition": float64(0), "position": float64(3), "reason": "tip", "high_watermark": float64(3)},
+		{"partition": float64(0), "position": float64(3)},
+	} {
+		for key, want := range expected {
+			if got := details[i][key]; got != want {
+				t.Fatalf("event %d %s: got %v, want %v", i, key, got, want)
+			}
+		}
 	}
 }
