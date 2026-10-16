@@ -58,6 +58,8 @@ jobs:
           go-version: '1.26.9'
           cache: true
       - run: make check
+        env:
+          CGO_ENABLED: "1" # The race detector needs cgo; release binaries do not.
       - name: Build versioned binary
         shell: bash
         env:
