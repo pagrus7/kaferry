@@ -65,6 +65,8 @@ type Source struct {
 	client               *kgo.Client
 	admin                *kadm.Client
 	adminClient          *kgo.Client
+	gaps                 gapReader
+	lastGap              int32
 	plan                 plan.Plan
 	fingerprint, topicID string
 	ctx                  context.Context
@@ -92,6 +94,7 @@ func NewSource(p plan.Plan, fp, topicID string) (*Source, error) {
 		return nil, err
 	}
 	s := &Source{admin: kadm.NewClient(a), adminClient: a, plan: p, fingerprint: fp, topicID: topicID, ctx: background, cancel: cancel, events: make(chan lifeEvent), fetched: make(chan fetchResult), positions: make(map[int32]int64), metadata: make(map[int32]progress), paused: make(map[int32]bool), held: make(map[int32]*kgo.Record)}
+	s.gaps = &fetchGap{client: a, topic: p.Source.Name, topicID: topicID}
 	desired := make(map[int32]int64) // Accessed only by serialized group callbacks.
 	notify := func(event lifeEvent) error {
 		event.done = make(chan error, 1)
@@ -331,21 +334,12 @@ func (s *Source) Poll(timeout time.Duration) (core.Event, error) {
 		s.lastTip = time.Now()
 		deadline, cancel := context.WithTimeout(s.ctx, 2*time.Second)
 		defer cancel()
-		ends, err := s.admin.ListCommittedOffsets(deadline, s.plan.Source.Name)
-		if err != nil {
-			return core.Event{}, err
-		}
-		if err := ends.Error(); err != nil {
-			return core.Event{}, err
-		}
-		for id, position := range s.positions {
-			end, ok := ends.Lookup(s.plan.Source.Name, id)
-			if !ok {
-				return core.Event{}, fmt.Errorf("offset response omitted partition %d", id)
+		if err := s.pollTips(deadline); err != nil {
+			var retry *core.Recoverable
+			if errors.As(gapFailure(err), &retry) {
+				return core.Event{}, nil // No proof this turn; ordinary consumption continues.
 			}
-			if position >= end.Offset && !s.paused[id] {
-				s.readyEOF = append(s.readyEOF, core.Cursor{Partition: id, Position: position})
-			}
+			return core.Event{}, err
 		}
 		if len(s.readyEOF) > 0 {
 			return s.Poll(0)
@@ -373,6 +367,9 @@ func (s *Source) deliverPending() (core.Event, error) {
 	return s.deliverRecord(r)
 }
 func (s *Source) deliverRecord(r *kgo.Record) (core.Event, error) {
+	if position, owned := s.positions[r.Partition]; !owned || r.Offset < position {
+		return core.Event{}, nil // A compacted record may arrive from an earlier fetch.
+	}
 	s.positions[r.Partition] = r.Offset + 1
 	cursor := core.Cursor{Partition: r.Partition, Position: r.Offset}
 	if r.Attrs.IsControl() {
@@ -492,7 +489,9 @@ func NewSink(p plan.Plan, limits config.Worker) (*Sink, error) {
 		return nil, err
 	}
 	background, cancel := context.WithCancel(context.Background())
-	opts := []kgo.Opt{kgo.WithContext(background), kgo.DefaultProduceTopic(p.Destination.Name), kgo.ProducerLinger(5 * time.Millisecond), kgo.ProducerBatchCompression(kgo.NoCompression()), kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)), kgo.MaxBufferedRecords(limits.RecordCap), kgo.MaxBufferedBytes(int(max(limits.ByteCap, 1000000)))}
+	// A timed-out write may already exist at the broker. Leave its source
+	// position unconfirmed so a restart replays it, possibly producing a duplicate.
+	opts := []kgo.Opt{kgo.WithContext(background), kgo.AllowIdempotentProduceCancellation(), kgo.DefaultProduceTopic(p.Destination.Name), kgo.ProducerLinger(5 * time.Millisecond), kgo.ProducerBatchCompression(kgo.NoCompression()), kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)), kgo.MaxBufferedRecords(limits.RecordCap), kgo.MaxBufferedBytes(int(max(limits.ByteCap, 1000000)))}
 	if value := p.Destination.Properties.Get("linger.ms"); value != "" {
 		n, err := strconv.Atoi(value)
 		if err != nil {
@@ -534,7 +533,7 @@ func (s *Sink) Submit(record core.Record, token core.Token) error {
 	s.client.Produce(writeCtx, r, func(_ *kgo.Record, err error) {
 		cancel()
 		select {
-		case s.reports <- core.Delivery{Token: token, Err: err, Fatal: err != nil}:
+		case s.reports <- core.Delivery{Token: token, Err: err}:
 		case <-s.ctx.Done():
 		}
 	})

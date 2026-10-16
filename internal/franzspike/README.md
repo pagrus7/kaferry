@@ -11,18 +11,19 @@ Tested locally on macOS ARM64 with Go 1.27.2 (module minimum 1.26), franz-go 1.2
 | Raw records within the tested timestamp range | Key/value nulls versus empty bytes, ordered duplicate headers, NUL/non-UTF8 header names and ordinary negative/zero timestamps survive. |
 | Saved progress | Public `PreCommitFnContext` retains member/generation fencing and custom metadata. `AdjustFetchOffsetsFn` positions before the first fetch. Departed-member commits are rejected. |
 | Identities and routing | Existing topic IDs require unpadded standard Base64, not kadm's padded string. Cluster IDs and keyed Murmur2 partition routing match the native client. |
-| Transactions | Read-committed consumption hides aborted data across small fetches. Retained control records advance the delivered cursor. An open transaction holds completion; later data beyond sampled H is excluded. |
+| Transactions | Read-committed consumption hides aborted data across small fetches. Retained control records advance the delivered cursor. An open transaction delays completion until it commits or aborts. Records appended after the worker samples the physical log end are left for another run. |
 | Engine and files | A repeated query resumes from its saved offset. Topic→file→topic works through the real v1 CBOR components. This does not test existing-file recovery. |
 | Rebalance | Two real group members transfer a partition while one adapter holds an unsubmitted paused record. Reassignment clears client pauses; a held record does not block other partitions. |
 | Permissions | PLAIN/TLS copying, progress commits and metadata/group inspection work with source READ, group READ and destination WRITE. DESCRIBE_CONFIGS remains optional and was denied in the fixture. |
 | TLS/auth | CA validation remains on when hostname matching is disabled. Valid and invalid SAN/CA cases and SCRAM-SHA-512 pass. mTLS is not tested here. |
-| Deadlines | Withheld coordinator and member-commit replies return the operation deadline. Forced client cancellation closes these clients and a blocked producer within the tested two-second bound, without detected goroutine leaks. The adapter also closes with an undrained delivery queue. Flush forces pending batches without blocking the core. This is not a universal shutdown guarantee. |
+| Deadlines | Submission-based delivery deadlines fail ambiguous writes without advancing saved progress. A dropped reply after append produces the permitted duplicate on restart. Cleanup finishes with withheld coordinator, join, offset lookup, offset fetch, commit, fetch and leave replies; goleak finds no leaked goroutines. Metadata deadlines and undrained delivery queues also close. These tests do not establish a universal shutdown bound. |
+| Compacted gaps | A separate read-committed fetch and the client's public batch parser prove empty/compacted offsets. Retained records prevent advancement; only reaching the stable tip emits EOF. Tests cover intermediate gaps, stale fetches, rotation, paused/held partitions, invalid responses, topic recreation, abort markers and Fetch v12/v17. The proof works with the same source READ grant. |
 
 ## Constraints that affect a migration
 
 - [`RecordDeliveryTimeout`](https://github.com/twmb/franz-go/blob/v1.22.2/pkg/kgo/sink.go#L2153-L2157) in this client version measures a batch's age from its first record timestamp. It rejects a newly submitted historical record immediately. The prototype uses a per-record context measured from submission instead; `TestSpikeDeliveryTimeoutUsesRecordTimestamp` reproduces the difference.
-- A record context does not normally cancel an ambiguous in-flight idempotent produce. [`AllowIdempotentProduceCancellation`](https://github.com/twmb/franz-go/blob/v1.22.2/pkg/kgo/config.go#L1228-L1258) permits that cancellation and may allow duplicates when the application retries. The test demonstrates both modes. The prototype retains the default mode; a production delivery-deadline policy is still required.
-- Retaining control records handles the tested transaction gaps. General cursor advancement across empty/compacted fetches is not proven. Never substitute the broker's last stable offset for a cursor known to have been consumed.
+- [`AllowIdempotentProduceCancellation`](https://github.com/twmb/franz-go/blob/v1.22.2/pkg/kgo/config.go#L1228-L1258) lets per-record contexts cancel ambiguous writes. The prototype enables it. A timed-out write may already be stored; the run fails and saves only the confirmed prefix. Restart can duplicate it, and later records may precede replayed earlier records. Idempotence still protects internal retries.
+- Compacted gaps need an additional bounded Fetch because the public consumer API does not expose their consumed cursor. The probe validates batches at the local position, never advances from the broker's end offset alone, and never skips a retained user record. Probe deadlines and retryable broker errors leave progress unchanged so consumption can continue. Other failures, including malformed data and missing or recreated topics, stop the copy.
 - Full connection-property compatibility, authentication mapping, ONEOFF groups, relative windows, strict foreign/expired progress handling, existing file-output recovery, lost-assignment error classification and the full shutdown/rebalance fault matrix remain outside this prototype. Unsupported connection properties are rejected.
 
 ## Accepted timestamp edge case
@@ -35,9 +36,14 @@ This limitation is accepted and does not block migration. No decoder fix is requ
 
 ## Local load checks
 
-The corrected adapter copies all 16,000 records in the default test and all 128 records in the slow-destination test. Work caps hold: peak uncommitted records are 9,707 and 32. Sampled peak RSS is 81.3 and 19.2 MiB; elapsed time is 0.494 and 1.104 s. These short CLI checks do not measure peak capacity or establish performance parity with the production adapter.
+Three alternating runs per client use the same host and Kafka 3.9 fixture. Median results:
 
-Earlier exploratory comparisons and one-minute controlled streams also passed fidelity, progress, work-cap and memory checks. Reports are retained in ignored `build-results/comparison-*`, `soak-*` and `post-review-load`. Controlled input rates differ; do not use them as saturation measurements. The prototype omits production checks and Fx composition. Fetch wait is 500 ms.
+| Scenario | Current client records/s | Prototype records/s | Current / prototype sampled peak RSS MiB |
+| --- | ---: | ---: | ---: |
+| 16,000 records, default caps | 19,537 | 31,755 | 98.1 / 77.8 |
+| 128 records, slow destination, cap 32 | 45 | 118 | 24.7 / 19.0 |
+
+Every record is verified, and peak uncommitted records stay within the caps (prototype maxima 9,707 and 32). These short checks include startup and do not measure peak capacity or establish production performance parity. The prototype omits production checks and Fx composition. Fetch wait is 500 ms. Per-run logs, binary hashes and metrics are in ignored `build-results/client-deadlines-comparison`; other load and controlled-stream reports remain in `build-results`.
 
 ## Run
 
@@ -55,7 +61,7 @@ KAFERRY_TEST_BINARY="$PWD/bin/franz-spike" go test -count=1 \
   -tags=integration,load -run TestLoadBoundedKafkaCopy ./tests/compat
 ```
 
-The source and destination topics must exist. The CLI accepts only the narrow mapper described above. The permission result applies to Kafka 3.9; older brokers need a separate comparison against the existing idempotent producer. Security tests need the disposable three-broker qualification fixture and `FRANZ_SPIKE_CERT_DIR`; otherwise they skip. Do not interpret that skip as security coverage.
+The source and destination topics must exist. The CLI maps only `bootstrap.servers` and destination `linger.ms`; other properties fail. Kafka sources require named groups and literal time bounds or an explicit start rule. The permission result applies to Kafka 3.9; older brokers need a separate comparison against the existing idempotent producer. Security tests need the disposable three-broker qualification fixture and `FRANZ_SPIKE_CERT_DIR`; otherwise they skip. Do not interpret that skip as security coverage.
 
 To include the security cases, start the existing disposable fixture with SCRAM enabled:
 
@@ -71,4 +77,4 @@ docker compose -p kaferry-franz-security -f tests/qualification/compose.yaml \
   -f internal/franzspike/security.compose.yaml down -v
 ```
 
-Before migration: resolve the delivery-deadline policy, prove invisible-gap cursor handling, map or explicitly approve unsupported working settings, and run the complete compatibility/security/rebalance/shutdown suite against the production adapter. Retain the accepted timestamp limitation in the compatibility documentation when adopting the client.
+Before replacing the production client: map or explicitly approve unsupported working settings, implement the total shutdown budget, and run the complete compatibility/security/rebalance/shutdown suite against the production adapter. Keep strict progress checks, existing-file recovery and the accepted timestamp limitation in the compatibility documentation.

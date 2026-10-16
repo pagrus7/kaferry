@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -162,6 +163,18 @@ func TestSpikePlainTLSMinimumACLs(t *testing.T) {
 	groups, err := inspect.DescribeGroups(ctx(t), group)
 	if err != nil || groups[group].Err != nil {
 		t.Fatal("group inspection requires extra permission", err, groups[group].Err)
+	}
+	metadata, err := inspect.Metadata(ctx(t), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topicID := metadata.Topics[src].ID
+	proof := &fetchGap{client: writer, topic: src, topicID: base64.RawStdEncoding.EncodeToString(topicID[:])}
+	if next, err := proof.Next(ctx(t), 0, 0); err != nil || next != 0 {
+		t.Fatal("gap proof requires extra permission or skipped retained data", next, err)
+	}
+	if next, err := proof.Next(ctx(t), 0, 1); err != nil || next != 1 {
+		t.Fatal("gap proof at tip requires extra permission", next, err)
 	}
 	configs, err := inspect.DescribeTopicConfigs(ctx(t), dst)
 	denied := errors.Is(err, kerr.TopicAuthorizationFailed)
