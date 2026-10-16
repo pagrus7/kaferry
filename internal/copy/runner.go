@@ -86,8 +86,7 @@ func (r *Runner) run(ctx context.Context) error {
 			return r.interrupted()
 		}
 		if r.failure != nil {
-			_ = r.drain()
-			return r.failure
+			return errors.Join(r.failure, r.drain())
 		}
 		done, err := r.step(ctx)
 		if done {
