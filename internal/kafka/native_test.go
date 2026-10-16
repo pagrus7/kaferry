@@ -93,7 +93,7 @@ func nativeRequest(s nativeScenario, inspector *Inspector) error {
 		return inspector.CheckMembers(nativeGroup)
 	}
 	// MockCluster cannot serve DescribeTopics; exercise Progress's coordinator step directly.
-	ctx, cancel := inspector.context()
+	ctx, cancel := inspector.context(context.Background())
 	defer cancel()
 	topic := nativeTopic
 	_, err := inspector.groupOffsets(ctx, nativeGroup, []k.TopicPartition{{Topic: &topic, Partition: 0}})

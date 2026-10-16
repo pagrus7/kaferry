@@ -124,11 +124,13 @@ func (m destinationMetadataMock) Config() map[string]string { return m.cfg }
 func (m destinationMetadataMock) PartitionCount() int { return m.count }
 
 type positioningMock struct {
+	ctx    context.Context
 	result Positioning
 	err    error
 }
 
-func (m *positioningMock) New(OffsetReader, TimeReader, plan.Plan, string, string) AssignmentPositioner {
+func (m *positioningMock) New(ctx context.Context, _ OffsetReader, _ TimeReader, _ plan.Plan, _, _ string) AssignmentPositioner {
+	m.ctx = ctx
 	return m
 }
 
@@ -246,7 +248,7 @@ func sourceWithMocks(t *testing.T, consumer *consumerMock, metadata *sourceMetad
 	consumer.committed = metadata.parts
 	clients := &mockClients{consumer: consumer}
 	p := plan.Plan{Source: plan.Endpoint{Name: "orders"}, Group: "group", Start: "EARLIEST"}
-	source, _, err := NewSource(clients, metadata, positioning, p, "fp", config.Defaults("home").Worker, quietLogger())
+	source, _, err := NewSource(context.Background(), clients, metadata, positioning, p, "fp", config.Defaults("home").Worker, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

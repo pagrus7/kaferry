@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -177,7 +178,7 @@ func TestInvalidConsumerBindingOptionsDoNotConstructAClient(t *testing.T) {
 	clients := &mockClients{}
 	p := plan.Plan{Source: sinkEndpoint(t, map[string]string{"go.events.channel.size": "private-option-secret"}), Group: "copy-group"}
 	// When creating the source through its adapter boundary.
-	source, progress, err := NewSource(clients, &sourceMetadataMock{}, &positioningMock{}, p, "fp", config.Defaults("home").Worker, quietLogger())
+	source, progress, err := NewSource(context.Background(), clients, &sourceMetadataMock{}, &positioningMock{}, p, "fp", config.Defaults("home").Worker, quietLogger())
 	// Then configuration fails before the native consumer is constructed, without echoing the value.
 	var conflict *Conflict
 	if source != nil || progress != nil || !errors.As(err, &conflict) || clients.cfg != nil || err.Error() != `Go client property "go.events.channel.size" requires a positive integer` {

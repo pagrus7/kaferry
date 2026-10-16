@@ -18,6 +18,7 @@ import (
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
 	adapter "github.com/pagrus7/kaferry/internal/kafka"
+	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/pagrus7/kaferry/internal/sql"
 )
@@ -127,12 +128,13 @@ func probeSource(t *testing.T, name, group string) *adapter.Source {
 	}
 	clients := adapter.NewClients()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	metadata, err := adapter.NewInspector(clients, p.Source.Properties, name, logger)
+	metadata, err := adapter.NewInspector(context.Background(), clients, p.Source.Properties, name, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(metadata.Close)
-	source, _, err := adapter.NewSource(clients, metadata, adapter.NewPositionerFactory(core.RealClock{}, logger), p, "pause-probe", config.Defaults(t.TempDir()).Worker, logger)
+	positioning := adapter.NewPositionerFactory(kafkaport.NewPositionerFactory(core.RealClock{}, logger))
+	source, _, err := adapter.NewSource(context.Background(), clients, metadata, positioning, p, "pause-probe", config.Defaults(t.TempDir()).Worker, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

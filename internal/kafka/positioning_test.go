@@ -1,47 +1,14 @@
 package kafka
 
 import (
+	"context"
 	"errors"
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
-	"reflect"
 	"testing"
 	"time"
 )
-
-func TestSavedMixedWindowSurvivesClockAdvanceAndAdoption(t *testing.T) {
-	for _, origin := range []string{"saved", "adopted", "fresh"} {
-		t.Run(origin, func(t *testing.T) {
-			// Given a mixed NOW/literal window whose fresh resolution is now empty.
-			hi, lo := int64(7200000), int64(3600000)
-			p := &positioner{plan: plan.Plan{Window: plan.WindowSpec{Lower: &plan.Expression{Now: true, AdjustmentMS: -3600000}, Upper: &plan.Expression{LiteralMS: hi}}}, log: quietLogger()}
-			saved, metadata := map[int32]k.TopicPartition{}, map[int32]Progress{}
-			var adopted *plan.Window
-			window := plan.Window{Lower: &lo, Upper: &hi}
-			if origin == "saved" {
-				saved[0] = k.TopicPartition{Offset: 42}
-				metadata[0] = Progress{Window: &window}
-			}
-			if origin == "adopted" {
-				adopted = &window
-			}
-
-			// When positioning after both the saved upper bound and its cutoff.
-			got, _, position, err := p.window(0, saved, metadata, adopted, time.UnixMilli(14400000))
-
-			// Then persisted windows remain authoritative; only fresh resolution fails.
-			if origin == "fresh" {
-				if err == nil {
-					t.Fatal("empty fresh window accepted")
-				}
-				return
-			}
-			if err != nil || !reflect.DeepEqual(got, window) || origin == "saved" && position != 42 {
-				t.Fatal("saved window was re-resolved", got, position, err)
-			}
-		})
-	}
-}
 
 func TestPositioningStartRulesAndCommittedPositions(t *testing.T) {
 	lower, upper := int64(1000), int64(2000)
@@ -72,7 +39,7 @@ func TestPositioningStartRulesAndCommittedPositions(t *testing.T) {
 			offsets := &countingOffsets{low: 100, high: 1000, stable: 900}
 			times := &countingTimes{topic: topic}
 			p := plan.Plan{Source: plan.Endpoint{Name: topic}, Start: scenario.start, Window: scenario.window}
-			positioner := NewPositionerFactory(&fixedClock{now: time.Unix(100, 0)}, quietLogger()).New(offsets, times, p, "fp", "topic-id")
+			positioner := NewPositionerFactory(kafkaport.NewPositionerFactory(&fixedClock{now: time.Unix(100, 0)}, quietLogger())).New(context.Background(), offsets, times, p, "fp", "topic-id")
 
 			// When a partition is assigned through the positioner interface.
 			got, err := positioner.Locate([]k.TopicPartition{{Topic: &topic, Partition: 1}}, scenario.saved, map[int32]Progress{})
@@ -100,7 +67,7 @@ func TestPositioningBatchesBrokerRequests(t *testing.T) {
 	clock := &fixedClock{now: time.UnixMilli(10 * hour)}
 	offsets := &countingOffsets{low: 100, high: 1000, stable: 900}
 	times := &countingTimes{topic: topic}
-	positioner := NewPositionerFactory(clock, quietLogger()).New(offsets, times, plan.Plan{Source: plan.Endpoint{Name: topic}, Window: spec}, "fp", "topic-id")
+	positioner := NewPositionerFactory(kafkaport.NewPositionerFactory(clock, quietLogger())).New(context.Background(), offsets, times, plan.Plan{Source: plan.Endpoint{Name: topic}, Window: spec}, "fp", "topic-id")
 	savedLower := 5 * hour
 	saved := map[int32]k.TopicPartition{}
 	metadata := map[int32]Progress{}

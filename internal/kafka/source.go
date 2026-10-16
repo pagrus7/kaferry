@@ -10,12 +10,14 @@ import (
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/config"
 	copy "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 type poller interface{ Poll(int) k.Event }
 
 type Source struct {
+	ctx             context.Context
 	consumer        ConsumerClient
 	events          poller
 	offsets         OffsetReader
@@ -32,12 +34,9 @@ type Source struct {
 	retentionChecks map[int32]RetentionCheck
 }
 
-type RetentionCheck struct {
-	Low   int64
-	Lower int64
-}
+type RetentionCheck = kafkaport.RetentionCheck
 
-func NewSource(clients Clients, inspector SourceMetadata, positioning PositionerFactory, p plan.Plan, fp string, limits config.Worker, logger *slog.Logger) (*Source, SourceProgress, error) {
+func NewSource(ctx context.Context, clients Clients, inspector SourceMetadata, positioning PositionerFactory, p plan.Plan, fp string, limits config.Worker, logger *slog.Logger) (*Source, SourceProgress, error) {
 	cfg, err := consumerConfig(p, limits)
 	if err != nil {
 		return nil, nil, err
@@ -47,7 +46,7 @@ func NewSource(clients Clients, inspector SourceMetadata, positioning Positioner
 		return nil, nil, conflict("invalid Kafka consumer configuration")
 	}
 	store := &Committer{consumer: c, topic: p.Source.Name, metadata: make(map[int32]Progress)}
-	s := &Source{consumer: c, events: c, offsets: inspector, times: c, inspector: inspector, positioning: positioning, committer: store, plan: p, fingerprint: fp, log: logger, retentionChecks: make(map[int32]RetentionCheck)}
+	s := &Source{ctx: ctx, consumer: c, events: c, offsets: inspector, times: c, inspector: inspector, positioning: positioning, committer: store, plan: p, fingerprint: fp, log: logger, retentionChecks: make(map[int32]RetentionCheck)}
 	return s, store, nil
 }
 func (s *Source) Start(lifecycle copy.Lifecycle) error {
@@ -148,7 +147,7 @@ func (s *Source) locate(parts []k.TopicPartition, saved map[int32]k.TopicPartiti
 	if len(parts) == 0 {
 		return nil, nil
 	}
-	positioner := s.positioning.New(s.offsets, s.times, s.plan, s.fingerprint, s.inspector.TopicID())
+	positioner := s.positioning.New(s.context(), s.offsets, s.times, s.plan, s.fingerprint, s.inspector.TopicID())
 	positioned, err := positioner.Locate(parts, saved, metadata)
 	if err != nil {
 		return nil, err
@@ -274,3 +273,10 @@ func watermarkTransient(err k.Error) bool {
 	return false
 }
 func (s *Source) Close() error { return s.consumer.Close() }
+
+func (s *Source) context() context.Context {
+	if s.ctx != nil {
+		return s.ctx
+	}
+	return context.Background()
+}

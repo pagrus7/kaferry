@@ -12,7 +12,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
-	"github.com/pagrus7/kaferry/internal/kafka"
+	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"go.uber.org/fx"
 )
@@ -24,9 +24,9 @@ type engineFixture struct {
 	input   *engineInput
 	output  *engineOutput
 	source  *engineSource
-	store   kafka.SourceProgress
+	store   kafkaport.SourceProgress
 	groups  []string
-	saved   map[int32]kafka.Progress
+	saved   map[int32]kafkaport.Progress
 	onStage func(string)
 }
 
@@ -47,7 +47,7 @@ func (f *engineFixture) stage(name string) error {
 	}
 	return nil
 }
-func (f *engineFixture) Open(endpoint plan.Endpoint) (kafka.Connection, error) {
+func (f *engineFixture) Open(_ context.Context, endpoint plan.Endpoint) (kafkaport.Connection, error) {
 	if err := f.stage("open-" + endpoint.Name); err != nil {
 		return nil, err
 	}
@@ -77,20 +77,22 @@ type engineConnection struct {
 	name    string
 }
 
-func (c *engineConnection) ClusterID() (string, error) {
+func (c *engineConnection) ClusterID(context.Context) (string, error) {
 	return c.name + "-cluster", c.fixture.stage("cluster-" + c.name)
 }
-func (c *engineConnection) CheckMembers(string) error { return c.fixture.stage("members") }
-func (c *engineConnection) ReadProgress(string, string, plan.WindowSpec, int64) (map[int32]kafka.Progress, error) {
+func (c *engineConnection) CheckMembers(context.Context, string) error {
+	return c.fixture.stage("members")
+}
+func (c *engineConnection) ReadProgress(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafkaport.Progress, error) {
 	return c.fixture.saved, c.fixture.stage("progress")
 }
-func (c *engineConnection) Source(_ plan.Plan, _ string, _ config.Worker) (core.Source, kafka.SourceProgress, error) {
+func (c *engineConnection) Source(_ context.Context, _ plan.Plan, _ string, _ config.Worker) (core.Source, kafkaport.SourceProgress, error) {
 	return c.fixture.source, c.fixture.store, c.fixture.stage("topic-input")
 }
-func (c *engineConnection) Sink(config.Worker) (core.Sink, error) {
+func (c *engineConnection) Sink(context.Context, config.Worker) (core.Sink, error) {
 	return c.fixture.output, c.fixture.stage("topic-output")
 }
-func (c *engineConnection) Close() { _ = c.fixture.stage("close-" + c.name) }
+func (c *engineConnection) Close(context.Context) error { return c.fixture.stage("close-" + c.name) }
 
 type engineSource struct {
 	core.Source
@@ -239,6 +241,34 @@ func TestEngineClosesOnlyAcquiredResourcesOnFailure(t *testing.T) {
 	}
 }
 
+func TestEngineReportsCleanupFailureAfterSuccessfulCopy(t *testing.T) {
+	for _, stage := range []string{"close-topic-input", "close-source", "close-destination"} {
+		t.Run(stage, func(t *testing.T) {
+			// Given a completed copy whose source or endpoint cleanup fails.
+			fixture := newEngineFixture()
+			fixture.fail, fixture.store = stage, fixture.input
+			engine := newEngine(fixture, fixture, fixture, engineLogger())
+			// When all acquired resources are closed after the copy.
+			err := engine.Run(context.Background(), enginePlan("TOPIC", "TOPIC"), config.Worker{})
+			// Then the failure is reported and each remaining resource is still closed once.
+			if !errors.Is(err, fixture.failure) {
+				t.Fatal("cleanup failure was hidden", err)
+			}
+			for _, closed := range []string{"close-topic-input", "close-output", "close-source", "close-destination"} {
+				count := 0
+				for _, action := range fixture.trace {
+					if action == closed {
+						count++
+					}
+				}
+				if count != 1 {
+					t.Fatal("cleanup stopped or closed a resource twice", fixture.trace)
+				}
+			}
+		})
+	}
+}
+
 func TestConsumerShutdownKeepsDestinationProgressAvailable(t *testing.T) {
 	for _, fail := range []string{"", "run"} {
 		t.Run("after-"+fail, func(t *testing.T) {
@@ -349,7 +379,7 @@ func TestOneOffUsesOneGroupAndDeletesOnlyOnSuccess(t *testing.T) {
 
 func TestDestinationProgressRequiresConsistentFileIdentity(t *testing.T) {
 	// Given
-	saved := map[int32]kafka.Progress{0: {FileID: "archive", Extent: 100}, 1: {FileID: "archive", Extent: 200}}
+	saved := map[int32]kafkaport.Progress{0: {FileID: "archive", Extent: 100}, 1: {FileID: "archive", Extent: 200}}
 
 	// When
 	progress, err := destinationProgress(saved)
@@ -358,8 +388,33 @@ func TestDestinationProgressRequiresConsistentFileIdentity(t *testing.T) {
 	if err != nil || progress != (file.DestinationProgress{ID: "archive", Extent: 200, Exists: true}) {
 		t.Fatal("durable extent was lost", progress, err)
 	}
-	saved[1] = kafka.Progress{FileID: "other", Extent: 200}
+	saved[1] = kafkaport.Progress{FileID: "other", Extent: 200}
 	if _, err := destinationProgress(saved); err == nil {
 		t.Fatal("inconsistent destination identity accepted")
+	}
+}
+
+func TestCleanupFailurePreservesTheFirstExitCode(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		primary error
+		want    int
+	}{
+		{"copy succeeded", nil, 1},
+		{"runtime failure", errors.New("broker unavailable"), 1},
+		{"startup conflict", &kafkaport.Conflict{Err: errors.New("foreign progress")}, 2},
+		{"runtime conflict", &core.Exit{Code: 1, Err: errors.New("changed topic")}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given a close operation that fails with a classified error after the primary outcome.
+			cleanup := &kafkaport.Conflict{Err: errors.New("close failed")}
+			// When combining cleanup with the copy result.
+			err := cleanupResult(tc.primary, "close Kafka input", cleanup)
+			// Then both causes remain available and cleanup cannot replace the primary exit code.
+			var coded interface{ ExitCode() int }
+			if !errors.As(err, &coded) || coded.ExitCode() != tc.want || !errors.Is(err, cleanup) || tc.primary != nil && !errors.Is(err, tc.primary) || !strings.Contains(err.Error(), "close Kafka input") {
+				t.Fatal("cleanup changed outcome or hid its cause", err)
+			}
+		})
 	}
 }
