@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pagrus7/kaferry/internal/plan"
 )
@@ -98,6 +99,58 @@ func TestDrainFlushFailureCommitsOnlyConfirmedPrefix(t *testing.T) {
 	// Then the failure is reported and only the already-confirmed prefix is saved.
 	if !errors.Is(err, failure) || !source.paused[0] || !reflect.DeepEqual(store.saves, [][]Cursor{{{0, 1}}}) || r.tracker.Saved(0) != 1 {
 		t.Fatal("flush failure lost confirmed progress or advanced past it", err, store.saves)
+	}
+}
+
+func TestRunnerReportsWriteAndFinalSaveFailures(t *testing.T) {
+	// Given a confirmed write followed by a failed write, and a failing progress store.
+	r, source, sink, store, _ := fixture(t)
+	writeErr, saveErr := errors.New("write failed"), errors.New("final save failed")
+	store.fail = map[int32]error{0: saveErr}
+	for i := range 2 {
+		input := incoming(0, int64(i), 1)
+		source.events = append(source.events, Event{Input: &input})
+	}
+	source.events = append(source.events, Event{EOF: &Cursor{0, 2}})
+	sink.flush = func() error {
+		if len(sink.writes) == 2 {
+			sink.reports <- Delivery{Token: sink.writes[0]}
+			sink.reports <- Delivery{Token: sink.writes[1], Err: writeErr}
+			sink.flush = nil
+		}
+		return nil
+	}
+	// When the copy fails and tries to save the confirmed prefix before returning.
+	err := r.Run(context.Background())
+	// Then both failures are available and no progress is reported as saved.
+	var exit *Exit
+	if !errors.Is(err, writeErr) || !errors.Is(err, saveErr) || !errors.As(err, &exit) || exit.Code != 1 || r.tracker.Saved(0) != 0 || !reflect.DeepEqual(store.saves, [][]Cursor{{{0, 1}}}) {
+		t.Fatal("failure hid final save error or saved unsafe progress", err, store.saves)
+	}
+}
+
+func TestDrainTimeoutReportsWriteAndFinalSaveFailures(t *testing.T) {
+	// Given a confirmed record, a failed record, and a write that never finishes.
+	r, _, sink, store, clock := fixture(t)
+	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		if err := r.input(incoming(0, int64(i), 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeErr, saveErr := errors.New("write failed"), errors.New("final save failed")
+	sink.reports <- Delivery{Token: sink.writes[0]}
+	sink.reports <- Delivery{Token: sink.writes[1], Err: writeErr}
+	store.fail = map[int32]error{0: saveErr}
+	started := clock.Now()
+	// When the ten-second drain expires and saving the confirmed prefix also fails.
+	err := r.exit(r.drain())
+	// Then the runtime exit retains all causes and does not claim the prefix was saved.
+	var exit *Exit
+	if !errors.Is(err, writeErr) || !errors.Is(err, saveErr) || !errors.As(err, &exit) || exit.Code != 1 || !strings.Contains(err.Error(), "outstanding writes") || clock.Now().Sub(started) != 10*time.Second || r.tracker.Saved(0) != 0 || !reflect.DeepEqual(store.saves, [][]Cursor{{{0, 1}}}) {
+		t.Fatal("drain timeout hid a failure or saved unsafe progress", err, store.saves)
 	}
 }
 

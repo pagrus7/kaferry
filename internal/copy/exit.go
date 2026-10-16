@@ -81,8 +81,5 @@ func (r *Runner) drain() error {
 		}
 		r.clock.Sleep(10 * time.Millisecond)
 	}
-	if err := r.commit(r.ids()); err != nil {
-		return err
-	}
-	return errors.Join(failed, fmt.Errorf("outstanding writes did not finish within 10 seconds"))
+	return errors.Join(failed, r.commit(r.ids()), fmt.Errorf("outstanding writes did not finish within 10 seconds"))
 }
