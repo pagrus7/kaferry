@@ -38,7 +38,11 @@ jobs:
           python3 scripts/quality.py coverage
           go tool cover -html=build-results/coverage.out -o=build-results/coverage.html
       - run: make build
+        env:
+          CGO_ENABLED: "0"
       - name: Validate release license notices
+        env:
+          CGO_ENABLED: "0"
         run: python3 scripts/notices.py bin/kaferry bin/THIRD_PARTY_NOTICES.txt
       - name: Check documentation size
         run: |
@@ -96,7 +100,7 @@ jobs:
           git archive "$BASE_SHA" | tar -x -C .cache/previous-version
           previous_binary="$PWD/build-results/kaferry-previous"
           (cd .cache/previous-version && go build -trimpath -o "$previous_binary" ./cmd/kaferry)
-          make build
+          CGO_ENABLED=0 make build
           export KAFERRY_PREVIOUS_BINARY="$previous_binary"
           export KAFERRY_TEST_BINARY="$PWD/bin/kaferry"
           python3 scripts/ci.py migration go test -count=1 -race -tags=integration,migration -run TestPreviousBinary -v ./tests/compat

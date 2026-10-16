@@ -27,7 +27,7 @@ Saved commits take precedence. Without a commit:
 | No `WHERE`, group has no valid progress | `START = EARLIEST` or `LATEST` |
 | No `WHERE`, group already has valid progress | Earliest retained offset for the uncommitted partition |
 
-`LATEST` and a timestamp lookup with no match use the read-committed end (last stable offset, LSO), so records in open transactions remain eligible. Initial positions are committed before copying. Every partition is positioned explicitly; `auto.offset.reset=error` is protected.
+`LATEST` and a timestamp lookup with no match use the read-committed end (last stable offset, LSO), so records in open transactions remain eligible. Initial positions are committed before copying. Every partition is positioned explicitly; Automatic offset reset is disabled; an out-of-range position fails.
 
 - Commit below log start: resume at log start; log old position, log start and offset gap, which is not a lost-record count.
 - Commit above log end: fail as truncation. An out-of-range position during copying fails; restart reevaluates it.
@@ -54,7 +54,7 @@ File sources read from their checkpoint or first frame to the size observed at o
 
 - `GROUP` identifies a Kafka consumer group or a file-source checkpoint. `GROUP = ONE_OFF` generates and logs `kaferry-<hex>` for a single worker. Successful file-source ONE_OFF runs delete the checkpoint but retain its stable lock; Kafka progress expires under broker offset retention.
 - Topic→topic workers share a named group and progress independently using classic `cooperative-sticky` assignment. There is no group-wide done marker or external coordinator.
-- Before subscription, group inspection rejects foreign/invalid progress and active members without the protected client-ID prefix or assigned to another topic. An absent group passes; an unavailable check fails. The topic check sees assigned partitions, so it cannot check the subscriptions of members with no partitions. Positioning validates progress again after assignment.
+- Before subscription, group inspection rejects foreign/invalid progress and active members whose client IDs do not start with `kaferry-` or are assigned to another topic. An absent group passes; an unavailable check fails. The topic check sees assigned partitions, so it cannot check the subscriptions of members with no partitions. Positioning validates progress again after assignment.
 - A worker exits `0` after every partition it still holds stops, its outstanding writes are acknowledged and progress is committed. Partitions released during a rebalance do not count. Copies from Kafka without an end time keep waiting for new records or assignments until signalled.
 - For a copy from Kafka with an end time, the wait starts when Kafka reports an empty assignment while the worker holds no partitions. If it still has none after `worker.idle_exit` (30 seconds by default), it exits `3`. Another empty-assignment notification restarts the timer. Waiting for the first assignment notification or losing all partitions during a rebalance does not start it. The exit logs `local idle exit`, the timeout and the code. A worker assigned an empty partition does not exit this way.
 - More workers than source partitions can leave some workers with no partitions to read. This can also happen while Kafka moves partitions between workers. Code `3` does not tell you whether other workers finished. If the last workers exit before a partition reaches its new owner, that partition can remain unfinished. Rerunning the same query and group resumes saved positions and may copy late arrivals.
@@ -198,7 +198,7 @@ Values are strings in TOML and SQL. Unknown keys, unsupported values and contrad
 | `partitioner` | Only `murmur2_random`; Java-compatible Murmur2 for non-null keys, sticky routing for null keys |
 | `message.max.bytes` | Client batch ceiling including 4–5 bytes of outer framing, 1,000–1,000,000,000 bytes; default 1,000,000, adjusted by readable destination config |
 | `message.timeout.ms`, `delivery.timeout.ms` | Submission deadline; positive milliseconds, aliases must agree; default worker delivery timeout |
-| `queue.buffering.max.messages`, `queue.buffering.max.kbytes` | Sink admission bounds, no larger than worker records / rounded worker-or-message bytes |
+| `queue.buffering.max.messages`, `queue.buffering.max.kbytes` | Sink admission bounds: at most worker records / the larger of worker bytes or the message limit (rounded up to KiB) |
 | `queued.max.messages.kbytes`, `fetch.max.bytes`, `max.partition.fetch.bytes` | Soft per-fetch ceilings, capped by worker bytes; defaults worker bytes / 50 MiB / 1 MiB |
 | `session.timeout.ms`, `heartbeat.interval.ms` | Defaults 45,000 / 3,000; heartbeat must be smaller than session |
 | `max.poll.interval.ms` | Group rebalance timeout, default 300,000; at least session timeout and 30,000. Not an application poll watchdog |

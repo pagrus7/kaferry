@@ -230,6 +230,14 @@ func (s settings) consumerOptions() []kgo.Opt {
 }
 
 func (s settings) producerOptions() []kgo.Opt {
+	// Keep the narrowing conversion within the client's supported batch range.
+	batchBytes := s.messageBytes
+	if batchBytes < 1000 {
+		batchBytes = 1000
+	}
+	if batchBytes > 1000000000 {
+		batchBytes = 1000000000
+	}
 	codecs := map[string]kgo.CompressionCodec{"none": kgo.NoCompression(), "gzip": kgo.GzipCompression(), "snappy": kgo.SnappyCompression(), "lz4": kgo.Lz4Compression(), "zstd": kgo.ZstdCompression()}
-	return []kgo.Opt{kgo.RequiredAcks(kgo.AllISRAcks()), kgo.AllowIdempotentProduceCancellation(), kgo.StopProducerOnDataLossDetected(), kgo.ProducerLinger(s.linger), kgo.ProduceRequestTimeout(s.request), kgo.ProducerBatchCompression(codecs[s.compression]), kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)), kgo.ProducerBatchMaxBytes(int32(s.messageBytes)), kgo.MaxBufferedRecords(int(s.queueRecords) + 1), kgo.MaxBufferedBytes(int(s.queueBytes + s.messageBytes))}
+	return []kgo.Opt{kgo.RequiredAcks(kgo.AllISRAcks()), kgo.AllowIdempotentProduceCancellation(), kgo.StopProducerOnDataLossDetected(), kgo.ProducerLinger(s.linger), kgo.ProduceRequestTimeout(s.request), kgo.ProducerBatchCompression(codecs[s.compression]), kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)), kgo.ProducerBatchMaxBytes(int32(batchBytes)), kgo.MaxBufferedRecords(int(s.queueRecords) + 1), kgo.MaxBufferedBytes(int(s.queueBytes + s.messageBytes))}
 }

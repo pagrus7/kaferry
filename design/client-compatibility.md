@@ -4,7 +4,7 @@ Kafka-client and deployment constraints. See [permissions](../docs/usage.md#perm
 
 ## Known issues
 
-Kafka output rejects timestamps outside ±9,223,372,036,854 Unix milliseconds (roughly 1677–2262) before submission. Kafka input cannot detect such timestamps: franz-go decodes them incorrectly, affecting copied timestamps and time filters. Ordinary modern timestamps are unaffected. For sources containing extreme timestamps, use a client that preserves them. File-to-file copies retain the full signed millisecond value.
+Kafka output rejects timestamps outside ±9,223,372,036,854 Unix milliseconds (roughly 1677–2262) before submission. Kafka input cannot detect such timestamps: franz-go decodes them incorrectly, affecting copied timestamps and time filters. Ordinary modern timestamps are unaffected. For such sources, use another tool that preserves 64-bit millisecond timestamps. File-to-file copies retain the full signed millisecond value.
 
 The pinned [decoder](https://github.com/twmb/franz-go/blob/v1.22.2/pkg/kgo/source.go#L2438) multiplies milliseconds into a signed nanosecond value. Overflow changes the timestamp before Kaferry receives it. [Kafka 4.x's default future-timestamp bound](https://kafka.apache.org/41/configuration/topic-configs/#message.timestamp.after.max.ms) reduces acceptance of new far-future records; it does not protect existing records, extreme past timestamps or permissive topic settings. Occurrence in production is unknown.
 
@@ -36,11 +36,11 @@ Startup attempts `DescribeConfigs` on the destination topic. Denial or failure l
 | `message.timestamp.type` | Known LogAppendTime lets the broker restamp records | Apply client-safe timestamp bounds even if the broker could restamp |
 | Timestamp before/after bounds; legacy difference bound | Check CreateTime timestamps before submission, allowing record-level SKIP | Broker rejection stops the run under every policy |
 
-Size preflight counts an uncompressed single-record batch and the client’s 4–5 byte outer framing. Compression, changed settings or clock skew can change broker acceptance. Timestamp preflight can skip a record the broker would accept. Kafka output rejects timestamps outside ±9,223,372,036,854 Unix milliseconds unless known LogAppendTime will restamp them; source decoding has the limit above.
+Size preflight counts an uncompressed single-record batch and the client’s 4–5 byte outer framing. Compression, changed settings or clock skew can change broker acceptance. Size preflight can refuse a record up to 5 bytes below the broker limit; timestamp preflight can skip a record the broker would accept. Both refusals support SKIP. Kafka output rejects timestamps outside ±9,223,372,036,854 Unix milliseconds unless known LogAppendTime will restamp them; source decoding has the limit above.
 
 ## Kafka requests
 
-[Factory.Open](../internal/franz/factory.go) creates one control client per Kafka endpoint. Files create none. [Inspector](../internal/franz/metadata.go) uses 10 s deadlines for startup and assignment, 2 s for input tip checks.
+[Factory.Open](../internal/franz/factory.go) creates one control client per Kafka endpoint. Files create none. [Inspector](../internal/franz/metadata.go) uses 10 s deadlines for startup and assignment, 2 s for input tip checks and 1 s for output partition checks.
 
 | API | Purpose / timing |
 | --- | --- |
@@ -54,15 +54,16 @@ Size preflight counts an uncompressed single-record batch and the client’s 4�
 | JoinGroup / SyncGroup / Heartbeat / LeaveGroup | Ordinary consumer-group membership and ownership |
 | Produce / InitProducerId | Idempotent output and delivery acknowledgements |
 
-While partitions are assigned, input checks stable ends once per second and probes at most one gap (Metadata + Fetch) per check. Output checks partition count every 30 s.
+While partitions are assigned, input checks stable ends once per second. Each check can also fetch up to 1 MiB from one partition behind its stable end, including partitions still receiving records. These probes count against client quotas; a throttled empty reply proves no progress and retries on the next check. Output checks partition count every 30 s.
 
 Completion samples the log end including open transactions. A stable offset alone never proves that records were consumed: gap probes parse batches and validate CRCs. Fixture administrators create, alter and delete test resources; those permissions are not CLI requirements.
 
 ## Operational limits
 
-- Required inspection or initial/periodic commit errors stop the run. Restart after broker recovery. Classified transient consumption errors retry without a total deadline. A group-session error that is not classified transient stops the worker; rerun to rejoin.
+- Required inspection or initial/periodic commit errors stop the run. Restart after broker recovery. Network, leader and coordinator errors marked retryable by the client retry without a total deadline. If Kafka reports that this worker is no longer a group member, it exits 1; rerun to rejoin.
 - SIGINT/SIGTERM stop reads, allow up to ten seconds for outstanding writes, then save confirmed progress. The CLI's overall shutdown deadline defaults to 30 s and covers cleanup and blocked I/O. Expiry exits 1 without further cleanup; records after the last saved position can replay. Set `worker.shutdown_timeout` for your environment; a second signal forces termination.
 - Leaving the group allows up to 5 s. A failed leave exits 1, even if progress was already saved. Other workers may wait for the session timeout before receiving its partitions. Resume with the same named group.
+- If a gap check reports an unknown source topic or partition, the run stops; rerun after the topic is available. Source replica reassignment is untested and may trigger this.
 - A delivery timeout can occur after the broker appended the record. The failed record stays unconfirmed and can duplicate on restart; later records cannot advance that partition's saved prefix past it.
 - Raw key/value bytes, duplicate headers, NUL/non-UTF-8 header names, nulls and zero/negative timestamps are supported. Kafka's −1 timestamp means missing. Destination LogAppendTime replaces timestamps; retention can remove old records.
 - Uncommitted-work caps bound tracked work. Fetch byte limits are soft; client buffers, decompression and one oversized record can add memory. [Connection mappings](decisions.md#connection-properties).

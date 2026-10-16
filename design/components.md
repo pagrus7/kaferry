@@ -23,7 +23,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Partition completion | [copy/partition.go](../internal/copy/partition.go) | Decide timestamp stops, tip sampling and waits for a fixed sampled end | Pure assignment state; runner performs I/O and logs outcomes |
 | Flow control | [copy/flow.go](../internal/copy/flow.go) | Hold unsent input; decide admission, worker-wide pause and commit cadence | Narrow work-count port; runner applies partition pauses and saves progress |
 | Progress tracker | [copy](../internal/copy) | Track consumed/resolved prefixes, ownership and caps | ProgressTracker, fresh instance through ProgressFactory |
-| Kafka metadata | [franz](../internal/franz) | Inspect identities, offsets and optional destination config | SourceMetadata, DestinationMetadata, MetadataClient |
+| Kafka metadata | [franz](../internal/franz) | Inspect identities, offsets and optional destination config | sourceMetadata, destinationMetadata, MetadataClient |
 | Kafka contracts and progress format | [kafkaport](../internal/kafkaport) | Endpoint interfaces and strict saved-progress encoding | Connection, SourceProgress; client libraries stay in adapters |
 | Kafka positioning | [kafkaport](../internal/kafkaport) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetReader, TimeReader; client conversions in franz |
 | Kafka input | [franz](../internal/franz) | Hand off callbacks/fetches to the core loop; position, pause and prove gaps | ConsumerClient, sourceMetadata, gapReader, rebalanceBridge |
@@ -38,8 +38,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 
 - Factories create fresh mutable runner/progress/adapter state for each query; assignment state is generation-specific.
 - The engine manages each query's resources. Adapters manage Kafka clients, files and locks.
-- For Kafka-to-file copies, Kaferry creates the Kafka consumer and checks its settings before opening the output file. Before reading any messages, it sets up progress tracking so saved Kafka offsets include the file ID and the last safely written byte position.
-- The runner saves confirmed progress before adapters close. Closing a Kafka source cancels callback handoff; it does not save progress.
+- [Endpoint creation](decisions.md#creation) defines validation, output ownership and progress-save order. Adapters close after the runner saves confirmed progress; Kafka source close performs no saves.
 - Runner mutates progress in one event loop. Late outcomes from an old assignment cannot advance current progress.
 - Sources provide owned record buffers; sinks retain them until the corresponding write outcome.
 - Source cursors are distinct from record provenance. Progress persists confirmed next positions and identity metadata.
