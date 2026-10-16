@@ -204,8 +204,10 @@ Exactly one input: `run --file/-f path`, `run --sql/-e statement`, or `run --fil
 | Normal exit | Meaning |
 | --- | --- |
 | 0 | This worker finished its file input or remaining assigned Kafka partitions, or a signal cleanly stopped a copy from Kafka with no end time. SKIP counts do not change the code |
-| 1 | The copy failed, or a signal interrupted startup, any copy from a file, or a copy from Kafka with an end time. Conflicts after the first consumed record also exit 1 |
+| 1 | Copy or cleanup failed, or a signal interrupted startup, a file copy, or a Kafka copy with an end time. Conflicts after the first consumed record also exit 1 |
 | 2 | Usage/parse/plan/configuration error, or identity/ownership/self-copy conflict before the first consumed record |
 | 3 | For a copy from Kafka with an end time, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |
 
 Busy locks and broker/record failures exit 1. Conflicts include foreign progress/members, changed input and unowned/short/corrupt acknowledged output. The first failure determines the code; cleanup cannot replace it. Native aborts and forced termination use system signal status.
+
+A cleanup error can occur after all records are copied and progress is saved; the error names the close operation. Resume using the same named group to avoid starting over. `ONE_OFF` always creates a new group, so rerunning it can copy records again.

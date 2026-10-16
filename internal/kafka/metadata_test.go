@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/plan"
@@ -127,7 +128,7 @@ func TestInspectorClosesAdminWhenPreflightFails(t *testing.T) {
 		admin := &adminMock{described: result}
 
 		// When
-		_, newInspectorErr := NewInspector(&mockClients{admin: admin}, plan.Properties{}, "orders", quietLogger())
+		_, newInspectorErr := NewInspector(context.Background(), &mockClients{admin: admin}, plan.Properties{}, "orders", quietLogger())
 
 		// Then
 		if newInspectorErr == nil || !admin.closed {
@@ -141,7 +142,7 @@ func TestInvalidBindingOptionStopsBeforeAdminConstruction(t *testing.T) {
 	clients := &mockClients{}
 	properties := sinkEndpoint(t, map[string]string{"go.events.channel.szie": "private-option-secret"}).Properties
 	// When constructing the metadata inspector.
-	metadata, err := NewInspector(clients, properties, "orders", quietLogger())
+	metadata, err := NewInspector(context.Background(), clients, properties, "orders", quietLogger())
 	// Then it fails without creating an admin handle or exposing the option value.
 	var conflict *Conflict
 	if metadata != nil || !errors.As(err, &conflict) || clients.cfg != nil || err.Error() != `unsupported Go client property "go.events.channel.szie"` {
@@ -277,7 +278,7 @@ func TestInspectorStartupFailuresDoNotLeakAdminOrConfiguration(t *testing.T) {
 			}
 
 			// When opening metadata inspection.
-			metadata, err := NewInspector(clients, plan.Properties{}, "orders", quietLogger())
+			metadata, err := NewInspector(context.Background(), clients, plan.Properties{}, "orders", quietLogger())
 
 			// Then startup fails and closes each successfully created native handle.
 			if metadata != nil || err == nil || admin.closed != (scenario != "configuration") {

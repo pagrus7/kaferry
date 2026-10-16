@@ -1,12 +1,14 @@
 package kafka
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
@@ -51,7 +53,7 @@ func TestPositioningDoesNotFallbackAfterLookupFailure(t *testing.T) {
 				p.Window = plan.WindowSpec{}
 				p.Start = "LATEST"
 			}
-			positioner := NewPositionerFactory(&fixedClock{now: time.Unix(100, 0)}, quietLogger()).New(offsets, times, p, "fp", "topic-id")
+			positioner := NewPositionerFactory(kafkaport.NewPositionerFactory(&fixedClock{now: time.Unix(100, 0)}, quietLogger())).New(context.Background(), offsets, times, p, "fp", "topic-id")
 
 			// When resolving the assigned partition's starting offset.
 			got, err := positioner.Locate([]k.TopicPartition{{Topic: &topic, Partition: 1}}, nil, nil)

@@ -117,12 +117,12 @@ func (r *Runner) step(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	event, err := r.source.Poll(20 * time.Millisecond)
+	if ctx.Err() != nil && (err == nil || errors.Is(err, ctx.Err())) {
+		return false, nil // A signal during Poll must not submit its input.
+	}
 	if err != nil {
 		return false, err
 	}
-	if ctx.Err() != nil {
-		return false, nil
-	} // A signal during Poll must not submit its input.
 	return false, r.accept(event)
 }
 

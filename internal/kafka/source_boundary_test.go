@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -8,6 +9,19 @@ import (
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	core "github.com/pagrus7/kaferry/internal/copy"
 )
+
+func TestSourceForwardsTheQueryContextToPositioning(t *testing.T) {
+	// Given a query context and a mocked assignment positioner.
+	positioning := &positioningMock{}
+	source, _ := sourceWithMocks(t, &consumerMock{}, &sourceMetadataMock{}, positioning)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	source.ctx = ctx
+	// When locating an assigned partition, then broker lookups receive the query context.
+	if _, err := source.locate([]k.TopicPartition{{Partition: 0}}, nil, nil); err != nil || positioning.ctx != ctx {
+		t.Fatal("positioning lost query cancellation", err)
+	}
+}
 
 type callbackPoller func() k.Event
 

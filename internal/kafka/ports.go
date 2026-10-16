@@ -3,6 +3,7 @@ package kafka
 import (
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	copy "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
@@ -11,11 +12,8 @@ type AssignmentStore interface {
 	SetMetadata(int32, Progress)
 }
 
-// SourceProgress binds destination durability before the source is started.
-type SourceProgress interface {
-	copy.ProgressStore
-	BindOutput(copy.OutputProgress)
-}
+// SourceProgress saves Kafka offsets with the output file's durable position.
+type SourceProgress = kafkaport.SourceProgress
 
 type OffsetReader interface {
 	Offsets([]int32, k.OffsetSpec, bool) (map[int32]int64, error)

@@ -2,60 +2,22 @@ package kafka
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
-type Conflict struct{ Err error }
+type Conflict = kafkaport.Conflict
+type Progress = kafkaport.Progress
 
-func (e *Conflict) Error() string               { return e.Err.Error() }
-func (e *Conflict) Unwrap() error               { return e.Err }
-func (*Conflict) ExitCode() int                 { return 2 }
 func conflict(format string, args ...any) error { return &Conflict{Err: fmt.Errorf(format, args...)} }
-
-type Progress struct {
-	Fingerprint string       `json:"fp"`
-	TopicID     string       `json:"tid"`
-	Window      *plan.Window `json:"win,omitempty"`
-	FileID      string       `json:"fid,omitempty"`
-	Extent      int64        `json:"extent,omitempty"`
-}
-
-// The v1 wire prefix is fixed; changing it makes saved progress unreadable.
-func (p Progress) Encode() string { data, _ := json.Marshal(p); return "kfwd2:1;" + string(data) }
 func decodeProgress(metadata *string, fp, topicID string, relative bool) (Progress, error) {
-	var progress Progress
-	if metadata == nil || !strings.HasPrefix(*metadata, "kfwd2:1;") {
-		return progress, conflict("foreign or unsupported commit metadata")
-	}
-	decoder := json.NewDecoder(strings.NewReader(strings.TrimPrefix(*metadata, "kfwd2:1;")))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&progress); err != nil || decoder.Decode(new(any)) != io.EOF {
-		return progress, conflict("invalid commit metadata")
-	}
-	if progress.Fingerprint != fp {
-		return progress, conflict("query fingerprint mismatch")
-	}
-	if progress.TopicID == "" || progress.TopicID != topicID {
-		return progress, conflict("source topic identity mismatch: saved=%s current=%s", progress.TopicID, topicID)
-	}
-	if relative && progress.Window == nil {
-		return progress, conflict("NOW() commit is missing its window")
-	}
-	if progress.Extent < 0 || (progress.FileID == "") != (progress.Extent == 0) {
-		return progress, conflict("invalid destination file progress")
-	}
-	if progress.Window != nil && progress.Window.Lower != nil && progress.Window.Upper != nil && *progress.Window.Lower >= *progress.Window.Upper {
-		return progress, conflict("invalid stored time window")
-	}
-	return progress, nil
+	return kafkaport.DecodeProgress(metadata, fp, topicID, relative)
 }
 
 type Inspector struct {
@@ -75,15 +37,18 @@ func (i *Inspector) deadline() time.Duration {
 	}
 	return i.timeout
 }
-func (i *Inspector) context() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), i.deadline())
+func (i *Inspector) context(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, i.deadline())
 }
 
 // Keep coordinator requests alive past the Go deadline until the engine closes the failed handle.
 // This mitigates native timeout crashes; see design/client-compatibility.md and native_test.go.
 func (i *Inspector) coordinatorTimeout() time.Duration { return 2 * i.deadline() }
 
-func NewInspector(clients Clients, properties plan.Properties, topic string, logger *slog.Logger) (Metadata, error) {
+func NewInspector(ctx context.Context, clients Clients, properties plan.Properties, topic string, logger *slog.Logger) (*Inspector, error) {
 	cfg, err := clientConfig(properties, adminClient)
 	if err != nil {
 		return nil, err
@@ -93,7 +58,7 @@ func NewInspector(clients Clients, properties plan.Properties, topic string, log
 		return nil, conflict("invalid Kafka connection configuration")
 	}
 	i := &Inspector{admin: a, topic: topic, log: logger}
-	ctx, cancel := i.context()
+	ctx, cancel := i.context(ctx)
 	defer cancel()
 	result, err := a.DescribeTopics(ctx, k.NewTopicCollectionOfTopicNames([]string{topic}))
 	if err != nil {
@@ -117,8 +82,8 @@ func NewInspector(clients Clients, properties plan.Properties, topic string, log
 	return i, nil
 }
 func (i *Inspector) Close() { i.admin.Close() }
-func (i *Inspector) ClusterID() (string, error) {
-	ctx, cancel := i.context()
+func (i *Inspector) clusterID(parent context.Context) (string, error) {
+	ctx, cancel := i.context(parent)
 	defer cancel()
 	return i.admin.ClusterID(ctx)
 }
@@ -131,8 +96,8 @@ func (i *Inspector) Parts() []k.TopicPartition {
 	}
 	return parts
 }
-func (i *Inspector) CurrentPartitions() ([]k.TopicPartition, error) {
-	ctx, cancel := i.context()
+func (i *Inspector) partitions(parent context.Context) ([]k.TopicPartition, error) {
+	ctx, cancel := i.context(parent)
 	defer cancel()
 	return i.currentPartitions(ctx)
 }
@@ -154,8 +119,8 @@ func (i *Inspector) currentPartitions(ctx context.Context) ([]k.TopicPartition, 
 	i.description = current
 	return i.Parts(), nil
 }
-func (i *Inspector) Progress(group string) ([]k.TopicPartition, error) {
-	ctx, cancel := i.context()
+func (i *Inspector) progress(parent context.Context, group string) ([]k.TopicPartition, error) {
+	ctx, cancel := i.context(parent)
 	defer cancel()
 	parts, err := i.currentPartitions(ctx)
 	if err != nil {
@@ -182,8 +147,8 @@ func (i *Inspector) groupOffsets(ctx context.Context, group string, parts []k.To
 	}
 	return parts, nil
 }
-func (i *Inspector) ReadProgress(group, fp string, window plan.WindowSpec, cutoff int64) (map[int32]Progress, error) {
-	parts, err := i.Progress(group)
+func (i *Inspector) readProgress(parent context.Context, group, fp string, window plan.WindowSpec, cutoff int64) (map[int32]Progress, error) {
+	parts, err := i.progress(parent, group)
 	if err != nil {
 		return nil, err
 	}
@@ -216,15 +181,10 @@ func decodeCommitted(parts []k.TopicPartition, fp, topicID string, window plan.W
 }
 
 func validateWindow(progress Progress, spec plan.WindowSpec, cutoff int64) error {
-	if progress.Window != nil {
-		if err := spec.ValidateStored(*progress.Window, cutoff); err != nil {
-			return conflict("invalid stored time window: %v", err)
-		}
-	}
-	return nil
+	return kafkaport.ValidateWindow(progress, spec, cutoff)
 }
-func (i *Inspector) CheckMembers(group string) error {
-	ctx, cancel := i.context()
+func (i *Inspector) checkMembers(parent context.Context, group string) error {
+	ctx, cancel := i.context(parent)
 	defer cancel()
 	result, err := i.admin.DescribeConsumerGroups(ctx, []string{group}, k.SetAdminRequestTimeout(i.coordinatorTimeout()))
 	if err != nil {
@@ -252,8 +212,8 @@ func (i *Inspector) CheckMembers(group string) error {
 }
 
 // Offsets lists one offset kind for many partitions in a single request.
-func (i *Inspector) Offsets(partitions []int32, spec k.OffsetSpec, readCommitted bool) (map[int32]int64, error) {
-	ctx, cancel := i.context()
+func (i *Inspector) offsets(parent context.Context, partitions []int32, spec k.OffsetSpec, readCommitted bool) (map[int32]int64, error) {
+	ctx, cancel := i.context(parent)
 	defer cancel()
 	request := make(map[k.TopicPartition]k.OffsetSpec, len(partitions))
 	for _, partition := range partitions {
@@ -292,8 +252,8 @@ func partitionInfos(result k.ListOffsetsResult, topic string) map[int32]k.ListOf
 	}
 	return infos
 }
-func (i *Inspector) Config() map[string]string {
-	ctx, cancel := i.context()
+func (i *Inspector) config(parent context.Context) map[string]string {
+	ctx, cancel := i.context(parent)
 	defer cancel()
 	result, err := i.admin.DescribeConfigs(ctx, []k.ConfigResource{{Type: k.ResourceTopic, Name: i.topic}})
 	if err != nil || len(result) != 1 || result[0].Error.Code() != k.ErrNoError || result[0].Type != k.ResourceTopic || result[0].Name != i.topic {

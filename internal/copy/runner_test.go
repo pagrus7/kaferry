@@ -461,6 +461,41 @@ func TestSignalCannotHideKnownFailure(t *testing.T) {
 	}
 }
 
+type cancellingPoll struct {
+	*testSource
+	cancel context.CancelFunc
+	err    error
+}
+
+func (s *cancellingPoll) Poll(time.Duration) (Event, error) {
+	s.cancel()
+	input := incoming(0, 0, 1)
+	return Event{Input: &input}, s.err
+}
+
+func TestSignalDuringPollDoesNotTurnCancellationIntoCopyFailure(t *testing.T) {
+	for _, unrelated := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cancellation", true: "unrelated failure"}[unrelated], func(t *testing.T) {
+			// Given a following Kafka copy cancelled during a poll or assignment request.
+			r, source, sink, store, _ := fixture(t)
+			r.plan.Source.Kind = "TOPIC"
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			failure := error(context.Canceled)
+			if unrelated {
+				failure = errors.New("topic authorization failed")
+			}
+			r.source = &cancellingPoll{testSource: source, cancel: cancel, err: failure}
+			// When the signal and poll result arrive together.
+			err := r.Run(ctx)
+			// Then no input is published or saved; only an unrelated failure exits with an error.
+			if (err != nil) != unrelated || unrelated && !errors.Is(err, failure) || len(sink.writes) != 0 || len(store.saves) != 0 {
+				t.Fatal("signal admitted input, hid a failure, or failed a clean stop", err, sink.writes, store.saves)
+			}
+		})
+	}
+}
+
 func TestCapturedTipFinishesWithoutAnotherEOF(t *testing.T) {
 	// Given
 	for _, gap := range []bool{false, true} {

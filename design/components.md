@@ -24,7 +24,8 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Flow control | [copy/flow.go](../internal/copy/flow.go) | Hold unsent input; decide admission, worker-wide pause and commit cadence | Narrow work-count port; runner applies partition pauses and saves progress |
 | Progress tracker | [copy](../internal/copy) | Track consumed/resolved prefixes, ownership and caps | ProgressTracker, fresh instance through ProgressFactory |
 | Kafka metadata | [kafka](../internal/kafka) | Inspect topic/group identities, offsets and optional destination config | SourceMetadata, DestinationMetadata, AdminClient |
-| Kafka positioning | [kafka](../internal/kafka) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetReader, TimeReader |
+| Kafka contracts and progress format | [kafkaport](../internal/kafkaport) | Endpoint interfaces and strict saved-progress encoding | Connection, SourceProgress; client libraries stay in adapters |
+| Kafka positioning | [kafkaport](../internal/kafkaport) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetReader, TimeReader; native conversions in kafka |
 | Kafka adapters | [kafka](../internal/kafka) | Poll/assign/pause, produce/deliver, commit progress | ConsumerClient, ProducerClient, AssignmentStore |
 | File adapters | [file](../internal/file) | Encode/decode frames, snapshot input, recover output, persist checkpoints | ArchiveDecoder, ArchiveEncoder, CheckpointStore, I/O ports |
 | File publication | [file](../internal/file) | Publish a durable header without replacing another creator | Publisher, private filesystem port |
