@@ -54,7 +54,7 @@ Size preflight counts an uncompressed single-record batch and the clientâ€™s 4â€
 | JoinGroup / SyncGroup / Heartbeat / LeaveGroup | Ordinary consumer-group membership and ownership |
 | Produce / InitProducerId | Idempotent output and delivery acknowledgements |
 
-While partitions are assigned, input checks stable ends once per second. Each check can also fetch up to 1 MiB from one partition behind its stable end, including partitions still receiving records. These probes count against client quotas; a throttled empty reply proves no progress and retries on the next check. Output checks partition count every 30 s.
+While partitions are assigned, input checks stable ends once per second. Each check can also request 1 MiB from one partition behind its stable end, including partitions still receiving records. Kafka can return a larger first batch. These probes count against client quotas; a throttled empty reply proves no progress and retries on the next check. Output checks partition count every 30 s.
 
 Completion samples the log end including open transactions. A stable offset alone never proves that records were consumed: gap probes parse batches and validate CRCs. Fixture administrators create, alter and delete test resources; those permissions are not CLI requirements.
 
