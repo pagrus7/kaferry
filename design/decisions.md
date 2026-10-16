@@ -5,7 +5,7 @@ Completion, delivery and restart contracts. See the [usage guide](../docs/usage.
 ## Scope
 
 - Copies topic→topic, topic→file, file→topic and file→file with one SQL-like statement; no transformations or Schema Registry access.
-- Preserves raw key/value bytes, null versus empty, and ordered headers including duplicates, subject to [client limits](client-compatibility.md#binding-limits). Files retain timestamp values and types; Kafka output follows the destination's timestamp rules.
+- Preserves raw key/value bytes, null versus empty, and ordered headers including duplicates, subject to [client limits](client-compatibility.md#operational-limits). Files retain timestamp values and types; Kafka output follows the destination's timestamp rules.
 - Payloads are opaque. Users must ensure byte formats and Schema Registry IDs are compatible with the destination.
 - Delivery is at least once for records selected before completion: output acknowledgment precedes source progress. Crashes and rebalances can duplicate output. Filters, SKIP, completion rules and retention can omit records.
 
@@ -79,13 +79,13 @@ Policies can therefore change to SKIP when resuming a failed record. `NOW()` bou
 
 ## Kafka output
 
-- One asynchronous idempotent producer per worker, with delivery reports and native batching. The Go batch producer is disabled because it drops headers and timestamps.
-- Send original key bytes with partition unset. Default `partitioner=murmur2_random` matches Java routing; connection properties may override it. Equal non-null keys stay together with a stable partitioner/count. Source partitions/offsets are never routing instructions. Topics must exist; destination partition-count changes are logged.
+- One asynchronous idempotent producer per worker, with delivery reports and client batching.
+- Send original key bytes with partition unset. Java-compatible Murmur2 routing is fixed; `partitioner=murmur2_random` is the only accepted setting. Equal non-null keys stay together with a stable partitioner/count. Source partitions/offsets are never routing instructions. Topics must exist; destination partition-count changes are logged.
 - Submission order is preserved for records from one source partition routed to one destination partition during an uninterrupted producer session with stable routing. Null keys can spread. Replay and rebalances can duplicate and reorder output; there is no cross-partition order guarantee.
-- Client delivery retries default to `worker.delivery_timeout` (60 s). Connection `message.timeout.ms` / `delivery.timeout.ms` overrides it; 0 is unbounded, conflicting aliases fail. Exhausted delivery fails the run.
+- Client delivery retries default to `worker.delivery_timeout` (60 s). Connection `message.timeout.ms` / `delivery.timeout.ms` overrides it; values must be positive and conflicting aliases fail. Deadlines start at submission, independently of record timestamps. Exhausted delivery fails the run.
 - Queue-full refusal pauses reading and retries the same record first, up to `worker.delivery_timeout`. Accepted records are not submitted again within that assignment.
 - Optional destination configuration supports size/timestamp preflight; denial logs a warning. [Checks and fallbacks](client-compatibility.md#optional-destination-configuration). Preflight cannot guarantee broker acceptance: clocks, settings, framing and compression may differ.
-- The destination determines timestamp type. Known LogAppendTime restamps records. Otherwise the Go client cannot preserve timestamps ≤ 0 or above 9,223,372,036,854 Unix milliseconds; apply the timestamp policy. A missing timestamp without `WHERE` gets producer time, counted and warned about.
+- The destination determines timestamp type. Known LogAppendTime restamps records. Otherwise timestamps outside ±9,223,372,036,854 Unix milliseconds cannot be published; apply the timestamp policy. Zero and negative timestamps are supported; Kafka uses −1 for a missing timestamp. [Source decoding limit](client-compatibility.md#known-issues). A missing timestamp without `WHERE` gets producer time, counted and warned about.
 - Destination retention is not checked; old CreateTime records may be deleted soon after copying.
 - Async delivery errors fail under every policy. A rejected batch does not identify the offending record, so SKIP cannot isolate it. No batch splitting or error-string parsing is attempted. Outcomes after revocation are discarded.
 
@@ -94,9 +94,9 @@ Policies can therefore change to SKIP when resuming a failed record. `NOW()` bou
 - Kafka sources read committed records. A Kafka delivery report or file fsync acknowledges output before source progress is saved.
 - Batches are bounded and non-atomic. Commit only each partition's contiguous resolved prefix: filtered, delivered or explicitly skipped. Consumed positions account for Kafka offset gaps.
 - A later failure leaves earlier output intact. Restart can duplicate output acknowledged after the last saved position, and revisits the failing record unless conditions or policy change.
-- Default uncommitted caps: 5,000 records / 16 MiB per partition; 20,000 records / 128 MiB per worker. Pause reading at a cap until commit succeeds; a single oversized record may proceed alone. These bound tracked work, not total process memory, which also includes native buffers and overhead.
+- Default uncommitted caps: 5,000 records / 16 MiB per partition; 20,000 records / 128 MiB per worker. Pause reading at a cap until commit succeeds; a single oversized record may proceed alone. These bound tracked work, not total process memory, which also includes client buffers and overhead.
 - Commit all worker partitions in one request, with at most one request in flight: every second, at 50% of a worker/partition cap, while paused at a cap with confirmed progress, and on shutdown/revocation. Check results per partition.
-- Shutdown stops reading, drains writes for up to ten seconds, then commits confirmed progress. Native commits/close and filesystem calls can extend shutdown; `socket.timeout.ms` is not a total commit deadline.
+- Shutdown stops reading, drains writes for up to ten seconds, then commits confirmed progress. The CLI enforces `worker.shutdown_timeout` (default 30 s) across draining, saving and cleanup, starting when a signal arrives or stopping begins. Expiry exits 1 immediately; unsaved work may replay. A short budget can end before the final save.
 
 ## Errors
 
@@ -106,11 +106,11 @@ Default FAIL. Choose `ON_ERROR` or the specific timestamp policies; they are mut
 | --- | --- |
 | Missing timestamp required by `WHERE` | `ON_MISSING_TIMESTAMP` or `ON_ERROR` |
 | Timestamp outside known destination bounds or client range | `ON_REJECTED_TIMESTAMP` or `ON_ERROR` |
-| NUL in a header name sent to Kafka, synchronous size refusal or supported record validation failure | `ON_ERROR` |
+| Synchronous size refusal or supported record validation failure | `ON_ERROR` |
 
 - Async delivery errors, fatal client errors, authentication/authorization, out-of-range positions, framing/CRC corruption and changed source files cannot be skipped.
 - Consumer polling retries classified transient connection/coordinator errors without a total deadline. `worker.tip_wait` bounds only waiting through sampled H, not general outages.
-- Required startup inspection and initial/periodic commits fail on error. Optional destination-config inspection warns. Go context deadlines do not cancel underlying native admin work or bound cleanup.
+- Required startup inspection and initial/periodic commits fail on error. Optional destination-config inspection warns. Kafka inspection and commit requests use context deadlines; the CLI shutdown budget also covers client cleanup and blocked filesystem or stdio calls.
 - File input fails if its ID changes, it is shorter than the checkpoint, or the last checkpointed frame's CRC changes. Appends are allowed; earlier frames are not all revalidated on resume. Use a new group for changed input.
 
 ## Files
@@ -125,7 +125,7 @@ Output holds an exclusive inode lock. A file-source group holds a stable checkpo
 
 ### Creation
 
-For Kafka-to-file copies, Kaferry creates the Kafka consumer and checks its settings before opening the output file. Before reading any messages, it sets up progress tracking so saved Kafka offsets include the file ID and the last safely written byte position. On shutdown, Kaferry keeps the file open and locked until the consumer finishes closing, because its shutdown callbacks can still save offsets.
+For Kafka-to-file copies, Kaferry creates the Kafka consumer and checks its settings before opening the output file. Before reading any messages, it sets up progress tracking so saved Kafka offsets include the file ID and the last safely written byte position. The runner saves confirmed progress before adapters close; closing a Kafka source does not save progress.
 
 Before copying records (before subscription for Kafka→file):
 
@@ -159,7 +159,7 @@ The checkpoint directory must exist; Kaferry does not search or migrate it. Anot
 
 Connections use TOML profiles or `WITH CONNECTION`; SQL keys override TOML. `ENV('NAME')` resolves at startup, fails if unset and is redacted. Worker settings are in TOML.
 
-Known Go binding options are passed only to clients that support them; profiles can be shared by producers and consumers. Admin clients exclude their producer/consumer Go options. Booleans and positive integer capacities are converted from configuration strings. Unknown Go or native property names fail, without displaying property values.
+Profiles can be shared by sources and destinations. Supported connection keys are mapped to franz-go options; other keys fail before endpoints are opened, without displaying property values. A property name does not imply full librdkafka compatibility.
 
 ### Worker settings
 
@@ -173,6 +173,7 @@ record_cap = 20000
 byte_cap = 134217728
 max_frame_bytes = 67108864
 delivery_timeout = '60s'
+shutdown_timeout = '30s'
 idle_exit = '30s'
 tip_wait = '15m'
 # checkpoint_dir = '/var/lib/kaferry/checkpoints'
@@ -180,34 +181,47 @@ tip_wait = '15m'
 
 Limits include delivered records whose source progress is not yet saved. [Delivery and progress](#delivery-and-progress).
 
-### Protected client properties
+### Connection properties
 
-Conflicting values fail configuration; matching values are allowed.
+Values are strings in TOML and SQL. Unknown keys, unsupported values and contradictory aliases fail; they are never silently ignored. Authentication and TLS paths are validated before output opens.
 
-| Source properties | Required value |
+| Keys | Meaning / limits |
 | --- | --- |
-| `group.id`, `client.id` | SQL group; `kaferry-<group>` |
-| `enable.auto.commit`, `enable.auto.offset.store` | `false` |
-| `auto.offset.reset`, `isolation.level` | `error`, `read_committed` |
-| `partition.assignment.strategy`, `group.protocol` | `cooperative-sticky`, `classic` |
-| `enable.partition.eof` | `true` |
-| `allow.auto.create.topics`, `go.events.channel.enable`, `go.application.rebalance.enable` | `false` |
+| `bootstrap.servers` | Required comma-separated host[:port] entries, no protocol prefix |
+| `security.protocol` | `PLAINTEXT` (default), `SSL`, `SASL_PLAINTEXT`, `SASL_SSL` |
+| `sasl.mechanism`, `sasl.username`, `sasl.password` | PLAIN (default), SCRAM-SHA-256 or SCRAM-SHA-512; credentials required for SASL |
+| `ssl.ca.location` | PEM CA file; otherwise system roots |
+| `ssl.certificate.location`, `ssl.key.location` | PEM client certificate and unencrypted private key; supply both |
+| `ssl.endpoint.identification.algorithm` | `https` (default) or `none`; `none` disables hostname checks but retains CA-chain checks |
+| `client.id` | Optional suffix; source ID is `kaferry-<group>-<suffix>`, other clients `kaferry-<suffix>` |
+| `compression.type` | `none` (default), gzip, snappy, lz4, zstd |
+| `partitioner` | Only `murmur2_random`; Java-compatible Murmur2 for non-null keys, sticky routing for null keys |
+| `message.max.bytes` | Client batch ceiling including 4–5 bytes of outer framing, 1,000–1,000,000,000 bytes; default 1,000,000, adjusted by readable destination config |
+| `message.timeout.ms`, `delivery.timeout.ms` | Submission deadline; positive milliseconds, aliases must agree; default worker delivery timeout |
+| `queue.buffering.max.messages`, `queue.buffering.max.kbytes` | Sink admission bounds, no larger than worker records / rounded worker-or-message bytes |
+| `queued.max.messages.kbytes`, `fetch.max.bytes`, `max.partition.fetch.bytes` | Soft per-fetch ceilings, capped by worker bytes; defaults worker bytes / 50 MiB / 1 MiB |
+| `session.timeout.ms`, `heartbeat.interval.ms` | Defaults 45,000 / 3,000; heartbeat must be smaller than session |
+| `max.poll.interval.ms` | Group rebalance timeout, default 300,000; at least session timeout and 30,000. Not an application poll watchdog |
+| `request.timeout.ms` | Produce request timeout, default 30,000; not the record-delivery deadline |
+| `socket.timeout.ms` | Request timeout overhead, default 2,000; 100–900,000; not a total-operation deadline |
+| `linger.ms` | Batch wait, default 5; 0–60,000 |
+| `metadata.max.age.ms`, `topic.metadata.refresh.interval.ms` | Metadata refresh age, default 300,000; aliases must agree; 10–3,600,000 |
 
-Producer requires `enable.idempotence=true`, `go.delivery.reports=true`, `go.batch.producer=false`, `delivery.report.only.error=false` and `allow.auto.create.topics=false`; nonempty `transactional.id` is rejected. All clients require `go.logs.channel.enable=false`; the CLI does not consume Go log channels. Unknown librdkafka keys also fail.
+Queue/fetch overrides must be positive. Byte queue settings use KiB. Large or compressed batches can exceed fetch ceilings; these do not cap total client memory. Only one fetch request runs at a time. Kaferry's uncommitted-work caps remain independent.
 
-Consumer `queued.max.messages.kbytes` is capped by worker bytes; producer `queue.buffering.max.messages` and `go.produce.channel.size` by worker records, and `go.events.channel.size` by worker records + 1. Producer `queue.buffering.max.kbytes` allows the larger of worker bytes or the effective message-size limit. Byte limits round up to KiB; overrides must be positive and no larger than these bounds.
+Auto-commit/reset, group ID/protocol, read isolation, cooperative assignment, auto topic creation, idempotence, acknowledgements and delivery handling are owned by Kaferry. Kaferry sets these; the corresponding property names are rejected as unsupported. Sources use the SQL group, classic protocol, read-committed and no automatic offset reset. Producers use idempotence and all-ISR acknowledgements. Topic auto-creation is disabled.
 
 ### CLI and exit codes
 
-Exactly one input: `run --file/-f path`, `run --sql/-e statement`, or `run --file -`. `--config/-c path` loads TOML. Events are JSON on stderr; nonzero exits also print a plain-text message after cleanup, so hung cleanup can delay it indefinitely.
+Exactly one input: `run --file/-f path`, `run --sql/-e statement`, or `run --file -`. `--config/-c path` loads TOML. Events are JSON on stderr; nonzero exits also print a plain-text message after cleanup. Shutdown timeout diagnostics name the operation still running.
 
 | Normal exit | Meaning |
 | --- | --- |
 | 0 | This worker finished its file input or remaining assigned Kafka partitions, or a signal cleanly stopped a copy from Kafka with no end time. SKIP counts do not change the code |
-| 1 | Copy or cleanup failed, or a signal interrupted startup, a file copy, or a Kafka copy with an end time. Conflicts after the first consumed record also exit 1 |
+| 1 | Copy, cleanup or the shutdown deadline failed, or a signal interrupted startup, a file copy, or a Kafka copy with an end time. Conflicts after the first consumed record also exit 1 |
 | 2 | Usage/parse/plan/configuration error, or identity/ownership/self-copy conflict before the first consumed record |
 | 3 | For a copy from Kafka with an end time, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |
 
-Busy locks and broker/record failures exit 1. Conflicts include foreign progress/members, changed input and unowned/short/corrupt acknowledged output. The first failure determines the code; cleanup cannot replace it. Native aborts and forced termination use system signal status.
+Busy locks and broker/record failures exit 1. Conflicts include foreign progress/members, changed input and unowned/short/corrupt acknowledged output. The first failure determines the code; cleanup cannot replace it. A second signal or external forced termination can use system signal status.
 
 A cleanup error can occur after all records are copied and progress is saved; the error names the close operation. Resume using the same named group to avoid starting over. `ONE_OFF` always creates a new group, so rerunning it can copy records again.

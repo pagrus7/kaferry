@@ -16,7 +16,7 @@ statement   = [ connections ] insert select [ where ] options [ ";" ] ;
 
 connections = "WITH" connection { "," connection } ;
 connection  = "CONNECTION" alias "AS" "(" property { "," property } ")" ;
-property    = string "=" ( string | env ) ;        (* librdkafka key and value *)
+property    = string "=" ( string | env ) ;        (* supported connection key and value *)
 env         = "ENV" "(" string ")" ;
 
 insert      = "INSERT" "INTO" endpoint ;
@@ -56,7 +56,7 @@ Planning or startup enforces:
 
 ## Valid examples
 
-Aliases not defined inline need TOML profiles; `ENV` variables must be set. TLS connections need a trusted broker CA; set `ssl.ca.location` if [librdkafka's default CA paths](https://docs.confluent.io/platform/current/clients/librdkafka/html/md_INTRODUCTION.html) do not include it.
+Aliases not defined inline need TOML profiles; `ENV` variables must be set. TLS connections need a trusted broker CA; set `ssl.ca.location` if system roots do not include it.
 
 Topic→topic, fixed window, inline PLAIN over TLS connection:
 

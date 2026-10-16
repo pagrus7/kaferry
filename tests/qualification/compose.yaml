@@ -24,7 +24,11 @@ x-environment: &environment
   KAFKA_AUTHORIZER_CLASS_NAME: org.apache.kafka.metadata.authorizer.StandardAuthorizer
   KAFKA_SUPER_USERS: User:admin;User:ANONYMOUS
   KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "false"
-  KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
+  KAFKA_SASL_ENABLED_MECHANISMS: PLAIN,SCRAM-SHA-256,SCRAM-SHA-512
+  KAFKA_LISTENER_NAME_SECURE_SCRAM___SHA___256_SASL_JAAS_CONFIG: >-
+    org.apache.kafka.common.security.scram.ScramLoginModule required;
+  KAFKA_LISTENER_NAME_SECURE_SCRAM___SHA___512_SASL_JAAS_CONFIG: >-
+    org.apache.kafka.common.security.scram.ScramLoginModule required;
   KAFKA_LISTENER_NAME_SECURE_PLAIN_SASL_JAAS_CONFIG: >-
     org.apache.kafka.common.security.plain.PlainLoginModule required
     username="admin" password="fixture-admin-secret"

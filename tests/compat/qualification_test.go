@@ -90,6 +90,14 @@ func secureFixture(t *testing.T) (*k.AdminClient, *k.Producer, string, string, s
 			t.Fatal(result)
 		}
 	}
+	for _, mechanism := range []k.ScramMechanism{k.ScramMechanismSHA256, k.ScramMechanismSHA512} {
+		credentials, err := a.AlterUserScramCredentials(ctx, []k.UserScramCredentialUpsertion{
+			{User: "copier", ScramCredentialInfo: k.ScramCredentialInfo{Mechanism: mechanism, Iterations: 4096}, Password: []byte("fixture-copy-secret")},
+		}, nil)
+		if err != nil || len(credentials.Errors) != 1 || credentials.Errors["copier"].Code() != k.ErrNoError {
+			t.Fatal("create SCRAM fixture credentials", credentials, err)
+		}
+	}
 	waitTopicReady(t, a, src, 1)
 	waitTopicReady(t, a, dst, 1)
 	waitCopierPermissions(t, src, dst)
@@ -275,6 +283,60 @@ func TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSaslTlsScramMechanisms(t *testing.T) {
+	for _, mechanism := range []string{"SCRAM-SHA-256", "SCRAM-SHA-512"} {
+		t.Run(mechanism, func(t *testing.T) {
+			// Given a record and a restricted SCRAM identity over TLS.
+			_, producer, src, dst, group := secureFixture(t)
+			stamp := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
+			publish(t, producer, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: []byte(mechanism), Timestamp: stamp})
+			cfg := secureProperties(t, "copier", "fixture-copy-secret")
+			cfg["sasl.mechanism"] = mechanism
+			waitScramReady(t, cfg, src)
+			statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), group)
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+
+			// When the CLI copies with that mechanism.
+			result := loggedWorker(ctx, statement, secureConfig(t, cfg))
+
+			// Then the destination contains the original bytes and timestamp.
+			if result.code != 0 || strings.Contains(result.detail, "fixture-copy-secret") {
+				t.Fatal("SCRAM copy failed or exposed credentials", result)
+			}
+			record := secureRead(t, secureReader(t, dst))
+			if string(record.Value) != mechanism || !record.Timestamp.Equal(stamp) {
+				t.Fatal("SCRAM copy changed the record", record)
+			}
+
+			// Given an incorrect password, when retried with SKIP, then authentication still fails.
+			cfg["sasl.password"] = "unique-wrong-scram-secret"
+			result = loggedWorker(ctx, strings.Replace(statement, "CUTOFF=", "ON_ERROR=SKIP,CUTOFF=", 1), secureConfig(t, cfg))
+			if result.code == 0 || strings.Contains(result.detail, "unique-wrong-scram-secret") {
+				t.Fatal("SCRAM authentication failure was skipped or exposed credentials", result)
+			}
+		})
+	}
+}
+
+// Credential changes must reach the serving brokers before testing the CLI.
+func waitScramReady(t *testing.T, cfg k.ConfigMap, topic string) {
+	t.Helper()
+	admin, err := k.NewAdminClient(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAdmin(t, admin)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err = admin.GetMetadata(&topic, false, 1000); err == nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("SCRAM fixture credentials did not become ready", err)
 }
 
 func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {

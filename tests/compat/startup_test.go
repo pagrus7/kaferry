@@ -14,7 +14,7 @@ import (
 func TestConsumerConfigurationFailureDoesNotCreateArchiveOrBlockRetry(t *testing.T) {
 	for _, setting := range []struct{ name, properties string }{
 		{"protected isolation", ",'isolation.level'='read_uncommitted'"},
-		{"native consumer validation", ",'session.timeout.ms'='6000','max.poll.interval.ms'='1000'"},
+		{"consumer timeout validation", ",'session.timeout.ms'='6000','max.poll.interval.ms'='1000'"},
 	} {
 		t.Run(setting.name, func(t *testing.T) {
 			// Given a new archive and a source configuration rejected before subscription.

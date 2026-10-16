@@ -23,10 +23,13 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Partition completion | [copy/partition.go](../internal/copy/partition.go) | Decide timestamp stops, tip sampling and waits for a fixed sampled end | Pure assignment state; runner performs I/O and logs outcomes |
 | Flow control | [copy/flow.go](../internal/copy/flow.go) | Hold unsent input; decide admission, worker-wide pause and commit cadence | Narrow work-count port; runner applies partition pauses and saves progress |
 | Progress tracker | [copy](../internal/copy) | Track consumed/resolved prefixes, ownership and caps | ProgressTracker, fresh instance through ProgressFactory |
-| Kafka metadata | [kafka](../internal/kafka) | Inspect topic/group identities, offsets and optional destination config | SourceMetadata, DestinationMetadata, AdminClient |
+| Kafka metadata | [franz](../internal/franz) | Inspect identities, offsets and optional destination config | SourceMetadata, DestinationMetadata, MetadataClient |
 | Kafka contracts and progress format | [kafkaport](../internal/kafkaport) | Endpoint interfaces and strict saved-progress encoding | Connection, SourceProgress; client libraries stay in adapters |
-| Kafka positioning | [kafkaport](../internal/kafkaport) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetReader, TimeReader; native conversions in kafka |
-| Kafka adapters | [kafka](../internal/kafka) | Poll/assign/pause, produce/deliver, commit progress | ConsumerClient, ProducerClient, AssignmentStore |
+| Kafka positioning | [kafkaport](../internal/kafkaport) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetReader, TimeReader; client conversions in franz |
+| Kafka input | [franz](../internal/franz) | Hand off callbacks/fetches to the core loop; position, pause and prove gaps | ConsumerClient, sourceMetadata, gapReader, rebalanceBridge |
+| Kafka output | [franz](../internal/franz) | Validate records, bound admission and report asynchronous deliveries | ProducerClient, destinationMetadata, Clock |
+| Kafka commits | [franz](../internal/franz) | Snapshot progress and file extent; attach it to member-fenced commits | offsetCommitter, core.OutputProgress |
+| Shutdown budget | [app/shutdown.go](../internal/app/shutdown.go) | Enforce whole-process stop deadline; identify the blocked operation | StopObserver, Shutdown; CLI alone owns termination |
 | File adapters | [file](../internal/file) | Encode/decode frames, snapshot input, recover output, persist checkpoints | ArchiveDecoder, ArchiveEncoder, CheckpointStore, I/O ports |
 | File publication | [file](../internal/file) | Publish a durable header without replacing another creator | Publisher, private filesystem port |
 | CLI | [cmd](../cmd/kaferry), [app](../internal/app) | Parse flags, compose components and handle signals | Command/Engine; Fx at composition only |
@@ -36,7 +39,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 - Factories create fresh mutable runner/progress/adapter state for each query; assignment state is generation-specific.
 - The engine manages each query's resources. Adapters manage Kafka clients, files and locks.
 - For Kafka-to-file copies, Kaferry creates the Kafka consumer and checks its settings before opening the output file. Before reading any messages, it sets up progress tracking so saved Kafka offsets include the file ID and the last safely written byte position.
-- On shutdown, Kaferry keeps the output file open and locked until the consumer finishes closing, because its shutdown callbacks can still save offsets.
+- The runner saves confirmed progress before adapters close. Closing a Kafka source cancels callback handoff; it does not save progress.
 - Runner mutates progress in one event loop. Late outcomes from an old assignment cannot advance current progress.
 - Sources provide owned record buffers; sinks retain them until the corresponding write outcome.
 - Source cursors are distinct from record provenance. Progress persists confirmed next positions and identity metadata.
@@ -50,7 +53,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 
 ## Tests
 
-Most tests exercise pure functions or individual components with handwritten mocks. Native-client and filesystem failures use injected ports; file-component tests use real files, and app tests replace Fx factories. Fewer [broker/CLI tests](../tests/compat) cover complete copy paths, rebalances and restart. Functional tests use Given/When/Then phases.
+Most tests exercise pure functions or individual components with handwritten mocks. Kafka and filesystem failures use injected ports; file-component tests use real files, and app tests replace Fx factories. Fewer [broker/CLI tests](../tests/compat) cover complete copy paths, rebalances and restart. PR checks also build the base revision and verify Kafka progress, file checkpoints and archives in both directions. Functional tests use Given/When/Then phases.
 
 ### Test targets
 
@@ -58,7 +61,7 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 
 | Command | Scope / prerequisite |
 | --- | --- |
-| `make check` | Vet and race-enabled unit/mock/component tests, including native subprocess regressions; no external broker |
+| `make check` | Vet and race-enabled unit/mock/component tests, including kfake protocol tests and shutdown subprocesses; no external broker |
 | `make broker` | Start disposable source/destination Kafka clusters |
 | `make integration` | Broker/CLI paths, fidelity, resume and rebalances; run `make broker` first |
 | `make fault` | Outages and ownership loss; run `make broker` first |
@@ -71,7 +74,7 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 
 Time-window arithmetic, boundaries and overflow use deterministic unit tests in `make check`. Set `FUZZ_ITERATIONS` to change the per-target fuzz budget; failures remain fatal.
 
-Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The extended-test workflow defaults to 30 minutes, configurable on manual dispatch, and stalls the destination. Plaintext fixtures warm the group coordinator with the Java CLI; TLS fixtures check readiness with consumer `Committed`. Broker integration therefore does not cover cold coordinator startup; isolated mock-cluster subprocesses test coordinator outages. [Native limits](client-compatibility.md#known-issues).
+Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The extended-test workflow defaults to 30 minutes, configurable on manual dispatch, and stalls the destination. Plaintext fixtures warm the group coordinator with the Java CLI; TLS fixtures check readiness with consumer `Committed`. Broker integration does not cover cold coordinator startup; isolated protocol component tests withhold coordinator, join, offset, commit and fetch replies and check cleanup. [Client limits](client-compatibility.md#operational-limits).
 
 ### Test results
 
@@ -102,20 +105,20 @@ python3 scripts/ci.py soak make soak
 | Indicator | Where / meaning |
 | --- | --- |
 | CI | README badge; vet, race-enabled tests, build and broker integration |
-| Go coverage | README badge and Codecov PR/file view show line coverage; Actions summarizes weighted Go statement coverage per suite. All Go packages are instrumented; Codecov combines unit/mock/file-component and broker integration coverage. Native C/C++ is excluded |
+| Go coverage | README badge and Codecov PR/file view show line coverage; Actions summarizes weighted Go statement coverage per suite. All Go packages are instrumented; Codecov combines unit/mock/file-component and broker integration coverage. Test-fixture native code is excluded |
 | Static analysis | [Quality workflow](https://github.com/pagrus7/kaferry/actions/workflows/quality.yml): Staticcheck and CodeQL for Go, Python and workflows |
 | Security | govulncheck fails on reachable Go advisories; CodeQL findings and Dependabot alerts appear in GitHub Security. Dependency review checks PRs; updates require review |
 | Complexity / duplication | Quality summary/artifact: gocyclo maximum/top ten, exact clones ≥100 tokens and ≥10 lines. Identical tools scan the PR base; no arbitrary score gates |
 | Extended tests | README badge; weekly default 30-minute soak plus load, fault, ACL/failover, fuzz and CBOR benchmarks |
 | Performance | Dated SHA/environment JSON and summaries: throughput, sampled RSS/growth, lag, caps, shutdown, ns/op and allocations. Prior successful measurements compare only matching settings; shared runners provide no regression gate |
 
-Missing measurements are unavailable. Coverage and Go vulnerability scans exclude native C/C++; badges report only the listed checks.
+Missing measurements are unavailable. Coverage and vulnerability scans describe Go code; badges report only the listed checks.
 
 ### Release evidence
 
-Release archives contain the binary, MIT license and third-party notices for linked Go modules, Go runtime and the reviewed native bundle. `--version` reports the build version, commit, Go and linked librdkafka. CI and packaging check all supported native archives against `licenses/native.json`; bundle changes require reviewing their notices in `licenses/native.txt`.
+Release archives contain the binary, MIT license and notices for linked Go modules, subpackage licenses and the Go runtime. `--version` reports the build version, commit, Go and franz-go version. Production builds use `CGO_ENABLED=0`; Confluent is linked only into broker test fixtures.
 
-The workflow also produces per-platform SPDX SBOMs, native inventory/license text, archive provenance and binary SBOM attestations. Syft inventories the binary; the native supplement identifies the selected librdkafka archive and observed version strings. Bundle notices may include unlinked components; native vulnerability coverage is incomplete.
+The workflow builds Linux AMD64/ARM64 static binaries and macOS AMD64/ARM64 binaries, then produces per-platform SPDX SBOMs, archive provenance and binary SBOM attestations. [Notices generation](../scripts/notices.py) inspects actual linked packages and fails if required licenses cannot be found.
 
 For downloads with attestation bundles, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document`. Attestations establish build origin. Downloads without these bundles can be checked against `SHA256SUMS` for file integrity.
 

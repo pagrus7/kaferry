@@ -1,8 +1,0 @@
-{
-  "client": "v2.16.0",
-  "archives": {
-    "librdkafka_darwin_arm64.a": "b5d62b664ab72eaefc7afa710447f3883b33823b4ef3084061a5903eae799b93",
-    "librdkafka_glibc_linux_amd64.a": "186e2f2bfe9f2a311dd3ddd842ec29085c1c4889932e71c9ca82647c474b4703",
-    "librdkafka_glibc_linux_arm64.a": "33700c99e5e34323447c706836e25f3c58bf697e5158f5c0b8606c0d4e746e4b"
-  }
-}

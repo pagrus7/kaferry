@@ -17,14 +17,14 @@ import (
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
-	adapter "github.com/pagrus7/kaferry/internal/kafka"
+	adapter "github.com/pagrus7/kaferry/internal/franz"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/pagrus7/kaferry/internal/sql"
 )
 
 func TestCopyDestinationAcceptableRecordAboveNativeDefault(t *testing.T) {
-	// Given a source record above librdkafka's default but within Kafka's topic limit.
+	// Given a source record above the default producer limit but within Kafka's topic limit.
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
 	p := producer(t, k.ConfigMap{"message.max.bytes": 2000000})
@@ -81,7 +81,7 @@ func TestLegacyTimestampLimitSkipsOnlyRejectedRecord(t *testing.T) {
 	out.Close()
 	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='%s-legacy',ON_REJECTED_TIMESTAMP=SKIP)", dst, path, dst)
 
-	// When restoring mixed valid and rejected timestamps into a native batch.
+	// When restoring mixed valid and rejected timestamps into a producer batch.
 	execute(t, statement, configuration(t))
 
 	// Then only the too-old record is skipped and both innocent records are delivered.
@@ -118,6 +118,11 @@ func (p *probeOwnership) Revoke(ids []int32, _ bool) error {
 
 func probeSource(t *testing.T, name, group string) *adapter.Source {
 	t.Helper()
+	source, _ := probeSourceProgress(t, name, group)
+	return source
+}
+func probeSourceProgress(t *testing.T, name, group string) (*adapter.Source, kafkaport.SourceProgress) {
+	t.Helper()
 	statement, err := sql.NewParser().Parse(fmt.Sprintf("INSERT INTO TOPIC 'unused' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", name, group))
 	if err != nil {
 		t.Fatal(err)
@@ -128,18 +133,22 @@ func probeSource(t *testing.T, name, group string) *adapter.Source {
 	}
 	clients := adapter.NewClients()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	metadata, err := adapter.NewInspector(context.Background(), clients, p.Source.Properties, name, logger)
+	factory := adapter.NewFactory(clients, kafkaport.NewPositionerFactory(core.RealClock{}, logger), core.RealClock{}, logger)
+	connection, err := factory.Open(context.Background(), p.Source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(metadata.Close)
-	positioning := adapter.NewPositionerFactory(kafkaport.NewPositionerFactory(core.RealClock{}, logger))
-	source, _, err := adapter.NewSource(context.Background(), clients, metadata, positioning, p, "pause-probe", config.Defaults(t.TempDir()).Worker, logger)
+	t.Cleanup(func() { _ = connection.Close(context.Background()) })
+	if _, err = connection.ClusterID(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	input, store, err := connection.Source(context.Background(), p, "pause-probe", config.Defaults(t.TempDir()).Worker)
 	if err != nil {
 		t.Fatal(err)
 	}
+	source := input.(*adapter.Source)
 	t.Cleanup(func() { _ = source.Close() })
-	return source
+	return source, store
 }
 
 func pollOwnership(t *testing.T, sources []*adapter.Source, ready func() bool) {

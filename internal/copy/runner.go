@@ -32,10 +32,11 @@ type Runner struct {
 	idleSince      time.Time
 	failure        error
 	intake         bool
+	stop           StopObserver
 }
 
-func NewRunner(source Source, sink Sink, store ProgressStore, clock Clock, logger *slog.Logger, p plan.Plan, limits config.Worker, tracker ProgressTracker) *Runner {
-	return &Runner{source: source, sink: sink, store: store, clock: clock, log: logger, plan: p, limits: limits, tracker: tracker, partitions: make(map[int32]*partition)}
+func NewRunner(source Source, sink Sink, store ProgressStore, clock Clock, logger *slog.Logger, p plan.Plan, limits config.Worker, tracker ProgressTracker, stop StopObserver) *Runner {
+	return &Runner{source: source, sink: sink, store: store, clock: clock, log: logger, plan: p, limits: limits, tracker: tracker, partitions: make(map[int32]*partition), stop: stop}
 }
 func (r *Runner) Assign(assignments []Assignment) error {
 	r.assignmentSeen = true
@@ -93,6 +94,9 @@ func (r *Runner) run(ctx context.Context) error {
 			return err
 		}
 		if err != nil {
+			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				continue
+			}
 			r.failure = err
 			continue
 		}
@@ -100,10 +104,12 @@ func (r *Runner) run(ctx context.Context) error {
 }
 
 func (r *Runner) step(ctx context.Context) (bool, error) {
+	r.stop.Stage("copying records")
 	if err := r.advance(); err != nil {
 		return false, err
 	}
 	if r.readyToExit() {
+		r.stop.Begin()
 		if len(r.partitions) == 0 {
 			r.log.Info("local idle exit", "idle_exit", r.limits.IdleExit, "exit_code", 3)
 			return true, &Exit{Err: fmt.Errorf("worker held no partitions for %s", r.limits.IdleExit), Code: 3}
@@ -319,7 +325,7 @@ func (r *Runner) eof(cursor Cursor) error {
 }
 func (r *Runner) tips() error {
 	wait, _ := time.ParseDuration(r.limits.TipWait)
-	sampled := false // Interleave native watermark queries with consumer polling.
+	sampled := false // Interleave watermark queries with consumer polling.
 	for id, p := range r.partitions {
 		if p.stopped || p.window.Upper == nil || r.plan.Source.Kind != "TOPIC" {
 			continue

@@ -4,14 +4,13 @@ package compat
 
 import (
 	"crypto/sha256"
+	"debug/buildinfo"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
-
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 )
 
 // Reports are optional build artifacts, never part of the archive or CLI API.
@@ -21,7 +20,8 @@ type loadReport struct {
 	Passed                 bool    `json:"passed"`
 	Skipped                bool    `json:"skipped"`
 	Platform               string  `json:"platform"`
-	Librdkafka             string  `json:"librdkafka"`
+	Client                 string  `json:"client"`
+	BinarySHA256           string  `json:"binary_sha256,omitempty"`
 	Records                int     `json:"records"`
 	ElapsedSeconds         float64 `json:"elapsed_seconds"`
 	RecordsPerSecond       float64 `json:"records_per_second"`
@@ -44,12 +44,30 @@ type loadReport struct {
 
 func newLoadReport(t *testing.T, kind string) *loadReport {
 	t.Helper()
-	_, native := k.LibraryVersion()
 	r := &loadReport{Test: t.Name(), Kind: kind, Platform: runtime.GOOS + "/" + runtime.GOARCH,
-		Librdkafka: native, SourcePartitions: 4, DestinationPartitions: 5}
+		SourcePartitions: 4, DestinationPartitions: 5}
 	if directory := os.Getenv("KAFERRY_REPORT_DIR"); directory != "" {
 		t.Cleanup(func() {
 			r.Passed, r.Skipped = !t.Failed() && !t.Skipped(), t.Skipped()
+			if r.cli != nil {
+				binaryPath := testBinary(t)
+				info, err := buildinfo.ReadFile(binaryPath)
+				if err != nil {
+					t.Error("read tested binary build information:", err)
+				} else {
+					for _, dep := range info.Deps {
+						if dep.Path == "github.com/twmb/franz-go" || dep.Path == "github.com/confluentinc/confluent-kafka-go/v2" {
+							r.Client = dep.Path + " " + dep.Version
+						}
+					}
+				}
+				data, err := os.ReadFile(binaryPath)
+				if err != nil {
+					t.Error("hash tested binary:", err)
+				} else {
+					r.BinarySHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
+				}
+			}
 			prefix := filepath.Join(directory, fmt.Sprintf("%s-%x", kind, sha256.Sum256([]byte(t.Name()))))
 			if err := os.MkdirAll(directory, 0755); err != nil {
 				t.Error("create build report directory:", err)

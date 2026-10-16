@@ -12,6 +12,7 @@ on:
 permissions:
   contents: read
 env:
+  CGO_ENABLED: "0"
   RELEASE_TAG: ${{ (github.event_name == 'push' || inputs.publish) && github.ref_name || format('validation-{0}', github.sha) }}
 jobs:
   build:
@@ -30,6 +31,8 @@ jobs:
             platform: linux-arm64
           - runner: macos-14
             platform: darwin-arm64
+          - runner: macos-15-intel
+            platform: darwin-amd64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -73,14 +76,10 @@ jobs:
           go version -m bin/kaferry > "release/build-$PLATFORM.txt"
           if [[ "$PLATFORM" == linux-* ]]; then
             python3 - <<'PY'
-          import re
           import subprocess
-          symbols = subprocess.check_output(['readelf', '--dyn-syms', '--wide', 'bin/kaferry'], text=True)
-          versions = [tuple(map(int, v.split('.'))) for v in re.findall(r'GLIBC_([0-9.]+)', symbols)]
-          assert versions, 'Expected dynamically linked glibc binary'
-          required = max(versions)
-          assert required <= (2, 34), f'Binary requires glibc {required}; README promises 2.34+'
-          print('Minimum glibc: ' + '.'.join(map(str, required)))
+          program_headers = subprocess.check_output(['readelf', '--program-headers', '--wide', 'bin/kaferry'], text=True)
+          assert 'INTERP' not in program_headers, 'Linux binary unexpectedly needs a dynamic linker'
+          print('Static Linux binary: no dynamic interpreter')
           PY
           else
             otool -l bin/kaferry | grep -A5 LC_BUILD_VERSION
@@ -95,10 +94,6 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
           dependency-snapshot: false
-      - name: Native inventory
-        env:
-          PLATFORM: ${{ matrix.platform }}
-        run: python3 scripts/native_inventory.py bin/kaferry "release/sbom-$PLATFORM.spdx.json" "release/native-$PLATFORM.json"
       - name: Package licenses and binary
         env:
           PLATFORM: ${{ matrix.platform }}

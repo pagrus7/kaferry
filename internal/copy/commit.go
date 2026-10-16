@@ -32,6 +32,7 @@ func (r *Runner) save(ids []int32, releasing bool) error {
 	if len(cursors) == 0 {
 		return nil
 	}
+	r.stop.Stage("saving progress")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	results, err := r.store.Save(ctx, cursors)

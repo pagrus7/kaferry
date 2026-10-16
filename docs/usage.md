@@ -55,6 +55,6 @@ Errors stop the copy by default. `ON_ERROR = SKIP` drops only identified records
 
 ## Stopping and exit codes
 
-SIGINT/SIGTERM stop reading, allow up to ten seconds for writes and save confirmed progress. Kafka or filesystem calls can hang shutdown; use a supervisor timeout if needed. Read stderr for errors and JSON logs; `copy summary` reports `confirmed`, `filtered` and `skipped` counts.
+SIGINT/SIGTERM stop reading, allow up to ten seconds for writes and save confirmed progress. The CLI exits `1` if stopping takes longer than `worker.shutdown_timeout` (default 30 s); unsaved work may replay. Read stderr for errors and JSON logs; `copy summary` reports `confirmed`, `filtered` and `skipped` counts.
 
-[Exit codes](../design/decisions.md#cli-and-exit-codes) describe only the exiting worker's outcome, not whether other workers finished. A native crash may end by signal.
+[Exit codes](../design/decisions.md#cli-and-exit-codes) describe only the exiting worker's outcome, not whether other workers finished. A second signal forces termination.

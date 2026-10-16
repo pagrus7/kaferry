@@ -37,7 +37,7 @@ Supported platforms, prerequisites and available verification files.
 3. Commit the notes with the release changes. Push an annotated `vX.Y.Z` tag on the reviewed commit; the release workflow builds and publishes. Manual dispatch without publishing validates builds. Manual publishing must select that version tag.
 4. Check the GitHub release body, assets and checksums after publishing. Verify each archive contains `kaferry`, `LICENSE` and `THIRD_PARTY_NOTICES.txt`; the workflow checks `--version` against the tag and commit on each platform. Keep notes aligned with that tag. If a tagged build fails, fix the problem and use a new version tag.
 
-For native dependency upgrades, verify upstream source pins and licenses, including curl's ISC files and zstd's divsufsort MIT notice. Update `licenses/native.txt` and the client/archive pins in `licenses/native.json` together; CI blocks unreviewed changes.
+Build with `CGO_ENABLED=0`. Verify all four release targets and review licenses for linked Go packages, including licenses in subdirectories. `scripts/notices.py` uses the binary's module/toolchain versions and the linked package inventory; do not substitute the test fixtures' dependency list. Linux archives must contain static binaries without an ELF interpreter.
 
 To correct published prose, edit the tracked note file, then validate before updating the body. Keep tags and assets unchanged:
 

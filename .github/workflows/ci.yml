@@ -79,12 +79,27 @@ jobs:
       KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.9'
           cache: true
       - run: python3 scripts/ci.py broker make broker
       - run: python3 scripts/ci.py integration go test -count=1 -json -race -tags=integration -coverpkg=./... -coverprofile=build-results/coverage.out ./...
+      - name: Check progress and archives against the PR base
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          mkdir -p .cache/previous-version
+          git archive "$BASE_SHA" | tar -x -C .cache/previous-version
+          previous_binary="$PWD/build-results/kaferry-previous"
+          (cd .cache/previous-version && go build -trimpath -o "$previous_binary" ./cmd/kaferry)
+          make build
+          export KAFERRY_PREVIOUS_BINARY="$previous_binary"
+          export KAFERRY_TEST_BINARY="$PWD/bin/kaferry"
+          python3 scripts/ci.py migration go test -count=1 -race -tags=integration,migration -run TestPreviousBinary -v ./tests/compat
       - name: Coverage reports
         run: |
           python3 scripts/quality.py coverage
