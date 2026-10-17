@@ -43,7 +43,7 @@ type loadReport struct {
 }
 
 func TestLoadReportIdentifiesExecutedBinary(t *testing.T) {
-	// Given a CLI binary and an unusable fallback build path.
+	// Given a CLI binary and an override naming a missing binary.
 	binary := testBinary(t)
 	data, err := os.ReadFile(binary)
 	if err != nil {
