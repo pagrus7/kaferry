@@ -124,7 +124,7 @@ Missing measurements are unavailable. Coverage and vulnerability scans describe 
 
 Each PR needs independent **docs**, **tests** and **simplicity** reviews. [AGENTS.md](../AGENTS.md) defines when to run them and what to record; the [local workflow](../.claude/skills/review-local/SKILL.md) runs the [three agents](../.claude/agents).
 
-Use Claude Code's subscription login (`claude auth login --claudeai`). Continue only if the auth method is `claude.ai`. [Authentication](https://code.claude.com/docs/en/authentication).
+Use Claude Code's subscription login (`claude auth login --claudeai`). Remove API credentials from the environment so they do not override that login. [Authentication](https://code.claude.com/docs/en/authentication).
 
 From the repository root, in either Claude Code or Codex's terminal:
 
@@ -132,11 +132,16 @@ From the repository root, in either Claude Code or Codex's terminal:
 git fetch origin main
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 claude auth status
-CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 \
-  claude -p '/review-local' --model claude-opus-5-5 --effort high
 ```
 
-The environment setting keeps terminal reviews in the foreground until reports are complete. In an existing Claude Code subscription session, use `/review-local [base]`. The base defaults to `origin/main`; staged, unstaged and relevant untracked changes are also reviewed. Fetch a different base first if needed.
+Continue only if the auth method is `claude.ai`:
+
+```sh
+CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 \
+  claude -p '/review-local'
+```
+
+The environment setting keeps reviewer calls in the foreground. The base defaults to `origin/main`; use `'/review-local <base>'` to select another fetched ref. In an existing Claude Code subscription session, use `/review-local [base]`. Staged, unstaged and relevant untracked changes are also reviewed.
 
 Reviewers inspect files without running tests; CI and local test commands run separately. Calls count against subscription limits.
 

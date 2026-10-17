@@ -10,7 +10,7 @@ Local review scope: <!-- Base/head and any uncommitted changes; applies to all t
 
 ## Docs review
 
-<!-- Result/dispositions; current behavior first, history only in releases/commits/PRs, links support claims. -->
+<!-- Result and finding dispositions; confirm the documentation checks required by AGENTS.md. -->
 
 ## Tests review
 
@@ -18,4 +18,4 @@ Local review scope: <!-- Base/head and any uncommitted changes; applies to all t
 
 ## Simplicity review
 
-<!-- Reviewer result; what was removed/simplified, or current evidence for keeping complexity. -->
+<!-- Reviewer result and finding dispositions. -->
