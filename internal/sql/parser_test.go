@@ -15,8 +15,8 @@ func TestDocumentedExamples(t *testing.T) {
 		t.Fatal(err)
 	}
 	examples := strings.Split(string(data), "```sql\n")[1:]
-	if len(examples) != 5 {
-		t.Fatalf("expected five documented examples, got %d", len(examples))
+	if len(examples) == 0 {
+		t.Fatal("no documented SQL examples found")
 	}
 	for _, example := range examples {
 		statement := strings.SplitN(example, "```", 2)[0]

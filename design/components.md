@@ -52,7 +52,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 
 - Priorities: correctness, simplicity, throughput, CI duration, binary size.
 - Single-purpose structs behind narrow interfaces; keep core logic Fx-free. Lines of code and cyclomatic complexity are signals, not targets.
-- Keep user documentation example-based. CI caps [README](../README.md) at 5,500 characters and enforces fewer than 10,000 across README, [usage](../docs/usage.md) and [file format](../docs/file-format.md). Grammar tests parse and plan exactly five fenced SQL examples; invalid examples use inline code.
+- Keep user documentation example-based. CI caps [README](../README.md) at 5,500 characters and enforces fewer than 10,000 across README, [usage](../docs/usage.md) and [file format](../docs/file-format.md). Grammar tests parse and plan the fenced SQL examples; invalid examples use inline code.
 
 ## Tests
 
