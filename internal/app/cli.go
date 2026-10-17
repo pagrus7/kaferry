@@ -8,18 +8,26 @@ import (
 	"io"
 	"os"
 
+	"github.com/pagrus7/kaferry/internal/config"
 	"github.com/pagrus7/kaferry/internal/sql"
 	"go.uber.org/fx"
 )
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	budget := newShutdownBudget(ctx, config.DefaultShutdownTimeout, forceShutdown)
+	defer budget.Done()
+	return executeWithShutdown(ctx, args, stdin, stdout, stderr, budget)
+}
+func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, budget Shutdown) int {
 	if len(args) == 1 && args[0] == "--version" {
+		budget.Stage("printing version")
 		if _, err := fmt.Fprintln(stdout, versionString()); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		return 0
 	}
+	budget.Stage("parsing command options")
 	options, err := parseArgs(args, stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -27,18 +35,22 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		}
 		return 2
 	}
+	budget.Stage("reading SQL input")
 	statement, err := readStatement(options, stdin)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
 	var command Command
+	budget.Stage("composing components")
 	graph := fx.New(fx.NopLogger, RuntimeModules, fx.Populate(&command))
 	if err := graph.Err(); err != nil {
 		fmt.Fprintln(stderr, "component composition failed")
 		return 2
 	}
-	if err = command.Run(ctx, statement, options.configPath); err != nil {
+	if err = command.Run(ctx, statement, options.configPath, budget); err != nil {
+		budget.Begin()
+		budget.Stage("printing error")
 		printCommandError(stderr, options.file, err)
 		var coded interface{ ExitCode() int }
 		if errors.As(err, &coded) {

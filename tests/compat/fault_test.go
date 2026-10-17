@@ -3,13 +3,16 @@
 package compat
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	core "github.com/pagrus7/kaferry/internal/copy"
+	adapter "github.com/pagrus7/kaferry/internal/franz"
 )
 
 func ownedContainer(t *testing.T) string {
@@ -25,128 +28,44 @@ func ownedContainer(t *testing.T) string {
 	return name
 }
 func TestBlockingCommitAcrossBrokerOutage(t *testing.T) {
-	// Given
+	// Given an assigned production source with confirmed initial progress.
 	container := ownedContainer(t)
-	a := admin(t)
-	name := topic(t, a, 1)
-	c, err := k.NewConsumer(&k.ConfigMap{"bootstrap.servers": broker(t), "group.id": name + "-fault", "enable.auto.commit": false, "session.timeout.ms": 6000, "socket.timeout.ms": 1000, "fetch.wait.max.ms": 0, "partition.assignment.strategy": "cooperative-sticky"})
-	if err != nil {
+	admin := admin(t)
+	name := topic(t, admin, 1)
+	source, store := probeSourceProgress(t, name, name+"-fault")
+	ownership := &probeOwnership{owned: make(map[int32]bool)}
+	if err := source.Start(ownership); err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
-	assigned := false
-	if err := c.Subscribe(name, func(c *k.Consumer, e k.Event) error {
-		switch e := e.(type) {
-		case k.AssignedPartitions:
-			assigned = true
-			return c.IncrementalAssign(e.Partitions)
-		case k.RevokedPartitions:
-			return c.IncrementalUnassign(e.Partitions)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	pollOwnership(t, []*adapter.Source{source}, func() bool { return len(ownership.owned) == 1 })
+	if data, err := exec.Command("docker", "pause", container).CombinedOutput(); err != nil {
+		t.Fatalf("pause: %v %s", err, data)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for !assigned && time.Now().Before(deadline) {
-		c.Poll(50)
-	}
-	if !assigned {
-		t.Fatal("assignment timed out")
-	}
-
-	// When
-	combinedOutputData, combinedOutputErr := exec.Command("docker", "pause", container).CombinedOutput()
-
-	// Then
-	if combinedOutputErr != nil {
-		t.Fatalf("pause: %v %s", combinedOutputErr, combinedOutputData)
-	}
-	unpaused := false
+	paused := true
 	defer func() {
-		if !unpaused {
+		if paused {
 			_ = exec.Command("docker", "unpause", container).Run()
 		}
 	}()
-	type result struct {
-		parts    []k.TopicPartition
-		err      error
-		duration time.Duration
-	}
-	done := make(chan result, 1)
-	start := time.Now()
-	go func() {
-		parts, err := c.CommitOffsets([]k.TopicPartition{{Topic: &name, Partition: 0, Offset: 0}})
-		done <- result{parts, err, time.Since(start)}
-	}()
-	var early *result
-	select {
-	case r := <-done:
-		early = &r
-	case <-time.After(2500 * time.Millisecond):
+	deadline, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
+	defer cancel()
+	// When the member commits while the coordinator is unavailable.
+	started := time.Now()
+	_, err := store.Save(deadline, []core.Cursor{{Partition: 0, Position: 0}})
+	// Then the actual adapter returns its deadline without waiting for recovery.
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > 2*time.Second {
+		t.Fatal("member commit ignored deadline", err, time.Since(started))
 	}
 	if data, err := exec.Command("docker", "unpause", container).CombinedOutput(); err != nil {
 		t.Fatalf("unpause: %v %s", err, data)
 	}
-	unpaused = true
-	var r result
-	if early != nil {
-		r = *early
-	} else {
-		select {
-		case r = <-done:
-		case <-time.After(15 * time.Second):
-			t.Fatal("blocking commit did not return after broker recovery")
-		}
-	}
-	t.Logf("CommitOffsets elapsed=%s err=%v per-partition=%+v (socket.timeout.ms=1000; broker paused 2.5s)", r.duration, r.err, r.parts)
-	if r.err == nil {
-		for _, p := range r.parts {
-			if p.Error != nil {
-				t.Logf("partition commit error: %v", p.Error)
-			}
-		}
-	}
-}
-
-func TestAssignmentLostOnPollDeadline(t *testing.T) {
-	// Given
-	a := admin(t)
-	name := topic(t, a, 1)
-	c, err := k.NewConsumer(&k.ConfigMap{"bootstrap.servers": broker(t), "group.id": name + "-lost", "enable.auto.commit": false, "session.timeout.ms": 6000, "max.poll.interval.ms": 6000, "partition.assignment.strategy": "cooperative-sticky"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-	assigned, lost := false, false
-	_ = c.Subscribe(name, func(c *k.Consumer, e k.Event) error {
-		switch e := e.(type) {
-		case k.AssignedPartitions:
-			assigned = true
-			return c.IncrementalAssign(e.Partitions)
-		case k.RevokedPartitions:
-			lost = c.AssignmentLost()
-			return c.IncrementalUnassign(e.Partitions)
-		}
-		return nil
-	})
-	deadline := time.Now().Add(10 * time.Second)
-	for !assigned && time.Now().Before(deadline) {
-
-		// When
-		c.Poll(20)
-	}
-
-	// Then
-	if !assigned {
-		t.Fatal("assignment timed out")
-	}
-	<-time.After(7 * time.Second)
-	deadline = time.Now().Add(5 * time.Second)
-	for !lost && time.Now().Before(deadline) {
-		c.Poll(20)
-	}
-	if !lost {
-		t.Fatal("lost ownership was not exposed during revocation")
+	paused = false
+	// When the coordinator recovers, then the same owned position can be saved.
+	recovered, stop := context.WithTimeout(t.Context(), 10*time.Second)
+	defer stop()
+	results, err := store.Save(recovered, []core.Cursor{{Partition: 0, Position: 0}})
+	failure, present := results[0]
+	if err != nil || !present || failure != nil {
+		t.Fatal("member commit did not recover", results, err)
 	}
 }

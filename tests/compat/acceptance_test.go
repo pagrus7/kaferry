@@ -23,7 +23,9 @@ import (
 	"github.com/pagrus7/kaferry/internal/app"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
-	adapter "github.com/pagrus7/kaferry/internal/kafka"
+	adapter "github.com/pagrus7/kaferry/internal/franz"
+	"github.com/pagrus7/kaferry/internal/kafkaport"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/fx"
 )
 
@@ -55,7 +57,7 @@ func loggedWorker(ctx context.Context, statement, cfg string, observers ...func(
 		return workerResult{2, err.Error()}
 	}
 	code := 0
-	if err := command.Run(ctx, statement, cfg); err != nil {
+	if err := command.Run(ctx, statement, cfg, testShutdown{}); err != nil {
 		code = 1
 		var coded interface{ ExitCode() int }
 		if errors.As(err, &coded) {
@@ -216,11 +218,11 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 	}
 }
 
-func relativeWindows(t *testing.T, parts []k.TopicPartition) map[int32]adapter.Progress {
+func relativeWindows(t *testing.T, parts []k.TopicPartition) map[int32]kafkaport.Progress {
 	t.Helper()
-	result := make(map[int32]adapter.Progress)
+	result := make(map[int32]kafkaport.Progress)
 	for _, part := range parts {
-		var progress adapter.Progress
+		var progress kafkaport.Progress
 		if part.Metadata == nil || !strings.HasPrefix(*part.Metadata, "kfwd2:1;") || json.Unmarshal([]byte(strings.TrimPrefix(*part.Metadata, "kfwd2:1;")), &progress) != nil || progress.Window == nil || progress.Window.Lower == nil || progress.Window.Upper == nil {
 			t.Fatal("relative progress has no concrete window", part)
 		}
@@ -337,28 +339,23 @@ func TestMissingTimestampWithoutFilterUsesProducerClockAndCountsIt(t *testing.T)
 // os.Exit bypasses drains/commits while other deliveries can remain outstanding.
 type crashingClients struct{ adapter.Clients }
 
-func (c crashingClients) Producer(cfg k.ConfigMap) (adapter.ProducerClient, error) {
-	p, err := c.Clients.Producer(cfg)
+func (c crashingClients) Producer(options ...kgo.Opt) (adapter.ProducerClient, error) {
+	producer, err := c.Clients.Producer(options...)
 	if err != nil {
 		return nil, err
 	}
-	return &crashingProducer{ProducerClient: p}, nil
+	return &crashingProducer{producer}, nil
 }
 
 type crashingProducer struct{ adapter.ProducerClient }
 
-func (p *crashingProducer) Events() chan k.Event {
-	events := make(chan k.Event)
-	go func() {
-		for event := range p.ProducerClient.Events() {
-			if message, ok := event.(*k.Message); ok && message.TopicPartition.Error == nil {
-				os.Exit(99)
-			}
-			events <- event
+func (p *crashingProducer) TryProduce(ctx context.Context, record *kgo.Record, callback func(*kgo.Record, error)) {
+	p.ProducerClient.TryProduce(ctx, record, func(record *kgo.Record, err error) {
+		if err == nil {
+			os.Exit(99)
 		}
-		close(events)
-	}()
-	return events
+		callback(record, err)
+	})
 }
 
 func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
@@ -372,7 +369,7 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 			t.Fatal(graph.Err())
 		}
 		args := os.Args[len(os.Args)-2:]
-		if err := command.Run(context.Background(), args[0], args[1]); err != nil {
+		if err := command.Run(context.Background(), args[0], args[1], testShutdown{}); err != nil {
 			t.Fatal(err)
 		}
 		t.Fatal("crash hook not reached")
@@ -492,3 +489,8 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 		t.Fatal("restart did not log the retention gap", process.logs())
 	}
 }
+
+// Embedded component tests keep process termination under the test runner's control.
+type testShutdown struct{ core.NoopStopObserver }
+
+func (testShutdown) Configure(time.Duration) {}

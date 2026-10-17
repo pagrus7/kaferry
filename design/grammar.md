@@ -16,7 +16,7 @@ statement   = [ connections ] insert select [ where ] options [ ";" ] ;
 
 connections = "WITH" connection { "," connection } ;
 connection  = "CONNECTION" alias "AS" "(" property { "," property } ")" ;
-property    = string "=" ( string | env ) ;        (* librdkafka key and value *)
+property    = string "=" ( string | env ) ;        (* supported connection key and value *)
 env         = "ENV" "(" string ")" ;
 
 insert      = "INSERT" "INTO" endpoint ;
@@ -46,7 +46,7 @@ option      = "GROUP" "=" ( string | "ONE_OFF" )
 
 Planning or startup enforces:
 
-- `GROUP` is required; no option repeats. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name; unquoted `ONE_OFF` generates one.
+- `GROUP` is required and must not be blank. Options, inline connection aliases and a connection's properties cannot repeat. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name; unquoted `ONE_OFF` generates one.
 - A topic source needs exactly one of `WHERE` and `START`; a file source takes no `START`.
 - `ON_ERROR` cannot be combined with any specific error policy.
 - `CUTOFF` requires a topic source with an upper bound. `ON_REJECTED_TIMESTAMP` requires a topic destination; `ON_MISSING_TIMESTAMP` a `WHERE` clause.
@@ -56,7 +56,7 @@ Planning or startup enforces:
 
 ## Valid examples
 
-Aliases not defined inline need TOML profiles; `ENV` variables must be set. TLS connections need a trusted broker CA; set `ssl.ca.location` if [librdkafka's default CA paths](https://docs.confluent.io/platform/current/clients/librdkafka/html/md_INTRODUCTION.html) do not include it.
+Aliases not defined inline need TOML profiles; `ENV` variables must be set. TLS connections need a trusted broker CA; set `ssl.ca.location` if system roots do not include it.
 
 Topic→topic, fixed window, inline PLAIN over TLS connection:
 
@@ -102,7 +102,7 @@ WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z'
 OPTIONS (GROUP = ONE_OFF);
 ```
 
-Topic→topic, relative window with cutoff. Each partition fixes its time window when first assigned and saves it with progress:
+Topic→topic, relative window with cutoff. Saved progress keeps the resolved `NOW()` window for restarts; workers starting together can resolve different windows ([time window](decisions.md#time-window)):
 
 ```sql
 INSERT INTO TOPIC 'clicks@analytics'
@@ -130,7 +130,7 @@ SQL errors identify the first error found by one-based line and character (code 
 | `OPTIONS (START = EARLIEST)` | `GROUP` is required |
 | `OPTIONS (GROUP = 'a', GROUP = 'b')` | repeated option `GROUP` |
 | `INSERT INTO TOPIC 'a@x' SELECT * FROM TOPIC 'a@y' ...` where `x` and `y` reach one cluster | destination is the source topic |
-| `INSERT INTO FILE cbor('a.cbor') SELECT * FROM FILE cbor('./a.cbor') ...` | destination would overwrite the source file |
+| `INSERT INTO FILE cbor('a.cbor') SELECT * FROM FILE cbor('./a.cbor') ...` | destination is the source file |
 | `SELECT key FROM TOPIC 'a' ...` | only `SELECT *` is supported |
 | `WHERE RECORD_TIMESTAMP >= NOW() OR ...` | `OR` is unsupported; bounds combine with `AND` |
 | `WHERE RECORD_TIMESTAMP > TIMESTAMP '...' AND RECORD_TIMESTAMP >= TIMESTAMP '...'` | two lower bounds |

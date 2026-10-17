@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Collect release notices from linked Go packages and the reviewed native bundle."""
+"""Collect release notices from linked Go packages and their license directories."""
 
-import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -18,18 +17,23 @@ def license_text(directory, fallback=None):
     return "\n\n".join(f"{p.name}\n\n{p.read_text(encoding='utf-8')}" for p in files)
 
 
-def native_text(client, archive, root):
-    pins = json.loads((root / "licenses/native.json").read_text(encoding="utf-8"))
-    if client != pins["client"] or archive.name not in pins["archives"]:
-        raise ValueError("native bundle changed; review licenses/native.txt and licenses/native.json")
-    for name, expected in pins["archives"].items():
-        if hashlib.sha256((archive.parent / name).read_bytes()).hexdigest() != expected:
-            raise ValueError("native bundle changed; review licenses/native.txt and licenses/native.json")
-    return license_text(archive.parent) + "\n\n" + (root / "licenses/native.txt").read_text(encoding="utf-8")
+def module_text(directory, packages):
+    result = [license_text(directory)]
+    parents = set()
+    for package in packages:
+        while package != directory:
+            package.relative_to(directory)
+            parents.add(package)
+            package = package.parent
+    for parent in sorted(parents):
+        for path in sorted(parent.iterdir()):
+            if path.is_file() and path.name.upper().startswith(("LICENSE", "COPYING", "NOTICE", "PATENTS")):
+                result.append(f"{path.relative_to(directory)}\n\n{path.read_text(encoding='utf-8')}")
+    return "\n\n".join(result)
 
 
 def collect(root, binary):
-    template = "{{if .Module}}{{if not .Module.Main}}{{.Module.Path}}\t{{.Module.Version}}\t{{.Module.Dir}}{{end}}{{else}}{{.ImportPath}}\t\t{{.Dir}}{{end}}"
+    template = "{{if .Module}}{{if not .Module.Main}}{{.Module.Path}}\t{{.Module.Version}}\t{{.Module.Dir}}\t{{.Dir}}{{end}}{{else}}{{.ImportPath}}\t\t{{.Dir}}\t{{.Dir}}{{end}}"
     packages = subprocess.check_output(["go", "list", "-deps", "-f", template, "./cmd/kaferry"], text=True, cwd=root)
     environment = json.loads(subprocess.check_output(["go", "env", "-json", "GOROOT", "GOVERSION"], text=True, cwd=root))
     built_version = subprocess.check_output(["go", "version", str(binary)], text=True, cwd=root).strip().rsplit(": ", 1)[-1]
@@ -37,30 +41,28 @@ def collect(root, binary):
         raise ValueError("build the binary and collect its notices with the same Go toolchain")
     goroot = Path(environment["GOROOT"])
     entries = {"Go runtime and standard library": goroot}
-    client = None
+    linked_packages = {}
+    client = False
     for line in packages.splitlines():
         if not line:
             continue
-        name, version, directory = line.split("\t")
+        name, version, directory, package = line.split("\t")
         if version:
-            entries[f"{name} {version}"] = Path(directory)
+            label = f"{name} {version}"
+            entries[label] = Path(directory)
+            linked_packages.setdefault(label, set()).add(Path(package))
         elif name.startswith("vendor/"):
             module = "/".join(name.split("/")[:4])
             entries[f"Go standard-library {module}"] = goroot / "src" / module
-        if name == "github.com/confluentinc/confluent-kafka-go/v2":
-            client = version
-    if client is None:
+        if name == "github.com/twmb/franz-go":
+            client = True
+    if not client:
         raise ValueError("Kafka client missing from linked packages")
-    flags = subprocess.check_output(["go", "list", "-f", "{{join .CgoLDFLAGS \"\\n\"}}",
-                                     "github.com/confluentinc/confluent-kafka-go/v2/kafka"], text=True, cwd=root)
-    archives = [Path(flag) for flag in flags.splitlines() if flag.endswith(".a")]
-    if len(archives) != 1:
-        raise ValueError("expected one bundled static librdkafka archive")
-    sections = ["Third-party software retains the licenses reproduced below.\n"
-                "Native bundle entries may include components not linked on this platform."]
-    sections.extend(f"{name}\n\n{license_text(directory, goroot.parent / 'LICENSE' if directory == goroot else None)}"
-                    for name, directory in sorted(entries.items()))
-    sections.append(f"Native bundle ({client}, {archives[0].name})\n\n{native_text(client, archives[0], root)}")
+    sections = ["Third-party software retains the licenses reproduced below."]
+    for name, directory in sorted(entries.items()):
+        text = (module_text(directory, linked_packages[name]) if name in linked_packages else
+                license_text(directory, goroot.parent / "LICENSE" if directory == goroot else None))
+        sections.append(f"{name}\n\n{text}")
     return "\n\n".join(sections) + "\n"
 
 

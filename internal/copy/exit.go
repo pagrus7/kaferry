@@ -60,6 +60,8 @@ func (r *Runner) readyToExit() bool {
 }
 
 func (r *Runner) drain() error {
+	r.stop.Begin()
+	r.stop.Stage("finishing writes")
 	r.pending = nil // Unsubmitted input replays from the confirmed cursor.
 	r.deferred, r.deferredEOF = nil, nil
 	deadline := r.clock.Now().Add(10 * time.Second)

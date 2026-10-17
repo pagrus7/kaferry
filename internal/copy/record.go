@@ -46,6 +46,17 @@ type Input struct {
 	Next   int64
 	Record Record
 }
+
+// StopObserver starts the shutdown budget and reports the operation in progress.
+type StopObserver interface {
+	Begin()
+	Stage(string)
+}
+type NoopStopObserver struct{}
+
+func (NoopStopObserver) Begin()       {}
+func (NoopStopObserver) Stage(string) {}
+
 type Assignment struct {
 	Cursor Cursor
 	Window plan.Window

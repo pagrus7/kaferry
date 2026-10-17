@@ -17,7 +17,7 @@ import (
 )
 
 type Engine interface {
-	Run(context.Context, plan.Plan, config.Worker) error
+	Run(context.Context, plan.Plan, config.Worker, copy.StopObserver) error
 }
 type KafkaFactory interface {
 	Open(context.Context, plan.Endpoint) (kafkaport.Connection, error)
@@ -28,7 +28,7 @@ type FileFactory interface {
 }
 type Execution interface{ Run(context.Context) error }
 type RunnerFactory interface {
-	New(copy.Source, copy.Sink, copy.ProgressStore, plan.Plan, config.Worker) Execution
+	New(copy.Source, copy.Sink, copy.ProgressStore, plan.Plan, config.Worker, copy.StopObserver) Execution
 }
 
 type runtimeEngine struct {
@@ -42,7 +42,7 @@ func newEngine(kafka KafkaFactory, files FileFactory, runner RunnerFactory, logg
 	return &runtimeEngine{kafka: kafka, files: files, runner: runner, log: logger}
 }
 
-func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Worker) (result error) {
+func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Worker, stop copy.StopObserver) (result error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -54,36 +54,34 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Work
 		}
 		e.log.Info("one-off group generated", "group", p.Group)
 	}
-	sourceEndpoint, err := e.inspect(ctx, p.Source)
+	stop.Stage("inspecting Kafka endpoints")
+	sourceEndpoint, err := e.inspect(ctx, p.Source, stop)
 	if err != nil {
 		return err
 	}
-	defer func() { result = cleanupResult(result, "close source connection", sourceEndpoint.close()) }()
-	destinationEndpoint, err := e.inspect(ctx, p.Destination)
+	defer func() { result = cleanupResult(result, "close source connection", sourceEndpoint.close(stop)) }()
+	destinationEndpoint, err := e.inspect(ctx, p.Destination, stop)
 	if err != nil {
 		return err
 	}
-	defer func() { result = cleanupResult(result, "close destination connection", destinationEndpoint.close()) }()
+	defer func() {
+		result = cleanupResult(result, "close destination connection", destinationEndpoint.close(stop))
+	}()
 	fp, err := p.Fingerprint(sourceEndpoint.clusterID, destinationEndpoint.clusterID)
 	if err != nil {
 		return &kafkaport.Conflict{Err: err}
 	}
 	input, progress, err := e.sourceProgress(ctx, p, fp, limits, sourceEndpoint.connection)
 	if err != nil {
-		// Begin cleanup before native coordinator requests expire; see design/client-compatibility.md#known-issues.
-		return cleanupResult(err, "close source connection", sourceEndpoint.close())
+		return err
 	}
 	if input != nil {
-		defer func() { result = cleanupResult(result, "close file input", input.Close()) }()
+		defer func() {
+			stop.Begin()
+			stop.Stage("closing file input")
+			result = cleanupResult(result, "close file input", input.Close())
+		}()
 	}
-	var sink copy.Sink
-	// Consumer.Close can save progress through its revoke callback. Keep output
-	// ownership until it returns, even though the consumer is constructed first.
-	defer func() {
-		if sink != nil {
-			sink.Close()
-		}
-	}()
 	var source copy.Source
 	var store copy.ProgressStore
 	var bindOutput func(copy.OutputProgress)
@@ -99,22 +97,32 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Work
 		if err != nil {
 			return err
 		}
-		defer func() { result = cleanupResult(result, "close Kafka input", source.Close()) }()
+		defer func() {
+			stop.Begin()
+			stop.Stage("closing Kafka input")
+			result = cleanupResult(result, "close Kafka input", source.Close())
+		}()
 		store, bindOutput = sourceProgress, sourceProgress.BindOutput
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	opened, output, err := e.openSink(ctx, p, fp, limits, destinationEndpoint.connection, progress)
+	sink, output, err := e.openSink(ctx, p, fp, limits, destinationEndpoint.connection, progress)
 	if err != nil {
 		return err
 	}
-	sink = opened
+	defer func() {
+		stop.Begin()
+		stop.Stage("closing output")
+		sink.Close()
+	}()
 	bindOutput(output)
-	if err := e.runner.New(source, sink, store, p, limits).Run(ctx); err != nil {
+	if err := e.runner.New(source, sink, store, p, limits, stop).Run(ctx); err != nil {
 		return err
 	}
 	if p.OneOff && input != nil {
+		stop.Begin()
+		stop.Stage("deleting one-off checkpoint")
 		return input.DeleteCheckpoint()
 	}
 	return nil
@@ -133,7 +141,7 @@ type inspectedEndpoint struct {
 	clusterID  string
 }
 
-func (e *runtimeEngine) inspect(ctx context.Context, endpoint plan.Endpoint) (inspectedEndpoint, error) {
+func (e *runtimeEngine) inspect(ctx context.Context, endpoint plan.Endpoint, stop copy.StopObserver) (inspectedEndpoint, error) {
 	if endpoint.Kind != "TOPIC" {
 		return inspectedEndpoint{}, nil
 	}
@@ -144,7 +152,7 @@ func (e *runtimeEngine) inspect(ctx context.Context, endpoint plan.Endpoint) (in
 	id, err := connection.ClusterID(ctx)
 	if err != nil {
 		opened := inspectedEndpoint{connection: connection}
-		return inspectedEndpoint{}, cleanupResult(err, "close Kafka connection", opened.close())
+		return inspectedEndpoint{}, cleanupResult(err, "close Kafka connection", opened.close(stop))
 	}
 	return inspectedEndpoint{connection: connection, clusterID: id}, nil
 }
@@ -163,8 +171,10 @@ func cleanupResult(result error, stage string, cleanup error) error {
 	}
 	return errors.Join(result, fmt.Errorf("%s: %w", stage, cleanup))
 }
-func (e *inspectedEndpoint) close() error {
+func (e *inspectedEndpoint) close(stop copy.StopObserver) error {
 	if e.connection != nil {
+		stop.Begin()
+		stop.Stage("closing Kafka connection")
 		connection := e.connection
 		e.connection = nil
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

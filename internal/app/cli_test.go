@@ -13,7 +13,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/sql"
@@ -42,14 +41,13 @@ func TestCLIVersionWithoutConfigurationOrInput(t *testing.T) {
 	// Given no home directory and a reader that cannot supply SQL.
 	t.Setenv("HOME", "")
 	var stdout, stderr bytes.Buffer
-	_, native := kafka.LibraryVersion()
-	want := "kaferry " + version + " (commit " + revision + "; " + runtime.Version() + "; librdkafka " + native + ")\n"
+	want := "kaferry " + version + " (commit " + revision + "; " + runtime.Version() + "; franz-go "
 
 	// When requesting build information.
 	code := Execute(t.Context(), []string{"--version"}, forbiddenInput{}, &stdout, &stderr)
 
 	// Then report the build on stdout without loading configuration or reading SQL.
-	if code != 0 || stdout.String() != want || stderr.Len() != 0 {
+	if code != 0 || !strings.HasPrefix(stdout.String(), want) || !strings.HasSuffix(stdout.String(), ")\n") || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }

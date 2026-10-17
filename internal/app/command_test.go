@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
@@ -48,21 +49,27 @@ func (m *commandMocks) Build(ast sql.Statement, profiles plan.Profiles) (plan.Pl
 	}
 	return m.plan, m.stage("build")
 }
-func (m *commandMocks) Run(ctx context.Context, p plan.Plan, worker config.Worker) error {
+func (m *commandMocks) Run(ctx context.Context, p plan.Plan, worker config.Worker, _ core.StopObserver) error {
 	if ctx != m.ctx || !reflect.DeepEqual(p, m.plan) || worker != m.cfg.Worker {
 		m.t.Fatal("execution input changed")
 	}
 	return m.stage("execute")
 }
+func (m *commandMocks) Validate(p plan.Plan, worker config.Worker) error {
+	if !reflect.DeepEqual(p, m.plan) || worker != m.cfg.Worker {
+		m.t.Fatal("validation input changed")
+	}
+	return m.stage("validate")
+}
 func TestCommandPlansBeforeExecutingAndStopsOnFailure(t *testing.T) {
 	// Given
-	stages := []string{"parse", "load", "build", "execute"}
+	stages := []string{"parse", "load", "build", "validate", "execute"}
 	for index, fail := range append(append([]string{}, stages...), "") {
 		t.Run("failure-"+fail, func(t *testing.T) {
 			m := &commandMocks{t: t, fail: fail, failure: errors.New("failure"), ctx: context.Background(), cfg: config.Defaults("home"), ast: sql.Statement{Source: sql.Endpoint{Name: "input"}}, plan: enginePlan("FILE", "FILE")}
 
 			// When
-			err := newCommand(m, m, m, m).Run(m.ctx, "statement", "config.toml")
+			err := newCommand(m, m, m, m, m).Run(m.ctx, "statement", "config.toml", noopShutdown{})
 			wanted := stages
 
 			// Then
@@ -72,10 +79,10 @@ func TestCommandPlansBeforeExecutingAndStopsOnFailure(t *testing.T) {
 					t.Fatal("failure lost", err)
 				}
 				var coded interface{ ExitCode() int }
-				if index < 3 && (!errors.As(err, &coded) || coded.ExitCode() != 2) {
+				if index < 4 && (!errors.As(err, &coded) || coded.ExitCode() != 2) {
 					t.Fatal("planning failure has wrong exit code", err)
 				}
-				if index == 3 && err != m.failure {
+				if index == 4 && err != m.failure {
 					t.Fatal("execution failure was reclassified", err)
 				}
 			} else if err != nil {
@@ -94,7 +101,7 @@ func TestCommandPreservesExecutionExitCode(t *testing.T) {
 		m := &commandMocks{t: t, fail: "execute", failure: failure, ctx: context.Background()}
 
 		// When
-		runErr := newCommand(m, m, m, m).Run(m.ctx, "statement", "config.toml")
+		runErr := newCommand(m, m, m, m, m).Run(m.ctx, "statement", "config.toml", noopShutdown{})
 
 		// Then
 		if runErr != failure {
@@ -135,8 +142,8 @@ func TestRunnerFactoryInjectsFreshProgressPerExecution(t *testing.T) {
 	factory := newRunnerFactory(core.RealClock{}, engineLogger(), progress)
 	stop := errors.New("stop after assignment")
 	source := assignmentSource{failure: stop}
-	first := factory.New(source, nil, nil, enginePlan("FILE", "FILE"), config.Worker{})
-	second := factory.New(source, nil, nil, enginePlan("FILE", "FILE"), config.Worker{})
+	first := factory.New(source, nil, nil, enginePlan("FILE", "FILE"), config.Worker{}, core.NoopStopObserver{})
+	second := factory.New(source, nil, nil, enginePlan("FILE", "FILE"), config.Worker{}, core.NoopStopObserver{})
 	if len(progress.made) != 2 || progress.made[0] == progress.made[1] {
 		t.Fatal("progress state shared between executions")
 	}
@@ -158,3 +165,7 @@ func TestRunnerFactoryInjectsFreshProgressPerExecution(t *testing.T) {
 		t.Fatal("second execution used wrong tracker")
 	}
 }
+
+type noopShutdown struct{ core.NoopStopObserver }
+
+func (noopShutdown) Configure(time.Duration) {}

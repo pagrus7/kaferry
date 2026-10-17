@@ -1,0 +1,55 @@
+package franz
+
+import (
+	"context"
+
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
+)
+
+type requester interface {
+	Request(context.Context, kmsg.Request) (kmsg.Response, error)
+}
+type MetadataClient interface {
+	requester
+	RequestTo(context.Context, int32, kmsg.Request) (kmsg.Response, error)
+	Close()
+}
+type ConsumerClient interface {
+	AddConsumeTopics(...string)
+	PollRecords(context.Context, int) kgo.Fetches
+	AllowRebalance()
+	PauseFetchPartitions(map[string][]int32) map[string][]int32
+	ResumeFetchPartitions(map[string][]int32)
+	CommitOffsetsSync(context.Context, map[string]map[int32]kgo.EpochOffset, func(*kgo.Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error))
+	LeaveGroupContext(context.Context) error
+	CloseAllowingRebalance()
+}
+type ProducerClient interface {
+	TryProduce(context.Context, *kgo.Record, func(*kgo.Record, error))
+	Flush(context.Context) error
+	Close()
+}
+type Clients interface {
+	Metadata(...kgo.Opt) (MetadataClient, error)
+	Consumer(...kgo.Opt) (ConsumerClient, error)
+	Producer(...kgo.Opt) (ProducerClient, error)
+}
+type clients struct{}
+
+func NewClients() Clients { return clients{} }
+func (clients) Metadata(opts ...kgo.Opt) (MetadataClient, error) {
+	c, err := kgo.NewClient(opts...)
+	if err != nil {
+		return nil, err
+	}
+	return protocolClient{c}, nil
+}
+func (clients) Consumer(opts ...kgo.Opt) (ConsumerClient, error) { return kgo.NewClient(opts...) }
+func (clients) Producer(opts ...kgo.Opt) (ProducerClient, error) { return kgo.NewClient(opts...) }
+
+type protocolClient struct{ *kgo.Client }
+
+func (c protocolClient) RequestTo(ctx context.Context, broker int32, req kmsg.Request) (kmsg.Response, error) {
+	return c.Broker(int(broker)).Request(ctx, req)
+}

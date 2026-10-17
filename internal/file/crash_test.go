@@ -106,7 +106,7 @@ func TestFileCrashAfterFsyncBeforeCheckpoint(t *testing.T) {
 	}
 	defer out.Close()
 	cp.BindOutput(out)
-	r := core.NewRunner(source, out, cp, core.RealClock{}, logger, plan.Plan{Source: plan.Endpoint{Kind: "FILE"}}, config.Defaults(dir).Worker, core.NewTracker())
+	r := core.NewRunner(source, out, cp, core.RealClock{}, logger, plan.Plan{Source: plan.Endpoint{Kind: "FILE"}}, config.Defaults(dir).Worker, core.NewTracker(), core.NoopStopObserver{})
 	if err := r.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
