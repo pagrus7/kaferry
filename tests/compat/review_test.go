@@ -23,7 +23,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/sql"
 )
 
-func TestCopyDestinationAcceptableRecordAboveNativeDefault(t *testing.T) {
+func TestCopyDestinationAcceptableRecordAboveProducerDefault(t *testing.T) {
 	// Given a source record above the default producer limit but within Kafka's topic limit.
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)

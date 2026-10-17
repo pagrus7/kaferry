@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/config"
+	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 func TestShutdownBudgetUsesConfiguredTimeoutAndCurrentStage(t *testing.T) {
@@ -85,6 +88,23 @@ func TestShutdownDeadlineCoversFinalErrorPrinting(t *testing.T) {
 	// then the same process guard stays alive until printing and execution have both ended.
 	runShutdownHelper(t, "error", "printing error")
 }
+
+type failedStartupSource struct{ core.Source }
+
+func (failedStartupSource) Start(core.Lifecycle) error { return errors.New("checkpoint write failed") }
+
+func TestShutdownDeadlineCoversSummaryAfterStartupFailure(t *testing.T) {
+	if os.Getenv("KAFERRY_SHUTDOWN_HELPER") == "summary" {
+		budget := newShutdownBudget(context.Background(), 40*time.Millisecond, forceShutdown)
+		logger := slog.New(slog.NewTextHandler(blockingErrorOutput{}, nil))
+		runner := core.NewRunner(failedStartupSource{}, nil, nil, core.RealClock{}, logger, plan.Plan{}, config.Worker{}, nil, budget)
+		_ = runner.Run(context.Background())
+		t.Fatal("blocked summary writer returned")
+	}
+	// Given startup fails before reading, when the summary writer blocks without a signal,
+	// then the shutdown deadline still ends the process with a clear error.
+	runShutdownHelper(t, "summary", "printing copy summary")
+}
 func TestShutdownDeadlineAlsoCoversBlockedSQLInput(t *testing.T) {
 	if os.Getenv("KAFERRY_SHUTDOWN_HELPER") == "input" {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -101,8 +121,7 @@ func runShutdownHelper(t *testing.T, mode, stage string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	testName := map[string]string{"cleanup": "TestShutdownDeadlineStopsBlockedCleanup", "input": "TestShutdownDeadlineAlsoCoversBlockedSQLInput", "error": "TestShutdownDeadlineCoversFinalErrorPrinting"}[mode]
-	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+testName+"$")
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+t.Name()+"$")
 	command.Env = append(os.Environ(), "KAFERRY_SHUTDOWN_HELPER="+mode)
 	output, err := command.CombinedOutput()
 	var exit *exec.ExitError

@@ -42,12 +42,12 @@ func runComponentCopy(ctx context.Context, p plan.Plan, limits config.Worker) (e
 	if err != nil {
 		return err
 	}
+	defer func() { err = errors.Join(err, source.Close()) }()
 	sink, err := destination.Sink(ctx, limits)
 	if err != nil {
-		return errors.Join(err, source.Close())
+		return err
 	}
 	defer sink.Close()
-	defer func() { err = errors.Join(err, source.Close()) }()
 	return core.NewRunner(source, sink, store, core.RealClock{}, quietLogger(), p, limits, core.NewTracker(), core.NoopStopObserver{}).Run(ctx)
 }
 func boundedComponentPlan(t *testing.T, cluster *kfake.Cluster) plan.Plan {
@@ -57,7 +57,6 @@ func boundedComponentPlan(t *testing.T, cluster *kfake.Cluster) plan.Plan {
 	p.Window.Upper = &plan.Expression{LiteralMS: time.Now().Add(-30 * time.Minute).UnixMilli()}
 	return p
 }
-func ctx(t *testing.T) context.Context { return componentContext(t) }
 func readN(t *testing.T, c *kgo.Client, count int) []*kgo.Record {
 	t.Helper()
 	var records []*kgo.Record
@@ -110,7 +109,7 @@ func TestAmbiguousDeliveryReplaysWithoutLosingProgress(t *testing.T) {
 	defer producer.Close()
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	for _, value := range []string{"confirmed", "uncertain", "later"} {
-		if err := producer.ProduceSync(ctx(t), &kgo.Record{Topic: "input", Key: []byte("key"), Value: []byte(value), Timestamp: stamp}).FirstErr(); err != nil {
+		if err := producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Key: []byte("key"), Value: []byte(value), Timestamp: stamp}).FirstErr(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -122,7 +121,7 @@ func TestAmbiguousDeliveryReplaysWithoutLosingProgress(t *testing.T) {
 
 	// When the copy times out after the destination has accepted its record.
 	started := time.Now()
-	err = runComponentCopy(ctx(t), p, limits)
+	err = runComponentCopy(componentContext(t), p, limits)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("wanted delivery deadline, got %v", err)
 	}
@@ -130,7 +129,7 @@ func TestAmbiguousDeliveryReplaysWithoutLosingProgress(t *testing.T) {
 		t.Fatalf("failed delivery delayed shutdown: %s", elapsed)
 	}
 	admin := kadm.NewClient(producer)
-	saved, err := admin.FetchOffsets(ctx(t), p.Group)
+	saved, err := admin.FetchOffsets(componentContext(t), p.Group)
 	if err != nil || saved["input"][0].At != 1 {
 		t.Fatalf("ambiguous write advanced source progress: %v %v", saved, err)
 	}
@@ -140,11 +139,11 @@ func TestAmbiguousDeliveryReplaysWithoutLosingProgress(t *testing.T) {
 	// When the destination recovers and the same query restarts.
 	gate.after.Store(0)
 	limits.DeliveryTimeout = "5s"
-	if err := runComponentCopy(ctx(t), p, limits); err != nil {
+	if err := runComponentCopy(componentContext(t), p, limits); err != nil {
 		t.Fatal(err)
 	}
 	// Then the record replays, producing the permitted duplicate and saving its next offset.
-	saved, err = admin.FetchOffsets(ctx(t), p.Group)
+	saved, err = admin.FetchOffsets(componentContext(t), p.Group)
 	if err != nil || saved["input"][0].At != 3 {
 		t.Fatalf("replay did not save confirmed progress: %v %v", saved, err)
 	}
@@ -182,12 +181,12 @@ func TestCompactedOffsetsReachTheBoundedEnd(t *testing.T) {
 			}
 			defer producer.Close()
 			for range 10 {
-				if err := producer.ProduceSync(ctx(t), &kgo.Record{Topic: "input", Value: []byte("compacted")}).FirstErr(); err != nil {
+				if err := producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Value: []byte("compacted")}).FirstErr(); err != nil {
 					t.Fatal(err)
 				}
 			}
 			batch := compactedBatch(retained...)
-			metadata, err := kadm.NewClient(producer).Metadata(ctx(t), "input")
+			metadata, err := kadm.NewClient(producer).Metadata(componentContext(t), "input")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -214,7 +213,7 @@ func TestCompactedOffsetsReachTheBoundedEnd(t *testing.T) {
 				return res, nil, len(res.Topics) > 0
 			})
 			p := boundedComponentPlan(t, cluster)
-			deadline, cancel := context.WithTimeout(ctx(t), 4*time.Second)
+			deadline, cancel := context.WithTimeout(componentContext(t), 4*time.Second)
 			defer cancel()
 			// When reading through the compacted tail with a bounded time range.
 			err = runComponentCopy(deadline, p, config.Defaults(t.TempDir()).Worker)
@@ -222,7 +221,7 @@ func TestCompactedOffsetsReachTheBoundedEnd(t *testing.T) {
 			if err != nil {
 				t.Fatalf("did not complete across compacted offsets: %v", err)
 			}
-			saved, err := kadm.NewClient(producer).FetchOffsets(ctx(t), p.Group)
+			saved, err := kadm.NewClient(producer).FetchOffsets(componentContext(t), p.Group)
 			if err != nil || saved["input"][0].At != 10 {
 				t.Fatalf("wrong consumed end: %v %v", saved, err)
 			}
@@ -231,7 +230,7 @@ func TestCompactedOffsetsReachTheBoundedEnd(t *testing.T) {
 				t.Fatalf("copied %d records, wanted %d", got, want)
 			}
 			// When the same query restarts at the verified end.
-			if err := runComponentCopy(ctx(t), p, config.Defaults(t.TempDir()).Worker); err != nil {
+			if err := runComponentCopy(componentContext(t), p, config.Defaults(t.TempDir()).Worker); err != nil {
 				t.Fatal(err)
 			}
 			// Then completed compacted offsets do not produce another write.

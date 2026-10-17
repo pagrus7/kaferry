@@ -184,17 +184,22 @@ func TestHotPartitionCannotStarveAQuietPartitionsGapProof(t *testing.T) {
 	}
 }
 
-func TestTransientGapFailureDoesNotStopOrdinaryConsumption(t *testing.T) {
-	for _, failure := range []error{kerr.FencedLeaderEpoch, context.DeadlineExceeded, io.EOF, kerr.UnknownTopicOrPartition, errors.New("corrupt batch")} {
-		t.Run(failure.Error(), func(t *testing.T) {
+func TestGapProbeErrorsRetryOnlyWhenRecoverable(t *testing.T) {
+	for _, scenario := range []struct {
+		failure error
+		stops   bool
+	}{
+		{kerr.FencedLeaderEpoch, false}, {context.DeadlineExceeded, false}, {io.EOF, false},
+		{kerr.UnknownTopicOrPartition, true}, {errors.New("corrupt batch"), true},
+	} {
+		t.Run(scenario.failure.Error(), func(t *testing.T) {
 			// Given a gap reader that cannot prove any progress on this turn.
 			source, proof := sourceWithGaps(t, 1)
-			proof.err = failure
-			// When its deadline expires or its leader changes during the probe.
+			proof.err = scenario.failure
+			// When polling after a probe failure.
 			event, err := source.Poll(0)
-			// Then transient errors leave ordinary consumption running; corruption still fails.
-			wantFailure := failure.Error() == "corrupt batch" || errors.Is(failure, kerr.UnknownTopicOrPartition)
-			if (err != nil) != wantFailure || event.Input != nil || event.EOF != nil || source.positions[0] != 0 || len(proof.calls) != 1 {
+			// Then only temporary failures permit another poll, and no failure advances progress.
+			if (err != nil) != scenario.stops || event.Input != nil || event.EOF != nil || source.positions[0] != 0 || len(proof.calls) != 1 {
 				t.Fatal("wrong probe error handling", event, err, source.positions, proof.calls)
 			}
 		})

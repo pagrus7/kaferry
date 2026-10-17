@@ -26,7 +26,7 @@ integration:
 fault:
 	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_FAULT_CONTAINER=kaferry-compat-kafka-1 $(GO) test -count=1 -tags=integration,fault -run 'TestBlockingCommit|TestRebalanceChurn' -v ./tests/compat
 load: build
-	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry $(GO) test -count=1 -tags=integration,load -run TestLoadBoundedKafkaCopy -v ./tests/compat
+	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry $(GO) test -count=1 -tags=integration,load -run '^TestLoad' -v ./tests/compat
 soak: build
 	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry $(GO) test -count=1 -timeout=1h -tags=integration,load -run TestStreamingSoak -v ./tests/compat
 qualification: build

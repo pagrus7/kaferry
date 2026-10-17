@@ -23,7 +23,7 @@ Or clone this repository and run `make build` with Go 1.26+. The CLI is pure Go 
 
 ## Known issues
 
-Kafka output rejects timestamps outside roughly 1677–2262. Kafka input cannot detect such timestamps: incorrect decoding can change copied timestamps and time-filter results. Ordinary modern timestamps are unaffected. [Scope and limits](design/client-compatibility.md#known-issues).
+Kafka input can misread timestamps outside roughly 1677–2262, changing copied timestamps and time-filter results. Kafka output rejects them unless the destination is known to replace timestamps. Ordinary modern timestamps are unaffected. [Scope and limits](design/client-compatibility.md#known-issues).
 
 ## Quick start
 

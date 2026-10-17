@@ -42,15 +42,50 @@ type loadReport struct {
 	cli                    *cliProcess
 }
 
+func TestLoadReportIdentifiesExecutedBinary(t *testing.T) {
+	// Given a CLI binary and an unusable fallback build path.
+	binary := testBinary(t)
+	data, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	// When the process finishes and its test cleanup writes a report.
+	t.Run("collect", func(t *testing.T) {
+		t.Setenv("KAFERRY_REPORT_DIR", directory)
+		t.Setenv("KAFERRY_TEST_BINARY", filepath.Join(directory, "unused-binary"))
+		report := newLoadReport(t, "identity")
+		report.cli = startCLI(t, t.Context(), binary, "", "--version")
+		if err := report.cli.wait(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	// Then the report identifies the binary that ran, without rebuilding it.
+	files, err := filepath.Glob(filepath.Join(directory, "*.metrics.json"))
+	if err != nil || len(files) != 1 {
+		t.Fatal("missing report", files, err)
+	}
+	encoded, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report loadReport
+	if err := json.Unmarshal(encoded, &report); err != nil {
+		t.Fatal(err)
+	}
+	if !report.Passed || report.Skipped || report.BinarySHA256 != fmt.Sprintf("%x", sha256.Sum256(data)) || report.Client == "" {
+		t.Fatal("report does not identify the tested binary", report)
+	}
+}
+
 func newLoadReport(t *testing.T, kind string) *loadReport {
 	t.Helper()
 	r := &loadReport{Test: t.Name(), Kind: kind, Platform: runtime.GOOS + "/" + runtime.GOARCH,
 		SourcePartitions: 4, DestinationPartitions: 5}
 	if directory := os.Getenv("KAFERRY_REPORT_DIR"); directory != "" {
 		t.Cleanup(func() {
-			r.Passed, r.Skipped = !t.Failed() && !t.Skipped(), t.Skipped()
 			if r.cli != nil {
-				binaryPath := testBinary(t)
+				binaryPath := r.cli.command.Path
 				info, err := buildinfo.ReadFile(binaryPath)
 				if err != nil {
 					t.Error("read tested binary build information:", err)
@@ -73,17 +108,18 @@ func newLoadReport(t *testing.T, kind string) *loadReport {
 				t.Error("create build report directory:", err)
 				return
 			}
+			if r.cli != nil {
+				if err := os.WriteFile(prefix+".cli.log", []byte(r.cli.logs()), 0644); err != nil {
+					t.Error("write CLI build log:", err)
+				}
+			}
+			r.Passed, r.Skipped = !t.Failed() && !t.Skipped(), t.Skipped()
 			data, err := json.MarshalIndent(r, "", "  ")
 			if err == nil {
 				err = os.WriteFile(prefix+".metrics.json", append(data, '\n'), 0644)
 			}
 			if err != nil {
 				t.Error("write build report:", err)
-			}
-			if r.cli != nil {
-				if err := os.WriteFile(prefix+".cli.log", []byte(r.cli.logs()), 0644); err != nil {
-					t.Error("write CLI build log:", err)
-				}
 			}
 		})
 	}

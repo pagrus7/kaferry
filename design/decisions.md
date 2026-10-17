@@ -127,7 +127,7 @@ Output holds an exclusive inode lock. A file-source group holds a stable checkpo
 
 For Kafka-to-file copies, Kaferry creates the Kafka consumer and checks its settings before opening the output file. Before reading any messages, it sets up progress tracking so saved Kafka offsets include the file ID and the last safely written byte position. The runner saves confirmed progress before adapters close; closing a Kafka source does not save progress.
 
-Before copying records (before subscription for Kafka→file):
+Before copying records:
 
 1. Write/fsync a complete header to a locked temporary file.
 2. Publish without replacing an existing path; fsync the directory. A losing creator opens and locks the published file.

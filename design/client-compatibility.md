@@ -4,7 +4,7 @@ Kafka-client and deployment constraints. See [permissions](../docs/usage.md#perm
 
 ## Known issues
 
-Kafka output rejects timestamps outside ±9,223,372,036,854 Unix milliseconds (roughly 1677–2262) before submission. Kafka input cannot detect such timestamps: franz-go decodes them incorrectly, affecting copied timestamps and time filters. Ordinary modern timestamps are unaffected. For such sources, use another tool that preserves 64-bit millisecond timestamps. File-to-file copies retain the full signed millisecond value.
+Kafka input can misread timestamps outside ±9,223,372,036,854 Unix milliseconds (roughly 1677–2262), affecting copied timestamps and time filters. Kaferry cannot detect this decoding error. Kafka output rejects timestamps outside this range unless the destination is known to replace them with broker time. Ordinary modern timestamps are unaffected. For such sources, use another tool that preserves 64-bit millisecond timestamps. File-to-file copies retain the full signed millisecond value.
 
 The pinned [decoder](https://github.com/twmb/franz-go/blob/v1.22.2/pkg/kgo/source.go#L2438) multiplies milliseconds into a signed nanosecond value. Overflow changes the timestamp before Kaferry receives it. [Kafka 4.x's default future-timestamp bound](https://kafka.apache.org/41/configuration/topic-configs/#message.timestamp.after.max.ms) reduces acceptance of new far-future records; it does not protect existing records, extreme past timestamps or permissive topic settings. Occurrence in production is unknown.
 

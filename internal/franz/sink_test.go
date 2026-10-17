@@ -115,16 +115,18 @@ func TestSinkGatesWorkAndUsesSubmissionTimeForDelivery(t *testing.T) {
 	stamp := int64(0)
 	r := core.Record{Key: []byte{}, Value: nil, TimestampMS: &stamp, Headers: []core.Header{{Name: "a\x00b", Value: nil}, {Name: string([]byte{255}), Value: []byte{}}}}
 	token := core.Token{Partition: 2}
+	before := time.Now()
 	if err := s.Submit(r, token); err != nil {
 		t.Fatal(err)
 	}
+	after := time.Now()
 	// When another record arrives before the first delivery, then it returns Busy without calling the client.
 	var busy *core.Busy
 	if err := s.Submit(r, token); !errors.As(err, &busy) || len(client.records) != 1 {
 		t.Fatal("full producer admitted work", err)
 	}
 	deadline, ok := client.contexts[0].Deadline()
-	if !ok || deadline.Before(time.Now()) || deadline.After(time.Now().Add(time.Second)) {
+	if !ok || deadline.Before(before.Add(s.settings.delivery)) || deadline.After(after.Add(s.settings.delivery)) {
 		t.Fatal("delivery deadline used the record's timestamp", deadline)
 	}
 	got := client.records[0]

@@ -70,6 +70,8 @@ func (r *Runner) Revoke(partitions []int32, lost bool) error {
 
 func (r *Runner) Run(ctx context.Context) error {
 	defer func() {
+		r.stop.Begin()
+		r.stop.Stage("printing copy summary")
 		r.log.Info("copy summary", "submitted", r.submitted, "confirmed", r.confirmed, "filtered", r.filtered, "skipped", r.skipped, "timestamp_stops", r.timestampStops, "tip_stops", r.tipStops, "peak_uncommitted_records", r.peakRecords, "peak_uncommitted_bytes", r.peakBytes)
 	}()
 	if err := r.run(ctx); err != nil {
