@@ -64,6 +64,14 @@ func (w Window) Contains(timestampMS int64) bool {
 	return (w.Lower == nil || timestampMS >= *w.Lower) && (w.Upper == nil || timestampMS < *w.Upper)
 }
 
+// StopThreshold is the boundary a Kafka record timestamp must strictly exceed.
+func (w Window) StopThreshold(cutoff int64) (int64, error) {
+	if w.Upper == nil {
+		return 0, fmt.Errorf("time window has no upper bound")
+	}
+	return checkedAdd(*w.Upper, cutoff)
+}
+
 // ValidateStored rejects incomplete or altered persisted windows before reading.
 func (s WindowSpec) ValidateStored(w Window, cutoff int64) error {
 	if (s.Lower == nil) != (w.Lower == nil) || (s.Upper == nil) != (w.Upper == nil) {

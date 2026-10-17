@@ -1,7 +1,6 @@
 package copy
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/plan"
@@ -37,7 +36,7 @@ func (p *partition) pastTimestamp(stamp *int64, cutoff int64) (bool, error) {
 	if stamp == nil || p.window.Upper == nil {
 		return false, nil
 	}
-	threshold, err := stopThreshold(p.window, cutoff)
+	threshold, err := p.window.StopThreshold(cutoff)
 	return err == nil && *stamp > threshold, err
 }
 
@@ -58,7 +57,7 @@ func (p *partition) sampled(high int64, now time.Time) {
 // to sample, stop or time out. A successful sample
 // stays fixed until this assignment ends, even when later records arrive.
 func (p *partition) tipAction(now time.Time, cutoff int64, wait time.Duration) (tipAction, error) {
-	threshold, err := stopThreshold(p.window, cutoff)
+	threshold, err := p.window.StopThreshold(cutoff)
 	if err != nil {
 		return tipWait, err
 	}
@@ -75,12 +74,4 @@ func (p *partition) tipAction(now time.Time, cutoff int64, wait time.Duration) (
 		return tipTimeout, nil
 	}
 	return tipWait, nil
-}
-
-func stopThreshold(window plan.Window, cutoff int64) (int64, error) {
-	hi := *window.Upper
-	if cutoff > 0 && hi > int64(^uint64(0)>>1)-cutoff {
-		return 0, fmt.Errorf("cutoff overflows timestamp")
-	}
-	return hi + cutoff, nil
 }

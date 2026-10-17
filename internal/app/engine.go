@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -59,13 +57,13 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Work
 	if err != nil {
 		return err
 	}
-	defer func() { result = cleanupResult(result, "close source connection", sourceEndpoint.close(stop)) }()
+	defer func() { result = copy.CleanupResult(result, "close source connection", sourceEndpoint.close(stop)) }()
 	destinationEndpoint, err := e.inspect(ctx, p.Destination, stop)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		result = cleanupResult(result, "close destination connection", destinationEndpoint.close(stop))
+		result = copy.CleanupResult(result, "close destination connection", destinationEndpoint.close(stop))
 	}()
 	fp, err := p.Fingerprint(sourceEndpoint.clusterID, destinationEndpoint.clusterID)
 	if err != nil {
@@ -79,7 +77,7 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Work
 		defer func() {
 			stop.Begin()
 			stop.Stage("closing file input")
-			result = cleanupResult(result, "close file input", input.Close())
+			result = copy.CleanupResult(result, "close file input", input.Close())
 		}()
 	}
 	var source copy.Source
@@ -100,7 +98,7 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Work
 		defer func() {
 			stop.Begin()
 			stop.Stage("closing Kafka input")
-			result = cleanupResult(result, "close Kafka input", source.Close())
+			result = copy.CleanupResult(result, "close Kafka input", source.Close())
 		}()
 		store, bindOutput = sourceProgress, sourceProgress.BindOutput
 	}
@@ -152,25 +150,11 @@ func (e *runtimeEngine) inspect(ctx context.Context, endpoint plan.Endpoint, sto
 	id, err := connection.ClusterID(ctx)
 	if err != nil {
 		opened := inspectedEndpoint{connection: connection}
-		return inspectedEndpoint{}, cleanupResult(err, "close Kafka connection", opened.close(stop))
+		return inspectedEndpoint{}, copy.CleanupResult(err, "close Kafka connection", opened.close(stop))
 	}
 	return inspectedEndpoint{connection: connection, clusterID: id}, nil
 }
 
-// Cleanup failures use exit 1 without changing an earlier failure's exit code.
-func cleanupResult(result error, stage string, cleanup error) error {
-	if cleanup == nil {
-		return result
-	}
-	if result == nil {
-		return &copy.Exit{Code: 1, Err: fmt.Errorf("%s: %w", stage, cleanup)}
-	}
-	var coded interface{ ExitCode() int }
-	if !errors.As(result, &coded) {
-		result = &copy.Exit{Code: 1, Err: result}
-	}
-	return errors.Join(result, fmt.Errorf("%s: %w", stage, cleanup))
-}
 func (e *inspectedEndpoint) close(stop copy.StopObserver) error {
 	if e.connection != nil {
 		stop.Begin()
@@ -207,17 +191,8 @@ func (e *runtimeEngine) sourceProgress(ctx context.Context, p plan.Plan, fp stri
 }
 
 func destinationProgress(saved map[int32]kafkaport.Progress) (file.DestinationProgress, error) {
-	progress := file.DestinationProgress{Exists: len(saved) > 0}
-	for _, partition := range saved {
-		if partition.FileID != "" {
-			if progress.ID != "" && progress.ID != partition.FileID {
-				return progress, &file.Conflict{Err: fmt.Errorf("commits name different destination files")}
-			}
-			progress.ID = partition.FileID
-		}
-		progress.Extent = max(progress.Extent, partition.Extent)
-	}
-	return progress, nil
+	id, extent, err := kafkaport.FileExtent(saved)
+	return file.DestinationProgress{ID: id, Extent: extent, Exists: len(saved) > 0}, err
 }
 
 func (e *runtimeEngine) openSink(ctx context.Context, p plan.Plan, fp string, limits config.Worker, connection kafkaport.Connection, progress file.DestinationProgress) (copy.Sink, copy.OutputProgress, error) {

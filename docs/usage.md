@@ -2,19 +2,24 @@
 
 ## Configuration
 
-Create `connections.toml` from [quick start](../README.md#quick-start), including [authentication](../README.md#connections). `-c` loads it; without `-c`, no TOML is loaded. SQL overrides TOML; topics without `@alias` use `default`. SQL `ENV()` fails if unset. [Worker settings](../design/decisions.md#configuration-and-cli).
+Pass `-c connections.toml` to load TOML; it is not loaded otherwise. SQL overrides TOML; topics without `@alias` use `default`. [Connection setup](../README.md#connections) · [Worker settings](../design/decisions.md#configuration-and-cli).
 
 ## Permissions
 
-For existing topics on Kafka 3.9 StandardAuthorizer, Kafka input needs only source topic/group READ; Kafka output needs only destination WRITE. These imply DESCRIBE. File-only copies need no Kafka grants. Other brokers/authorizers may require cluster IDEMPOTENT_WRITE.
+Kafka 3.9 StandardAuthorizer: source topic/group READ; destination WRITE. These imply DESCRIBE. Other brokers may require cluster IDEMPOTENT_WRITE. File-only copies need no Kafka grants. For Kafka-source `GROUP = ONE_OFF`, grant group READ on the `kaferry-` prefix. Destination DESCRIBE_CONFIGS is optional; if denied, [dependent checks are skipped](../design/client-compatibility.md#optional-destination-configuration).
 
-For Kafka-source `GROUP = ONE_OFF`, grant group READ on the `kaferry-` prefix.
+## Preview a copy
 
-Destination DESCRIBE_CONFIGS is optional; without it, Kaferry warns and skips checks that need those settings. [Fallbacks](../design/client-compatibility.md#optional-destination-configuration).
+```sh
+kaferry explain -c connections.toml -f copy.sql
+kaferry explain -c connections.toml -f copy.sql --json
+```
+
+Shows endpoints, saved progress and starting positions. It never joins a group, commits, creates files or takes locks. Kafka spans count offsets, not records, and do not predict completion. Without saved progress, `NOW()` resolves again when you run. Listed run permissions are not verified. [Output contract](../design/decisions.md#inspection).
 
 ## Run a copy
 
-Examples assume `kaferry` is on `PATH`; otherwise use its path. Pass SQL with `-f file`, `-f -` (stdin) or `-e "SQL"`. Help: `kaferry run -h`.
+Pass SQL with `-f file`, `-f -` (stdin) or `-e "SQL"`. Both commands accept `-h`.
 
 **Archive retained records, then follow new ones.** Create the output directory:
 
@@ -35,28 +40,22 @@ kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM FILE cbor('archive/orders.cbor') OPTIONS (GROUP = 'orders-restore');"
 ```
 
-Kafka input needs `WHERE` or `START`, not both. `EARLIEST` starts at the oldest retained record; `LATEST` copies records that become readable after startup. Saved progress overrides the start position. Use a dedicated `GROUP`. File input takes no `START` and reads up to its size at startup; later appends wait for the next run. [More examples](../design/grammar.md#valid-examples).
+Kafka input needs `WHERE` or `START`, not both. `EARLIEST` means oldest retained; `LATEST` means records readable after startup. Saved progress determines the start. File input takes no `START` and reads up to its size when the run starts. [Examples](../design/grammar.md#valid-examples).
 
 ## Stop and check results
 
-SIGINT/SIGTERM stop reading, allow up to ten seconds for writes and save confirmed progress. The CLI exits `1` if stopping takes longer than `worker.shutdown_timeout` (default 30 s); unsaved work may replay. Check stderr; `copy summary` reports `confirmed`, `filtered` and `skipped` counts.
-
-[Exit codes](../design/decisions.md#cli-and-exit-codes) describe only this worker’s outcome. A second signal forces termination.
+SIGINT/SIGTERM stop reading, allow ten seconds for writes, then save confirmed progress. A second signal forces termination. At `worker.shutdown_timeout` (default 30 s), the CLI exits `1`; unsaved work may replay. Check `copy summary` on stderr for `confirmed`, `filtered` and `skipped` counts. [Exit codes](../design/decisions.md#cli-and-exit-codes) describe only this worker's outcome.
 
 ## Resume or start over
 
-Resume with the same `GROUP`, endpoints, time filter and `CUTOFF`; use a new group for a new query. Saved `NOW()` bounds are reused.
+Rerun with the same `GROUP`, endpoints, filter, `CUTOFF` and checkpoint directory (default `~/.kaferry/checkpoints`). Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
 
-`GROUP = ONE_OFF` logs a new `group` in `one-off group generated`. To resume an interrupted run, quote that name as `GROUP`.
-
-Keep output, checkpoints and locks. Resume with the same `worker.checkpoint_dir` (default `~/.kaferry/checkpoints`). Lost output or progress requires a new group and, for file output, a new path. [Recovery rules](../design/decisions.md#output-recovery).
+Keep output, checkpoints and locks. Lost output or progress requires a new group and, for file output, a new path. [Recovery rules](../design/decisions.md#output-recovery).
 
 ## Errors
 
-Errors stop the copy by default. `ON_ERROR = SKIP` drops only identified records rejected before sending; broker rejections cannot be skipped. For a skippable error, add `ON_ERROR = SKIP` and rerun the same query. Skips appear in `copy summary`. [Policies](../design/decisions.md#errors), [SQL errors](../design/grammar.md#invalid-examples).
+Errors stop the copy by default. `ON_ERROR = SKIP` drops identified records rejected before sending; broker rejections cannot be skipped. Add it and rerun for skippable errors; skips appear in `copy summary`. [Policies](../design/decisions.md#errors) · [SQL errors](../design/grammar.md#invalid-examples).
 
 ## Workers
 
-For topic-to-topic copies, run the same command on each machine with identical SQL and named `GROUP`. Each process is a worker. Use fixed timestamps; `NOW()` can differ. Stop workers before upgrading Kaferry. File queries use one process.
-
-If a worker exits without any assigned partitions, rerun the same query and group to pick up unfinished work.
+For topic-to-topic copies, run identical SQL and a dedicated named `GROUP` on each machine. Each process is a worker. Use fixed timestamps; `NOW()` can differ. Stop workers before upgrading. File queries use one process. Rerun workers that received no partition assignment to pick up unfinished work.

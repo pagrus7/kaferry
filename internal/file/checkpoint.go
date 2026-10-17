@@ -83,15 +83,8 @@ type Checkpoints struct {
 }
 
 func NewCheckpoints(directory, group string, writer AtomicWriter) (*Checkpoints, error) {
-	info, err := os.Stat(directory)
-	if os.IsNotExist(err) {
-		return nil, conflict("worker.checkpoint_dir %q does not exist; to resume, configure the existing checkpoint directory; for a new job, create it first", directory)
-	}
-	if err != nil {
+	if err := validateCheckpointDirectory(directory); err != nil {
 		return nil, err
-	}
-	if !info.IsDir() {
-		return nil, conflict("worker.checkpoint_dir %q is not a directory", directory)
 	}
 	path := checkpointPath(directory, group)
 	f, err := openCheckpointLock(path)
@@ -109,6 +102,20 @@ func NewCheckpoints(directory, group string, writer AtomicWriter) (*Checkpoints,
 		c.frames[saved.Position] = saved.LastFrame
 	}
 	return c, nil
+}
+
+func validateCheckpointDirectory(directory string) error {
+	info, err := os.Stat(directory)
+	if os.IsNotExist(err) {
+		return conflict("worker.checkpoint_dir %q does not exist; to resume, configure the existing checkpoint directory; for a new job, create it first", directory)
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return conflict("worker.checkpoint_dir %q is not a directory", directory)
+	}
+	return nil
 }
 
 func checkpointPath(directory, group string) string {

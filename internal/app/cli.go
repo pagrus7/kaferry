@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/pagrus7/kaferry/internal/config"
+	"github.com/pagrus7/kaferry/internal/inspect"
 	"github.com/pagrus7/kaferry/internal/sql"
 	"go.uber.org/fx"
 )
@@ -48,7 +49,18 @@ func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, st
 		fmt.Fprintln(stderr, "component composition failed")
 		return 2
 	}
-	if err = command.Run(ctx, statement, options.configPath, budget); err != nil {
+	if options.command == "explain" {
+		var report inspect.Report
+		report, err = command.Explain(ctx, statement, options.configPath, budget)
+		if err == nil {
+			budget.Begin()
+			budget.Stage("printing explanation")
+			err = renderExplanation(stdout, report, options.json)
+		}
+	} else {
+		err = command.Run(ctx, statement, options.configPath, budget)
+	}
+	if err != nil {
 		budget.Begin()
 		budget.Stage("printing error")
 		printCommandError(stderr, options.file, err)
@@ -74,6 +86,8 @@ func printCommandError(output io.Writer, source string, err error) {
 }
 
 type commandOptions struct {
+	command    string
+	json       bool
 	statement  string
 	file       string
 	configPath string
@@ -81,12 +95,13 @@ type commandOptions struct {
 
 func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 	var options commandOptions
-	if len(args) == 0 || args[0] != "run" {
-		err := fmt.Errorf("usage: kaferry --version | run (--sql statement | --file path | --file -) [--config path]")
+	if len(args) == 0 || (args[0] != "run" && args[0] != "explain") {
+		err := fmt.Errorf("usage: kaferry --version | run|explain (--sql statement | --file path | --file -) [--config path]; explain accepts --json")
 		fmt.Fprintln(stderr, err)
 		return options, err
 	}
-	flags := flag.NewFlagSet("run", flag.ContinueOnError)
+	options.command = args[0]
+	flags := flag.NewFlagSet(options.command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&options.statement, "sql", "", "copy statement")
 	flags.StringVar(&options.statement, "e", "", "copy statement")
@@ -94,6 +109,9 @@ func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 	flags.StringVar(&options.file, "f", "", "statement file; - reads stdin")
 	flags.StringVar(&options.configPath, "config", "", "TOML configuration")
 	flags.StringVar(&options.configPath, "c", "", "TOML configuration")
+	if options.command == "explain" {
+		flags.BoolVar(&options.json, "json", false, "print a JSON explanation")
+	}
 	if err := flags.Parse(args[1:]); err != nil {
 		return options, err
 	}

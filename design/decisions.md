@@ -168,6 +168,26 @@ File-source checkpoints are atomically replaced in `~/.kaferry/checkpoints`, or 
 
 The checkpoint directory must exist; Kaferry does not search or migrate it. Another directory starts fresh for Kafka output and fails for existing file output. Locks belong to that directory, so different directories can duplicate a copy. [Resume and recovery instructions](../docs/usage.md#resume-or-start-over).
 
+## Inspection
+
+`explain` previews the same statement, configuration, identity and start-position rules as `run`. It never joins a group, consumes records, commits, creates/truncates files or takes locks. Metadata and checkpoints can change during inspection; this is not an atomic snapshot or a guarantee that a later run succeeds. Listed run permissions are requirements, not verified grants.
+
+Kafka rows show the start selected from saved progress or the start rule, plus retained/log-end offsets. `log end` includes open transactions. For a bounded window, `lookup end` is the first offset Kafka returns at or after `upper + CUTOFF`; `span` is `max(0, lookup end - start)`. Spans count offsets, not records. Timestamp order controls the runner's actual stop, so a lookup is not a stop offset or completion proof. No match prints `none`; negative cutoff boundaries cannot be looked up. Saved relative windows stay attached to each partition; new partitions adopt the lowest saved partition's window as in `run`. Fresh `NOW()` values are preview-only.
+
+File inspection reads the archive header, checkpoint and last checkpointed frame identity. It reports byte positions and acknowledged output extent without scanning records or recovering a tail. `ONE_OFF` never generates a group or inspects an existing checkpoint; the preview reports that a fresh group would be used.
+
+`--json` emits version 1 with these fields; time bounds use signed Unix milliseconds; byte and offset fields are counts. Connection properties and SQL text are excluded.
+
+| Fields | Meaning |
+| --- | --- |
+| `version`, `fingerprint`, `group`, `one_off`, `cutoff_ms` | Report format and query identity; one-off group is `ONE_OFF` |
+| `source`, `destination` | `kind`, `name`, optional connection alias, cluster/topic IDs, partition count, destination timestamp type |
+| Endpoint `file` | `exists`, `id`, `size_bytes`; source `start_bytes`, `window`, `checkpoint`, `checkpoint_exists`; destination `acknowledged_extent_bytes` when saved |
+| `partitions` | Sorted `partition`, `start`, `lookup_end`, `span`, `log_start`, `log_end`, `saved`, `window`, `window_origin` |
+| `window` | Inclusive `lower`, exclusive `upper`; null means unbounded. `window_origin`: `literal`, `saved`, `adopted` or `resolved` for preview-only NOW |
+| `lookup_end`, `span` | Null if unbounded, no match or a negative cutoff boundary |
+| `run_permissions`, `warnings` | Requirements and inspection limits; arrays may be empty |
+
 ## Configuration and CLI
 
 Connections use TOML profiles or `WITH CONNECTION`; SQL keys override TOML. `ENV('NAME')` resolves at startup, fails if unset and is redacted. Worker settings are in TOML.
@@ -225,12 +245,12 @@ Auto-commit/reset, group ID/protocol, read isolation, cooperative assignment, au
 
 ### CLI and exit codes
 
-Exactly one input: `run --file/-f path`, `run --sql/-e statement`, or `run --file -`. `--config/-c path` loads TOML. Events are JSON on stderr; nonzero exits also print a plain-text message after cleanup. Shutdown timeout diagnostics name the operation still running.
+Both `run` and `explain` accept exactly one input: `--file/-f path`, `--sql/-e statement`, or `--file -`. `--config/-c path` loads TOML. `explain` writes text or `--json` to stdout; `run` keeps stdout empty. Events are JSON on stderr; nonzero exits also print a plain-text message after cleanup. Shutdown timeout diagnostics name the operation still running.
 
 | Normal exit | Meaning |
 | --- | --- |
-| 0 | This worker finished its file input or remaining assigned Kafka partitions, or a signal cleanly stopped a copy from Kafka with no end time. SKIP counts do not change the code |
-| 1 | Copy, cleanup or the shutdown deadline failed, or a signal interrupted startup, a file copy, or a Kafka copy with an end time. Conflicts after the first consumed record also exit 1 |
+| 0 | The preview was printed, or this worker finished its file input or remaining assigned Kafka partitions, or a signal cleanly stopped a copy from Kafka with no end time. SKIP counts do not change the code |
+| 1 | Copy, inspection, output, cleanup or the shutdown deadline failed, or a signal interrupted startup, a file copy, or a Kafka copy with an end time. Conflicts after the first consumed record also exit 1 |
 | 2 | Usage/parse/plan/configuration error, or identity/ownership/self-copy conflict before the first consumed record |
 | 3 | For a copy from Kafka with an end time, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |
 

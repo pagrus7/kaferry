@@ -63,3 +63,19 @@ func ValidateWindow(progress Progress, spec plan.WindowSpec, cutoff int64) error
 	}
 	return nil
 }
+
+// FileExtent combines the destination identity and acknowledged extent in commits.
+func FileExtent(saved map[int32]Progress) (string, int64, error) {
+	var id string
+	var extent int64
+	for _, partition := range saved {
+		if partition.FileID != "" {
+			if id != "" && id != partition.FileID {
+				return "", 0, conflict("commits name different destination files")
+			}
+			id = partition.FileID
+		}
+		extent = max(extent, partition.Extent)
+	}
+	return id, extent, nil
+}

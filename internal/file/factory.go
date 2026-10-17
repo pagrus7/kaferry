@@ -54,15 +54,9 @@ func (f *Factory) OpenSource(p plan.Plan, fp string, limits config.Worker) (Inpu
 	if err != nil {
 		return nil, err
 	}
-	var directory string
-	if limits.CheckpointDir != nil {
-		directory = *limits.CheckpointDir
-	} else {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, conflict("cannot resolve the default checkpoint directory; set HOME or worker.checkpoint_dir")
-		}
-		directory = filepath.Join(home, ".kaferry", "checkpoints")
+	directory, err := checkpointDirectory(limits)
+	if err != nil {
+		return nil, err
 	}
 	checkpoints, err := NewCheckpoints(directory, p.Group, f.writer)
 	if err != nil {
@@ -74,6 +68,17 @@ func (f *Factory) OpenSource(p plan.Plan, fp string, limits config.Worker) (Inpu
 		return nil, err
 	}
 	return &input{Source: source, checkpoints: checkpoints}, nil
+}
+
+func checkpointDirectory(limits config.Worker) (string, error) {
+	if limits.CheckpointDir != nil {
+		return *limits.CheckpointDir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", conflict("cannot resolve the default checkpoint directory; set HOME or worker.checkpoint_dir")
+	}
+	return filepath.Join(home, ".kaferry", "checkpoints"), nil
 }
 
 func (f *Factory) OpenOutput(p plan.Plan, fp string, progress DestinationProgress, limits config.Worker) (OutputSink, error) {

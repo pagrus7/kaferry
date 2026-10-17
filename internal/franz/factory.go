@@ -47,6 +47,22 @@ func (f *Factory) Validate(p plan.Plan, limits config.Worker) error {
 	return nil
 }
 func (f *Factory) Open(ctx context.Context, endpoint plan.Endpoint) (kafkaport.Connection, error) {
+	connection, err := f.open(ctx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	return connection, nil
+}
+
+func (f *Factory) OpenInspection(ctx context.Context, endpoint plan.Endpoint) (kafkaport.InspectionConnection, error) {
+	connection, err := f.open(ctx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	return connection, nil
+}
+
+func (f *Factory) open(ctx context.Context, endpoint plan.Endpoint) (*connection, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
