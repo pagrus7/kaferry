@@ -60,7 +60,7 @@ func TestLoadReportIdentifiesExecutedBinary(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	// Then the report identifies the binary that ran, without rebuilding it.
+	// Then the report hashes the binary that ran despite the unrelated override.
 	files, err := filepath.Glob(filepath.Join(directory, "*.metrics.json"))
 	if err != nil || len(files) != 1 {
 		t.Fatal("missing report", files, err)
