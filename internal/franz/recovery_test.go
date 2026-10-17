@@ -218,8 +218,8 @@ func TestCompactedOffsetsReachTheBoundedEnd(t *testing.T) {
 			// When reading through the compacted tail with a bounded time range.
 			err = runComponentCopy(deadline, p, config.Defaults(t.TempDir()).Worker)
 			// Then the batch's consumed end is saved, and every retained record is copied.
-			if err != nil {
-				t.Fatalf("did not complete across compacted offsets: %v", err)
+			if err != nil || deadline.Err() != nil {
+				t.Fatalf("did not complete across compacted offsets: copy=%v context=%v", err, deadline.Err())
 			}
 			saved, err := kadm.NewClient(producer).FetchOffsets(componentContext(t), p.Group)
 			if err != nil || saved["input"][0].At != 10 {
@@ -236,8 +236,9 @@ func TestCompactedOffsetsReachTheBoundedEnd(t *testing.T) {
 				}
 			}
 			// When the same query restarts at the verified end.
-			if err := runComponentCopy(componentContext(t), p, config.Defaults(t.TempDir()).Worker); err != nil {
-				t.Fatal(err)
+			restart := componentContext(t)
+			if err := runComponentCopy(restart, p, config.Defaults(t.TempDir()).Worker); err != nil || restart.Err() != nil {
+				t.Fatalf("restart did not complete: copy=%v context=%v", err, restart.Err())
 			}
 			// Then completed compacted offsets do not produce another write.
 			if got := cluster.PartitionInfo("output", 0).HighWatermark; got != want {
