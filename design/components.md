@@ -28,7 +28,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Kafka positioning | [kafkaport](../internal/kafkaport) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetReader, TimeReader; client conversions in franz |
 | Kafka input | [franz](../internal/franz) | Hand off callbacks/fetches to the core loop; position, pause and prove gaps | ConsumerClient, sourceMetadata, gapReader, rebalanceBridge |
 | Kafka output | [franz](../internal/franz) | Validate records, bound admission and report asynchronous deliveries | ProducerClient, destinationMetadata, Clock |
-| Kafka commits | [franz](../internal/franz) | Snapshot progress and file extent; attach it to member-fenced commits | offsetCommitter, core.OutputProgress |
+| Kafka commits | [franz](../internal/franz) | Snapshot progress and file extent; attach it to member-fenced commits | offsetCommitter, copy.OutputProgress |
 | Shutdown budget | [app/shutdown.go](../internal/app/shutdown.go) | Enforce whole-process stop deadline; identify the blocked operation | StopObserver, Shutdown; CLI alone owns termination |
 | File adapters | [file](../internal/file) | Encode/decode frames, snapshot input, recover output, persist checkpoints | ArchiveDecoder, ArchiveEncoder, CheckpointStore, I/O ports |
 | File publication | [file](../internal/file) | Publish a durable header without replacing another creator | Publisher, private filesystem port |
@@ -73,11 +73,18 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 
 Time-window arithmetic, boundaries and overflow use deterministic unit tests in `make check`. Set `FUZZ_ITERATIONS` to change the per-target fuzz budget; failures remain fatal.
 
-Soak defaults to two minutes locally; `KAFERRY_SOAK_DURATION` overrides it (minimum one minute). The extended-test workflow defaults to 30 minutes, configurable on manual dispatch, and stalls the destination. Plaintext fixtures warm the group coordinator with the Java CLI; TLS fixtures check readiness with consumer `Committed`. Broker integration does not cover cold coordinator startup; isolated protocol component tests withhold coordinator, join, offset, commit and fetch replies and check cleanup. [Client limits](client-compatibility.md#operational-limits).
+### Coverage limits
+
+- Broker fixtures wait for a ready group coordinator: plaintext fixtures use the Java CLI; TLS fixtures use consumer `Committed`. Broker tests therefore do not cover cold coordinator startup.
+- Component tests in `make check` withhold coordinator, join, offset, commit and fetch replies and check cleanup.
+
+See [client limits](client-compatibility.md#operational-limits) for deployment constraints.
 
 ### Test results
 
 [scripts/ci.py](../scripts/ci.py) writes logs, environment/result JSON and measurements to ignored `build-results/`, setting `KAFERRY_REPORT_DIR`. Direct load/soak commands need that variable to save metrics.
+
+Soak defaults to two minutes locally. `KAFERRY_SOAK_DURATION` overrides it (minimum one minute):
 
 ```sh
 make broker
@@ -97,18 +104,18 @@ KAFERRY_SOAK_DURATION=30m \
 python3 scripts/ci.py soak make soak
 ```
 
-[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. [Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) run load, soak, fault, security/failover, fuzz and benchmarks weekly and on manual dispatch. Artifacts retain logs and measurements for 30 days.
+[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. [Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) run weekly and on manual dispatch. Artifacts retain logs and measurements for 30 days.
 
 ### Quality indicators
 
 | Indicator | Where / meaning |
 | --- | --- |
-| CI | README badge; vet, race-enabled tests, build and broker integration |
-| Go coverage | README badge and Codecov PR/file view show line coverage; Actions summarizes weighted Go statement coverage per suite. All Go packages are instrumented; Codecov combines unit/mock/file-component and broker integration coverage. Test-fixture native code is excluded |
+| CI | README badge; formatting and documentation checks, vet, race-enabled tests, build, license-notice validation and broker integration |
+| Go coverage | README badge and Codecov PR/file view show line coverage; Actions summarizes weighted Go statement coverage per suite. All Go packages are instrumented; Codecov combines unit/mock/file-component and broker integration coverage |
 | Static analysis | [Quality workflow](https://github.com/pagrus7/kaferry/actions/workflows/quality.yml): Staticcheck and CodeQL for Go, Python and workflows |
 | Security | govulncheck fails on reachable Go advisories; CodeQL findings and Dependabot alerts appear in GitHub Security. Dependency review checks PRs; updates require review |
 | Complexity / duplication | Quality summary/artifact: gocyclo maximum/top ten, exact clones ≥100 tokens and ≥10 lines. Identical tools scan the PR base; no arbitrary score gates |
-| Extended tests | README badge; weekly default 30-minute soak plus load, fault, ACL/failover, fuzz and CBOR benchmarks |
+| Extended tests | README badge; load, fault, ACL/failover, fuzz, CBOR benchmarks and a 30-minute soak with destination stalls. Soak duration is configurable on manual dispatch |
 | Performance | Dated SHA/environment JSON and summaries: throughput, sampled RSS/growth, lag, caps, shutdown, ns/op and allocations. Prior successful measurements compare only matching settings; shared runners provide no regression gate |
 
 Missing measurements are unavailable. Coverage and vulnerability scans describe Go code; badges report only the listed checks.
@@ -121,4 +128,4 @@ The workflow builds Linux AMD64/ARM64 static binaries and macOS AMD64/ARM64 bina
 
 For downloads with attestation bundles, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document`. Attestations establish build origin. Downloads without these bundles can be checked against `SHA256SUMS` for file integrity.
 
-Pushing a `v*` tag publishes after successful builds. Manual dispatch defaults to validation only; publishing requires selecting the version tag as the workflow ref. Checkout must match the attested workflow SHA. [Release procedure and note format](../releases/README.md).
+Manual dispatch defaults to validating builds without publishing. Publishing requires a `v*` tag; the workflow checks that the built commit matches the tag. [Release procedure and note format](../releases/README.md).

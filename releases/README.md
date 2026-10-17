@@ -19,7 +19,7 @@ One sentence describing this release.
 
 ## Known issues
 
-- Current protection and resulting behavior first, then remaining risk, impact and action; link upstream issues. Keep mechanisms and test evidence in linked reference docs.
+- Briefly state the limitation and affected scope; link an upstream issue when one exists. For mitigated failures, state the protection and remaining risk together.
 
 ## Downloads
 
@@ -33,11 +33,11 @@ Supported platforms, prerequisites and available verification files.
 ## Procedure
 
 1. Inspect the intended tag's source, dependency versions and upgrade changes. Write its notes and validate with `python3 scripts/release_notes.py vX.Y.Z`. Update living known-issue docs with current behavior, without release chronology; do not copy the release's change narrative into them.
-2. Reread changed docs, comments and diagnostics as a user of the current version. Check behavior, scope, impact, action and limits against the tagged implementation. Include the `Docs review` required by [AGENTS.md](../AGENTS.md) in the PR body. Run the checks appropriate to the changed behavior. See [test targets](../design/components.md#test-targets) and [release evidence](../design/components.md#release-evidence).
+2. Reread changed docs, comments and diagnostics as a user of the current version. Check each claim against the tagged implementation; remove repetition, investigation history and unnecessary detail. Include the `Docs review` required by [AGENTS.md](../AGENTS.md) in the PR body. Run the checks appropriate to the changed behavior. See [test targets](../design/components.md#test-targets) and [release evidence](../design/components.md#release-evidence).
 3. Commit the notes with the release changes. Push an annotated `vX.Y.Z` tag on the reviewed commit; the release workflow builds and publishes. Manual dispatch without publishing validates builds. Manual publishing must select that version tag.
 4. Check the GitHub release body, assets and checksums after publishing. Verify each archive contains `kaferry`, `LICENSE` and `THIRD_PARTY_NOTICES.txt`; the workflow checks `--version` against the tag and commit on each platform. Keep notes aligned with that tag. If a tagged build fails, fix the problem and use a new version tag.
 
-Build with `CGO_ENABLED=0`. Verify all four release targets and review licenses for linked Go packages, including licenses in subdirectories. `scripts/notices.py` uses the binary's module/toolchain versions and the linked package inventory; do not substitute the test fixtures' dependency list. Linux archives must contain static binaries without an ELF interpreter.
+Build with `CGO_ENABLED=0` and verify all four release targets. Linux binaries must not need a dynamic linker. `scripts/notices.py` collects licenses, including subdirectory licenses, from packages linked by `cmd/kaferry` in the checkout; it checks that the binary uses the same Go toolchain. Run it on the checkout that built the binary and review the notices. Do not derive notices from `go.mod`, which also lists test-only dependencies.
 
 To correct published prose, edit the tracked note file, then validate before updating the body. Keep tags and assets unchanged:
 

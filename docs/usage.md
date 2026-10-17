@@ -2,7 +2,7 @@
 
 ## Run a copy
 
-Use [quick start](../README.md#quick-start) SQL and profiles; add its authentication prefix where needed. Use your binary path. Choose one of `-f file`, `-f -` (stdin) or `-e "SQL"`; `-c` loads TOML. Flags: `kaferry run -h`.
+Create `connections.toml` as in [quick start](../README.md#quick-start). Commands below assume `kaferry` is on `PATH`; otherwise use its path, such as `bin/kaferry`. Choose `-f file`, `-f -` (stdin) or `-e "SQL"`; `-c` loads TOML. Help: `kaferry run -h`.
 
 **Archive retained records, then follow new ones.** Create the output directory:
 
@@ -45,7 +45,7 @@ Without `-c`, no TOML is loaded. SQL overrides TOML; topics without `@alias` use
 
 For existing topics on Kafka 3.9 StandardAuthorizer, Kafka input needs only source topic/group READ; Kafka output needs only destination WRITE. These imply DESCRIBE. File-only copies need no Kafka grants. Other brokers/authorizers may require cluster IDEMPOTENT_WRITE.
 
-Kafka-source `ONE_OFF` needs the `kaferry-` group prefix.
+For Kafka-source `ONE_OFF`, grant group READ on the `kaferry-` prefix.
 
 Destination DESCRIBE_CONFIGS is optional; without it, Kaferry warns and skips checks that need those settings. [Fallbacks](../design/client-compatibility.md#optional-destination-configuration).
 

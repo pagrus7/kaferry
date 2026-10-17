@@ -27,7 +27,7 @@ Saved commits take precedence. Without a commit:
 | No `WHERE`, group has no valid progress | `START = EARLIEST` or `LATEST` |
 | No `WHERE`, group already has valid progress | Earliest retained offset for the uncommitted partition |
 
-`LATEST` and a timestamp lookup with no match use the read-committed end (last stable offset, LSO), so records in open transactions remain eligible. Initial positions are committed before copying. Every partition is positioned explicitly; Automatic offset reset is disabled; an out-of-range position fails.
+`LATEST` and a timestamp lookup with no match use the read-committed end (last stable offset, LSO), so records in open transactions remain eligible. Initial positions are committed before copying. Every partition is positioned explicitly; automatic offset reset is disabled. Out-of-range positions follow the rules below.
 
 - Commit below log start: resume at log start; log old position, log start and offset gap, which is not a lost-record count.
 - Commit above log end: fail as truncation. An out-of-range position during copying fails; restart reevaluates it.
@@ -44,7 +44,11 @@ A Kafka partition with an upper bound stops when either:
 
 ### Catching up
 
-After the time threshold passes and the partition reaches its read-committed tip, sample the read-uncommitted log end H once for that attempt. H includes records in open transactions; the consumer continues to read only committed records. Complete when the consumed cursor reaches H, including aborted/control records, and all prior work resolves. H = 0 completes immediately. An open transaction delays completion until it commits or aborts; `worker.tip_wait` (default 15 min) bounds waiting after H is sampled. Timeout fails with H and the stable/consumed positions. Sampling logs H and the current positions. H is neither shared nor persisted.
+1. After wall time passes `hi + CUTOFF` and the partition reaches its read-committed tip, Kaferry records the log end **H**, including open transactions. H stays fixed for this assignment.
+2. Continue reading only committed records. Stop when the consumed position reaches H, accounting for aborted/control records, and all earlier work is resolved. H = 0 completes immediately.
+3. An open transaction delays completion until it commits or aborts. If H is not reached within `worker.tip_wait` (default 15 min) after sampling, fail the run.
+
+Sampling and timeout logs include H and the stable/consumed positions. H is local to this worker and is not saved for restart.
 
 A timestamp stop commits at the trigger record, so rerunning stops there again. A tip stop commits the next position, so rerunning may copy later arrivals. Without an upper bound, Kafka sources follow indefinitely.
 
@@ -52,14 +56,21 @@ File sources read from their checkpoint or first frame to the size observed at o
 
 ## Groups and workers
 
+### Group names
+
 - `GROUP` identifies a Kafka consumer group or a file-source checkpoint. `GROUP = ONE_OFF` generates and logs `kaferry-<hex>` for a single worker. Successful file-source ONE_OFF runs delete the checkpoint but retain its stable lock; Kafka progress expires under broker offset retention.
 - Topic→topic workers share a named group and progress independently using classic `cooperative-sticky` assignment. There is no group-wide done marker or external coordinator.
-- Before subscription, group inspection rejects foreign/invalid progress and active members whose client IDs do not start with `kaferry-` or are assigned to another topic. An absent group passes; an unavailable check fails. The topic check sees assigned partitions, so it cannot check the subscriptions of members with no partitions. Positioning validates progress again after assignment.
+
+### When a worker exits
+
 - A worker exits `0` after every partition it still holds stops, its outstanding writes are acknowledged and progress is committed. Partitions released during a rebalance do not count. Copies from Kafka without an end time keep waiting for new records or assignments until signalled.
 - For a copy from Kafka with an end time, the wait starts when Kafka reports an empty assignment while the worker holds no partitions. If it still has none after `worker.idle_exit` (30 seconds by default), it exits `3`. Another empty-assignment notification restarts the timer. Waiting for the first assignment notification or losing all partitions during a rebalance does not start it. The exit logs `local idle exit`, the timeout and the code. A worker assigned an empty partition does not exit this way.
 - More workers than source partitions can leave some workers with no partitions to read. This can also happen while Kafka moves partitions between workers. Code `3` does not tell you whether other workers finished. If the last workers exit before a partition reaches its new owner, that partition can remain unfinished. Rerunning the same query and group resumes saved positions and may copy late arrivals.
 - If your supervisor restarts workers on nonzero exits, set a policy for code `3`. Restarting rejoins the group and can give the worker partitions to copy.
-- On revocation, stop reading the revoked partitions, commit the confirmed prefix and release without waiting for outstanding deliveries. Discard their late outcomes; the new owner replays uncommitted records. Ownership loss never commits.
+
+### Rebalances
+
+- When Kafka revokes partitions, stop reading them, save already-confirmed progress and release them without waiting for outstanding deliveries. Discard their late outcomes; the new owner replays uncommitted records. A worker that has lost ownership does not commit.
 - Recoverable rebalance/coordinator/timeout/transport errors during revocation commit are logged and released for replay. Authorization, fencing, fatal/unknown errors, oversized metadata and missing results fail. Initial and periodic commits fail on any error.
 - Rebalancing can discover added source partitions; additions after workers exit need another run. Groups cannot seed from another group's offsets.
 
@@ -77,6 +88,8 @@ Policies can therefore change to SKIP when resuming a failed record. `NOW()` bou
 - Startup and assignment reject mismatched fingerprints/topic IDs, foreign metadata and missing saved `NOW()` windows. Topic IDs must be nonzero. Source identity is checked at startup and assignment, without continuous monitoring; destination recreation is not detected.
 - File-source checkpoints store fingerprint, resolved window, source file ID, last-frame CRC and next position; file output also stores destination ID and acknowledged extent. Output headers store group, file ID and fingerprint.
 
+Before subscribing, group inspection also rejects active members whose client IDs do not start with `kaferry-` or are assigned to another topic. An absent group passes; an unavailable check fails. The topic check sees assigned partitions, so it cannot check subscriptions of members with no partitions.
+
 ## Kafka output
 
 - One asynchronous idempotent producer per worker, with delivery reports and client batching.
@@ -92,7 +105,7 @@ Policies can therefore change to SKIP when resuming a failed record. `NOW()` bou
 ## Delivery and progress
 
 - Kafka sources read committed records. A Kafka delivery report or file fsync acknowledges output before source progress is saved.
-- Batches are bounded and non-atomic. Commit only each partition's contiguous resolved prefix: filtered, delivered or explicitly skipped. Consumed positions account for Kafka offset gaps.
+- Batches are bounded and non-atomic. Save a partition's next position only after all earlier consumed records are delivered, filtered or explicitly skipped. Consumed positions account for Kafka offset gaps.
 - A later failure leaves earlier output intact. Restart can duplicate output acknowledged after the last saved position, and revisits the failing record unless conditions or policy change.
 - Default uncommitted caps: 5,000 records / 16 MiB per partition; 20,000 records / 128 MiB per worker. Pause reading at a cap until commit succeeds; a single oversized record may proceed alone. These bound tracked work, not total process memory, which also includes client buffers and overhead.
 - Commit all worker partitions in one request, with at most one request in flight: every second, at 50% of a worker/partition cap, while paused at a cap with confirmed progress, and on shutdown/revocation. Check results per partition.
