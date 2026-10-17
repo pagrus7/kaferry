@@ -122,22 +122,23 @@ Missing measurements are unavailable. Coverage and vulnerability scans describe 
 
 ### Local reviews
 
-Every local PR review includes independent **docs**, **tests** and **simplicity** reviews. The [agents](../.claude/agents) use Opus 5.5 at HIGH effort; the [local workflow](../.claude/skills/review-local/SKILL.md) runs all three. Simplicity covers implementation, tests and docs: remove unnecessary work unless current requirements, demonstrated failures or compatibility justify it.
+Each PR needs independent **docs**, **tests** and **simplicity** reviews. [AGENTS.md](../AGENTS.md) defines when to run them and what to record; the [local workflow](../.claude/skills/review-local/SKILL.md) runs the [three agents](../.claude/agents).
 
-Use Claude Code's subscription login (`claude auth login`). Unset `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`; verify `claude auth status` reports `claude.ai` before starting. [Authentication](https://code.claude.com/docs/en/authentication).
+Use Claude Code's subscription login (`claude auth login --claudeai`). Continue only if the auth method is `claude.ai`. [Authentication](https://code.claude.com/docs/en/authentication).
 
 From the repository root, in either Claude Code or Codex's terminal:
 
 ```sh
+git fetch origin main
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 claude auth status
-claude -p '/review-local origin/main' --model claude-opus-5-5 --effort high
+CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 \
+  claude -p '/review-local' --model claude-opus-5-5 --effort high
 ```
 
-Inside an existing Claude Code subscription session, use `/review-local origin/main`. The base defaults to `origin/main`; the workflow also includes staged, unstaged and relevant untracked changes. Fetch your intended base before starting.
+The environment setting keeps terminal reviews in the foreground until reports are complete. In an existing Claude Code subscription session, use `/review-local [base]`. The base defaults to `origin/main`; staged, unstaged and relevant untracked changes are also reviewed. Fetch a different base first if needed.
 
-Reviewers inspect files without editing or running tests; normal CI and local test commands run separately. Calls use subscription limits. Provider limits, denied necessary reads and partial reports leave the review incomplete. Fix findings and request targeted follow-up, including effects on the other aspects, before recording final results for the reviewed changes.
-
-[AGENTS.md](../AGENTS.md) requires all three before creating, updating or merging a PR. Record scope and findings in the PR template's `Docs review`, `Tests review` and `Simplicity review` sections; include concrete simplifications or evidence for keeping complexity.
+Reviewers inspect files without running tests; CI and local test commands run separately. Calls count against subscription limits.
 
 ### Release evidence
 

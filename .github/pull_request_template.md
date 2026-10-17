@@ -6,9 +6,11 @@
 
 <!-- Checks actually run, results and remaining limits. -->
 
+Local review scope: <!-- Base/head and any uncommitted changes; applies to all three reviews. -->
+
 ## Docs review
 
-<!-- Reviewed base/head and uncommitted scope; reviewer result and finding dispositions. -->
+<!-- Result/dispositions; current behavior first, history only in releases/commits/PRs, links support claims. -->
 
 ## Tests review
 
