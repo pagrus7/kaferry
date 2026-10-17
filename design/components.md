@@ -28,7 +28,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Kafka positioning | [kafkaport](../internal/kafkaport) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetReader, TimeReader; client conversions in franz |
 | Kafka input | [franz](../internal/franz) | Hand off callbacks/fetches to the core loop; position, pause and prove gaps | ConsumerClient, sourceMetadata, gapReader, rebalanceBridge |
 | Kafka output | [franz](../internal/franz) | Validate records, bound admission and report asynchronous deliveries | ProducerClient, destinationMetadata, Clock |
-| Kafka commits | [franz](../internal/franz) | Snapshot progress and file extent; attach it to member-fenced commits | offsetCommitter, copy.OutputProgress |
+| Kafka commits | [franz](../internal/franz) | Save positions and, for file outputs, file ID and extent; reject commits without a group member ID and generation | offsetCommitter, copy.OutputProgress |
 | Shutdown budget | [app/shutdown.go](../internal/app/shutdown.go) | Enforce whole-process stop deadline; identify the blocked operation | StopObserver, Shutdown; CLI alone owns termination |
 | File adapters | [file](../internal/file) | Encode/decode frames, snapshot input, recover output, persist checkpoints | ArchiveDecoder, ArchiveEncoder, CheckpointStore, I/O ports |
 | File publication | [file](../internal/file) | Publish a durable header without replacing another creator | Publisher, private filesystem port |
@@ -84,7 +84,7 @@ See [client limits](client-compatibility.md#operational-limits) for deployment c
 
 [scripts/ci.py](../scripts/ci.py) writes logs, environment/result JSON and measurements to ignored `build-results/`, setting `KAFERRY_REPORT_DIR`. Direct load/soak commands need that variable to save metrics.
 
-Soak defaults to two minutes locally. `KAFERRY_SOAK_DURATION` overrides it (minimum one minute):
+Soak defaults to two minutes locally. `KAFERRY_SOAK_DURATION` overrides it (minimum one minute).
 
 ```sh
 make broker

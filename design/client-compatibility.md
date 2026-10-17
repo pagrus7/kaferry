@@ -32,10 +32,10 @@ Startup attempts `DescribeConfigs` on the destination topic. Denial or failure l
 | Setting | Use | Fallback when unreadable |
 | --- | --- | --- |
 | `max.message.bytes` | Set batch ceiling and queue allowance; cap an explicit client limit | Default 1,000,000 or explicit `message.max.bytes`; broker may reject oversized batches |
-| `message.timestamp.type` | Known LogAppendTime lets the broker restamp records | Apply client-safe timestamp bounds even if the broker could restamp |
+| `message.timestamp.type` | Known LogAppendTime lets the broker restamp records | Apply [client-safe timestamp bounds](decisions.md#kafka-output) even if the broker could restamp |
 | Timestamp before/after bounds; legacy difference bound | Check CreateTime timestamps before submission, allowing record-level SKIP | Broker rejection stops the run under every policy |
 
-Size preflight counts an uncompressed single-record batch and the client’s 4–5 byte outer framing. Compression, changed settings or clock skew can change broker acceptance. Size preflight can refuse a record up to 5 bytes below the broker limit; timestamp preflight can skip a record the broker would accept. Both refusals support SKIP. Kafka output rejects timestamps outside ±9,223,372,036,854 Unix milliseconds unless known LogAppendTime will restamp them.
+Size preflight counts an uncompressed single-record batch and the client’s 4–5 byte outer framing. Compression, changed settings or clock skew can change broker acceptance. Size preflight can refuse a record up to 5 bytes below the broker limit; timestamp preflight can skip a record the broker would accept. Both refusals support SKIP.
 
 ## Kafka requests
 
@@ -59,11 +59,9 @@ Completion samples the log end including open transactions. A stable offset alon
 
 ## Operational limits
 
-- Consumer polling can retry temporary network, leader and coordinator errors indefinitely. Required inspections and initial/periodic commits stop the run on error or deadline; writes use the delivery timeout. If Kafka reports that this worker is no longer a group member, it exits 1; rerun to rejoin.
-- SIGINT/SIGTERM stop reads, allow up to ten seconds for outstanding writes, then save confirmed progress. The CLI's overall shutdown deadline defaults to 30 s and covers cleanup and blocked I/O. Expiry exits 1 without further cleanup; records after the last saved position can replay. Set `worker.shutdown_timeout` for your environment; a second signal forces termination.
+- If Kafka reports that this worker is no longer a group member, it exits 1; rerun to rejoin.
 - Leaving the group allows up to 5 s. A failed leave exits 1, even if progress was already saved. Other workers may wait for the session timeout before receiving its partitions. Resume with the same named group.
 - If a gap check reports an unknown source topic or partition, the run stops; rerun after the topic is available. Source replica reassignment is untested and may trigger this.
 - A delivery timeout can occur after the broker appended the record. The failed record stays unconfirmed and can duplicate on restart; later records cannot advance that partition's saved prefix past it.
-- Raw key/value bytes, duplicate headers, NUL/non-UTF-8 header names, nulls and zero/negative timestamps are supported. Kafka's −1 timestamp means missing. Destination LogAppendTime replaces timestamps; retention can remove old records.
-- Uncommitted-work caps bound tracked work. Fetch byte limits are soft; client buffers, decompression and one oversized record can add memory. [Connection mappings](decisions.md#connection-properties).
-- Group checks see assigned partitions, so they cannot inspect subscriptions of members assigned none. [Identity limits](decisions.md#identity).
+
+For retries, shutdown, memory and group checks, see [Errors](decisions.md#errors), [Delivery and progress](decisions.md#delivery-and-progress), [connection properties](decisions.md#connection-properties) and [Identity](decisions.md#identity).

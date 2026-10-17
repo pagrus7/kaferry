@@ -19,7 +19,7 @@ One sentence describing this release.
 
 ## Known issues
 
-- Briefly state the limitation and affected scope; link an upstream issue when one exists. For mitigated failures, state the protection and remaining risk together.
+- Briefly name the affected dependency, limitation and scope; link an upstream issue when one exists. For mitigated failures, state the protection and remaining risk together.
 
 ## Downloads
 
@@ -37,7 +37,7 @@ Supported platforms, prerequisites and available verification files.
 3. Commit the notes with the release changes. Push an annotated `vX.Y.Z` tag on the reviewed commit; the release workflow builds and publishes. Manual dispatch without publishing validates builds. Manual publishing must select that version tag.
 4. Check the GitHub release body, assets and checksums after publishing. Verify each archive contains `kaferry`, `LICENSE` and `THIRD_PARTY_NOTICES.txt`; the workflow checks `--version` against the tag and commit on each platform. Keep notes aligned with that tag. If a tagged build fails, fix the problem and use a new version tag.
 
-Build with `CGO_ENABLED=0` and verify all four release targets. Linux binaries must not need a dynamic linker. `scripts/notices.py` collects licenses, including subdirectory licenses, from packages linked by `cmd/kaferry` in the checkout; it checks that the binary uses the same Go toolchain. Run it on the checkout that built the binary and review the notices. Do not derive notices from `go.mod`, which also lists test-only dependencies.
+Build with `CGO_ENABLED=0` and verify all four release targets. Linux binaries must not need a dynamic linker. `scripts/notices.py` collects licenses, including subdirectory licenses, from packages linked by `cmd/kaferry` in the checkout; it fails if the binary was built with a different Go version. Run it on the checkout that built the binary and review the notices. Do not derive notices from `go.mod`, which also lists test-only dependencies.
 
 To correct published prose, edit the tracked note file, then validate before updating the body. Keep tags and assets unchanged:
 

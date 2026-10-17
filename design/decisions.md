@@ -5,7 +5,7 @@ Completion, delivery and restart contracts. See the [usage guide](../docs/usage.
 ## Scope
 
 - Copies topic→topic, topic→file, file→topic and file→file with one SQL-like statement; no transformations or Schema Registry access.
-- Preserves raw key/value bytes, null versus empty, and ordered headers including duplicates, subject to [client limits](client-compatibility.md#operational-limits). Files retain timestamp values and types; Kafka output follows the destination's timestamp rules.
+- Preserves raw key/value bytes, null versus empty, and ordered headers including duplicates and NUL/non-UTF-8 names, subject to [client limits](client-compatibility.md). Files retain timestamp values and types; Kafka output follows the destination's timestamp rules.
 - Payloads are opaque. Users must ensure byte formats and Schema Registry IDs are compatible with the destination.
 - Delivery is at least once for records selected before completion: output acknowledgment precedes source progress. Crashes and rebalances can duplicate output. Filters, SKIP, completion rules and retention can omit records.
 
@@ -40,13 +40,13 @@ A Kafka partition with an upper bound stops when either:
 1. It encounters a timestamp strictly greater than `hi + CUTOFF`.
 2. Wall time passes `hi + CUTOFF` and it catches up as described below.
 
-`CUTOFF` defaults to one minute. This is a heuristic: later offsets can have earlier timestamps. For an end of 10:00 and one-minute cutoff, a 10:02 record stops the partition; a subsequent 09:59 record is missed, even if already present. Each stop logs its reason, partition, cursor and trigger time; unusually future-dated triggers are flagged.
+`CUTOFF` defaults to one minute. This is a heuristic: later offsets can have earlier timestamps. For an end of 10:00 and one-minute cutoff, a 10:02 record stops the partition; a subsequent 09:59 record is missed, even if already present. Each stop logs its reason, partition and position. Timestamp stops also log the trigger timestamp and flag it if more than one minute ahead of the local clock; tip stops log H.
 
 ### Catching up
 
 1. After wall time passes `hi + CUTOFF` and the partition reaches its read-committed tip, Kaferry records the log end **H**, including open transactions. H stays fixed for this assignment.
-2. Continue reading only committed records. Stop when the consumed position reaches H, accounting for aborted/control records, and all earlier work is resolved. H = 0 completes immediately.
-3. An open transaction delays completion until it commits or aborts. If H is not reached within `worker.tip_wait` (default 15 min) after sampling, fail the run.
+2. Kaferry keeps reading only committed records. The partition stops when its consumed position reaches H, accounting for aborted/control records. H = 0 completes immediately. The worker waits until earlier records are delivered, filtered or skipped before exiting.
+3. An open transaction delays completion until it commits or aborts. If H is not reached within `worker.tip_wait` (default 15 min) after sampling, Kaferry fails the run.
 
 Sampling and timeout logs include H and the stable/consumed positions. H is local to this worker and is not saved for restart.
 
@@ -65,7 +65,7 @@ File sources read from their checkpoint or first frame to the size observed at o
 
 - A worker exits `0` after every partition it still holds stops, its outstanding writes are acknowledged and progress is committed. Partitions released during a rebalance do not count. Copies from Kafka without an end time keep waiting for new records or assignments until signalled.
 - For a copy from Kafka with an end time, the wait starts when Kafka reports an empty assignment while the worker holds no partitions. If it still has none after `worker.idle_exit` (30 seconds by default), it exits `3`. Another empty-assignment notification restarts the timer. Waiting for the first assignment notification or losing all partitions during a rebalance does not start it. The exit logs `local idle exit`, the timeout and the code. A worker assigned an empty partition does not exit this way.
-- More workers than source partitions can leave some workers with no partitions to read. This can also happen while Kafka moves partitions between workers. Code `3` does not tell you whether other workers finished. If the last workers exit before a partition reaches its new owner, that partition can remain unfinished. Rerunning the same query and group resumes saved positions and may copy late arrivals.
+- More workers than source partitions can leave some workers with no partitions to read. This can also happen while Kafka moves partitions between workers. If the last workers exit before a partition reaches its new owner, that partition can remain unfinished. Rerunning the same query and group resumes saved positions and may copy late arrivals.
 - If your supervisor restarts workers on nonzero exits, set a policy for code `3`. Restarting rejoins the group and can give the worker partitions to copy.
 
 ### Rebalances
@@ -157,7 +157,7 @@ Progress stores acknowledged extent E, initially the header end. Kafka→file us
 
 1. Validate header group/fingerprint and stored destination ID; partitions without their own ID adopt the group's. Never regenerate IDs.
 2. Fail if output is missing or shorter than E. Scan and CRC-check the whole output; corruption before E or E inside a frame fails.
-3. Complete frames above `worker.max_frame_bytes` fail without truncation; raise the limit.
+3. Frames whose encoded record exceeds `worker.max_frame_bytes` fail without truncation; raise the limit.
 4. Keep valid complete frames at/after E; replay may duplicate them. Truncate the first invalid/partial tail beyond E, fsync and log removed bytes.
 
 Without valid ownership, never infer E or delete data. Full-output validation makes restart time grow with file size.
@@ -176,23 +176,22 @@ Profiles can be shared by sources and destinations. Supported connection keys ar
 
 ### Worker settings
 
-Optional defaults in TOML's `[worker]` table:
+Optional keys in TOML's `[worker]` table; byte values are integers:
 
-```toml
-[worker]
-partition_record_cap = 5000
-partition_byte_cap = 16777216
-record_cap = 20000
-byte_cap = 134217728
-max_frame_bytes = 67108864
-delivery_timeout = '60s'
-shutdown_timeout = '30s'
-idle_exit = '30s'
-tip_wait = '15m'
-# checkpoint_dir = '/var/lib/kaferry/checkpoints'
-```
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `partition_record_cap`, `partition_byte_cap` | 5000, 16777216 (16 MiB) | Unsaved work per partition |
+| `record_cap`, `byte_cap` | 20000, 134217728 (128 MiB) | Unsaved work per worker; also sizes Kafka queues |
+| `max_frame_bytes` | 67108864 (64 MiB) | Maximum encoded archive record, including key, value, headers and metadata; excludes frame length and CRC |
+| `delivery_timeout` | `'60s'` | Delivery deadline and queue-full wait |
+| `shutdown_timeout` | `'30s'` | Whole-process stop deadline |
+| `idle_exit` | `'30s'` | Wait after an empty assignment before exit 3 |
+| `tip_wait` | `'15m'` | Wait to reach sampled H |
+| `checkpoint_dir` | `~/.kaferry/checkpoints` | File-source checkpoint directory |
 
-Limits include delivered records whose source progress is not yet saved. [Delivery and progress](#delivery-and-progress).
+Caps must be positive; `max_frame_bytes` is at most 4,294,967,295. Durations are positive Go duration strings; `delivery_timeout` is 1 ms–2,147,483,647 ms. `checkpoint_dir` must not be empty. Unknown keys fail.
+
+Caps include delivered records whose source progress is not yet saved. [Delivery and progress](#delivery-and-progress).
 
 ### Connection properties
 
@@ -201,7 +200,7 @@ Values are strings in TOML and SQL. Unknown keys, unsupported values and contrad
 | Keys | Meaning / limits |
 | --- | --- |
 | `bootstrap.servers` | Required comma-separated host[:port] entries, no protocol prefix |
-| `security.protocol` | `PLAINTEXT` (default), `SSL`, `SASL_PLAINTEXT`, `SASL_SSL` |
+| `security.protocol` | `PLAINTEXT` (default), `SSL`, `SASL_PLAINTEXT`, `SASL_SSL`. `ssl.*` keys require SSL or SASL_SSL; `sasl.*` keys require SASL_PLAINTEXT or SASL_SSL |
 | `sasl.mechanism`, `sasl.username`, `sasl.password` | PLAIN (default), SCRAM-SHA-256 or SCRAM-SHA-512; credentials required for SASL |
 | `ssl.ca.location` | PEM CA file; otherwise system roots |
 | `ssl.certificate.location`, `ssl.key.location` | PEM client certificate and unencrypted private key; supply both |

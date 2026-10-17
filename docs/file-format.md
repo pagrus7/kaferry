@@ -26,7 +26,7 @@ Header: `version` (unsigned 1), `file_id` (random 128-bit hex text), `group` (te
 | `timestamp_type` | Text: `create_time`, `log_append_time`, `unknown` |
 | `source` | Optional map: `topic` text, `partition` integer, `offset` integer; diagnostics only |
 
-All record fields except `source` are required; `headers` is never null. Header names use bytes, preserving arbitrary Go string contents. Duplicate headers retain sequence.
+All record fields except `source` are required; `headers` is never null. Header names use bytes, so NUL and non-UTF-8 names round-trip. Duplicate headers retain sequence.
 
 ## Durability
 
