@@ -35,10 +35,9 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 	if err := ctx.Err(); err != nil {
 		return report, err
 	}
-	report = Report{Version: 1, Group: p.Group, OneOff: p.OneOff, CutoffMS: p.CutoffMS, Partitions: []Partition{}, Warnings: []string{}}
+	report = Report{Version: 1, Group: p.Group, OneOff: p.OneOff, CutoffMS: p.CutoffMS, StartRule: p.Start, RecordErrors: ErrorPolicies{p.Policies.MissingTimestamp, p.Policies.RejectedTimestamp, p.Policies.OtherRecord}, Partitions: []Partition{}, Warnings: []string{}}
 	if p.OneOff {
 		report.Group = "ONE_OFF"
-		report.Warnings = append(report.Warnings, "ONE_OFF would generate a fresh group; there is nothing to resume.")
 	}
 	stop.Stage("inspecting source metadata")
 	source, sourceInfo, err := s.open(ctx, p.Source, false, stop)
@@ -74,8 +73,7 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 			report.Destination.File.AcknowledgedExtent = &progress.Extent
 		}
 	}
-	report.RunPermissions = permissions(p)
-	addWarnings(p, &report)
+	addWarnings(&report)
 	return report, ctx.Err()
 }
 
@@ -112,27 +110,8 @@ func fileSummary(info file.ArchiveInspection) *FileSummary {
 	return &FileSummary{Exists: info.Exists, ID: info.ID, SizeBytes: info.Size}
 }
 
-func permissions(p plan.Plan) []string {
-	var needed []string
-	if p.Source.Kind == "TOPIC" {
-		needed = append(needed, "source topic READ", "source group READ")
-	} else {
-		needed = append(needed, "source file read", "checkpoint directory write")
-	}
-	if p.Destination.Kind == "TOPIC" {
-		return append(needed, "destination topic WRITE")
-	}
-	return append(needed, "destination file and directory write")
-}
-
-func addWarnings(p plan.Plan, r *Report) {
-	if p.Source.Kind == "FILE" || p.Destination.Kind == "FILE" {
-		r.Warnings = append(r.Warnings, "Archive records are not scanned; inspection does not verify the whole archive.")
-	}
-	if p.Source.Kind == "TOPIC" && p.Window.Upper != nil {
-		r.Warnings = append(r.Warnings, "Spans count offsets, not records; lookup end is not the runner's stop offset.")
-	}
-	if p.Destination.Kind != "TOPIC" {
+func addWarnings(r *Report) {
+	if r.Destination.Kind != "TOPIC" {
 		return
 	}
 	switch r.Destination.TimestampType {
@@ -140,8 +119,5 @@ func addWarnings(p plan.Plan, r *Report) {
 		r.Warnings = append(r.Warnings, "Destination LogAppendTime replaces copied timestamps with broker time.")
 	case "":
 		r.Warnings = append(r.Warnings, "Destination timestamp policy is unreadable; related checks remain unavailable.")
-	}
-	if p.Source.Kind == "TOPIC" && r.Source.PartitionCount != r.Destination.PartitionCount {
-		r.Warnings = append(r.Warnings, "Partition counts differ; original key bytes route using the destination partitioner.")
 	}
 }

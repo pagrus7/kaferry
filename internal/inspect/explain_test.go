@@ -73,9 +73,6 @@ func (m *topicMock) Offsets(_ context.Context, _ []int32, kind kafkaport.OffsetK
 }
 func (m *topicMock) OffsetsForTimes(_ context.Context, queries map[int32]int64) (map[int32]int64, error) {
 	m.queries = append(m.queries, queries)
-	if m.fail == "end times" && len(m.queries) > 1 {
-		return nil, m.failure
-	}
 	return m.times(queries), m.err("times")
 }
 func (m *topicMock) Close(context.Context) error { m.closed++; return m.err("close") }
@@ -112,7 +109,7 @@ func (f *filesMock) Destination(_ plan.Plan, _ string, progress file.Destination
 }
 
 func fixture() (*Service, plan.Plan, *factoryMock, *filesMock) {
-	p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC", Name: "input"}, Destination: plan.Endpoint{Kind: "TOPIC", Name: "output"}, Group: "g", Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 100}, Upper: &plan.Expression{LiteralMS: 1000}}, CutoffMS: 20}
+	p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC", Name: "input"}, Destination: plan.Endpoint{Kind: "TOPIC", Name: "output"}, Group: "g", Policies: plan.Policies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}, Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 100}, Upper: &plan.Expression{LiteralMS: 1000}}, CutoffMS: 20}
 	topic := func(name string) *topicMock {
 		return &topicMock{info: kafkaport.TopicDescription{ClusterID: "cluster", TopicID: name, Partitions: []int32{1, 0}, TimestampType: "CreateTime"}, positions: map[int32]int64{}, metadata: map[int32]kafkaport.Progress{}, low: map[int32]int64{0: 0, 1: 0}, high: map[int32]int64{0: 10, 1: 11}, stable: map[int32]int64{0: 9, 1: 10}, failure: errors.New("injected"), times: func(queries map[int32]int64) map[int32]int64 {
 			found := make(map[int32]int64)
@@ -140,7 +137,7 @@ func preview(t *testing.T, service *Service, p plan.Plan) Report {
 	return r
 }
 
-func TestTopicPreviewUsesSavedPositionsAndBatchedLookups(t *testing.T) {
+func TestTopicPreviewUsesSavedPositionsAndOnlyRequiredStartLookups(t *testing.T) {
 	// Given two partitions, one saved position, and different destination routing.
 	service, p, factory, _ := fixture()
 	source := factory.connections["input"]
@@ -149,22 +146,22 @@ func TestTopicPreviewUsesSavedPositionsAndBatchedLookups(t *testing.T) {
 	factory.connections["output"].info.TimestampType = "LogAppendTime"
 	// When previewing through the real shared positioner with mocked metadata ports.
 	report := preview(t, service, p)
-	// Then starts, spans and both warnings are explicit without changing progress.
+	// Then starts, bounds and error policies are explicit without estimating work or changing progress.
 	if report.Version != 1 || report.Fingerprint == "" || report.Group != "g" || len(report.Partitions) != 2 {
 		t.Fatal(report)
 	}
 	window := plan.Window{Lower: number(100), Upper: number(1000)}
 	want := []Partition{
-		{ID: 0, Start: 4, Saved: true, LookupEnd: number(8), Span: number(4), LogEnd: 10, Window: window, WindowOrigin: "literal"},
-		{ID: 1, Start: 3, LookupEnd: number(9), Span: number(6), LogEnd: 11, Window: window, WindowOrigin: "literal"},
+		{ID: 0, Start: 4, Saved: true, LogEnd: 10, Window: window, WindowOrigin: "literal"},
+		{ID: 1, Start: 3, LogEnd: 11, Window: window, WindowOrigin: "literal"},
 	}
 	if !reflect.DeepEqual(report.Partitions, want) {
-		t.Fatal("wrong positions, bounds or spans", report.Partitions)
+		t.Fatal("wrong positions or bounds", report.Partitions)
 	}
-	if len(source.queries) != 2 || len(source.queries[1]) != 2 || source.queries[1][0] != 1020 || source.memberChecks != 1 || source.groupReads != 1 || !reflect.DeepEqual(source.positions, map[int32]int64{0: 4}) {
+	if len(source.queries) != 1 || len(source.queries[0]) != 1 || source.queries[0][1] != 100 || source.memberChecks != 1 || source.groupReads != 1 || !reflect.DeepEqual(source.positions, map[int32]int64{0: 4}) {
 		t.Fatal("positioning or progress changed", source)
 	}
-	if source.closed != 1 || factory.connections["output"].closed != 1 || !strings.Contains(strings.Join(report.Warnings, " "), "LogAppendTime") || !strings.Contains(strings.Join(report.Warnings, " "), "Partition counts differ") {
+	if source.closed != 1 || factory.connections["output"].closed != 1 || !strings.Contains(strings.Join(report.Warnings, " "), "LogAppendTime") || len(report.Warnings) != 1 {
 		t.Fatal("cleanup or warnings lost", report)
 	}
 }
@@ -182,7 +179,7 @@ func TestLatestAndUnmatchedTimestampStartAtCommittedEnd(t *testing.T) {
 			// When inspecting an unbounded statement.
 			report := preview(t, service, p)
 			// Then the run starts at the stable end and no stopping lookup is invented.
-			if report.Partitions[0].Start != 9 || report.Partitions[0].LogEnd != 10 || report.Partitions[0].LookupEnd != nil || report.Partitions[0].Span != nil {
+			if report.Partitions[0].Start != 9 || report.Partitions[0].LogEnd != 10 {
 				t.Fatal(report.Partitions)
 			}
 		})
@@ -206,27 +203,8 @@ func TestRelativeWindowsPreserveSavedAndAdoptedBounds(t *testing.T) {
 	// Given fresh progress instead, when inspecting, then NOW is preview-only.
 	service, _, _, _ = fixture()
 	report = preview(t, service, p)
-	if *report.Partitions[0].Window.Upper != 5000 || report.Partitions[0].WindowOrigin != "resolved" || !strings.Contains(strings.Join(report.Warnings, " "), "resolves it again") {
+	if *report.Partitions[0].Window.Upper != 5000 || report.Partitions[0].WindowOrigin != "resolved" {
 		t.Fatal(report)
-	}
-}
-
-func TestMissingLookupAndSavedPositionPastLookupAreNotCompletionProof(t *testing.T) {
-	for _, match := range []bool{true, false} {
-		t.Run(map[bool]string{true: "saved past lookup", false: "no match"}[match], func(t *testing.T) {
-			// Given a saved position after the matching timestamp, or no timestamp match.
-			service, p, factory, _ := fixture()
-			source := factory.connections["input"]
-			source.positions[0], source.metadata[0] = 9, kafkaport.Progress{}
-			if !match {
-				source.times = func(map[int32]int64) map[int32]int64 { return map[int32]int64{0: -1, 1: -1} }
-			}
-			// When previewing, then report a zero span or no lookup, never a completion verdict.
-			report := preview(t, service, p)
-			if match && (report.Partitions[0].Span == nil || *report.Partitions[0].Span != 0) || !match && (report.Partitions[0].LookupEnd != nil || report.Partitions[0].Span != nil) {
-				t.Fatal(report.Partitions)
-			}
-		})
 	}
 }
 
@@ -267,7 +245,7 @@ func TestFileInspectionCarriesPositionsAndAcknowledgedOutputExtent(t *testing.T)
 }
 
 func TestInspectionFailuresCloseOnlyAcquiredConnections(t *testing.T) {
-	for _, failure := range []string{"source open", "source describe", "destination open", "destination describe", "members", "saved", "offsets", "times", "end times", "close"} {
+	for _, failure := range []string{"source open", "source describe", "destination open", "destination describe", "members", "saved", "offsets", "times", "close"} {
 		t.Run(failure, func(t *testing.T) {
 			// Given a failure at one acquisition, positioning or cleanup boundary.
 			service, p, factory, _ := fixture()
@@ -307,15 +285,7 @@ func TestInvalidSavedPositionsAndWindowOverflowFailBeforeLookup(t *testing.T) {
 			case "overflow":
 				p.Window.Upper.LiteralMS = math.MaxInt64
 			case "missing lookup":
-				source.times = func(queries map[int32]int64) map[int32]int64 {
-					found := make(map[int32]int64)
-					for id, stamp := range queries {
-						if stamp == 100 {
-							found[id] = 2
-						}
-					}
-					return found
-				}
+				source.times = func(map[int32]int64) map[int32]int64 { return map[int32]int64{} }
 			case "file identity":
 				source.metadata = map[int32]kafkaport.Progress{0: {FileID: "a", Extent: 100}, 1: {FileID: "b", Extent: 100}}
 			}
@@ -328,14 +298,14 @@ func TestInvalidSavedPositionsAndWindowOverflowFailBeforeLookup(t *testing.T) {
 	}
 }
 
-func TestNegativeCutoffBoundaryNeverBecomesABrokerOffsetSpecifier(t *testing.T) {
-	// Given a cutoff boundary that Kafka would treat as a reserved offset specifier.
+func TestUpperBoundOnlyDoesNotRequestTimestampLookups(t *testing.T) {
+	// Given an upper-bound-only filter with a pre-epoch stopping threshold.
 	service, p, factory, _ := fixture()
 	p.Window = plan.WindowSpec{Upper: &plan.Expression{LiteralMS: -21}}
 	p.CutoffMS = 20
-	// When previewing, then use no timestamp lookup and explain why it is unavailable.
+	// When previewing, then start at the earliest offset without looking up an end timestamp.
 	report := preview(t, service, p)
-	if len(factory.connections["input"].queries) != 0 || report.Partitions[0].LookupEnd != nil || !strings.Contains(strings.Join(report.Warnings, " "), "negative cutoff") {
+	if len(factory.connections["input"].queries) != 0 || report.Partitions[0].Start != 0 {
 		t.Fatal(report)
 	}
 }
@@ -362,5 +332,19 @@ func TestCancelledInspectionDoesNotAcquireConnections(t *testing.T) {
 	_, err := service.Explain(ctx, p, config.Worker{}, core.NoopStopObserver{})
 	if !errors.Is(err, context.Canceled) || factory.opened != 0 {
 		t.Fatal(err, factory.opened)
+	}
+}
+
+func TestPreviewReportsNewPartitionFallbackAndEffectiveRecordPolicies(t *testing.T) {
+	// Given START=LATEST, existing group progress and a missing timestamp SKIP policy.
+	service, p, factory, _ := fixture()
+	p.Window, p.Start = plan.WindowSpec{}, "LATEST"
+	p.Policies.MissingTimestamp = "SKIP"
+	source := factory.connections["input"]
+	source.positions[0], source.metadata[0] = 4, kafkaport.Progress{}
+	// When inspecting, then new partitions start earliest and the actual policy is exposed.
+	report := preview(t, service, p)
+	if report.StartRule != "EARLIEST" || report.Partitions[1].Start != 0 || report.RecordErrors != (ErrorPolicies{MissingTimestamp: "SKIP", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}) {
+		t.Fatal(report)
 	}
 }

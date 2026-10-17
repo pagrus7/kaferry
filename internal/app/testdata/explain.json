@@ -24,8 +24,6 @@
     {
       "partition": 0,
       "start": 4,
-      "lookup_end": 10,
-      "span": 6,
       "log_start": 0,
       "log_end": 12,
       "saved": true,
@@ -36,12 +34,11 @@
       "window_origin": "literal"
     }
   ],
-  "run_permissions": [
-    "source topic READ",
-    "source group READ",
-    "destination file and directory write"
-  ],
-  "warnings": [
-    "Spans count offsets, not records."
-  ]
+  "start_rule": "WINDOW",
+  "record_errors": {
+    "missing_timestamp": "FAIL",
+    "rejected_timestamp": "FAIL",
+    "other_record": "FAIL"
+  },
+  "warnings": []
 }

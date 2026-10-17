@@ -4,16 +4,23 @@ package inspect
 import "github.com/pagrus7/kaferry/internal/plan"
 
 type Report struct {
-	Version        int         `json:"version"`
-	Fingerprint    string      `json:"fingerprint"`
-	Group          string      `json:"group"`
-	OneOff         bool        `json:"one_off"`
-	CutoffMS       int64       `json:"cutoff_ms"`
-	Source         Endpoint    `json:"source"`
-	Destination    Endpoint    `json:"destination"`
-	Partitions     []Partition `json:"partitions"`
-	RunPermissions []string    `json:"run_permissions"`
-	Warnings       []string    `json:"warnings"`
+	Version      int           `json:"version"`
+	Fingerprint  string        `json:"fingerprint"`
+	Group        string        `json:"group"`
+	OneOff       bool          `json:"one_off"`
+	CutoffMS     int64         `json:"cutoff_ms"`
+	Source       Endpoint      `json:"source"`
+	Destination  Endpoint      `json:"destination"`
+	Partitions   []Partition   `json:"partitions"`
+	StartRule    string        `json:"start_rule,omitempty"`
+	RecordErrors ErrorPolicies `json:"record_errors"`
+	Warnings     []string      `json:"warnings"`
+}
+
+type ErrorPolicies struct {
+	MissingTimestamp  string `json:"missing_timestamp"`
+	RejectedTimestamp string `json:"rejected_timestamp"`
+	OtherRecord       string `json:"other_record"`
 }
 
 type Endpoint struct {
@@ -33,6 +40,7 @@ type FileSummary struct {
 	SizeBytes          int64        `json:"size_bytes"`
 	StartBytes         *int64       `json:"start_bytes,omitempty"`
 	Window             *plan.Window `json:"window,omitempty"`
+	WindowOrigin       string       `json:"window_origin,omitempty"`
 	Checkpoint         string       `json:"checkpoint,omitempty"`
 	CheckpointExists   *bool        `json:"checkpoint_exists,omitempty"`
 	AcknowledgedExtent *int64       `json:"acknowledged_extent_bytes,omitempty"`
@@ -41,8 +49,6 @@ type FileSummary struct {
 type Partition struct {
 	ID           int32       `json:"partition"`
 	Start        int64       `json:"start"`
-	LookupEnd    *int64      `json:"lookup_end"`
-	Span         *int64      `json:"span"`
 	LogStart     int64       `json:"log_start"`
 	LogEnd       int64       `json:"log_end"`
 	Saved        bool        `json:"saved"`

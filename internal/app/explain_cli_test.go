@@ -187,13 +187,13 @@ func TestExplainUsesOnlyReadOnlyKafkaRequests(t *testing.T) {
 			if output == "FILE" {
 				destination = fmt.Sprintf("FILE cbor('%s')", filepath.Join(directory, "archive.cbor"))
 			}
-			query := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='secret_SENTINEL_415') INSERT INTO %s SELECT * FROM TOPIC 'input' WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='preview',CUTOFF=INTERVAL '0' SECOND)", strings.Join(cluster.ListenAddrs(), ","), destination, stamp.Format(time.RFC3339Nano), stamp.Add(time.Minute).Format(time.RFC3339Nano))
+			query := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='secret_SENTINEL_415') INSERT INTO %s SELECT * FROM TOPIC 'input' WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='preview',CUTOFF=INTERVAL '0' SECOND,ON_ERROR=SKIP)", strings.Join(cluster.ListenAddrs(), ","), destination, stamp.Format(time.RFC3339Nano), stamp.Add(time.Minute).Format(time.RFC3339Nano))
 			var stdout, stderr bytes.Buffer
 			// When the full Fx-composed command explains the copy.
 			code := Execute(ctx, []string{"explain", "-e", query, "--json"}, nil, &stdout, &stderr)
 			// Then no consume, produce, join or commit occurs and no properties leak.
 			var report inspect.Report
-			if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || code != 0 || writes.Load() != 0 || len(report.Partitions) != 2 || report.Partitions[0].Start != 0 || report.Partitions[0].LogEnd != 1 || strings.Contains(stdout.String()+stderr.String(), "secret_SENTINEL") {
+			if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || code != 0 || writes.Load() != 0 || len(report.Partitions) != 2 || report.StartRule != "WINDOW" || report.RecordErrors != (inspect.ErrorPolicies{MissingTimestamp: "SKIP", RejectedTimestamp: "SKIP", OtherRecord: "SKIP"}) || report.Partitions[0].Start != 0 || report.Partitions[0].LogEnd != 1 || strings.Contains(stdout.String()+stderr.String(), "secret_SENTINEL") {
 				t.Fatalf("exit=%d writes=%d report=%+v err=%v stderr=%s", code, writes.Load(), report, err, stderr.String())
 			}
 			if output == "TOPIC" && (report.Destination.TimestampType != "" || !strings.Contains(strings.Join(report.Warnings, " "), "unreadable")) {

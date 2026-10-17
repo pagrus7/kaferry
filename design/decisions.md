@@ -170,23 +170,26 @@ The checkpoint directory must exist; Kaferry does not search or migrate it. Anot
 
 ## Inspection
 
-`explain` previews the same statement, configuration, identity and start-position rules as `run`. It never joins a group, consumes records, commits, creates/truncates files or takes locks. Metadata and checkpoints can change during inspection; this is not an atomic snapshot or a guarantee that a later run succeeds. Listed run permissions are requirements, not verified grants.
+`explain` previews the same statement, configuration, identity and start-position rules as `run`. It never joins a group, consumes records, commits, creates/truncates files or takes locks. Observations can change during inspection; this is not an atomic snapshot or a guarantee that a later run succeeds. Write access is not checked. Records, output bytes and duration are not estimated.
 
-Kafka rows show the start selected from saved progress or the start rule, plus retained/log-end offsets. `log end` includes open transactions. For a bounded window, `lookup end` is the first offset Kafka returns at or after `upper + CUTOFF`; `span` is `max(0, lookup end - start)`. Spans count offsets, not records. Timestamp order controls the runner's actual stop, so a lookup is not a stop offset or completion proof. No match prints `none`; negative cutoff boundaries cannot be looked up. Saved relative windows stay attached to each partition; new partitions adopt the lowest saved partition's window as in `run`. Fresh `NOW()` values are preview-only.
+Text sections show endpoints, progress, time windows, behavior and any warnings. They summarize saved/fresh partitions, resolved bounds, start/stop rules, destination routing and record-error policies. Identical bounds and origins share a window summary. At most eight window groups, eight partition IDs per group and eight warnings are printed; omitted counts point to `--json`. Cluster IDs are shown separately from connection aliases; fingerprints and topic IDs stay in JSON.
 
-File inspection reads the archive header, checkpoint and last checkpointed frame identity. It reports byte positions and acknowledged output extent without scanning records or recovering a tail. `ONE_OFF` never generates a group or inspects an existing checkpoint; the preview reports that a fresh group would be used.
+Kafka JSON rows show the selected start and retained/log-end offsets; log end includes open transactions. Offset differences are not record counts or completion evidence. Saved relative windows stay attached to each partition; new partitions adopt the lowest saved partition's window as in `run`. Fresh `NOW()` values are preview-only. New partitions without time bounds start earliest when the group has saved progress, including with `START=LATEST`.
 
-`--json` emits version 1 with these fields; time bounds use signed Unix milliseconds; byte and offset fields are counts. Connection properties and SQL text are excluded.
+File inspection reads the archive header, checkpoint and last checkpointed frame identity without scanning records or recovering a tail. Text shows encoded input bytes after the selected position before filtering, and whether output would be created or resumed. A run reads existing output frames during recovery; inspection does not verify full archive integrity. `ONE_OFF` never generates a group or reads an existing checkpoint; the preview says a fresh group would be used.
+
+`--json` emits version 1 with all partitions and warnings. Time bounds use signed Unix milliseconds; byte and offset fields are counts. Connection properties and SQL text are excluded.
 
 | Fields | Meaning |
 | --- | --- |
 | `version`, `fingerprint`, `group`, `one_off`, `cutoff_ms` | Report format and query identity; one-off group is `ONE_OFF` |
+| `start_rule` | Kafka fallback for partitions without progress: `WINDOW`, `EARLIEST` or `LATEST`; absent for file sources |
+| `record_errors` | Effective `FAIL`/`SKIP` policies: `missing_timestamp`, `rejected_timestamp`, `other_record`; SKIP applies before writing, not to delivery failures |
 | `source`, `destination` | `kind`, `name`, optional connection alias, cluster/topic IDs, partition count, destination timestamp type |
-| Endpoint `file` | `exists`, `id`, `size_bytes`; source `start_bytes`, `window`, `checkpoint`, `checkpoint_exists`; destination `acknowledged_extent_bytes` when saved |
-| `partitions` | Sorted `partition`, `start`, `lookup_end`, `span`, `log_start`, `log_end`, `saved`, `window`, `window_origin` |
+| Endpoint `file` | `exists`, `id`, `size_bytes`; source `start_bytes`, `window`, `window_origin`, `checkpoint`, `checkpoint_exists`; destination `acknowledged_extent_bytes` when saved |
+| `partitions` | Sorted `partition`, `start`, `log_start`, `log_end`, `saved`, `window`, `window_origin` |
 | `window` | Inclusive `lower`, exclusive `upper`; null means unbounded. `window_origin`: `literal`, `saved`, `adopted` or `resolved` for preview-only NOW |
-| `lookup_end`, `span` | Null if unbounded, no match or a negative cutoff boundary |
-| `run_permissions`, `warnings` | Requirements and inspection limits; arrays may be empty |
+| `warnings` | Detected retention gaps and unavailable/changed destination timestamp behavior; may be empty |
 
 ## Configuration and CLI
 

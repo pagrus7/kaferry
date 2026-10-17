@@ -2,7 +2,6 @@ package inspect
 
 import (
 	"context"
-	"fmt"
 	"slices"
 
 	"github.com/pagrus7/kaferry/internal/config"
@@ -20,8 +19,12 @@ func (s *Service) source(ctx context.Context, p plan.Plan, limits config.Worker,
 		report.Source.File = fileSummary(info.ArchiveInspection)
 		report.Source.File.StartBytes, report.Source.File.Window = &info.Position, &info.Window
 		report.Source.File.Checkpoint, report.Source.File.CheckpointExists = info.CheckpointPath, &info.Saved
-		if p.Window.Relative() && !info.Saved {
-			report.Warnings = append(report.Warnings, "NOW() resolved for this preview; a run without saved progress resolves it again.")
+		report.Source.File.WindowOrigin = "literal"
+		if p.Window.Relative() {
+			report.Source.File.WindowOrigin = "resolved"
+			if info.Saved {
+				report.Source.File.WindowOrigin = "saved"
+			}
 		}
 		return info.Output, nil
 	}
@@ -40,6 +43,11 @@ func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafka
 			return file.DestinationProgress{}, err
 		}
 	}
+	if p.Window.Lower != nil || p.Window.Upper != nil {
+		report.StartRule = "WINDOW"
+	} else if len(saved) > 0 {
+		report.StartRule = "EARLIEST"
+	}
 	topic, err := connection.Describe(ctx, false)
 	if err != nil {
 		return file.DestinationProgress{}, err
@@ -53,52 +61,6 @@ func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafka
 	var warnings []string
 	report.Partitions, warnings = partitionRows(p, located, saved, metadata)
 	report.Warnings = append(report.Warnings, warnings...)
-	if err := lookupEnds(ctx, connection, p.CutoffMS, report); err != nil {
-		return file.DestinationProgress{}, err
-	}
 	id, extent, err := kafkaport.FileExtent(metadata)
 	return file.DestinationProgress{ID: id, Extent: extent, Exists: len(metadata) > 0}, err
-}
-
-func lookupEnds(ctx context.Context, reader kafkaport.TimeReader, cutoff int64, report *Report) error {
-	queries := make(map[int32]int64)
-	for _, partition := range report.Partitions {
-		if partition.Window.Upper == nil {
-			continue
-		}
-		threshold, err := partition.Window.StopThreshold(cutoff)
-		if err != nil {
-			return &kafkaport.Conflict{Err: err}
-		}
-		if threshold < 0 {
-			report.Warnings = append(report.Warnings, fmt.Sprintf("Partition %d: timestamp lookup is unavailable for a negative cutoff boundary.", partition.ID))
-			continue
-		}
-		queries[partition.ID] = threshold
-	}
-	if len(queries) == 0 {
-		return nil
-	}
-	found, err := reader.OffsetsForTimes(ctx, queries)
-	if err != nil {
-		return err
-	}
-	for n := range report.Partitions {
-		partition := &report.Partitions[n]
-		if _, queried := queries[partition.ID]; !queried {
-			continue
-		}
-		end, exists := found[partition.ID]
-		if !exists {
-			return fmt.Errorf("missing timestamp lookup result for partition %d", partition.ID)
-		}
-		if end >= 0 {
-			span := max(0, end-partition.Start)
-			partition.LookupEnd, partition.Span = &end, &span
-			if end < partition.Start {
-				report.Warnings = append(report.Warnings, fmt.Sprintf("Partition %d: start position is past the timestamp lookup.", partition.ID))
-			}
-		}
-	}
-	return nil
 }

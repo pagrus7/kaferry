@@ -29,8 +29,5 @@ func partitionRows(p plan.Plan, located kafkaport.Positioning, saved map[int32]i
 			warnings = append(warnings, fmt.Sprintf("Partition %d: earlier offsets are not retained; the start of the requested window may be unavailable.", id))
 		}
 	}
-	if p.Window.Relative() && len(metadata) == 0 {
-		warnings = append(warnings, "NOW() resolved for this preview; a run without saved progress resolves it again.")
-	}
 	return rows, warnings
 }

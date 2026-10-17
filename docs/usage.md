@@ -15,7 +15,7 @@ kaferry explain -c connections.toml -f copy.sql
 kaferry explain -c connections.toml -f copy.sql --json
 ```
 
-Shows endpoints, saved progress and starting positions. It never joins a group, commits, creates files or takes locks. Kafka spans count offsets, not records, and do not predict completion. Without saved progress, `NOW()` resolves again when you run. Listed run permissions are not verified. [Output contract](../design/decisions.md#inspection).
+Shows endpoints, progress, time windows, stopping rules and error policies. It never joins a group, commits, creates files or takes locks. JSON includes every partition. Records, output bytes and duration are not estimated; write access is not checked. Fresh `NOW()` resolves again when you run. [Output contract](../design/decisions.md#inspection).
 
 ## Run a copy
 

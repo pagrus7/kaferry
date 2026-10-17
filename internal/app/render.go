@@ -6,11 +6,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"text/tabwriter"
-	"time"
 
 	"github.com/pagrus7/kaferry/internal/inspect"
-	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 func renderExplanation(output io.Writer, report inspect.Report, asJSON bool) error {
@@ -22,15 +19,30 @@ func renderExplanation(output io.Writer, report inspect.Report, asJSON bool) err
 			return err
 		}
 	} else {
-		fmt.Fprintf(&buffer, "group %q  fingerprint %s\n", report.Group, report.Fingerprint)
-		renderEndpoint(&buffer, "source", report.Source)
-		renderEndpoint(&buffer, "destination", report.Destination)
-		fmt.Fprintf(&buffer, "cutoff %d ms\n", report.CutoffMS)
-		renderPartitions(&buffer, report.Partitions)
-		fmt.Fprintf(&buffer, "\nRun permissions (not verified): %s\n", strings.Join(report.RunPermissions, "; "))
-		for _, warning := range report.Warnings {
-			fmt.Fprintf(&buffer, "Warning: %s\n", warning)
+		fmt.Fprintln(&buffer, "Endpoints")
+		renderEndpoint(&buffer, "Source", report.Source)
+		renderEndpoint(&buffer, "Destination", report.Destination)
+		renderProgress(&buffer, report)
+		if err := renderWindows(&buffer, report); err != nil {
+			return err
 		}
+		renderBehavior(&buffer, report)
+		if len(report.Warnings) > 0 {
+			fmt.Fprintln(&buffer, "\nAttention")
+			for _, warning := range report.Warnings[:min(8, len(report.Warnings))] {
+				fmt.Fprintf(&buffer, "  - %s\n", warning)
+			}
+			if len(report.Warnings) > 8 {
+				fmt.Fprintf(&buffer, "  %d more warnings; see --json.\n", len(report.Warnings)-8)
+			}
+		}
+		fmt.Fprintln(&buffer, "\nPreview limits")
+		fmt.Fprintln(&buffer, "  Read-only; metadata and progress may change before the run.")
+		fmt.Fprintln(&buffer, "  Write access is not checked. Records, output bytes and duration are not estimated.")
+		if report.Source.File != nil || report.Destination.File != nil {
+			fmt.Fprintln(&buffer, "  Archive records are not scanned; full archive integrity is not checked.")
+		}
+		fmt.Fprintln(&buffer, "  Full partition details and identities: --json.")
 	}
 	n, err := output.Write(buffer.Bytes())
 	if err == nil && n != buffer.Len() {
@@ -40,71 +52,92 @@ func renderExplanation(output io.Writer, report inspect.Report, asJSON bool) err
 }
 
 func renderEndpoint(output io.Writer, label string, endpoint inspect.Endpoint) {
-	fmt.Fprintf(output, "%s %s %q", label, endpoint.Kind, endpoint.Name)
+	fmt.Fprintf(output, "  %s: %s %q", label, endpoint.Kind, endpoint.Name)
 	if endpoint.Kind == "TOPIC" {
-		fmt.Fprintf(output, "  connection %q  cluster %q  topic ID %q  partitions %d", endpoint.Connection, endpoint.ClusterID, endpoint.TopicID, endpoint.PartitionCount)
-		if endpoint.TimestampType != "" {
-			fmt.Fprintf(output, "  %q", endpoint.TimestampType)
+		fmt.Fprintf(output, " (connection %q; %d partitions)\n", endpoint.Connection, endpoint.PartitionCount)
+		fmt.Fprintf(output, "    Resolved cluster: %q\n", endpoint.ClusterID)
+	} else {
+		fmt.Fprintln(output)
+	}
+}
+
+func renderProgress(output io.Writer, report inspect.Report) {
+	fmt.Fprintf(output, "\nProgress\n  Group: %q\n", report.Group)
+	if report.OneOff {
+		fmt.Fprintln(output, "  ONE_OFF: a run generates a fresh group; there is nothing to resume.")
+	}
+	if file := report.Source.File; file != nil {
+		if *file.CheckpointExists {
+			fmt.Fprintln(output, "  Resume: saved file checkpoint.")
+		} else {
+			fmt.Fprintln(output, "  Start: beginning of record frames; no saved checkpoint.")
+		}
+		fmt.Fprintf(output, "  Input position: %d bytes.\n", *file.StartBytes)
+		fmt.Fprintf(output, "  Encoded input after position: %d bytes (before filtering).\n", file.SizeBytes-*file.StartBytes)
+		if file.Checkpoint != "" {
+			fmt.Fprintf(output, "  Checkpoint: %q\n", file.Checkpoint)
+		}
+	} else {
+		saved := 0
+		for _, partition := range report.Partitions {
+			if partition.Saved {
+				saved++
+			}
+		}
+		fmt.Fprintf(output, "  Resume: %d of %d partitions have saved offsets.\n", saved, len(report.Partitions))
+		if fresh := len(report.Partitions) - saved; fresh > 0 {
+			fmt.Fprintf(output, "  Without saved offsets: %d partitions; %s\n", fresh, startRule(report.StartRule))
 		}
 	}
-	fmt.Fprintln(output)
-	if file := endpoint.File; file != nil {
-		fmt.Fprintf(output, "  exists %t  file ID %q  size %d bytes  record frames unknown\n", file.Exists, file.ID, file.SizeBytes)
-		if file.StartBytes != nil {
-			fmt.Fprintf(output, "  start %d bytes  checkpoint %q  saved %t  window %s\n", *file.StartBytes, file.Checkpoint, *file.CheckpointExists, formatWindow(*file.Window))
-		}
-		if file.AcknowledgedExtent != nil {
-			fmt.Fprintf(output, "  acknowledged extent %d bytes\n", *file.AcknowledgedExtent)
+	if file := report.Destination.File; file != nil {
+		if file.Exists {
+			fmt.Fprintf(output, "  Output: resume existing file (%d bytes).\n", file.SizeBytes)
+			fmt.Fprintf(output, "  Acknowledged output: %d bytes.\n", *file.AcknowledgedExtent)
+			fmt.Fprintln(output, "  A run reads every existing output frame before copying.")
+		} else {
+			fmt.Fprintln(output, "  Output: create a new file.")
 		}
 	}
 }
 
-func renderPartitions(output io.Writer, partitions []inspect.Partition) {
-	if len(partitions) == 0 {
-		return
-	}
-	bounded := partitions[0].Window.Upper != nil
-	table := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-	fmt.Fprint(table, "\npartition\tstart\tlog start\tlog end\tsaved\t")
-	if bounded {
-		fmt.Fprint(table, "lookup end\tspan\t")
-	}
-	fmt.Fprintln(table, "window [start, end)\twindow source")
-	for _, p := range partitions {
-		fmt.Fprintf(table, "%d\t%d\t%d\t%d\t%t\t", p.ID, p.Start, p.LogStart, p.LogEnd, p.Saved)
-		if bounded {
-			fmt.Fprintf(table, "%s\t%s\t", optionalOffset(p.LookupEnd), optionalOffset(p.Span))
-		}
-		fmt.Fprintf(table, "%s\t%s\n", formatWindow(p.Window), windowOrigin(p.WindowOrigin))
-	}
-	table.Flush() // The caller supplies an in-memory buffer.
-}
-
-func windowOrigin(origin string) string {
-	switch origin {
-	case "saved":
-		return "saved progress"
-	case "adopted":
-		return "from saved partition"
-	case "resolved":
-		return "NOW() preview"
+func startRule(rule string) string {
+	switch rule {
+	case "LATEST":
+		return "start at the current read-committed end."
+	case "WINDOW":
+		return "use the time-window start rule below."
 	default:
-		return "SQL bounds"
+		return "start at the earliest retained offset."
 	}
 }
 
-func optionalOffset(value *int64) string {
-	if value == nil {
-		return "none"
-	}
-	return fmt.Sprint(*value)
-}
-func formatWindow(window plan.Window) string {
-	bound := func(value *int64) string {
-		if value == nil {
-			return "unbounded"
+func renderBehavior(output io.Writer, report inspect.Report) {
+	fmt.Fprintln(output, "\nBehavior")
+	if report.Destination.Kind == "TOPIC" {
+		fmt.Fprintln(output, "  Routing: original key bytes; destination partitioner.")
+		if report.Destination.TimestampType != "" {
+			fmt.Fprintf(output, "  Destination timestamp policy: %q.\n", report.Destination.TimestampType)
+		} else {
+			fmt.Fprintln(output, "  Destination timestamp policy: unknown.")
 		}
-		return time.UnixMilli(*value).UTC().Format(time.RFC3339Nano)
 	}
-	return "[" + bound(window.Lower) + ", " + bound(window.Upper) + ")"
+	var skips []string
+	for _, policy := range []struct {
+		value, label string
+		applies      bool
+	}{
+		{report.RecordErrors.MissingTimestamp, "missing timestamps", hasTimeFilter(report)},
+		{report.RecordErrors.RejectedTimestamp, "rejected timestamps", report.Destination.Kind == "TOPIC"},
+		{report.RecordErrors.OtherRecord, "other invalid records", true},
+	} {
+		if policy.applies && policy.value == "SKIP" {
+			skips = append(skips, policy.label)
+		}
+	}
+	if len(skips) == 0 {
+		fmt.Fprintln(output, "  Record errors: stop; no deliberate skipping.")
+	} else {
+		fmt.Fprintf(output, "  Skip before writing: %s (records dropped).\n", strings.Join(skips, ", "))
+		fmt.Fprintln(output, "  Delivery and unclassified errors: stop.")
+	}
 }
