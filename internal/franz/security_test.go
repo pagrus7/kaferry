@@ -12,9 +12,14 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/pagrus7/kaferry/internal/config"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl"
 )
 
 func testCA(t *testing.T) (*x509.Certificate, ed25519.PrivateKey, []byte) {
@@ -147,6 +152,89 @@ func TestTLSHostnameOverrideKeepsTrustAndClientCertificateChecks(t *testing.T) {
 			// Then disabling hostname matching never disables CA or client-certificate verification.
 			if (err == nil) != tc.want {
 				t.Fatal("incorrect TLS protection", err)
+			}
+		})
+	}
+}
+
+func TestConnectionOptionsApplyTLSAndSelectedSASLMechanism(t *testing.T) {
+	ca, _, caPEM := testCA(t)
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	caPath := writeFixture(t, t.TempDir(), "ca.pem", caPEM)
+	for _, tc := range []struct{ protocol, mechanism string }{
+		{"PLAINTEXT", ""}, {"SSL", ""}, {"SASL_SSL", "PLAIN"},
+		{"SASL_SSL", "SCRAM-SHA-256"}, {"SASL_SSL", "SCRAM-SHA-512"},
+	} {
+		t.Run(tc.protocol+"/"+tc.mechanism, func(t *testing.T) {
+			// Given valid connection properties for the selected transport and authentication.
+			properties := map[string]string{"security.protocol": tc.protocol}
+			if strings.HasSuffix(tc.protocol, "SSL") {
+				properties["ssl.ca.location"] = caPath
+			}
+			if tc.mechanism != "" {
+				properties["sasl.mechanism"], properties["sasl.username"], properties["sasl.password"] = tc.mechanism, "user", "password"
+			}
+			s, err := parseSettings(testPlan(t, properties).Source.Properties)
+			if err != nil {
+				t.Fatal(err)
+			}
+			options, err := s.commonOptions()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			// When applying the production options to the real client without connecting.
+			client, err := kgo.NewClient(append(options, kgo.WithContext(ctx))...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			// Then TLS trust and the chosen authentication mechanism reach the client.
+			tlsConfig := client.OptValue(kgo.DialTLSConfig).(*tls.Config)
+			if strings.HasSuffix(tc.protocol, "SSL") {
+				if tlsConfig == nil || tlsConfig.MinVersion != tls.VersionTLS12 || tlsConfig.RootCAs == nil || !tlsConfig.RootCAs.Equal(roots) || tlsConfig.InsecureSkipVerify {
+					t.Fatal("TLS trust settings were not applied")
+				}
+			} else if tlsConfig != nil {
+				t.Fatal("unexpected TLS transport")
+			}
+			mechanisms := client.OptValue(kgo.SASL).([]sasl.Mechanism)
+			if tc.mechanism == "" {
+				if len(mechanisms) != 0 {
+					t.Fatal("unexpected SASL authentication")
+				}
+			} else if len(mechanisms) != 1 || mechanisms[0].Name() != tc.mechanism {
+				t.Fatal("wrong SASL mechanism applied")
+			}
+		})
+	}
+}
+
+func TestTLSFileErrorsFailValidationWithoutExposingPathsOrContents(t *testing.T) {
+	directory := t.TempDir()
+	ca, issuer, _ := testCA(t)
+	_, certPEM, _ := testCertificate(t, ca, issuer, true)
+	invalid := writeFixture(t, directory, "sensitive-fixture.pem", []byte("sensitive-fixture-contents"))
+	certificate := writeFixture(t, directory, "client.pem", certPEM)
+	for _, tc := range []struct {
+		name, key  string
+		properties map[string]string
+	}{
+		{"missing CA file", "ssl.ca.location", map[string]string{"ssl.ca.location": filepath.Join(directory, "sensitive-fixture-missing.pem")}},
+		{"invalid CA file", "ssl.ca.location", map[string]string{"ssl.ca.location": invalid}},
+		{"invalid client key", "ssl.certificate.location/ssl.key.location", map[string]string{"ssl.certificate.location": certificate, "ssl.key.location": invalid}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given unreadable or malformed TLS files named by the user's connection.
+			tc.properties["security.protocol"] = "SSL"
+			p := testPlan(t, tc.properties)
+			// When validating before any Kafka or output handles are opened.
+			err := componentFactory().Validate(p, config.Defaults("").Worker)
+			// Then the error identifies the setting without exposing its path or contents.
+			if err == nil || !strings.Contains(err.Error(), tc.key) || strings.Contains(err.Error(), "sensitive-fixture") {
+				t.Fatal("unsafe or missing TLS diagnostic", err)
 			}
 		})
 	}
