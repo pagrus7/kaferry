@@ -4,9 +4,7 @@ Kafka-client and deployment constraints. See [permissions](../docs/usage.md#perm
 
 ## Known issues
 
-Kafka output rejects file timestamps outside ±9,223,372,036,854 Unix milliseconds (roughly 1677–2262) unless the topic is known to use LogAppendTime, which replaces them with broker time. This check cannot catch out-of-range Kafka input: franz-go misreads those timestamps as other dates without warning, affecting copied timestamps and time filters. Ordinary modern timestamps are unaffected. For such sources, use another tool that preserves 64-bit millisecond timestamps. File-to-file copies retain the full signed millisecond value.
-
-The pinned [decoder](https://github.com/twmb/franz-go/blob/v1.22.2/pkg/kgo/source.go#L2438) multiplies milliseconds into a signed nanosecond value. Overflow changes the timestamp before Kaferry receives it. [Kafka 4.x's default future-timestamp bound](https://kafka.apache.org/41/configuration/topic-configs/#message.timestamp.after.max.ms) reduces acceptance of new far-future records; it does not protect existing records, extreme past timestamps or permissive topic settings. Occurrence in production is unknown.
+When Kaferry reads Kafka, franz-go v1.22.2 misreads record timestamps outside ±9,223,372,036,854 Unix milliseconds. [Kafka 4+ rejects new far-future timestamps by default](https://kafka.apache.org/40/generated/topic_config.html#topicconfigs_message.timestamp.after.max.ms); existing records, extreme past timestamps and custom settings can still expose this limitation.
 
 ## Tested configurations
 
@@ -37,7 +35,7 @@ Startup attempts `DescribeConfigs` on the destination topic. Denial or failure l
 | `message.timestamp.type` | Known LogAppendTime lets the broker restamp records | Apply client-safe timestamp bounds even if the broker could restamp |
 | Timestamp before/after bounds; legacy difference bound | Check CreateTime timestamps before submission, allowing record-level SKIP | Broker rejection stops the run under every policy |
 
-Size preflight counts an uncompressed single-record batch and the client’s 4–5 byte outer framing. Compression, changed settings or clock skew can change broker acceptance. Size preflight can refuse a record up to 5 bytes below the broker limit; timestamp preflight can skip a record the broker would accept. Both refusals support SKIP. Kafka output rejects timestamps outside ±9,223,372,036,854 Unix milliseconds unless known LogAppendTime will restamp them; source decoding has the limit above.
+Size preflight counts an uncompressed single-record batch and the client’s 4–5 byte outer framing. Compression, changed settings or clock skew can change broker acceptance. Size preflight can refuse a record up to 5 bytes below the broker limit; timestamp preflight can skip a record the broker would accept. Both refusals support SKIP. Kafka output rejects timestamps outside ±9,223,372,036,854 Unix milliseconds unless known LogAppendTime will restamp them.
 
 ## Kafka requests
 

@@ -23,7 +23,7 @@ Or clone this repository and run `make build` with Go 1.26+. The CLI is pure Go 
 
 ## Known issues
 
-Kafka output rejects file timestamps outside roughly 1677–2262 unless the topic is known to replace them with broker time. Kafka input misreads such source timestamps without warning, affecting copied timestamps and time filters. Ordinary modern timestamps are unaffected. [Scope and limits](design/client-compatibility.md#known-issues).
+When Kaferry reads Kafka, franz-go v1.22.2 misreads record timestamps outside ±9,223,372,036,854 Unix milliseconds. [Kafka 4+ defaults and scope](design/client-compatibility.md#known-issues).
 
 ## Quick start
 
