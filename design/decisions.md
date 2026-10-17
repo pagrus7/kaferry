@@ -174,7 +174,7 @@ The checkpoint directory must exist; Kaferry does not search or migrate it. Anot
 
 Text sections show endpoints, progress, time windows, behavior and any warnings. They summarize saved/fresh partitions, resolved bounds, start/stop rules, destination routing and record-error policies. Identical bounds and origins share a window summary. At most eight window groups, eight partition IDs per group and eight warnings are printed; omitted counts point to `--json`. Cluster IDs are shown separately from connection aliases; fingerprints and topic IDs stay in JSON.
 
-Kafka JSON rows show the selected start and retained/log-end offsets; log end includes open transactions. Offset differences are not record counts or completion evidence. Saved relative windows stay attached to each partition; new partitions adopt the lowest saved partition's window as in `run`. Fresh `NOW()` values are preview-only. New partitions without time bounds start earliest when the group has saved progress, including with `START=LATEST`.
+Kafka JSON rows show the selected start and retained/log-end offsets; log end includes open transactions. Offset differences are not record counts or completion evidence. Fresh `NOW()` values are preview-only.
 
 File inspection reads the archive header, checkpoint and last checkpointed frame identity without scanning records or recovering a tail. Text shows encoded input bytes after the selected position before filtering, and whether output would be created or resumed. A run reads existing output frames during recovery; inspection does not verify full archive integrity. `ONE_OFF` never generates a group or reads an existing checkpoint; the preview says a fresh group would be used.
 

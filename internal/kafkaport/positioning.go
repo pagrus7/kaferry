@@ -20,7 +20,6 @@ type positioner struct {
 	clock       copy.Clock
 	log         *slog.Logger
 	low, high   map[int32]int64
-	index       map[int32]int
 	lookups     map[int32]int64
 	ends        []int32
 }
@@ -65,10 +64,8 @@ func (p *positioner) Locate(ctx context.Context, parts []int32, saved map[int32]
 	now, adopted := p.clock.Now(), adoptedWindow(metadata)
 	assignments := make([]copy.Assignment, len(parts))
 	progress := make(map[int32]Progress, len(parts))
-	p.index = make(map[int32]int, len(parts))
 	p.lookups = make(map[int32]int64)
 	for n, part := range parts {
-		p.index[part] = n
 		window, stored, position, err := p.window(part, saved, metadata, adopted, now)
 		if err != nil {
 			return Positioning{}, err
@@ -196,7 +193,7 @@ func (p *positioner) resolveTimes(ctx context.Context, assignments []copy.Assign
 	if err != nil {
 		return err
 	}
-	for _, assignment := range assignments {
+	for n, assignment := range assignments {
 		id := assignment.Cursor.Partition
 		if _, queried := p.lookups[id]; !queried {
 			continue
@@ -209,7 +206,7 @@ func (p *positioner) resolveTimes(ctx context.Context, assignments []copy.Assign
 			p.ends = append(p.ends, id) // No match starts at the read-committed end.
 			continue
 		}
-		assignments[p.index[id]].Cursor.Position = offset
+		assignments[n].Cursor.Position = offset
 	}
 	return nil
 }
@@ -225,8 +222,10 @@ func (p *positioner) resolveEnds(ctx context.Context, assignments []copy.Assignm
 	if err := validateOffsets(p.ends, stable); err != nil {
 		return err
 	}
-	for _, id := range p.ends {
-		assignments[p.index[id]].Cursor.Position = stable[id]
+	for n, assignment := range assignments {
+		if assignment.Cursor.Position < 0 {
+			assignments[n].Cursor.Position = stable[assignment.Cursor.Partition]
+		}
 	}
 	return nil
 }

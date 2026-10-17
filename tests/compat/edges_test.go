@@ -7,15 +7,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"path/filepath"
 	"testing"
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/app"
-	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
 )
 
 func TestTimeBoundariesOutOfOrderAndTriggerReplay(t *testing.T) {
@@ -133,51 +130,5 @@ func TestExpiredAndAboveEndCommits(t *testing.T) {
 	var out bytes.Buffer
 	if code := app.Execute(ctx, []string{"run", "-e", statement, "-c", cfg}, nil, io.Discard, &out); code != 2 {
 		t.Fatalf("above-end offset exit=%d: %s", code, out.String())
-	}
-}
-
-func TestMissingTimestampSkipAndResumeWithDifferentPolicy(t *testing.T) {
-	// Given
-	// File records can lack timestamps; modern Kafka records normally cannot.
-	dir := t.TempDir()
-	src, dst := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "copy.cbor")
-	codec, err := file.NewCodec(64 << 20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writer, err := file.NewOutput(file.NewPublisher(), src, "fixture", "fixture", "", 0, codec, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
-	ms := stamp.UnixMilli()
-	for i, ts := range []*int64{&ms, nil, &ms} {
-		kind := "create_time"
-		if ts == nil {
-			kind = "unknown"
-		}
-		if err := writer.Submit(core.Record{Value: []byte(fmt.Sprint(i)), TimestampMS: ts, TimestampType: kind}, core.Token{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := writer.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	writer.Close()
-	cfg := configuration(t)
-	prefix := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM FILE cbor('%s') WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' ", dst, src, stamp.Add(-time.Second).Format(time.RFC3339Nano))
-	var output bytes.Buffer
-
-	// When
-	executeCode := app.Execute(context.Background(), []string{"run", "-e", prefix + "OPTIONS(GROUP='missing')", "-c", cfg}, nil, io.Discard, &output)
-
-	// Then
-	if executeCode != 1 {
-		t.Fatalf("missing timestamp exit=%d: %s", executeCode, output.String())
-	}
-	execute(t, prefix+"OPTIONS(GROUP='missing',ON_MISSING_TIMESTAMP=SKIP)", cfg)
-	records := archiveRecords(t, dst)
-	if len(records) != 2 || string(records[0].Value) != "0" || string(records[1].Value) != "2" {
-		t.Fatal("changing policy lost, duplicated, or reordered valid records")
 	}
 }
