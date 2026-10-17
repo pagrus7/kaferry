@@ -3,6 +3,7 @@ package inspect
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -113,11 +114,8 @@ func fixture() (*Service, plan.Plan, *factoryMock, *filesMock) {
 	topic := func(name string) *topicMock {
 		return &topicMock{info: kafkaport.TopicDescription{ClusterID: "cluster", TopicID: name, Partitions: []int32{1, 0}, TimestampType: "CreateTime"}, positions: map[int32]int64{}, metadata: map[int32]kafkaport.Progress{}, low: map[int32]int64{0: 0, 1: 0}, high: map[int32]int64{0: 10, 1: 11}, stable: map[int32]int64{0: 9, 1: 10}, failure: errors.New("injected"), times: func(queries map[int32]int64) map[int32]int64 {
 			found := make(map[int32]int64)
-			for id, stamp := range queries {
+			for id := range queries {
 				found[id] = int64(id) + 2
-				if stamp > 1000 {
-					found[id] = int64(id) + 8
-				}
 			}
 			return found
 		}}
@@ -245,10 +243,10 @@ func TestFileInspectionCarriesPositionsAndAcknowledgedOutputExtent(t *testing.T)
 }
 
 func TestInspectionFailuresCloseOnlyAcquiredConnections(t *testing.T) {
-	for _, failure := range []string{"source open", "source describe", "destination open", "destination describe", "members", "saved", "offsets", "times", "close"} {
+	for _, failure := range []string{"source open", "source describe", "destination open", "destination describe", "members", "saved", "offsets", "times", "file output", "close"} {
 		t.Run(failure, func(t *testing.T) {
 			// Given a failure at one acquisition, positioning or cleanup boundary.
-			service, p, factory, _ := fixture()
+			service, p, factory, files := fixture()
 			source, destination := factory.connections["input"], factory.connections["output"]
 			wantSource, wantDestination := 1, 1
 			injected := source.failure
@@ -261,6 +259,8 @@ func TestInspectionFailuresCloseOnlyAcquiredConnections(t *testing.T) {
 				factory.fail, factory.failure, wantDestination = "output", injected, 0
 			case "destination describe":
 				destination.fail, destination.failure = "describe", injected
+			case "file output":
+				p.Destination.Kind, files.failOutput, wantDestination = "FILE", injected, 0
 			default:
 				source.fail = failure
 			}
@@ -345,6 +345,39 @@ func TestPreviewReportsNewPartitionFallbackAndEffectiveRecordPolicies(t *testing
 	// When inspecting, then new partitions start earliest and the actual policy is exposed.
 	report := preview(t, service, p)
 	if report.StartRule != "EARLIEST" || report.Partitions[1].Start != 0 || report.RecordErrors != (ErrorPolicies{MissingTimestamp: "SKIP", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}) {
+		t.Fatal(report)
+	}
+}
+
+func TestFilePreviewPreservesFreshAndSavedRelativeWindows(t *testing.T) {
+	for _, saved := range []bool{false, true} {
+		t.Run(fmt.Sprint(saved), func(t *testing.T) {
+			// Given a file inspector's resolved NOW bounds, byte position and checkpoint state.
+			service, p, factory, files := fixture()
+			p.Source.Kind = "FILE"
+			p.Window = plan.WindowSpec{Upper: &plan.Expression{Now: true}}
+			upper, origin := int64(5000), "resolved"
+			if saved {
+				upper, origin = 1000, "saved"
+			}
+			files.source = file.SourceInspection{ArchiveInspection: file.ArchiveInspection{Exists: true, Size: 300}, Position: 200, Saved: saved, Window: plan.Window{Upper: &upper}, CheckpointPath: "checkpoint.json"}
+			// When composing the preview, then retain the inspector's bounds and describe their origin accurately.
+			report := preview(t, service, p)
+			info := report.Source.File
+			if info.WindowOrigin != origin || !reflect.DeepEqual(*info.Window, files.source.Window) || *info.StartBytes != 200 || *info.CheckpointExists != saved || info.Checkpoint != "checkpoint.json" || factory.opened != 1 || factory.connections["output"].closed != 1 {
+				t.Fatal(report)
+			}
+		})
+	}
+}
+
+func TestFreshTimeWindowWarnsWhenEarlierOffsetsAreNotRetained(t *testing.T) {
+	// Given no saved progress and a time lookup that selects a positive log start.
+	service, p, factory, _ := fixture()
+	factory.connections["input"].low[0] = 2
+	// When inspecting, then report the selected offset and possible missing history, without claiming proven loss.
+	report := preview(t, service, p)
+	if report.Partitions[0].Start != 2 || report.Partitions[0].Saved || len(report.Warnings) != 1 || !strings.Contains(report.Warnings[0], "start of the requested window may be unavailable") {
 		t.Fatal(report)
 	}
 }

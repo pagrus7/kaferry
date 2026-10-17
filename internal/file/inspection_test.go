@@ -185,18 +185,26 @@ func TestDestinationInspectionDoesNotRecoverOrLockATornTail(t *testing.T) {
 }
 
 func TestFileInspectionRejectsInvalidIdentityAndMissingSavedOutput(t *testing.T) {
-	for _, problem := range []string{"missing output", "missing identity", "hardlink", "bad header", "bad checkpoint", "missing directory"} {
+	for _, problem := range []string{"missing output", "missing identity", "bad output header", "directory source", "hardlink", "bad header", "bad checkpoint", "missing directory"} {
 		t.Run(problem, func(t *testing.T) {
 			// Given invalid input or saved output identity.
 			p, limits, inspector, _ := inspectionFixture(t)
-			var err error
+			directory := *limits.CheckpointDir
+			progress := DestinationProgress{Exists: true, ID: "missing", Extent: 100}
+			destination := false
 			switch problem {
-			case "missing output", "missing identity":
-				progress := DestinationProgress{Exists: true, ID: "missing", Extent: 100}
+			case "missing output", "missing identity", "bad output header":
+				destination = true
 				if problem == "missing identity" {
 					progress.ID, progress.Extent = "", 0
 				}
-				_, err = inspector.Destination(p, "query", progress, limits)
+				if problem == "bad output header" {
+					if err := os.WriteFile(p.Destination.Name, []byte("invalid"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case "directory source":
+				p.Source.Name = directory
 			case "hardlink":
 				if err := os.Link(p.Source.Name, p.Destination.Name); err != nil {
 					t.Fatal(err)
@@ -207,19 +215,24 @@ func TestFileInspectionRejectsInvalidIdentityAndMissingSavedOutput(t *testing.T)
 				}
 			case "bad checkpoint":
 				data, _ := json.Marshal(Checkpoint{Version: 50})
-				if err := os.WriteFile(checkpointPath(*limits.CheckpointDir, p.Group), data, 0600); err != nil {
+				if err := os.WriteFile(checkpointPath(directory, p.Group), data, 0600); err != nil {
 					t.Fatal(err)
 				}
 			case "missing directory":
-				missing := filepath.Join(*limits.CheckpointDir, "missing")
+				missing := filepath.Join(directory, "missing")
 				limits.CheckpointDir = &missing
 			}
-			// When inspecting, then fail rather than creating or repairing anything.
-			if problem != "missing output" && problem != "missing identity" {
+			before := directoryContents(t, directory)
+			// When inspecting, then reject with exit 2 without creating, repairing or rewriting any file.
+			var err error
+			if destination {
+				_, err = inspector.Destination(p, "query", progress, limits)
+			} else {
 				_, err = inspector.Source(p, "query", limits)
 			}
-			if err == nil {
-				t.Fatal("invalid state accepted")
+			var classified interface{ ExitCode() int }
+			if !errors.As(err, &classified) || classified.ExitCode() != 2 || !reflect.DeepEqual(before, directoryContents(t, directory)) {
+				t.Fatal("invalid state accepted, misclassified or changed", err)
 			}
 		})
 	}

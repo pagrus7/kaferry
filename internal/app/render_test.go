@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -107,21 +108,32 @@ func TestTextExplanationDistinguishesSavedAndFreshWindows(t *testing.T) {
 }
 
 func TestTextExplanationFollowingRoutingAndSkipPolicies(t *testing.T) {
-	// Given a fresh following copy with destination routing and one explicit SKIP policy.
-	report := explanationFixture()
-	report.Partitions[0].Window, report.Partitions[0].Saved = plan.Window{}, false
-	report.StartRule = "LATEST"
-	report.Destination = inspect.Endpoint{Kind: "TOPIC", Name: "output", Connection: "backup", ClusterID: "other-cluster", PartitionCount: 3, TimestampType: "LogAppendTime"}
-	report.RecordErrors.RejectedTimestamp = "SKIP"
-	// When rendering, then state the latest start, continuous follow and the dropped-record policy.
-	output := textExplanation(t, report)
-	for _, want := range []string{"current read-committed end", "Filter: none", "no end time; follow", "original key bytes; destination partitioner", "LogAppendTime", "Skip before writing: rejected timestamps (records dropped)", "Delivery and unclassified errors: stop"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("missing %q:\n%s", want, output)
-		}
-	}
-	if strings.Contains(output, "Stop threshold") || strings.Contains(output, "Attention") {
-		t.Fatal(output)
+	for _, policy := range []string{"LogAppendTime", ""} {
+		t.Run(policy, func(t *testing.T) {
+			// Given a following copy, destination routing and one explicit SKIP policy.
+			report := explanationFixture()
+			report.Partitions[0].Window, report.Partitions[0].Saved = plan.Window{}, false
+			report.StartRule = "LATEST"
+			report.Destination = inspect.Endpoint{Kind: "TOPIC", Name: "output", Connection: "backup", ClusterID: "other-cluster", PartitionCount: 3, TimestampType: policy}
+			report.RecordErrors.RejectedTimestamp = "SKIP"
+			// When rendering, then state continuous follow, dropped-record scope, and whether the timestamp policy is known.
+			output := textExplanation(t, report)
+			for _, want := range []string{"current read-committed end", "Filter: none", "no end time; follow", "original key bytes; destination partitioner", "Skip before writing: rejected timestamps (records dropped)", "Delivery and unclassified errors: stop"} {
+				if !strings.Contains(output, want) {
+					t.Fatalf("missing %q:\n%s", want, output)
+				}
+			}
+			if policy == "" {
+				if !strings.Contains(output, "Destination timestamp policy: unknown.") {
+					t.Fatal(output)
+				}
+			} else if !strings.Contains(output, policy) {
+				t.Fatal(output)
+			}
+			if strings.Contains(output, "Stop threshold") || strings.Contains(output, "Attention") {
+				t.Fatal(output)
+			}
+		})
 	}
 }
 
@@ -168,6 +180,8 @@ func TestTextExplanationShowsOnlyApplicableSkipCategories(t *testing.T) {
 			// Given a file destination and SKIP policies for missing/rejected timestamps.
 			report := explanationFixture()
 			report.RecordErrors.MissingTimestamp, report.RecordErrors.RejectedTimestamp = "SKIP", "SKIP"
+			report.Partitions[0].Saved = false
+			report.Partitions[0].Window.Lower = nil
 			if !filtered {
 				report.Partitions[0].Window, report.StartRule = plan.Window{}, "EARLIEST"
 			}
@@ -177,7 +191,11 @@ func TestTextExplanationShowsOnlyApplicableSkipCategories(t *testing.T) {
 			if strings.Contains(output, "Skip before writing: missing timestamps") != filtered || strings.Contains(output, "rejected timestamps") {
 				t.Fatal(output)
 			}
-			if !filtered && !strings.Contains(output, "Record errors: stop") {
+			if filtered {
+				if !strings.Contains(output, "Fresh start: earliest retained offset; apply the time filter while reading.") || !strings.Contains(output, "Stop threshold: 1970-01-01T00:00:03Z") {
+					t.Fatal(output)
+				}
+			} else if !strings.Contains(output, "Record errors: stop") || !strings.Contains(output, "start at the earliest retained offset.") {
 				t.Fatal(output)
 			}
 		})
@@ -185,33 +203,42 @@ func TestTextExplanationShowsOnlyApplicableSkipCategories(t *testing.T) {
 }
 
 func TestTextExplanationSummarizesLargePartitionSets(t *testing.T) {
-	for _, distinct := range []bool{false, true} {
-		t.Run(fmt.Sprint(distinct), func(t *testing.T) {
-			// Given a thousand partitions with either equal-valued bounds or distinct windows.
+	for _, windows := range []int{1, 2, 1000} {
+		t.Run(fmt.Sprint(windows), func(t *testing.T) {
+			// Given a thousand partitions with equal-valued bounds, two groups, or distinct windows.
 			report := explanationFixture()
 			for id := int32(1); id < 1000; id++ {
 				part := report.Partitions[0]
-				upper := int64(2000)
-				if distinct {
-					upper += int64(id)
-				}
+				upper := int64(2000 + id%int32(windows))
 				part.ID, part.Window.Upper = id, &upper
 				report.Partitions = append(report.Partitions, part)
 			}
 			for id := range 20 {
 				report.Warnings = append(report.Warnings, fmt.Sprintf("Partition %d: expired offset.", id))
 			}
-			// When rendering, then aggregate equal bounds and explicitly point to omitted details.
+			// When rendering, then aggregate bounds, disclose omitted IDs/windows, and retain all JSON rows.
 			output := textExplanation(t, report)
 			if !strings.Contains(output, "Resume: 1000 of 1000") || !strings.Contains(output, "12 more warnings; see --json") {
 				t.Fatal(output)
 			}
-			if distinct {
-				if strings.Count(output, "  From:") != 8 || !strings.Contains(output, "992 more distinct windows; see --json") {
+			if strings.Count(output, "  From:") != min(8, windows) {
+				t.Fatal(output)
+			}
+			if windows == 1000 && !strings.Contains(output, "992 more distinct windows; see --json") {
+				t.Fatal(output)
+			}
+			if windows == 2 {
+				if !strings.Contains(output, "Partitions: [0 2 4 6 8 10 12 14] (+492 more; see --json)") {
 					t.Fatal(output)
 				}
-			} else if strings.Count(output, "  From:") != 1 {
-				t.Fatal(output)
+				var raw bytes.Buffer
+				if err := renderExplanation(&raw, report, true); err != nil {
+					t.Fatal(err)
+				}
+				var decoded inspect.Report
+				if err := json.Unmarshal(raw.Bytes(), &decoded); err != nil || len(decoded.Partitions) != 1000 || decoded.Partitions[999].ID != 999 || len(decoded.Warnings) != 20 {
+					t.Fatal("JSON was truncated", len(decoded.Partitions), len(decoded.Warnings), err)
+				}
 			}
 		})
 	}
