@@ -134,7 +134,7 @@ Fetch the intended base from the repository root before starting:
 git fetch origin main
 ```
 
-Reviewers inspect files without running tests; run CI and local test commands separately. Calls count against the active client's subscription limits.
+Reviewers inspect files without running tests. The tests reviewer reads GitHub CI and downloads coverage into an ignored evidence cache; source edits remain forbidden. The client needs GitHub read access and cache-write permission. Blocked collection leaves coverage review pending. Run tests separately. Calls count against the active client's subscription limits.
 
 **Codex:** use its ChatGPT login (`codex login`). The [native agent definitions](../.codex/agents) use your Codex model settings. [Codex agents](https://learn.chatgpt.com/docs/agent-configuration/subagents).
 
@@ -145,10 +145,10 @@ codex login status
 After confirming ChatGPT login, from the repository root:
 
 ```sh
-codex exec --sandbox read-only 'Follow review/README.md; run all three reviewers against origin/main.'
+codex exec 'Follow review/README.md; run all three reviewers against origin/main.'
 ```
 
-For an interactive review, start `codex --sandbox read-only` and ask it to follow `review/README.md` for your base.
+The command uses your configured [permissions](https://learn.chatgpt.com/docs/sandboxing); forced read-only mode can block evidence downloads. For an interactive review, ask your existing Codex session to follow `review/README.md` for your base.
 
 **Claude Code:** use subscription login (`claude auth login --claudeai`). Remove API credentials so they do not override it. [Authentication](https://code.claude.com/docs/en/authentication).
 
