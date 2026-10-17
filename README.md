@@ -52,10 +52,11 @@ OPTIONS (GROUP = 'orders-backfill');
 `@alias` selects a connection; `GROUP` names the consumer group or file checkpoint. Rerun unchanged to resume; use a new group to change the window or `CUTOFF`.
 
 ```sh
+bin/kaferry explain --file copy.sql --config connections.toml
 bin/kaferry run --file copy.sql --config connections.toml
 ```
 
-For downloads, use your binary's path instead of `bin/kaferry`.
+`explain` previews positions without joining the group or writing output. For downloads, use your binary's path instead of `bin/kaferry`.
 
 ## Connections
 

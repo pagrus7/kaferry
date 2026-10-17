@@ -379,7 +379,7 @@ func TestCleanupFailurePreservesTheFirstExitCode(t *testing.T) {
 			// Given a close operation that fails with a classified error after the primary outcome.
 			cleanup := &kafkaport.Conflict{Err: errors.New("close failed")}
 			// When combining cleanup with the copy result.
-			err := cleanupResult(tc.primary, "close Kafka input", cleanup)
+			err := core.CleanupResult(tc.primary, "close Kafka input", cleanup)
 			// Then both causes remain available and cleanup cannot replace the primary exit code.
 			var coded interface{ ExitCode() int }
 			if !errors.As(err, &coded) || coded.ExitCode() != tc.want || !errors.Is(err, cleanup) || tc.primary != nil && !errors.Is(err, tc.primary) || !strings.Contains(err.Error(), "close Kafka input") {

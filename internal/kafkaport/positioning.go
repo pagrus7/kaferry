@@ -29,6 +29,8 @@ type Positioning struct {
 	Assignments []copy.Assignment
 	Progress    map[int32]Progress
 	Retention   map[int32]RetentionCheck
+	LogStart    map[int32]int64
+	LogEnd      map[int32]int64
 }
 type AssignmentPositioner interface {
 	Locate(context.Context, []int32, map[int32]int64, map[int32]Progress) (Positioning, error)
@@ -91,7 +93,7 @@ func (p *positioner) Locate(ctx context.Context, parts []int32, saved map[int32]
 			retention[id] = RetentionCheck{Low: p.low[id], Lower: *assignment.Window.Lower}
 		}
 	}
-	return Positioning{Assignments: assignments, Progress: progress, Retention: retention}, nil
+	return Positioning{Assignments: assignments, Progress: progress, Retention: retention, LogStart: p.low, LogEnd: p.high}, nil
 }
 
 func (p *positioner) watermarks(ctx context.Context, ids []int32) error {

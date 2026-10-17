@@ -9,6 +9,7 @@ import (
 
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/inspect"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/pagrus7/kaferry/internal/sql"
 )
@@ -61,6 +62,32 @@ func (m *commandMocks) Validate(p plan.Plan, worker config.Worker) error {
 	}
 	return m.stage("validate")
 }
+
+func (m *commandMocks) Explain(ctx context.Context, p plan.Plan, worker config.Worker, _ core.StopObserver) (inspect.Report, error) {
+	if ctx != m.ctx || !reflect.DeepEqual(p, m.plan) || worker != m.cfg.Worker {
+		m.t.Fatal("inspection input changed")
+	}
+	return inspect.Report{Version: 1, Group: p.Group}, m.stage("inspect")
+}
+
+func TestExplainPlansAndInspectsWithoutExecuting(t *testing.T) {
+	for _, failure := range []string{"", "parse", "inspect"} {
+		t.Run(failure, func(t *testing.T) {
+			// Given independent execution and inspection boundaries.
+			m := &commandMocks{t: t, ctx: t.Context(), cfg: config.Defaults("home"), plan: enginePlan("FILE", "FILE"), fail: failure, failure: &core.Exit{Code: 1, Err: errors.New("failed")}}
+			// When explaining through the same preparation stages as run.
+			report, err := newCommand(m, m, m, m, m, m).Explain(m.ctx, "statement", "config.toml", noopShutdown{})
+			// Then only the inspector executes, and failures retain their cause.
+			want := []string{"parse", "load", "build", "validate", "inspect"}
+			if failure == "parse" {
+				want = want[:1]
+			}
+			if !reflect.DeepEqual(m.calls, want) || failure == "" && (err != nil || report.Group != m.plan.Group) || failure != "" && !errors.Is(err, m.failure) {
+				t.Fatal(report, err, m.calls)
+			}
+		})
+	}
+}
 func TestCommandPlansBeforeExecutingAndStopsOnFailure(t *testing.T) {
 	// Given
 	stages := []string{"parse", "load", "build", "validate", "execute"}
@@ -69,7 +96,7 @@ func TestCommandPlansBeforeExecutingAndStopsOnFailure(t *testing.T) {
 			m := &commandMocks{t: t, fail: fail, failure: errors.New("failure"), ctx: context.Background(), cfg: config.Defaults("home"), ast: sql.Statement{Source: sql.Endpoint{Name: "input"}}, plan: enginePlan("FILE", "FILE")}
 
 			// When
-			err := newCommand(m, m, m, m, m).Run(m.ctx, "statement", "config.toml", noopShutdown{})
+			err := newCommand(m, m, m, m, m, nil).Run(m.ctx, "statement", "config.toml", noopShutdown{})
 			wanted := stages
 
 			// Then
@@ -101,7 +128,7 @@ func TestCommandPreservesExecutionExitCode(t *testing.T) {
 		m := &commandMocks{t: t, fail: "execute", failure: failure, ctx: context.Background()}
 
 		// When
-		runErr := newCommand(m, m, m, m, m).Run(m.ctx, "statement", "config.toml", noopShutdown{})
+		runErr := newCommand(m, m, m, m, m, nil).Run(m.ctx, "statement", "config.toml", noopShutdown{})
 
 		// Then
 		if runErr != failure {

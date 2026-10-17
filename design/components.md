@@ -8,6 +8,8 @@ Constructors receive dependencies through narrow interfaces. [Fx modules](../int
 
 Command parses, configures and plans; Engine acquires adapters; Runner copies through shared source, sink and progress contracts.
 
+Explain uses the same planning stages and Kafka positioner through read-only metadata and archive interfaces. Text and JSON render the same report; inspection never acquires execution adapters or locks.
+
 SQL syntax and validation errors share `sql.Diagnostic`, which carries a source position and preserves its cause. AST positions stay out of normalized plans, fingerprints and checkpoints. The CLI adds SQL file/stdin names; errors report token categories and fixed syntax hints without echoing input values or SQL excerpts. Caller-created ASTs without positions produce plain messages; configuration and operational errors keep their own context.
 
 ## Components
@@ -19,6 +21,8 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Planner | [plan](../internal/plan) | Validate, merge connections, compile time bounds and resolve environment values | `plan.Builder`, `Environment` |
 | Command | [app](../internal/app) | Order planning stages; classify failures | Parser, Reader, Builder, Engine |
 | Engine | [app](../internal/app) | Validate endpoints/progress; acquire and close query resources | KafkaFactory, FileFactory, RunnerFactory |
+| Copy inspection | [inspect](../internal/inspect) | Preview endpoints, progress and starting positions without writes | KafkaFactory, Files, PositionerFactory |
+| Archive inspection | [file/inspection.go](../internal/file/inspection.go) | Read headers and checkpoint identity without locks or recovery | inspect.Files |
 | Runner | [copy](../internal/copy) | Consume, filter, submit, process outcomes/lifecycle events | Source, Sink, ProgressStore, ProgressTracker, Clock |
 | Partition completion | [copy/partition.go](../internal/copy/partition.go) | Decide timestamp stops, tip sampling and waits for a fixed sampled end | Pure assignment state; runner performs I/O and logs outcomes |
 | Flow control | [copy/flow.go](../internal/copy/flow.go) | Hold unsent input; decide admission, worker-wide pause and commit cadence | Narrow work-count port; runner applies partition pauses and saves progress |
@@ -130,7 +134,7 @@ Fetch the intended base from the repository root before starting:
 git fetch origin main
 ```
 
-Reviewers inspect files without running tests; run CI and local test commands separately. Calls count against the active client's subscription limits.
+Reviewers inspect files without running tests. The tests reviewer reads GitHub CI and downloads coverage into an ignored evidence cache; source edits remain forbidden. The client needs GitHub read access and cache-write permission. Blocked collection leaves coverage review pending. Run tests separately. Calls count against the active client's subscription limits.
 
 **Codex:** use its ChatGPT login (`codex login`). The [native agent definitions](../.codex/agents) use your Codex model settings. [Codex agents](https://learn.chatgpt.com/docs/agent-configuration/subagents).
 
@@ -141,10 +145,10 @@ codex login status
 After confirming ChatGPT login, from the repository root:
 
 ```sh
-codex exec --sandbox read-only 'Follow review/README.md; run all three reviewers against origin/main.'
+codex exec 'Follow review/README.md; run all three reviewers against origin/main.'
 ```
 
-For an interactive review, start `codex --sandbox read-only` and ask it to follow `review/README.md` for your base.
+The command uses your configured [permissions](https://learn.chatgpt.com/docs/sandboxing); forced read-only mode can block evidence downloads. For an interactive review, ask your existing Codex session to follow `review/README.md` for your base.
 
 **Claude Code:** use subscription login (`claude auth login --claudeai`). Remove API credentials so they do not override it. [Authentication](https://code.claude.com/docs/en/authentication).
 
