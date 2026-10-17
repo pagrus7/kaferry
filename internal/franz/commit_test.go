@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/pagrus7/kaferry/internal/commitmeta"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -21,7 +22,7 @@ func TestCommitMetadataUsesTheCapturedDurableFileSnapshot(t *testing.T) {
 	// Given a confirmed source cursor and a durable output position.
 	id := [16]byte{1}
 	output := &outputProgressMock{id: "archive", extent: 200}
-	c := &Committer{topic: "input", group: "group", topicID: id, metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: topicID(id)}}, output: output}
+	c := &Committer{codec: commitmeta.NewCodec(), topic: "input", group: "group", topicID: id, metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: topicID(id)}}, output: output}
 	offsets, encoded, err := c.snapshot([]core.Cursor{{Partition: 0, Position: 42}})
 	if err != nil || offsets["input"][0].Offset != 42 {
 		t.Fatal(err, offsets)
@@ -35,7 +36,7 @@ func TestCommitMetadataUsesTheCapturedDurableFileSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Then the v10 ID-only request carries the original fsync-confirmed extent and identity.
-	got, err := kafkaport.DecodeProgress(req.Topics[0].Partitions[0].Metadata, "fp", topicID(id), false)
+	got, err := kafkaport.DecodeProgress(commitmeta.NewCodec(), req.Topics[0].Partitions[0].Metadata, "fp", topicID(id), false)
 	if err != nil || got.FileID != "archive" || got.Extent != 200 {
 		t.Fatal("hook read mutable state after snapshot", got, err)
 	}
@@ -49,7 +50,7 @@ func TestCommitMetadataUsesTheCapturedDurableFileSnapshot(t *testing.T) {
 func TestCommitterPreservesPartitionErrorsAndRejectsUnownedPositions(t *testing.T) {
 	// Given an independently mocked group client and owned progress.
 	client := &consumerMock{commitErr: kerr.RebalanceInProgress}
-	c := &Committer{client: client, topic: "input", group: "group", metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: "id"}}}
+	c := &Committer{codec: commitmeta.NewCodec(), client: client, topic: "input", group: "group", metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: "id"}}}
 	// When the group changes, then a retryable request error remains distinguishable for revoke handling.
 	_, err := c.Save(t.Context(), []core.Cursor{{Partition: 0, Position: 2}})
 	var recoverable *core.Recoverable
@@ -67,7 +68,7 @@ func TestCommitterPreservesPartitionErrorsAndRejectsUnownedPositions(t *testing.
 func TestCommittedOffsetsMatchTopicIDsWithoutNames(t *testing.T) {
 	// Given a Kafka v10 response using topic IDs in place of names.
 	id := [16]byte{1}
-	i := &Inspector{topic: "input", topicID: id}
+	i := &Inspector{codec: commitmeta.NewCodec(), topic: "input", topicID: id}
 	r := &kmsg.OffsetFetchResponse{Groups: []kmsg.OffsetFetchResponseGroup{{Group: "group", Topics: []kmsg.OffsetFetchResponseGroupTopic{{TopicID: id, Partitions: []kmsg.OffsetFetchResponseGroupTopicPartition{{Partition: 0, Offset: 42}}}}}}}
 	// When reading the response, then it is matched by the expected identity.
 	parts, err := i.offsetParts(r, "group")
@@ -77,5 +78,40 @@ func TestCommittedOffsetsMatchTopicIDsWithoutNames(t *testing.T) {
 	// When a different topic reuses the name, then its ID cannot match the old source.
 	if sameTopic("input", [16]byte{2}, id, "input") {
 		t.Fatal("different topic identity accepted by name")
+	}
+}
+
+type metadataCodecMock struct {
+	encoded kafkaport.Progress
+	failure error
+}
+
+func (c *metadataCodecMock) Encode(p commitmeta.Progress) (string, error) {
+	c.encoded = p
+	return "encoded", c.failure
+}
+func (c *metadataCodecMock) Decode(string) (commitmeta.Progress, error) { return c.encoded, c.failure }
+func TestCommitterUsesInjectedCodecAndClearsPreviousStop(t *testing.T) {
+	// Given a previous stop, and an independently mocked codec and group client.
+	codec := &metadataCodecMock{}
+	client := &consumerMock{}
+	c := &Committer{codec: codec, client: client, topic: "input", metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: "id", Stop: &core.Stop{Reason: "tip", At: 7}}}}
+	// When the new assignment saves its initial position without a stop.
+	if _, _, err := c.snapshot([]core.Cursor{{Position: 7}}); err != nil {
+		t.Fatal(err)
+	}
+	// Then encoding receives a cleared stop at the same position.
+	if codec.encoded.Stop != nil {
+		t.Fatal(codec.encoded)
+	}
+	// When encoding fails, then no commit request can leave the component.
+	codec.failure = errors.New("codec failure")
+	if _, err := c.Save(t.Context(), []core.Cursor{{Position: 7}}); !errors.Is(err, codec.failure) || client.committed != nil {
+		t.Fatal(err, client.committed)
+	}
+	// When a stop lies past the confirmed cursor, then even the codec is bypassed.
+	codec.encoded = kafkaport.Progress{}
+	if _, _, err := c.snapshot([]core.Cursor{{Position: 7, Stop: &core.Stop{Reason: "tip", At: 8}}}); err == nil || codec.encoded.Fingerprint != "" {
+		t.Fatal(err, codec.encoded)
 	}
 }

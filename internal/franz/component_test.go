@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pagrus7/kaferry/internal/commitmeta"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
@@ -21,7 +22,7 @@ import (
 )
 
 func componentFactory() *Factory {
-	return NewFactory(NewClients(), kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger()), core.RealClock{}, quietLogger())
+	return NewFactory(commitmeta.NewCodec(), NewClients(), kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger()), core.RealClock{}, quietLogger())
 }
 func componentPlan(t *testing.T, cluster *kfake.Cluster) plan.Plan {
 	return testPlan(t, map[string]string{"bootstrap.servers": strings.Join(cluster.ListenAddrs(), ",")})
@@ -153,7 +154,7 @@ func TestCorePositioningPrecedesClientOffsetAdjustment(t *testing.T) {
 		t.Fatal("initial member commit lost", saved, err)
 	}
 	text := saved["input"][0].Metadata
-	if _, err := kafkaport.DecodeProgress(&text, "fp", input.(*Source).topicID, false); err != nil {
+	if _, err := kafkaport.DecodeProgress(commitmeta.NewCodec(), &text, "fp", input.(*Source).topicID, false); err != nil {
 		t.Fatal("wire metadata changed", err)
 	}
 }

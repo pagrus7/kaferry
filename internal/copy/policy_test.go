@@ -56,7 +56,7 @@ func TestRecordPoliciesCommitSkippedInputsOnly(t *testing.T) {
 				}
 				source.events = append(source.events, Event{Input: &input})
 			}
-			source.events = append(source.events, Event{EOF: &Cursor{0, 3}})
+			source.events = append(source.events, Event{EOF: &Cursor{Partition: 0, Position: 3}})
 
 			// When the copy applies the selected record policy.
 			err := r.Run(context.Background())
@@ -120,7 +120,7 @@ func TestTimeFilterKeepsInclusiveStartAndExclusiveEnd(t *testing.T) {
 		input.Record.TimestampMS = &stamp
 		source.events = append(source.events, Event{Input: &input})
 	}
-	source.events = append(source.events, Event{EOF: &Cursor{0, 5}})
+	source.events = append(source.events, Event{EOF: &Cursor{Partition: 0, Position: 5}})
 	sink.submit = func(_ Record, token Token) error { sink.reports <- Delivery{Token: token}; return nil }
 
 	// When the full source is processed through the timestamp filter.
@@ -136,7 +136,7 @@ func TestDeferredRecordRetainsFollowingEOFUntilBudgetIsReleased(t *testing.T) {
 	// Given one uncommitted record and a second record held by the byte cap.
 	r, _, sink, store, _ := fixture(t)
 	r.limits.ByteCap, r.limits.PartitionByteCap = 150, 150
-	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.input(incoming(0, 0, 30)); err != nil {
@@ -147,10 +147,10 @@ func TestDeferredRecordRetainsFollowingEOFUntilBudgetIsReleased(t *testing.T) {
 	}
 
 	// When an already queued EOF arrives behind the held record.
-	err := r.eof(Cursor{0, 2})
+	err := r.eof(Cursor{Partition: 0, Position: 2})
 
 	// Then the partition stays open and keeps the EOF without observing it ahead of input.
-	if err != nil || r.deferredEOF == nil || r.partitions[0].stopped || r.partitions[0].position != 1 {
+	if err != nil || r.deferredEOF == nil || r.partitions[0].stop != nil || r.partitions[0].position != 1 {
 		t.Fatal("EOF overtook deferred input", err, r.partitions[0])
 	}
 
@@ -165,7 +165,7 @@ func TestDeferredRecordRetainsFollowingEOFUntilBudgetIsReleased(t *testing.T) {
 	err = r.admitDeferred()
 
 	// Then both input and EOF are consumed in order, with the second delivery still pending.
-	if err != nil || len(sink.writes) != 2 || r.deferred != nil || r.deferredEOF != nil || !r.partitions[0].stopped || r.readyToExit() {
+	if err != nil || len(sink.writes) != 2 || r.deferred != nil || r.deferredEOF != nil || r.partitions[0].stop == nil || r.readyToExit() {
 		t.Fatal("held EOF was lost or completed unresolved work", err)
 	}
 
@@ -190,7 +190,7 @@ func TestDeferredRecordIsValidatedAfterBudgetIsReleased(t *testing.T) {
 	source.assignments[0].Window.Lower = &lower
 	first, second := incoming(0, 0, 30), incoming(0, 1, 200)
 	first.Record.TimestampMS = &lower
-	eof := Cursor{0, 2}
+	eof := Cursor{Partition: 0, Position: 2}
 	source.events = []Event{{Input: &first}, {Input: &second}, {EOF: &eof}}
 	acknowledged := false
 	sink.flush = func() error {
@@ -208,7 +208,7 @@ func TestDeferredRecordIsValidatedAfterBudgetIsReleased(t *testing.T) {
 
 	// Then deferred admission keeps FAIL semantics and cannot publish or save the invalid record.
 	var invalid *RecordError
-	if !acknowledged || !errors.As(err, &invalid) || invalid.Class != "missing_timestamp" || exitCode(err) != 1 || len(sink.writes) != 1 || !reflect.DeepEqual(store.saves, [][]Cursor{{{0, 1}}}) {
+	if !acknowledged || !errors.As(err, &invalid) || invalid.Class != "missing_timestamp" || exitCode(err) != 1 || len(sink.writes) != 1 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1}}}) {
 		t.Fatal("held input bypassed validation or failed to stop", err, store.saves, sink.writes)
 	}
 }

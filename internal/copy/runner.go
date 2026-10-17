@@ -178,7 +178,7 @@ func (r *Runner) accept(event Event) error {
 
 func (r *Runner) input(input Input) error {
 	p := r.partitions[input.Cursor.Partition]
-	if p == nil || p.stopped {
+	if p == nil || p.stop != nil {
 		return nil
 	}
 	if r.pending != nil || r.deferred != nil {
@@ -223,7 +223,7 @@ func (r *Runner) stopAtTimestamp(p *partition, input Input) (bool, error) {
 	if err := r.tracker.Advance(input.Cursor); err != nil {
 		return false, err
 	}
-	p.stopped = true
+	p.stop = &Stop{Reason: "timestamp", At: input.Cursor.Position}
 	r.timestampStops++
 	r.log.Info("partition stopped", "reason", "timestamp", "partition", input.Cursor.Partition, "position", input.Cursor.Position, "timestamp", *input.Record.TimestampMS, "upper", *p.window.Upper, "past_upper_ms", *input.Record.TimestampMS-*p.window.Upper, "future_dated", *input.Record.TimestampMS > r.clock.Now().Add(time.Minute).UnixMilli())
 	return true, nil
@@ -311,7 +311,7 @@ func (r *Runner) deliveries() error {
 }
 func (r *Runner) eof(cursor Cursor) error {
 	p := r.partitions[cursor.Partition]
-	if p == nil || p.stopped {
+	if p == nil || p.stop != nil {
 		return nil
 	}
 	if r.deferred != nil && r.deferred.Cursor.Partition == cursor.Partition {
@@ -323,13 +323,14 @@ func (r *Runner) eof(cursor Cursor) error {
 		return err
 	}
 	p.reachedTip(cursor.Position, r.plan.Source.Kind == "FILE")
+
 	return nil
 }
 func (r *Runner) tips() error {
 	wait, _ := time.ParseDuration(r.limits.TipWait)
 	sampled := false // Interleave watermark queries with consumer polling.
 	for id, p := range r.partitions {
-		if p.stopped || p.window.Upper == nil || r.plan.Source.Kind != "TOPIC" {
+		if p.stop != nil || p.window.Upper == nil || r.plan.Source.Kind != "TOPIC" {
 			continue
 		}
 		action, err := p.tipAction(r.clock.Now(), r.plan.CutoffMS, wait)
@@ -351,7 +352,7 @@ func (r *Runner) tips() error {
 		}
 		switch action {
 		case tipStop:
-			p.stopped = true
+			p.stop = &Stop{Reason: "tip", At: p.position}
 			r.tipStops++
 			r.log.Info("partition stopped", "reason", "tip", "partition", id, "position", p.position, "high_watermark", *p.high)
 		case tipTimeout:

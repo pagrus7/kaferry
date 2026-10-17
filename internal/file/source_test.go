@@ -3,14 +3,15 @@ package file
 import (
 	"context"
 	"errors"
-	"github.com/pagrus7/kaferry/internal/config"
-	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/plan"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/pagrus7/kaferry/internal/config"
+	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 type fileClock struct{ now time.Time }
@@ -133,5 +134,43 @@ func TestOpenSourceTruncationFailsUnderSkipPolicy(t *testing.T) {
 	var exit *core.Exit
 	if !errors.As(err, &exit) || exit.Code != 1 || sink.writes != 1 || cp.Existing().Position != int64(len(header)+len(data)) {
 		t.Fatal("changed source did not fail", err, sink.writes)
+	}
+}
+
+func TestFileAssignmentClearsStopAndRefreshesOpeningSize(t *testing.T) {
+	// Given a saved EOF stop and an input with bytes appended after it stopped.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "source.cbor")
+	codec := codec(t)
+	header, err := codec.EncodeHeader(Header{Version: 1, ID: "source", Group: "fixture", Fingerprint: "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(header, 0), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cp, err := NewCheckpoints(dir, "job", DurableWriter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cp.Close()
+	pos := int64(len(header))
+	cp.Initialize(Checkpoint{Version: 2, Fingerprint: "fp", SourceID: "source", Position: pos, OpeningSize: pos})
+	if _, err := cp.Save(t.Context(), []core.Cursor{{Position: pos, Stop: &core.Stop{Reason: "eof", At: pos}}}); err != nil {
+		t.Fatal(err)
+	}
+	// When reopening and assigning the same file query.
+	source, err := NewSource(path, "fp", plan.WindowSpec{}, codec, cp, core.RealClock{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if err := source.Start(&lifecycle{}); err != nil {
+		t.Fatal(err)
+	}
+	// Then the first saved checkpoint clears the old stop before reading and records the new opening size.
+	saved, err := readCheckpoint(cp.path)
+	if err != nil || saved.Stop != nil || saved.Position != pos || saved.OpeningSize != pos+1 {
+		t.Fatal(saved, err)
 	}
 }

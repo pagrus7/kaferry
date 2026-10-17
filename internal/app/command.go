@@ -15,6 +15,7 @@ import (
 type Command interface {
 	Run(context.Context, string, string, Shutdown) error
 	Explain(context.Context, string, string, Shutdown) (inspect.Report, error)
+	Status(context.Context, string, string, Shutdown) (inspect.StatusReport, error)
 }
 type QueryValidator interface {
 	Validate(plan.Plan, config.Worker) error
@@ -26,10 +27,11 @@ type command struct {
 	validator QueryValidator
 	engine    Engine
 	explainer inspect.Explainer
+	status    inspect.StatusReader
 }
 
-func newCommand(parser sql.Parser, config config.Reader, planner plan.Builder, validator QueryValidator, engine Engine, explainer inspect.Explainer) Command {
-	return &command{parser: parser, config: config, planner: planner, validator: validator, engine: engine, explainer: explainer}
+func newCommand(parser sql.Parser, config config.Reader, planner plan.Builder, validator QueryValidator, engine Engine, explainer inspect.Explainer, status inspect.StatusReader) Command {
+	return &command{parser: parser, config: config, planner: planner, validator: validator, engine: engine, explainer: explainer, status: status}
 }
 
 func (c *command) Run(ctx context.Context, statement, configPath string, stop Shutdown) error {
@@ -46,6 +48,14 @@ func (c *command) Explain(ctx context.Context, statement, configPath string, sto
 		return inspect.Report{}, err
 	}
 	return c.explainer.Explain(ctx, p, limits, stop)
+}
+
+func (c *command) Status(ctx context.Context, statement, configPath string, stop Shutdown) (inspect.StatusReport, error) {
+	p, limits, err := c.prepare(statement, configPath, stop)
+	if err != nil {
+		return inspect.StatusReport{}, err
+	}
+	return c.status.Status(ctx, p, limits, stop)
 }
 
 func (c *command) prepare(statement, configPath string, stop Shutdown) (plan.Plan, config.Worker, error) {

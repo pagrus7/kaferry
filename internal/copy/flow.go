@@ -83,7 +83,7 @@ func (r *Runner) pause() error {
 	full := r.flow.full(r.tracker, r.limits)
 	for id, p := range r.partitions {
 		n, b := r.tracker.Work(id)
-		paused := full || p.stopped || n >= r.limits.PartitionRecordCap || b >= r.limits.PartitionByteCap
+		paused := full || p.stop != nil || n >= r.limits.PartitionRecordCap || b >= r.limits.PartitionByteCap
 		if paused != p.paused {
 			if err := r.source.Pause(id, paused); err != nil {
 				return err

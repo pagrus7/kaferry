@@ -28,6 +28,8 @@ type Checkpoint struct {
 	Window        plan.Window    `json:"window"`
 	DestinationID string         `json:"destination_id"`
 	Extent        int64          `json:"extent"`
+	OpeningSize   int64          `json:"opening_size"`
+	Stop          *copy.Stop     `json:"stop,omitempty"`
 }
 type AtomicWriter interface{ Replace(string, []byte) error }
 type DurableWriter struct{}
@@ -173,15 +175,18 @@ func readCheckpoint(path string) (*Checkpoint, error) {
 }
 
 func (c Checkpoint) validate() error {
-	if c.Version != 1 || c.Fingerprint == "" || c.SourceID == "" || c.Position < 0 || c.Extent < 0 || (c.DestinationID == "") != (c.Extent == 0) {
+	if c.Version != 2 || c.Fingerprint == "" || c.SourceID == "" || c.Position < 0 || c.Extent < 0 || (c.DestinationID == "") != (c.Extent == 0) {
 		return conflict("invalid checkpoint")
+	}
+	if c.OpeningSize < c.Position || c.Stop != nil && (c.Stop.Reason != "eof" || c.Stop.At != c.Position) {
+		return conflict("invalid checkpoint stop or opening size")
 	}
 	return nil
 }
 func (c *Checkpoints) Existing() *Checkpoint { return c.saved }
 func (c *Checkpoints) Initialize(checkpoint Checkpoint) {
 	c.current = checkpoint
-	c.frames[checkpoint.Position] = nil
+	c.frames[checkpoint.Position] = checkpoint.LastFrame
 }
 func (c *Checkpoints) RememberFrame(position int64, frame FrameIdentity) {
 	c.frames[position] = &frame
@@ -201,9 +206,13 @@ func (c *Checkpoints) Save(ctx context.Context, cursors []copy.Cursor) (map[int3
 	}
 	next := c.current
 	next.Position = position
+	next.Stop = cursors[0].Stop
 	next.LastFrame = last
 	if c.output != nil {
 		next.DestinationID, next.Extent = c.output.DurableOutput()
+	}
+	if err := next.validate(); err != nil {
+		return nil, err
 	}
 	data, err := json.Marshal(next)
 	if err != nil {

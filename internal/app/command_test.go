@@ -76,7 +76,7 @@ func TestExplainPlansAndInspectsWithoutExecuting(t *testing.T) {
 			// Given independent execution and inspection boundaries.
 			m := &commandMocks{t: t, ctx: t.Context(), cfg: config.Defaults("home"), plan: enginePlan("FILE", "FILE"), fail: failure, failure: &core.Exit{Code: 1, Err: errors.New("failed")}}
 			// When explaining through the same preparation stages as run.
-			report, err := newCommand(m, m, m, m, m, m).Explain(m.ctx, "statement", "config.toml", noopShutdown{})
+			report, err := newCommand(m, m, m, m, m, m, nil).Explain(m.ctx, "statement", "config.toml", noopShutdown{})
 			// Then only the inspector executes, and failures retain their cause.
 			want := []string{"parse", "load", "build", "validate", "inspect"}
 			if failure == "parse" {
@@ -96,7 +96,7 @@ func TestCommandPlansBeforeExecutingAndStopsOnFailure(t *testing.T) {
 			m := &commandMocks{t: t, fail: fail, failure: errors.New("failure"), ctx: context.Background(), cfg: config.Defaults("home"), ast: sql.Statement{Source: sql.Endpoint{Name: "input"}}, plan: enginePlan("FILE", "FILE")}
 
 			// When
-			err := newCommand(m, m, m, m, m, nil).Run(m.ctx, "statement", "config.toml", noopShutdown{})
+			err := newCommand(m, m, m, m, m, nil, nil).Run(m.ctx, "statement", "config.toml", noopShutdown{})
 			wanted := stages
 
 			// Then
@@ -128,7 +128,7 @@ func TestCommandPreservesExecutionExitCode(t *testing.T) {
 		m := &commandMocks{t: t, fail: "execute", failure: failure, ctx: context.Background()}
 
 		// When
-		runErr := newCommand(m, m, m, m, m, nil).Run(m.ctx, "statement", "config.toml", noopShutdown{})
+		runErr := newCommand(m, m, m, m, m, nil, nil).Run(m.ctx, "statement", "config.toml", noopShutdown{})
 
 		// Then
 		if runErr != failure {

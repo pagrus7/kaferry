@@ -7,12 +7,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/pagrus7/kaferry/internal/commitmeta"
 )
 
 // Supply binaries built from the previous and candidate revisions.
@@ -22,6 +25,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 		t.Fatal("set KAFERRY_PREVIOUS_BINARY for migration checks")
 	}
 	candidate := testBinary(t)
+	previousFormat := ""
 	for _, direction := range []struct{ name, first, second string }{
 		{"previous to candidate", previous, candidate}, {"candidate to previous", candidate, previous},
 	} {
@@ -45,27 +49,60 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			if progress.Offset != 1 {
 				t.Fatal("first binary did not save progress", progress)
 			}
-			// When the other binary resumes the same query and reads that archive.
-			runMigrationBinary(t, direction.second, sql, config)
+			if progress.Metadata == nil {
+				t.Fatal("missing metadata")
+			}
+			format := strings.SplitN(*progress.Metadata, ";", 2)[0]
+			want := 0
+			if direction.first == previous {
+				previousFormat = format
+				if _, err := commitmeta.NewCodec().Decode(*progress.Metadata); err != nil {
+					want = 2
+				}
+			} else if format != previousFormat {
+				want = 2
+			}
+			// When another format resumes this group, then it rejects the save before changing output.
+			runMigrationExpect(t, direction.second, sql, config, want)
 			if got := archiveRecords(t, archive); !reflect.DeepEqual(got, before) {
 				t.Fatal("Kafka progress/archive resume changed records", got)
 			}
 			cloneSQL := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='file-migration')", clone, archive)
 			runMigrationBinary(t, direction.first, cloneSQL, config)
-			runMigrationBinary(t, direction.second, cloneSQL, config)
-			// Then both Kafka metadata and file checkpoints resume without duplicating records.
+			runMigrationExpect(t, direction.second, cloneSQL, config, want)
+			// Then matching formats resume, incompatible formats fail closed, and neither duplicates output.
 			if got := archiveRecords(t, clone); !reflect.DeepEqual(got, before) {
 				t.Fatal("file checkpoint/archive compatibility failed", got)
+			}
+			// When using a fresh group/output, then the other binary can still read the unchanged archive format.
+			freshClone := filepath.Join(t.TempDir(), "read.cbor")
+			freshSQL := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='archive-read')", freshClone, archive)
+			runMigrationBinary(t, direction.second, freshSQL, config)
+			if got := archiveRecords(t, freshClone); !reflect.DeepEqual(got, before) {
+				t.Fatal("archive format changed", got)
 			}
 		})
 	}
 }
 func runMigrationBinary(t *testing.T, binary, statement, config string) {
 	t.Helper()
+	runMigrationExpect(t, binary, statement, config, 0)
+}
+func runMigrationExpect(t *testing.T, binary, statement, config string, want int) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	process := startCLI(t, ctx, binary, "", "run", "-e", statement, "-c", config)
-	if err := process.wait(); err != nil {
-		t.Fatalf("migration binary failed: %v %s", err, process.logs())
+	err := process.wait()
+	code := 0
+	if err != nil {
+		if e, ok := err.(*exec.ExitError); ok {
+			code = e.ExitCode()
+		} else {
+			t.Fatal(err)
+		}
+	}
+	if code != want {
+		t.Fatalf("migration exit=%d want=%d: %s", code, want, process.logs())
 	}
 }

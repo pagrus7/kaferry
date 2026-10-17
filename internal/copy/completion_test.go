@@ -21,7 +21,7 @@ func TestRunnerThresholdEqualityDoesNotStopUntilWallTimePasses(t *testing.T) {
 	source.high = 1
 	query := &watermarkSource{testSource: source}
 	r.source = query
-	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}, Window: plan.Window{Upper: &upper}}}); err != nil {
+	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}); err != nil {
 		t.Fatal(err)
 	}
 	input := incoming(0, 0, 1)
@@ -29,7 +29,7 @@ func TestRunnerThresholdEqualityDoesNotStopUntilWallTimePasses(t *testing.T) {
 	if err := r.input(input); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.eof(Cursor{0, 1}); err != nil {
+	if err := r.eof(Cursor{Partition: 0, Position: 1}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -39,7 +39,7 @@ func TestRunnerThresholdEqualityDoesNotStopUntilWallTimePasses(t *testing.T) {
 	}
 
 	// Then equality filters the record without stopping or sampling the log end.
-	if query.calls != 0 || r.partitions[0].stopped || r.timestampStops != 0 || r.filtered != 1 || len(sink.writes) != 0 {
+	if query.calls != 0 || r.partitions[0].stop != nil || r.timestampStops != 0 || r.filtered != 1 || len(sink.writes) != 0 {
 		t.Fatal("threshold equality stopped the partition", query.calls, r.partitions[0], sink.writes)
 	}
 
@@ -53,7 +53,7 @@ func TestRunnerThresholdEqualityDoesNotStopUntilWallTimePasses(t *testing.T) {
 	}
 
 	// Then the tip rule stops and saves the next position, not a timestamp trigger.
-	if query.calls != 1 || !r.readyToExit() || r.tipStops != 1 || r.timestampStops != 0 || !reflect.DeepEqual(store.saves, [][]Cursor{{{0, 1}}}) {
+	if query.calls != 1 || !r.readyToExit() || r.tipStops != 1 || r.timestampStops != 0 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1, Stop: &Stop{Reason: "tip", At: 1}}}}) {
 		t.Fatal("incorrect tip completion", query.calls, r.tipStops, store.saves)
 	}
 }
@@ -68,10 +68,10 @@ func TestRunnerFixedTipWaitsForAcknowledgementAndDoesNotCopyLaterRecords(t *test
 	r.source = query
 	var logs bytes.Buffer
 	r.log = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}, Window: plan.Window{Upper: &upper}}}); err != nil {
+	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.eof(Cursor{0, 0}); err != nil {
+	if err := r.eof(Cursor{Partition: 0, Position: 0}); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.tips(); err != nil {
@@ -110,7 +110,7 @@ func TestRunnerFixedTipWaitsForAcknowledgementAndDoesNotCopyLaterRecords(t *test
 	}
 
 	// Then completion saves exactly the original end and preserves diagnostic order.
-	if !r.readyToExit() || !reflect.DeepEqual(store.saves, [][]Cursor{{{0, 3}}}) {
+	if !r.readyToExit() || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 3, Stop: &Stop{Reason: "tip", At: 3}}}}) {
 		t.Fatal("sampled end changed", store.saves)
 	}
 	var messages []string

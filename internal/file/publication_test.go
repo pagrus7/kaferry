@@ -343,7 +343,7 @@ func TestCheckpointRenameFailurePreservesSavedPositionAndPendingFrames(t *testin
 		t.Fatal(err)
 	}
 	defer cp.Close()
-	cp.Initialize(Checkpoint{Version: 1, Fingerprint: "fp", SourceID: "source", Position: 0})
+	cp.Initialize(Checkpoint{Version: 2, OpeningSize: 10, Fingerprint: "fp", SourceID: "source", Position: 0})
 
 	// When
 	_, saveErr := cp.Save(context.Background(), []core.Cursor{{Partition: 0}})

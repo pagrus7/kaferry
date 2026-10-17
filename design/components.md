@@ -8,7 +8,7 @@ Constructors receive dependencies through narrow interfaces. [Fx modules](../int
 
 Command parses, configures and plans; Engine acquires adapters; Runner copies through shared source, sink and progress contracts.
 
-Explain uses the same planning stages and Kafka positioner through read-only metadata and archive interfaces. Text and JSON render the same report; inspection never acquires execution adapters or locks.
+Explain and status use the same planning stages and read-only metadata/archive interfaces; explain also uses the Kafka positioner. Text and JSON render the same report; inspection never acquires execution adapters or locks.
 
 SQL syntax and validation errors share `sql.Diagnostic`, which carries a source position and preserves its cause. AST positions stay out of normalized plans, fingerprints and checkpoints. The CLI adds SQL file/stdin names; errors report token categories and fixed syntax hints without echoing input values or SQL excerpts. Caller-created ASTs without positions produce plain messages; configuration and operational errors keep their own context.
 
@@ -28,11 +28,12 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Flow control | [copy/flow.go](../internal/copy/flow.go) | Hold unsent input; decide admission, worker-wide pause and commit cadence | Narrow work-count port; runner applies partition pauses and saves progress |
 | Progress tracker | [copy](../internal/copy) | Track consumed/resolved prefixes, ownership and caps | ProgressTracker, fresh instance through ProgressFactory |
 | Kafka metadata | [franz](../internal/franz) | Inspect identities, offsets and optional destination config | sourceMetadata, destinationMetadata, MetadataClient |
-| Kafka contracts and progress format | [kafkaport](../internal/kafkaport) | Endpoint interfaces and strict saved-progress encoding | Connection, SourceProgress; client libraries stay in adapters |
+| Kafka contracts | [kafkaport](../internal/kafkaport) | Endpoint interfaces and saved-progress identity checks | Connection, SourceProgress; client libraries stay in adapters |
+| Commit metadata codec | [commitmeta](../internal/commitmeta) | Encode/decode the versioned commit format, without Kafka I/O | `commitmeta.Codec`; private wire types, independent golden/invalid-input tests |
 | Kafka positioning | [kafkaport](../internal/kafkaport) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetReader, TimeReader; client conversions in franz |
 | Kafka input | [franz](../internal/franz) | Hand off callbacks/fetches to the core loop; position, pause and prove gaps | ConsumerClient, sourceMetadata, gapReader, rebalanceBridge |
 | Kafka output | [franz](../internal/franz) | Validate records, bound admission and report asynchronous deliveries | ProducerClient, destinationMetadata, Clock |
-| Kafka commits | [franz](../internal/franz) | Save positions and, for file outputs, file ID and extent; reject commits without a group member ID and generation | offsetCommitter, copy.OutputProgress |
+| Kafka commits | [franz](../internal/franz) | Save positions, eligible stops and, for file outputs, file ID and extent; reject commits without a group member ID and generation | offsetCommitter, copy.OutputProgress |
 | Shutdown budget | [app/shutdown.go](../internal/app/shutdown.go) | Enforce whole-process stop deadline; identify the blocked operation | StopObserver, Shutdown; CLI alone owns termination |
 | File adapters | [file](../internal/file) | Encode/decode frames, snapshot input, recover output, persist checkpoints | ArchiveDecoder, ArchiveEncoder, CheckpointStore, I/O ports |
 | File publication | [file](../internal/file) | Publish a durable header without replacing another creator | Publisher, private filesystem port |
@@ -56,7 +57,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 
 ## Tests
 
-Most tests exercise pure functions or individual components with handwritten mocks. Kafka and filesystem failures use injected ports; file-component tests use real files, and app tests replace Fx factories. Fewer [broker/CLI tests](../tests/compat) cover complete copy paths, rebalances and restart. PR checks also build the base revision and verify Kafka progress, file checkpoints and archives in both directions. Functional tests use Given/When/Then phases.
+Most tests exercise pure functions or individual components with handwritten mocks. Kafka and filesystem failures use injected ports; file-component tests use real files, and app tests replace Fx factories. Fewer [broker/CLI tests](../tests/compat) cover complete copy paths, rebalances and restart. PR checks also build the base revision, verify resume or explicit format rejection in both directions, and check archive interoperability. Functional tests use Given/When/Then phases.
 
 ### Test targets
 

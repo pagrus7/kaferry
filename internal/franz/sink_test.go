@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pagrus7/kaferry/internal/commitmeta"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -216,7 +217,7 @@ func TestSinkRefreshesRoutingOnIntervalWithoutBlockingOnMetadataFailure(t *testi
 		}
 		return &kmsg.MetadataResponse{ClusterID: &cluster, Topics: []kmsg.MetadataResponseTopic{{Topic: &name, TopicID: [16]byte{1}, Partitions: partitions}}}, nil
 	}}
-	s.inspector = &Inspector{client: client, topic: "output", log: s.log}
+	s.inspector = &Inspector{codec: commitmeta.NewCodec(), client: client, topic: "output", log: s.log}
 	for _, step := range []struct {
 		seconds, partitions, calls, remembered int
 		failure                                error

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/pagrus7/kaferry/internal/commitmeta"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -16,6 +17,7 @@ type offsetCommitter interface {
 	CommitOffsetsSync(context.Context, map[string]map[int32]kgo.EpochOffset, func(*kgo.Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error))
 }
 type Committer struct {
+	codec        commitmeta.Codec
 	client       offsetCommitter
 	topic, group string
 	topicID      [16]byte
@@ -87,7 +89,15 @@ func (c *Committer) snapshot(cursors []core.Cursor) (map[string]map[int32]kgo.Ep
 			progress.FileID, progress.Extent = id, extent
 			c.metadata[cursor.Partition] = progress
 		}
-		encoded[cursor.Partition] = progress.Encode()
+		progress.Stop = cursor.Stop
+		if cursor.Stop != nil && cursor.Stop.At > cursor.Position {
+			return nil, nil, fmt.Errorf("stop exceeds committed position")
+		}
+		text, err := c.codec.Encode(progress)
+		if err != nil {
+			return nil, nil, err
+		}
+		encoded[cursor.Partition] = text
 		offsets[c.topic][cursor.Partition] = kgo.EpochOffset{Epoch: -1, Offset: cursor.Position}
 	}
 

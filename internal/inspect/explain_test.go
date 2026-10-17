@@ -27,18 +27,21 @@ func (fixedClock) Sleep(time.Duration) {}
 func number(n int64) *int64            { return &n }
 
 type topicMock struct {
-	info         kafkaport.TopicDescription
-	positions    map[int32]int64
-	metadata     map[int32]kafkaport.Progress
-	low, high    map[int32]int64
-	stable       map[int32]int64
-	times        func(map[int32]int64) map[int32]int64
-	fail         string
-	failure      error
-	closed       int
-	groupReads   int
-	memberChecks int
-	queries      []map[int32]int64
+	memberships     []kafkaport.Membership
+	observations    []string
+	membershipReads int
+	info            kafkaport.TopicDescription
+	positions       map[int32]int64
+	metadata        map[int32]kafkaport.Progress
+	low, high       map[int32]int64
+	stable          map[int32]int64
+	times           func(map[int32]int64) map[int32]int64
+	fail            string
+	failure         error
+	closed          int
+	groupReads      int
+	memberChecks    int
+	queries         []map[int32]int64
 }
 
 func (m *topicMock) err(stage string) error {
@@ -48,6 +51,7 @@ func (m *topicMock) err(stage string) error {
 	return nil
 }
 func (m *topicMock) Describe(context.Context, bool) (kafkaport.TopicDescription, error) {
+	m.observations = append(m.observations, "describe")
 	info := m.info
 	info.Partitions = slices.Clone(info.Partitions)
 	return info, m.err("describe")
@@ -56,8 +60,18 @@ func (m *topicMock) CheckMembers(context.Context, string) error {
 	m.memberChecks++
 	return m.err("members")
 }
+func (m *topicMock) Membership(context.Context, string) (kafkaport.Membership, error) {
+	m.observations = append(m.observations, "members")
+	observation := kafkaport.Membership{Idle: true}
+	if len(m.memberships) > 0 {
+		observation = m.memberships[min(m.membershipReads, len(m.memberships)-1)]
+	}
+	m.membershipReads++
+	return observation, m.err("members")
+}
 func (m *topicMock) Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {
 	m.groupReads++
+	m.observations = append(m.observations, "saved")
 	return m.positions, m.metadata, m.err("saved")
 }
 func (m *topicMock) Offsets(_ context.Context, _ []int32, kind kafkaport.OffsetKind, committed bool) (map[int32]int64, error) {

@@ -52,7 +52,7 @@ func (r *Runner) readyToExit() bool {
 		return false
 	}
 	for id, p := range r.partitions {
-		if !p.stopped || !r.tracker.Resolved(id) {
+		if p.stop == nil || !r.tracker.Resolved(id) {
 			return false
 		}
 	}

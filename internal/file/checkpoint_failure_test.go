@@ -80,14 +80,17 @@ func TestCheckpointReplacementFailuresPreserveAtomicPublication(t *testing.T) {
 }
 
 func TestCorruptCheckpointFailsAndReleasesLock(t *testing.T) {
-	valid := []byte(`{"version":1,"fingerprint":"fp","source_id":"source","position":0}`)
+	valid := []byte(`{"version":2,"fingerprint":"fp","source_id":"source","position":0}`)
 	for _, tc := range []struct{ name, data string }{
 		{"oversized", strings.Repeat("x", 65537)},
 		{"trailing JSON", string(valid) + `{}`},
-		{"unknown field", `{"version":1,"fingerprint":"fp","source_id":"source","position":0,"extra":1}`},
-		{"unsupported version", `{"version":2,"fingerprint":"fp","source_id":"source","position":0}`},
-		{"negative position", `{"version":1,"fingerprint":"fp","source_id":"source","position":-1}`},
-		{"destination without extent", `{"version":1,"fingerprint":"fp","source_id":"source","position":0,"destination_id":"output"}`},
+		{"unknown field", `{"version":2,"fingerprint":"fp","source_id":"source","position":0,"extra":1}`},
+		{"unsupported version", `{"version":3,"fingerprint":"fp","source_id":"source","position":0}`},
+		{"opening size below position", `{"version":2,"fingerprint":"fp","source_id":"source","position":1,"opening_size":0}`},
+		{"wrong stop reason", `{"version":2,"fingerprint":"fp","source_id":"source","position":0,"stop":{"reason":"tip","at":0}}`},
+		{"different stop position", `{"version":2,"fingerprint":"fp","source_id":"source","position":0,"stop":{"reason":"eof","at":1}}`},
+		{"negative position", `{"version":2,"fingerprint":"fp","source_id":"source","position":-1}`},
+		{"destination without extent", `{"version":2,"fingerprint":"fp","source_id":"source","position":0,"destination_id":"output"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given an invalid saved checkpoint for this group.
@@ -168,7 +171,7 @@ func TestCheckpointRejectsInvalidSaveWithoutChangingDurableProgress(t *testing.T
 				t.Fatal(err)
 			}
 			defer cp.Close()
-			cp.Initialize(Checkpoint{Version: 1, Fingerprint: "fp", SourceID: "source"})
+			cp.Initialize(Checkpoint{Version: 2, OpeningSize: 0, Fingerprint: "fp", SourceID: "source"})
 			if _, err := cp.Save(t.Context(), []core.Cursor{{Partition: 0}}); err != nil {
 				t.Fatal(err)
 			}
@@ -189,6 +192,54 @@ func TestCheckpointRejectsInvalidSaveWithoutChangingDurableProgress(t *testing.T
 			after, readErr := os.ReadFile(cp.path)
 			if err == nil || tc.cancel && !errors.Is(err, context.Canceled) || readErr != nil || !bytes.Equal(before, after) || cp.Existing().Position != 0 {
 				t.Fatal("invalid save advanced progress", err, readErr)
+			}
+		})
+	}
+}
+
+type checkpointOutput struct {
+	id     string
+	extent int64
+}
+
+func (o checkpointOutput) DurableOutput() (string, int64) { return o.id, o.extent }
+func TestInvalidCheckpointSavePreservesSavedBytes(t *testing.T) {
+	for _, mode := range []string{"stop reason", "stop position", "opening size", "output extent"} {
+		t.Run(mode, func(t *testing.T) {
+			// Given a valid checkpoint at a known source boundary.
+			cp, err := NewCheckpoints(t.TempDir(), "group", DurableWriter{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cp.Close()
+			cp.Initialize(Checkpoint{Version: 2, Fingerprint: "fp", SourceID: "source"})
+			if _, err := cp.Save(t.Context(), []core.Cursor{{}}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(cp.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cursor := core.Cursor{}
+			switch mode {
+			case "stop reason":
+				cursor.Stop = &core.Stop{Reason: "tip"}
+			case "stop position":
+				cursor.Stop = &core.Stop{Reason: "eof", At: 1}
+			case "opening size":
+				cp.RememberFrame(1, FrameIdentity{})
+				cursor.Position = 1
+			case "output extent":
+				cp.BindOutput(checkpointOutput{id: "file", extent: 0})
+			}
+			// When an invalid stop, source extent or output snapshot is presented.
+			_, err = cp.Save(t.Context(), []core.Cursor{cursor})
+			// Then the previous checkpoint remains unchanged and readable.
+			var conflict *Conflict
+			after, readErr := os.ReadFile(cp.path)
+			saved, savedErr := readCheckpoint(cp.path)
+			if !errors.As(err, &conflict) || readErr != nil || !bytes.Equal(before, after) || savedErr != nil || saved.Position != 0 || saved.Stop != nil {
+				t.Fatal(err, readErr, saved, savedErr)
 			}
 		})
 	}

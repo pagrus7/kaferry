@@ -8,8 +8,9 @@ import (
 
 // partition holds one assignment's completion state; it does not perform I/O.
 type partition struct {
+	stop        *Stop
+	stopSaved   bool
 	window      plan.Window
-	stopped     bool
 	paused      bool
 	position    int64
 	stable      int64
@@ -44,7 +45,7 @@ func (p *partition) reachedTip(position int64, fileSource bool) {
 	p.atTip = true
 	p.position, p.stable = position, position
 	if fileSource {
-		p.stopped = true
+		p.stop = &Stop{Reason: "eof", At: position}
 	}
 }
 

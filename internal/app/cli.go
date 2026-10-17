@@ -42,6 +42,7 @@ func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, st
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	code := 0
 	var command Command
 	budget.Stage("composing components")
 	graph := fx.New(fx.NopLogger, RuntimeModules, fx.Populate(&command))
@@ -49,7 +50,16 @@ func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, st
 		fmt.Fprintln(stderr, "component composition failed")
 		return 2
 	}
-	if options.command == "explain" {
+	if options.command == "status" {
+		var report inspect.StatusReport
+		report, err = command.Status(ctx, statement, options.configPath, budget)
+		if err == nil {
+			budget.Begin()
+			budget.Stage("printing status")
+			err = renderStatus(stdout, report, options.json)
+			code = report.ExitCode()
+		}
+	} else if options.command == "explain" {
 		var report inspect.Report
 		report, err = command.Explain(ctx, statement, options.configPath, budget)
 		if err == nil {
@@ -70,7 +80,7 @@ func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, st
 		}
 		return 1
 	}
-	return 0
+	return code
 }
 
 func printCommandError(output io.Writer, source string, err error) {
@@ -95,8 +105,8 @@ type commandOptions struct {
 
 func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 	var options commandOptions
-	if len(args) == 0 || (args[0] != "run" && args[0] != "explain") {
-		err := fmt.Errorf("usage: kaferry --version | run|explain (--sql statement | --file path | --file -) [--config path]; explain accepts --json")
+	if len(args) == 0 || (args[0] != "run" && args[0] != "explain" && args[0] != "status") {
+		err := fmt.Errorf("usage: kaferry --version | run|explain|status (--sql statement | --file path | --file -) [--config path]; explain and status accept --json")
 		fmt.Fprintln(stderr, err)
 		return options, err
 	}
@@ -109,8 +119,8 @@ func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 	flags.StringVar(&options.file, "f", "", "statement file; - reads stdin")
 	flags.StringVar(&options.configPath, "config", "", "TOML configuration")
 	flags.StringVar(&options.configPath, "c", "", "TOML configuration")
-	if options.command == "explain" {
-		flags.BoolVar(&options.json, "json", false, "print a JSON explanation")
+	if options.command != "run" {
+		flags.BoolVar(&options.json, "json", false, "print JSON")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		return options, err

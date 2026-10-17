@@ -23,12 +23,7 @@ func (r *Runner) commit(ids []int32) error { return r.save(ids, false) }
 // recoverable failure only replays work, so the partition is released anyway.
 func (r *Runner) save(ids []int32, releasing bool) error {
 	r.lastCommit = r.clock.Now()
-	var cursors []Cursor
-	for _, id := range ids {
-		if r.tracker.HasProgress(id) {
-			cursors = append(cursors, r.tracker.Confirmed(id))
-		}
-	}
+	cursors := r.confirmedCursors(ids)
 	if len(cursors) == 0 {
 		return nil
 	}
@@ -55,9 +50,31 @@ func (r *Runner) save(ids []int32, releasing bool) error {
 			continue
 		}
 		r.tracker.Committed(cursor)
+		if cursor.Stop != nil {
+			r.partitions[cursor.Partition].stopSaved = true
+		}
 		r.log.Debug("progress committed", "partition", cursor.Partition, "position", cursor.Position)
 	}
 	return failed
+}
+
+func (r *Runner) confirmedCursors(ids []int32) []Cursor {
+	var cursors []Cursor
+	for _, id := range ids {
+		p := r.partitions[id]
+		if !r.tracker.HasProgress(id) && (p.stop == nil || p.stopSaved) {
+			continue
+		}
+		cursor := r.tracker.Confirmed(id)
+		stopped := p.stop != nil && cursor.Position >= p.stop.At
+		if stopped {
+			cursor.Stop = p.stop
+		}
+		if r.tracker.HasProgress(id) || stopped && !p.stopSaved {
+			cursors = append(cursors, cursor)
+		}
+	}
+	return cursors
 }
 
 func (r *Runner) released(releasing bool, cursors []Cursor, err error) bool {

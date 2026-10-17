@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/pagrus7/kaferry/internal/commitmeta"
 	"github.com/pagrus7/kaferry/internal/config"
 	copy "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
@@ -37,6 +38,7 @@ var PlanningModules = fx.Options(EnvironmentModule, SQLModule, ConfigurationModu
 var ProgressModule = fx.Module("progress", fx.Provide(copy.NewProgressFactory))
 var KafkaClientModule = fx.Module("kafka-client", fx.Provide(franz.NewClients))
 var PositioningModule = fx.Module("positioning", fx.Provide(kafkaport.NewPositionerFactory))
+var CommitMetadataModule = fx.Module("commit-metadata", fx.Provide(commitmeta.NewCodec))
 var KafkaModule = fx.Module("kafka", fx.Provide(franz.NewFactory,
 	func(f *franz.Factory) KafkaFactory { return f },
 	func(f *franz.Factory) QueryValidator { return f },
@@ -48,8 +50,8 @@ var FileModule = fx.Module("file", fx.Provide(fx.Annotate(file.NewFactory, fx.As
 var RunnerModule = fx.Module("runner", fx.Provide(newRunnerFactory))
 var EngineModule = fx.Module("engine", fx.Provide(newEngine))
 var FileInspectionModule = fx.Module("file-inspection", fx.Provide(fx.Annotate(file.NewInspector, fx.As(new(inspect.Files)))))
-var InspectionModule = fx.Module("inspection", fx.Provide(fx.Annotate(inspect.NewExplainer, fx.As(new(inspect.Explainer)))))
+var InspectionModule = fx.Module("inspection", fx.Provide(inspect.NewExplainer, func(s *inspect.Service) inspect.Explainer { return s }, func(s *inspect.Service) inspect.StatusReader { return s }))
 var CommandModule = fx.Module("command", fx.Provide(newCommand))
 var ClockModule = fx.Module("clock", fx.Provide(func() copy.Clock { return copy.RealClock{} }))
 var LoggingModule = fx.Module("logging", fx.Provide(func() *slog.Logger { return slog.New(slog.NewJSONHandler(os.Stderr, nil)) }))
-var RuntimeModules = fx.Options(PlanningModules, ProgressModule, KafkaClientModule, PositioningModule, KafkaModule, CheckpointModule, PublicationModule, FileModule, RunnerModule, EngineModule, FileInspectionModule, InspectionModule, CommandModule, ClockModule, LoggingModule)
+var RuntimeModules = fx.Options(PlanningModules, ProgressModule, KafkaClientModule, PositioningModule, CommitMetadataModule, KafkaModule, CheckpointModule, PublicationModule, FileModule, RunnerModule, EngineModule, FileInspectionModule, InspectionModule, CommandModule, ClockModule, LoggingModule)

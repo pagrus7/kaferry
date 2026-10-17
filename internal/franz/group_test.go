@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/pagrus7/kaferry/internal/commitmeta"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -55,7 +56,7 @@ func TestGroupInspectionAllowsCompatibleWorkersAndRejectsConflicts(t *testing.T)
 					Members: tc.members,
 				}}}, nil
 			}}
-			inspector := &Inspector{client: client, topic: "input"}
+			inspector := &Inspector{codec: commitmeta.NewCodec(), client: client, topic: "input"}
 			// When deciding whether this query may join the group.
 			err := inspector.CheckMembers(t.Context(), "group")
 			// Then only an absent group or compatible members pass; inspection failures remain errors.
@@ -89,7 +90,7 @@ func TestSavedOffsetsDistinguishAbsentGroupsFromInspectionFailures(t *testing.T)
 		t.Run(tc.name, func(t *testing.T) {
 			// Given a retained commit and a legacy or grouped Kafka offset response.
 			id := [16]byte{1}
-			encoded := (kafkaport.Progress{Fingerprint: "fp", TopicID: topicID(id)}).Encode()
+			encoded := encodeMetadata(kafkaport.Progress{Fingerprint: "fp", TopicID: topicID(id)})
 			client := &metadataMock{request: func(_ context.Context, r kmsg.Request) (kmsg.Response, error) {
 				if _, ok := r.(*kmsg.MetadataRequest); ok {
 					return metadataResponse(id), nil
@@ -117,7 +118,7 @@ func TestSavedOffsetsDistinguishAbsentGroupsFromInspectionFailures(t *testing.T)
 					Partitions: []kmsg.OffsetFetchResponseTopicPartition{{Partition: 0, Offset: 42, Metadata: &encoded}, {Partition: 2, Offset: -1}},
 				}}}, nil
 			}}
-			inspector := &Inspector{client: client, topic: "input", log: quietLogger()}
+			inspector := &Inspector{codec: commitmeta.NewCodec(), client: client, topic: "input", log: quietLogger()}
 			// When loading progress before positioning a source.
 			positions, progress, err := inspector.Saved(t.Context(), "group", "fp", plan.WindowSpec{}, 0)
 			// Then unavailable or unauthorized progress cannot become a fresh start.
@@ -128,8 +129,45 @@ func TestSavedOffsetsDistinguishAbsentGroupsFromInspectionFailures(t *testing.T)
 				if len(positions) != 0 || len(progress) != 0 {
 					t.Fatal("unexpected usable progress", positions, progress)
 				}
-			} else if !reflect.DeepEqual(positions, map[int32]int64{0: 42}) || len(progress) != 1 || progress[0].Encode() != encoded {
+			} else if !reflect.DeepEqual(positions, map[int32]int64{0: 42}) || len(progress) != 1 || encodeMetadata(progress[0]) != encoded {
 				t.Fatal("saved progress changed", positions, progress)
+			}
+		})
+	}
+}
+
+func TestMembershipObservesActivityAndCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, client string
+		assignment          []byte
+		idle, foreign       bool
+	}{
+		{name: "empty", state: "Empty", idle: true},
+		{name: "dead", state: "Dead", idle: true},
+		{name: "rebalance without members", state: "PreparingRebalance"},
+		{name: "unrecognized state", state: "unknown"},
+		{name: "active", state: "Stable", client: "kaferry-worker"},
+		{name: "foreign", state: "Stable", client: "other", foreign: true},
+		{name: "invalid assignment", state: "Stable", client: "kaferry-worker", assignment: []byte{0}, foreign: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given an independently mocked broker group description.
+			members := []kmsg.DescribeGroupsResponseGroupMember{}
+			if tc.client != "" {
+				members = append(members, kmsg.DescribeGroupsResponseGroupMember{ClientID: tc.client, MemberAssignment: tc.assignment})
+			}
+			client := &metadataMock{request: func(_ context.Context, r kmsg.Request) (kmsg.Response, error) {
+				if req := r.(*kmsg.DescribeGroupsRequest); !reflect.DeepEqual(req.Groups, []string{"group"}) {
+					t.Fatal(req)
+				}
+				return &kmsg.DescribeGroupsResponse{Groups: []kmsg.DescribeGroupsResponseGroup{{Group: "group", State: tc.state, Members: members}}}, nil
+			}}
+			inspector := &Inspector{client: client, topic: "input"}
+			// When deriving an observation for the status service.
+			got, err := inspector.Membership(t.Context(), "group")
+			// Then active, foreign and unsettled empty groups cannot be mistaken for idle groups.
+			if err != nil || got.State != tc.state || got.Idle != tc.idle || got.Foreign != tc.foreign {
+				t.Fatal(got, err)
 			}
 		})
 	}
