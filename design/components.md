@@ -120,24 +120,24 @@ python3 scripts/ci.py soak make soak
 
 Missing measurements are unavailable. Coverage and vulnerability scans describe Go code; badges report only the listed checks.
 
-### PR reviews
+### Local reviews
 
-The **Docs review** and **Test review** checks run after the `checks` workflow for each PR, including forks. They use Claude Opus 5.5 at HIGH effort, with the reusable prompts in [.claude/agents](../.claude/agents). Each result names its PR commit; newer commits get new reviews.
+Every local PR review includes independent **docs**, **tests** and **simplicity** reviews. The [agents](../.claude/agents) use Opus 5.5 at HIGH effort; the [local workflow](../.claude/skills/review-local/SKILL.md) runs all three. Simplicity covers implementation, tests and docs: remove unnecessary work unless current requirements, demonstrated failures or compatibility justify it.
 
-Reports appear in the PR checks and Actions summary, with JSON/Markdown artifacts retained for 30 days. Findings are advisory. Missing credentials, provider errors and unfinished reviews fail the check. The agents inspect source and tests without executing them; CI runs tests separately.
+Use Claude Code's subscription login (`claude auth login`). Unset `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`; verify `claude auth status` reports `claude.ai` before starting. [Authentication](https://code.claude.com/docs/en/authentication).
 
-Setup requires an `ANTHROPIC_API_KEY` repository secret and this workflow on the default branch. The normal Claude CLI login is not used. CI gives each reviewer a US$3 API budget, 20 turns and ten minutes; model usage is billed to the API account. To retry, manually run **PR reviews** in Actions with the PR number.
-
-Automatic runs use default-branch code and prompts; manual runs use the selected workflow ref. PR source is read from snapshots with commands, hooks and MCP disabled. GitHub tokens stay out of the model process.
-
-For local review with Claude Code, supply the diff to the same agents:
+From the repository root, in either Claude Code or Codex's terminal:
 
 ```sh
-mkdir -p .cache
-git diff origin/main...HEAD > .cache/pr-review.patch
-claude --agent docs-reviewer -p 'Review .cache/pr-review.patch and the affected source.'
-claude --agent test-reviewer -p 'Review .cache/pr-review.patch and the affected source.'
+claude auth status
+claude -p '/review-local origin/main' --model claude-opus-5-5 --effort high
 ```
+
+Inside an existing Claude Code subscription session, use `/review-local origin/main`. The base defaults to `origin/main`; the workflow also includes staged, unstaged and relevant untracked changes. Fetch your intended base before starting.
+
+Reviewers inspect files without editing or running tests; normal CI and local test commands run separately. Calls use subscription limits. Provider limits, denied necessary reads and partial reports leave the review incomplete. Fix findings and request targeted follow-up, including effects on the other aspects, before recording final results for the reviewed changes.
+
+[AGENTS.md](../AGENTS.md) requires all three before creating, updating or merging a PR. Record scope and findings in the PR template's `Docs review`, `Tests review` and `Simplicity review` sections; include concrete simplifications or evidence for keeping complexity.
 
 ### Release evidence
 
