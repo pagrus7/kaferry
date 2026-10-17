@@ -166,7 +166,7 @@ func TestMembershipObservesActivityAndCompatibility(t *testing.T) {
 			// When deriving an observation for the status service.
 			got, err := inspector.Membership(t.Context(), "group")
 			// Then active, foreign and unsettled empty groups cannot be mistaken for idle groups.
-			if err != nil || got.State != tc.state || got.Members != len(members) || got.Idle != tc.idle || got.Foreign != tc.foreign {
+			if err != nil || got.State != tc.state || got.Idle != tc.idle || got.Foreign != tc.foreign {
 				t.Fatal(got, err)
 			}
 		})

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -95,7 +96,7 @@ func (JSONCodec) Decode(encoded string) (Progress, error) {
 		return p, &Error{Kind: "unsupported version of"}
 	}
 	data := []byte(strings.TrimPrefix(encoded, prefix))
-	if !utf8.Valid(data) || checkObject(data) != nil {
+	if !utf8.Valid(data) || checkObject(data, "fp", "tid", "win", "fid", "extent", "stop") != nil {
 		return p, &Error{Kind: "invalid"}
 	}
 	var w wire
@@ -142,20 +143,10 @@ func validate(p Progress) error {
 	return nil
 }
 
-// checkObject rejects duplicate and case-folded names, null objects and trailing
-// data. Ordinary JSON whitespace and field order remain valid.
-func checkObject(data []byte) error {
+// checkObject checks exact field names before encoding/json can apply Unicode
+// case folding. It also rejects duplicate keys, null objects and trailing data.
+func checkObject(data []byte, fields ...string) error {
 	d := json.NewDecoder(bytes.NewReader(data))
-	d.UseNumber()
-	if err := object(d); err != nil {
-		return err
-	}
-	if _, err := d.Token(); err != io.EOF {
-		return fmt.Errorf("trailing JSON")
-	}
-	return nil
-}
-func object(d *json.Decoder) error {
 	first, err := d.Token()
 	if err != nil || first != json.Delim('{') {
 		return fmt.Errorf("expected object")
@@ -167,7 +158,7 @@ func object(d *json.Decoder) error {
 			return err
 		}
 		name, ok := token.(string)
-		if !ok || name != strings.ToLower(name) || seen[name] {
+		if !ok || !slices.Contains(fields, name) || seen[name] {
 			return fmt.Errorf("invalid field")
 		}
 		seen[name] = true
@@ -178,12 +169,22 @@ func object(d *json.Decoder) error {
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) && name != "lower" && name != "upper" {
 			return fmt.Errorf("null field")
 		}
-		if name == "win" || name == "stop" {
-			if err := checkObject(raw); err != nil {
+		switch name {
+		case "win":
+			if err := checkObject(raw, "lower", "upper"); err != nil {
+				return err
+			}
+		case "stop":
+			if err := checkObject(raw, "reason", "at"); err != nil {
 				return err
 			}
 		}
 	}
-	_, err = d.Token()
-	return err
+	if _, err := d.Token(); err != nil {
+		return err
+	}
+	if _, err := d.Token(); err != io.EOF {
+		return fmt.Errorf("trailing JSON")
+	}
+	return nil
 }

@@ -16,7 +16,6 @@ type TopicDescription struct {
 // Membership is one observation, not a lease or a completion barrier.
 type Membership struct {
 	State   string
-	Members int
 	Foreign bool
 	Idle    bool
 }

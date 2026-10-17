@@ -196,3 +196,51 @@ func TestCheckpointRejectsInvalidSaveWithoutChangingDurableProgress(t *testing.T
 		})
 	}
 }
+
+type checkpointOutput struct {
+	id     string
+	extent int64
+}
+
+func (o checkpointOutput) DurableOutput() (string, int64) { return o.id, o.extent }
+func TestInvalidCheckpointSavePreservesSavedBytes(t *testing.T) {
+	for _, mode := range []string{"stop reason", "stop position", "opening size", "output extent"} {
+		t.Run(mode, func(t *testing.T) {
+			// Given a valid checkpoint at a known source boundary.
+			cp, err := NewCheckpoints(t.TempDir(), "group", DurableWriter{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cp.Close()
+			cp.Initialize(Checkpoint{Version: 2, Fingerprint: "fp", SourceID: "source"})
+			if _, err := cp.Save(t.Context(), []core.Cursor{{}}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(cp.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cursor := core.Cursor{}
+			switch mode {
+			case "stop reason":
+				cursor.Stop = &core.Stop{Reason: "tip"}
+			case "stop position":
+				cursor.Stop = &core.Stop{Reason: "eof", At: 1}
+			case "opening size":
+				cp.RememberFrame(1, FrameIdentity{})
+				cursor.Position = 1
+			case "output extent":
+				cp.BindOutput(checkpointOutput{id: "file", extent: 0})
+			}
+			// When an invalid stop, source extent or output snapshot is presented.
+			_, err = cp.Save(t.Context(), []core.Cursor{cursor})
+			// Then the previous checkpoint remains unchanged and readable.
+			var conflict *Conflict
+			after, readErr := os.ReadFile(cp.path)
+			saved, savedErr := readCheckpoint(cp.path)
+			if !errors.As(err, &conflict) || readErr != nil || !bytes.Equal(before, after) || savedErr != nil || saved.Position != 0 || saved.Stop != nil {
+				t.Fatal(err, readErr, saved, savedErr)
+			}
+		})
+	}
+}

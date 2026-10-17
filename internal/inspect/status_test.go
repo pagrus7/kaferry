@@ -38,17 +38,17 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 			case "no stop":
 				source.metadata[1] = kafkaport.Progress{}
 			case "active":
-				source.memberships = []kafkaport.Membership{{Idle: true}, {Members: 1}}
+				source.memberships = []kafkaport.Membership{{Idle: true}, {Idle: false}}
 			case "changed empty group state":
 				source.memberships = []kafkaport.Membership{{Idle: true, State: "Empty"}, {Idle: true, State: "Dead"}}
 			case "rebalance without members":
 				source.memberships = []kafkaport.Membership{{Idle: false}}
 			case "foreign member":
-				source.memberships = []kafkaport.Membership{{Foreign: true, Members: 1}}
+				source.memberships = []kafkaport.Membership{{Foreign: true, Idle: false}}
 			case "identity conflict while active":
 				source.fail = "saved"
 				source.failure = &kafkaport.Conflict{Err: errors.New("different query")}
-				source.memberships = []kafkaport.Membership{{Members: 1}}
+				source.memberships = []kafkaport.Membership{{Idle: false}}
 			}
 			// When observing without joining, consuming, positioning or committing.
 			r, err := s.Status(t.Context(), p, config.Defaults("home").Worker, core.NoopStopObserver{})

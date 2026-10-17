@@ -66,7 +66,7 @@ func (i *Inspector) Membership(ctx context.Context, group string) (kafkaport.Mem
 	if err != nil {
 		return kafkaport.Membership{}, err
 	}
-	return kafkaport.Membership{State: g.State, Members: len(g.Members), Foreign: compatibleMembers(g, i.topic) != nil, Idle: len(g.Members) == 0 && (g.State == "Empty" || g.State == "Dead")}, nil
+	return kafkaport.Membership{State: g.State, Foreign: compatibleMembers(g, i.topic) != nil, Idle: len(g.Members) == 0 && (g.State == "Empty" || g.State == "Dead")}, nil
 }
 
 func (i *Inspector) Saved(parent context.Context, group, fp string, window plan.WindowSpec, cutoff int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {

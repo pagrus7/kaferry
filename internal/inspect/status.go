@@ -136,7 +136,7 @@ func (r *StatusReport) observed(before, after kafkaport.Membership) {
 	switch {
 	case before.Foreign || after.Foreign:
 		r.Verdict, r.Reason = "unknown", "group has an incompatible active member"
-	case before.Members > 0 || after.Members > 0 || !before.Idle || !after.Idle || before.State != after.State:
+	case !before.Idle || !after.Idle || before.State != after.State:
 		r.Verdict = "running"
 	default:
 		r.classify()

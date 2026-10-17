@@ -211,6 +211,9 @@ func (c *Checkpoints) Save(ctx context.Context, cursors []copy.Cursor) (map[int3
 	if c.output != nil {
 		next.DestinationID, next.Extent = c.output.DurableOutput()
 	}
+	if err := next.validate(); err != nil {
+		return nil, err
+	}
 	data, err := json.Marshal(next)
 	if err != nil {
 		return nil, err
