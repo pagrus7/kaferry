@@ -165,6 +165,7 @@ func TestConnectionOptionsApplyTLSAndSelectedSASLMechanism(t *testing.T) {
 	for _, tc := range []struct{ protocol, mechanism string }{
 		{"PLAINTEXT", ""}, {"SSL", ""}, {"SASL_SSL", "PLAIN"},
 		{"SASL_SSL", "SCRAM-SHA-256"}, {"SASL_SSL", "SCRAM-SHA-512"},
+		{"SASL_PLAINTEXT", "SCRAM-SHA-256"},
 	} {
 		t.Run(tc.protocol+"/"+tc.mechanism, func(t *testing.T) {
 			// Given valid connection properties for the selected transport and authentication.
@@ -207,6 +208,12 @@ func TestConnectionOptionsApplyTLSAndSelectedSASLMechanism(t *testing.T) {
 				}
 			} else if len(mechanisms) != 1 || mechanisms[0].Name() != tc.mechanism {
 				t.Fatal("wrong SASL mechanism applied")
+			} else {
+				_, first, err := mechanisms[0].Authenticate(t.Context(), "host")
+				if err != nil || (tc.mechanism == "PLAIN" && string(first) != "\x00user\x00password") ||
+					(tc.mechanism != "PLAIN" && !strings.Contains(string(first), "n=user,")) {
+					t.Fatal("SASL credentials were not applied correctly")
+				}
 			}
 		})
 	}
@@ -233,7 +240,7 @@ func TestTLSFileErrorsFailValidationWithoutExposingPathsOrContents(t *testing.T)
 			// When validating before any Kafka or output handles are opened.
 			err := componentFactory().Validate(p, config.Defaults("").Worker)
 			// Then the error identifies the setting without exposing its path or contents.
-			if err == nil || !strings.Contains(err.Error(), tc.key) || strings.Contains(err.Error(), "sensitive-fixture") {
+			if err == nil || !strings.Contains(err.Error(), tc.key) || strings.Contains(err.Error(), directory) || strings.Contains(err.Error(), "sensitive-fixture") {
 				t.Fatal("unsafe or missing TLS diagnostic", err)
 			}
 		})

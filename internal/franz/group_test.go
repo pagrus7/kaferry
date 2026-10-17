@@ -18,21 +18,26 @@ func TestGroupInspectionAllowsCompatibleWorkersAndRejectsConflicts(t *testing.T)
 		a.Topics = []kmsg.ConsumerMemberAssignmentTopic{{Topic: topic, Partitions: []int32{0}}}
 		return a.AppendTo(nil)
 	}
+	member := func(clientID string, assignment []byte) []kmsg.DescribeGroupsResponseGroupMember {
+		return []kmsg.DescribeGroupsResponseGroupMember{{ClientID: clientID, MemberAssignment: assignment}}
+	}
 	unavailable := errors.New("coordinator unavailable")
 	for _, tc := range []struct {
-		name       string
-		clientID   string
-		assignment []byte
-		code       int16
-		failure    error
-		conflict   bool
+		name     string
+		members  []kmsg.DescribeGroupsResponseGroupMember
+		code     int16
+		failure  error
+		conflict bool
 	}{
-		{name: "compatible worker", clientID: "kaferry-worker", assignment: assignment("input")},
-		{name: "worker awaiting assignment", clientID: "kaferry-worker"},
+		{name: "compatible worker", members: member("kaferry-worker", assignment("input"))},
+		{name: "worker awaiting assignment", members: member("kaferry-worker", nil)},
 		{name: "absent group", code: kerr.GroupIDNotFound.Code},
-		{name: "foreign worker", clientID: "other-consumer", conflict: true},
-		{name: "other topic", clientID: "kaferry-worker", assignment: assignment("other"), conflict: true},
-		{name: "unreadable assignment", clientID: "kaferry-worker", assignment: []byte{0}, conflict: true},
+		{name: "foreign worker", members: member("other-consumer", nil), conflict: true},
+		{name: "waiting worker before foreign member", members: []kmsg.DescribeGroupsResponseGroupMember{
+			{ClientID: "kaferry-waiting"}, {ClientID: "other-consumer"},
+		}, conflict: true},
+		{name: "other topic", members: member("kaferry-worker", assignment("other")), conflict: true},
+		{name: "unreadable assignment", members: member("kaferry-worker", []byte{0}), conflict: true},
 		{name: "group access denied", code: kerr.GroupAuthorizationFailed.Code, failure: kerr.GroupAuthorizationFailed},
 		{name: "group unavailable", failure: unavailable},
 	} {
@@ -47,7 +52,7 @@ func TestGroupInspectionAllowsCompatibleWorkersAndRejectsConflicts(t *testing.T)
 				}
 				return &kmsg.DescribeGroupsResponse{Groups: []kmsg.DescribeGroupsResponseGroup{{
 					Group: "group", ErrorCode: tc.code,
-					Members: []kmsg.DescribeGroupsResponseGroupMember{{ClientID: tc.clientID, MemberAssignment: tc.assignment}},
+					Members: tc.members,
 				}}}, nil
 			}}
 			inspector := &Inspector{client: client, topic: "input"}
@@ -92,6 +97,11 @@ func TestSavedOffsetsDistinguishAbsentGroupsFromInspectionFailures(t *testing.T)
 				req := r.(*kmsg.OffsetFetchRequest)
 				if req.Group != "group" || len(req.Groups) != 1 || req.Groups[0].Group != "group" || !req.RequireStable {
 					t.Fatal("saved offsets did not request the group's stable commits")
+				}
+				group := req.Groups[0]
+				if group.MemberEpoch != -1 || len(group.Topics) != 1 || group.Topics[0].TopicID != id ||
+					!reflect.DeepEqual(group.Topics[0].Partitions, []int32{0, 2}) {
+					t.Fatal("saved offsets did not identify the topic and partitions for a non-member")
 				}
 				if tc.failure != nil && tc.code == 0 {
 					return nil, tc.failure

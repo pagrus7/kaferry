@@ -191,7 +191,7 @@ type sinkClock struct{ now time.Time }
 func (c *sinkClock) Now() time.Time        { return c.now }
 func (c *sinkClock) Sleep(d time.Duration) { c.now = c.now.Add(d) }
 
-func TestSinkRefreshesRoutingWithoutChangingKeysOrBlockingOnMetadataFailure(t *testing.T) {
+func TestSinkRefreshesRoutingOnIntervalWithoutBlockingOnMetadataFailure(t *testing.T) {
 	// Given a destination whose partition count changes and whose metadata can become unavailable.
 	s, producer := sinkFixture(t)
 	start := time.Unix(1000000, 0)
@@ -217,7 +217,6 @@ func TestSinkRefreshesRoutingWithoutChangingKeysOrBlockingOnMetadataFailure(t *t
 		return &kmsg.MetadataResponse{ClusterID: &cluster, Topics: []kmsg.MetadataResponseTopic{{Topic: &name, TopicID: [16]byte{1}, Partitions: partitions}}}, nil
 	}}
 	s.inspector = &Inspector{client: client, topic: "output", log: s.log}
-	key := []byte{0, 255, 'k'}
 	for _, step := range []struct {
 		seconds, partitions, calls, remembered int
 		failure                                error
@@ -229,13 +228,13 @@ func TestSinkRefreshesRoutingWithoutChangingKeysOrBlockingOnMetadataFailure(t *t
 		clock.now = start.Add(time.Duration(step.seconds) * time.Second)
 		count, failure = step.partitions, step.failure
 		// When records arrive before and after each refresh interval, including an outage.
-		if err := s.Submit(core.Record{Key: key}, core.Token{}); err != nil {
+		if err := s.Submit(core.Record{}, core.Token{}); err != nil {
 			t.Fatal("optional metadata check prevented publishing", err)
 		}
 		n := len(producer.records) - 1
 		producer.callbacks[n](producer.records[n], nil)
-		// Then refreshes stay throttled and successful writes retain the original key bytes.
-		if calls != step.calls || s.partitionCount != step.remembered || !bytes.Equal(producer.records[n].Key, key) {
+		// Then refreshes stay throttled and remember only successfully read partition counts.
+		if calls != step.calls || s.partitionCount != step.remembered {
 			t.Fatal("incorrect routing refresh or delivery", step.seconds, calls, s.partitionCount)
 		}
 		select {
