@@ -1,13 +1,12 @@
-"""Release packaging preserves notices and requires review of changed native bundles."""
+"""Release packaging preserves notices for linked modules and vendored code."""
 
-import hashlib
 import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from notices import collect, license_text, native_text
+from notices import collect, license_text, module_text
 
 
 class NoticesTest(unittest.TestCase):
@@ -50,36 +49,19 @@ class NoticesTest(unittest.TestCase):
             self.assertIn("Go permission\n", result)
             self.assertIn("Go patent grant\n", result)
 
-    def test_changed_native_client_or_archive_requires_review(self):
-        # Given an archive that is not among the reviewed bundle hashes.
+    def test_linked_subpackage_license_is_preserved(self):
+        # Given a compression module with an additional copyright in a linked subpackage.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "licenses").mkdir()
-            archive = root / "librdkafka_darwin_arm64.a"
-            archive.write_bytes(b"changed archive")
-            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-            for client, digest in (("v2.16.0", "outdated hash"), ("v99.0.0", digest)):
-                with self.subTest(client=client):
-                    pins = {"client": "v2.16.0", "archives": {archive.name: digest}}
-                    (root / "licenses/native.json").write_text(json.dumps(pins))
-                    # When packaging, then block before trusting stale notices.
-                    with self.assertRaisesRegex(ValueError, "native bundle changed"):
-                        native_text(client, archive, root)
-
-    def test_changed_archive_for_another_platform_blocks_packaging(self):
-        # Given an unchanged host archive and a changed archive for another platform.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "licenses").mkdir()
-            archive = root / "host.a"
-            archive.write_bytes(b"reviewed")
-            (root / "other.a").write_bytes(b"changed")
-            pins = {"client": "v2.16.0", "archives": {
-                archive.name: hashlib.sha256(archive.read_bytes()).hexdigest(), "other.a": "outdated hash"}}
-            (root / "licenses/native.json").write_text(json.dumps(pins))
-            # When validating the bundle on this host, then the other platform also fails.
-            with self.assertRaisesRegex(ValueError, "native bundle changed"):
-                native_text("v2.16.0", archive, root)
+            package = root / "zstd/internal/hash"
+            package.mkdir(parents=True)
+            (root / "LICENSE").write_text("module permission\n")
+            (package.parent / "LICENSE").write_text("hash attribution\n")
+            # When collecting that module, then both notices and their locations are retained.
+            result = module_text(root, {package})
+            self.assertIn("module permission\n", result)
+            self.assertIn("zstd/internal/LICENSE", result)
+            self.assertIn("hash attribution\n", result)
 
     def test_binary_and_notice_toolchains_must_match(self):
         # Given a binary compiled by a different Go version.
@@ -89,32 +71,23 @@ class NoticesTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "same Go toolchain"):
                 collect(Path("/unused"), Path("kaferry"))
 
-    def test_collect_linked_modules_runtime_vendor_and_native_notices(self):
-        # Given package metadata for a binary and reviewed native archive.
+    def test_collect_linked_modules_runtime_and_vendor_notices(self):
+        # Given package metadata for a pure Go binary, including vendored standard library code.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "licenses").mkdir()
-            (root / "licenses/native.txt").write_text("native extras\n")
             goroot, module = root / "go", root / "client"
             vendor = goroot / "src/vendor/golang.org/x/net"
-            bundle = module / "kafka/librdkafka_vendor"
             for path, text in ((goroot, "Go copyright\n"), (module, "client copyright\n"),
-                               (vendor, "vendor copyright\n"), (bundle, "bundle copyright\n")):
+                               (vendor, "vendor copyright\n")):
                 path.mkdir(parents=True, exist_ok=True)
                 (path / "LICENSE").write_text(text)
-            archive = bundle / "test.a"
-            archive.write_bytes(b"reviewed archive")
-            packages = (f"github.com/confluentinc/confluent-kafka-go/v2\tv2.16.0\t{module}\n"
-                        f"vendor/golang.org/x/net/dns/dnsmessage\t\t{vendor / 'dns/dnsmessage'}\n\n")
-            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-            (root / "licenses/native.json").write_text(json.dumps({
-                "client": "v2.16.0", "archives": {archive.name: digest}}))
+            packages = (f"github.com/twmb/franz-go\tv1.22.2\t{module}\t{module}\n"
+                        f"vendor/golang.org/x/net/dns/dnsmessage\t\t{vendor / 'dns/dnsmessage'}\t{vendor / 'dns/dnsmessage'}\n\n")
             environment = json.dumps({"GOROOT": str(goroot), "GOVERSION": "go1.26.9"})
-            with patch("notices.subprocess.check_output", side_effect=[packages, environment, "kaferry: go1.26.9\n", str(archive)]):
-                # When generating notices, then include all linked source categories.
+            with patch("notices.subprocess.check_output", side_effect=[packages, environment, "kaferry: go1.26.9\n"]):
+                # When generating notices, then all linked source categories are included without a native bundle.
                 result = collect(root, Path("kaferry"))
-            for text in ("Go copyright\n", "client copyright\n", "vendor copyright\n",
-                         "bundle copyright\n", "native extras\n"):
+            for text in ("Go copyright\n", "client copyright\n", "vendor copyright\n"):
                 self.assertIn(text, result)
 
 

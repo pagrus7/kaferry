@@ -8,7 +8,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/config"
 	copy "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
-	"github.com/pagrus7/kaferry/internal/kafka"
+	"github.com/pagrus7/kaferry/internal/franz"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/pagrus7/kaferry/internal/sql"
@@ -34,10 +34,12 @@ var PlannerModule = fx.Module("planner", fx.Provide(fx.Annotate(plan.NewPlanner,
 var PlanningModules = fx.Options(EnvironmentModule, SQLModule, ConfigurationModule, PlannerModule)
 
 var ProgressModule = fx.Module("progress", fx.Provide(copy.NewProgressFactory))
-var KafkaClientModule = fx.Module("kafka-client", fx.Provide(kafka.NewClients))
+var KafkaClientModule = fx.Module("kafka-client", fx.Provide(franz.NewClients))
 var PositioningModule = fx.Module("positioning", fx.Provide(kafkaport.NewPositionerFactory))
-var NativePositioningModule = fx.Module("native-positioning", fx.Provide(kafka.NewPositionerFactory))
-var KafkaModule = fx.Module("kafka", fx.Provide(fx.Annotate(kafka.NewFactory, fx.As(new(KafkaFactory)))))
+var KafkaModule = fx.Module("kafka", fx.Provide(franz.NewFactory,
+	func(f *franz.Factory) KafkaFactory { return f },
+	func(f *franz.Factory) QueryValidator { return f },
+))
 var CheckpointModule = fx.Module("checkpoint", fx.Provide(func() file.AtomicWriter { return file.DurableWriter{} }))
 var PublicationModule = fx.Module("publication", fx.Provide(file.NewPublisher))
 var FileModule = fx.Module("file", fx.Provide(fx.Annotate(file.NewFactory, fx.As(new(FileFactory)))))
@@ -46,4 +48,4 @@ var EngineModule = fx.Module("engine", fx.Provide(newEngine))
 var CommandModule = fx.Module("command", fx.Provide(newCommand))
 var ClockModule = fx.Module("clock", fx.Provide(func() copy.Clock { return copy.RealClock{} }))
 var LoggingModule = fx.Module("logging", fx.Provide(func() *slog.Logger { return slog.New(slog.NewJSONHandler(os.Stderr, nil)) }))
-var RuntimeModules = fx.Options(PlanningModules, ProgressModule, KafkaClientModule, PositioningModule, NativePositioningModule, KafkaModule, CheckpointModule, PublicationModule, FileModule, RunnerModule, EngineModule, CommandModule, ClockModule, LoggingModule)
+var RuntimeModules = fx.Options(PlanningModules, ProgressModule, KafkaClientModule, PositioningModule, KafkaModule, CheckpointModule, PublicationModule, FileModule, RunnerModule, EngineModule, CommandModule, ClockModule, LoggingModule)

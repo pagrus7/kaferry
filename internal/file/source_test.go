@@ -124,7 +124,7 @@ func TestOpenSourceTruncationFailsUnderSkipPolicy(t *testing.T) {
 	defer source.Close()
 	sink := &unusedFileSink{reports: make(chan core.Delivery, 2)}
 	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE"}, Policies: plan.Policies{MissingTimestamp: "SKIP", RejectedTimestamp: "SKIP", OtherRecord: "SKIP"}}
-	runner := core.NewRunner(&truncatingFileSource{Source: source, path: path, cut: int64(len(header)+len(data)) + 2}, sink, cp, core.RealClock{}, logger(), p, config.Defaults(dir).Worker, core.NewTracker())
+	runner := core.NewRunner(&truncatingFileSource{Source: source, path: path, cut: int64(len(header)+len(data)) + 2}, sink, cp, core.RealClock{}, logger(), p, config.Defaults(dir).Worker, core.NewTracker(), core.NoopStopObserver{})
 
 	// When the file shrinks after intake starts and the runner polls it.
 	err = runner.Run(context.Background())

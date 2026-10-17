@@ -18,6 +18,41 @@ type testClock struct {
 	tick func()
 }
 
+type stopObserverMock struct{ begun bool }
+
+func (s *stopObserverMock) Begin()     { s.begun = true }
+func (*stopObserverMock) Stage(string) {}
+
+func TestShutdownBudgetStartsBeforePotentiallyBlockingDrain(t *testing.T) {
+	for _, signal := range []bool{false, true} {
+		t.Run(map[bool]string{false: "write failure", true: "signal"}[signal], func(t *testing.T) {
+			// Given a following copy that must drain after a signal or a write failure.
+			r, _, sink, _, _ := fixture(t)
+			r.plan.Source.Kind = "TOPIC"
+			observer := &stopObserverMock{}
+			r.stop = observer
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if signal {
+				cancel()
+			} else {
+				r.failure = errors.New("write failed")
+			}
+			sink.flush = func() error {
+				if !observer.begun {
+					t.Fatal("drain began without a shutdown budget")
+				}
+				return nil
+			}
+			// When stopping, then a blocked flush is already covered by the process deadline.
+			_ = r.Run(ctx)
+			if !observer.begun {
+				t.Fatal("shutdown budget never started")
+			}
+		})
+	}
+}
+
 func (c *testClock) Now() time.Time { return c.now }
 func (c *testClock) Sleep(d time.Duration) {
 	c.now = c.now.Add(d)
@@ -102,7 +137,7 @@ func fixture(t *testing.T) (*Runner, *testSource, *testSink, *testStore, *testCl
 	s := &testSource{clock: c, paused: make(map[int32]bool), assignments: []Assignment{{Cursor: Cursor{0, 0}}}}
 	d := &testSink{reports: make(chan Delivery, 100)}
 	p := &testStore{}
-	r := NewRunner(s, d, p, c, slog.New(slog.NewTextHandler(io.Discard, nil)), plan.Plan{Source: plan.Endpoint{Kind: "FILE"}}, config.Defaults(t.TempDir()).Worker, NewTracker())
+	r := NewRunner(s, d, p, c, slog.New(slog.NewTextHandler(io.Discard, nil)), plan.Plan{Source: plan.Endpoint{Kind: "FILE"}}, config.Defaults(t.TempDir()).Worker, NewTracker(), NoopStopObserver{})
 	return r, s, d, p, c
 }
 func incoming(id int32, position int64, size int) Input {
@@ -465,6 +500,39 @@ type cancellingPoll struct {
 	*testSource
 	cancel context.CancelFunc
 	err    error
+}
+
+type cancellingWatermark struct {
+	*testSource
+	cancel context.CancelFunc
+	err    error
+}
+
+func (s *cancellingWatermark) HighWatermark(int32) (int64, error) { s.cancel(); return 0, s.err }
+func TestSignalDuringWatermarkQueryReportsInterruptionAndPreservesOtherErrors(t *testing.T) {
+	for _, unrelated := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cancelled query", true: "broker failure"}[unrelated], func(t *testing.T) {
+			// Given a bounded copy that reaches the topic tip and samples its ending offset.
+			r, source, _, _, _ := fixture(t)
+			r.plan.Source.Kind = "TOPIC"
+			hi := int64(1)
+			r.plan.Window.Upper = &plan.Expression{LiteralMS: hi}
+			source.assignments[0].Window.Upper = &hi
+			source.events = []Event{{EOF: &Cursor{Partition: 0, Position: 0}}}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			failure := error(context.Canceled)
+			if unrelated {
+				failure = errors.New("topic authorization failed")
+			}
+			r.source = &cancellingWatermark{testSource: source, cancel: cancel, err: failure}
+			// When a signal arrives during the query, then cancellation follows the ordinary interrupted-copy path.
+			err := r.Run(ctx)
+			if err == nil || unrelated && !errors.Is(err, failure) || !unrelated && !strings.Contains(err.Error(), "bounded copy interrupted before completion") {
+				t.Fatal("unclear interruption or hidden broker failure", err)
+			}
+		})
+	}
 }
 
 func (s *cancellingPoll) Poll(time.Duration) (Event, error) {

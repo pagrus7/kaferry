@@ -20,10 +20,13 @@ type Worker struct {
 	RecordCap          int     `toml:"record_cap"`
 	ByteCap            int64   `toml:"byte_cap"`
 	DeliveryTimeout    string  `toml:"delivery_timeout"`
+	ShutdownTimeout    string  `toml:"shutdown_timeout"`
 	IdleExit           string  `toml:"idle_exit"`
 	TipWait            string  `toml:"tip_wait"`
 	CheckpointDir      *string `toml:"checkpoint_dir"` // Nil selects the default when opening a file source.
 }
+
+const DefaultShutdownTimeout = 30 * time.Second
 
 type Config struct {
 	Connections plan.Profiles `toml:"connections"`
@@ -45,7 +48,7 @@ func Defaults(home string) Config {
 		directory := filepath.Join(home, ".kaferry", "checkpoints")
 		checkpointDir = &directory
 	}
-	return Config{Connections: make(plan.Profiles), Worker: Worker{MaxFrameBytes: 64 << 20, PartitionRecordCap: 5000, PartitionByteCap: 16 << 20, RecordCap: 20000, ByteCap: 128 << 20, DeliveryTimeout: "60s", IdleExit: "30s", TipWait: "15m", CheckpointDir: checkpointDir}}
+	return Config{Connections: make(plan.Profiles), Worker: Worker{MaxFrameBytes: 64 << 20, PartitionRecordCap: 5000, PartitionByteCap: 16 << 20, RecordCap: 20000, ByteCap: 128 << 20, DeliveryTimeout: "60s", ShutdownTimeout: DefaultShutdownTimeout.String(), IdleExit: "30s", TipWait: "15m", CheckpointDir: checkpointDir}}
 }
 
 func (l *Loader) Load(path string) (Config, error) {
@@ -83,7 +86,7 @@ func (w Worker) Validate() error {
 	if w.PartitionRecordCap <= 0 || w.PartitionByteCap <= 0 || w.RecordCap <= 0 || w.ByteCap <= 0 {
 		return fmt.Errorf("worker record and byte caps must be positive")
 	}
-	for _, setting := range []struct{ name, value string }{{"delivery_timeout", w.DeliveryTimeout}, {"idle_exit", w.IdleExit}, {"tip_wait", w.TipWait}} {
+	for _, setting := range []struct{ name, value string }{{"delivery_timeout", w.DeliveryTimeout}, {"shutdown_timeout", w.ShutdownTimeout}, {"idle_exit", w.IdleExit}, {"tip_wait", w.TipWait}} {
 		duration, err := time.ParseDuration(setting.value)
 		if err != nil || duration <= 0 {
 			return fmt.Errorf("worker.%s must be a positive duration", setting.name)

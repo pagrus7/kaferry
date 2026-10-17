@@ -1,8 +1,20 @@
 # Using Kaferry
 
+## Configuration
+
+Create `connections.toml` from [quick start](../README.md#quick-start), including [authentication](../README.md#connections). `-c` loads it; without `-c`, no TOML is loaded. SQL overrides TOML; topics without `@alias` use `default`. SQL `ENV()` fails if unset. [Worker settings](../design/decisions.md#configuration-and-cli).
+
+## Permissions
+
+For existing topics on Kafka 3.9 StandardAuthorizer, Kafka input needs only source topic/group READ; Kafka output needs only destination WRITE. These imply DESCRIBE. File-only copies need no Kafka grants. Other brokers/authorizers may require cluster IDEMPOTENT_WRITE.
+
+For Kafka-source `GROUP = ONE_OFF`, grant group READ on the `kaferry-` prefix.
+
+Destination DESCRIBE_CONFIGS is optional; without it, Kaferry warns and skips checks that need those settings. [Fallbacks](../design/client-compatibility.md#optional-destination-configuration).
+
 ## Run a copy
 
-Use [quick start](../README.md#quick-start) SQL and profiles; add its authentication prefix where needed. Use your binary path. Choose one of `-f file`, `-f -` (stdin) or `-e "SQL"`; `-c` loads TOML. Flags: `kaferry run -h`.
+Examples assume `kaferry` is on `PATH`; otherwise use its path. Pass SQL with `-f file`, `-f -` (stdin) or `-e "SQL"`. Help: `kaferry run -h`.
 
 **Archive retained records, then follow new ones.** Create the output directory:
 
@@ -23,38 +35,28 @@ kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM FILE cbor('archive/orders.cbor') OPTIONS (GROUP = 'orders-restore');"
 ```
 
-Kafka input needs `WHERE` or `START` (`EARLIEST`: retained; `LATEST`: readable end), not both. Saved commits win; `WHERE` filters record timestamps. Use a dedicated `GROUP`. File input has no `START` and ends at startup size. [File-to-file and other examples](../design/grammar.md#valid-examples).
+Kafka input needs `WHERE` or `START`, not both. `EARLIEST` starts at the oldest retained record; `LATEST` copies records that become readable after startup. Saved progress overrides the start position. Use a dedicated `GROUP`. File input takes no `START` and reads up to its size at startup; later appends wait for the next run. [More examples](../design/grammar.md#valid-examples).
+
+## Stop and check results
+
+SIGINT/SIGTERM stop reading, allow up to ten seconds for writes and save confirmed progress. The CLI exits `1` if stopping takes longer than `worker.shutdown_timeout` (default 30 s); unsaved work may replay. Check stderr; `copy summary` reports `confirmed`, `filtered` and `skipped` counts.
+
+[Exit codes](../design/decisions.md#cli-and-exit-codes) describe only this worker’s outcome. A second signal forces termination.
 
 ## Resume or start over
 
-Resume with the same `GROUP`, endpoints, time filter and `CUTOFF`; use a new group for a new query. Error policies may change. Saved `NOW()` bounds are reused.
+Resume with the same `GROUP`, endpoints, time filter and `CUTOFF`; use a new group for a new query. Saved `NOW()` bounds are reused.
 
 `GROUP = ONE_OFF` logs a new `group` in `one-off group generated`. To resume an interrupted run, quote that name as `GROUP`.
 
 Keep output, checkpoints and locks. Resume with the same `worker.checkpoint_dir` (default `~/.kaferry/checkpoints`). Lost output or progress requires a new group and, for file output, a new path. [Recovery rules](../design/decisions.md#output-recovery).
 
-## Workers
-
-For topic-to-topic copies, run the same command on each machine with identical SQL and named `GROUP`. Each process is a worker. Use fixed timestamps; `NOW()` can differ. Stop workers before moving progress or upgrading Kaferry. File queries use one process.
-
-## Configuration
-
-Without `-c`, no TOML is loaded. SQL overrides TOML; topics without `@alias` use `default`. `ENV()` is SQL-only and fails if unset. [Worker limits and protected settings](../design/decisions.md#configuration-and-cli).
-
-## Permissions
-
-For existing topics on Kafka 3.9 StandardAuthorizer, Kafka input needs only source topic/group READ; Kafka output needs only destination WRITE. These imply DESCRIBE. File-only copies need no Kafka grants. Other brokers/authorizers may require cluster IDEMPOTENT_WRITE.
-
-Kafka-source `ONE_OFF` needs the `kaferry-` group prefix.
-
-Destination DESCRIBE_CONFIGS is optional; without it, Kaferry warns and skips checks that need those settings. [Fallbacks](../design/client-compatibility.md#optional-destination-configuration).
-
 ## Errors
 
-Errors stop the copy by default. `ON_ERROR = SKIP` drops only identified records rejected before sending; broker rejections cannot be skipped. [Policies](../design/decisions.md#errors), [SQL errors](../design/grammar.md#invalid-examples).
+Errors stop the copy by default. `ON_ERROR = SKIP` drops only identified records rejected before sending; broker rejections cannot be skipped. For a skippable error, add `ON_ERROR = SKIP` and rerun the same query. Skips appear in `copy summary`. [Policies](../design/decisions.md#errors), [SQL errors](../design/grammar.md#invalid-examples).
 
-## Stopping and exit codes
+## Workers
 
-SIGINT/SIGTERM stop reading, allow up to ten seconds for writes and save confirmed progress. Kafka or filesystem calls can hang shutdown; use a supervisor timeout if needed. Read stderr for errors and JSON logs; `copy summary` reports `confirmed`, `filtered` and `skipped` counts.
+For topic-to-topic copies, run the same command on each machine with identical SQL and named `GROUP`. Each process is a worker. Use fixed timestamps; `NOW()` can differ. Stop workers before upgrading Kaferry. File queries use one process.
 
-[Exit codes](../design/decisions.md#cli-and-exit-codes) describe only the exiting worker's outcome, not whether other workers finished. A native crash may end by signal.
+If a worker exits without any assigned partitions, rerun the same query and group to pick up unfinished work.
