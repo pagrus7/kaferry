@@ -120,6 +120,48 @@ python3 scripts/ci.py soak make soak
 
 Missing measurements are unavailable. Coverage and vulnerability scans describe Go code; badges report only the listed checks.
 
+### Local reviews
+
+Each PR needs independent **docs**, **tests** and **simplicity** reviews. [AGENTS.md](../AGENTS.md) defines when to run them and what to record; [review/](../review/README.md) holds the shared workflow and criteria.
+
+Fetch the intended base from the repository root before starting:
+
+```sh
+git fetch origin main
+```
+
+Reviewers inspect files without running tests; run CI and local test commands separately. Calls count against the active client's subscription limits.
+
+**Codex:** use its ChatGPT login (`codex login`). The [native agent definitions](../.codex/agents) use your Codex model settings. [Codex agents](https://learn.chatgpt.com/docs/agent-configuration/subagents).
+
+```sh
+codex login status
+```
+
+After confirming ChatGPT login, from the repository root:
+
+```sh
+codex exec --sandbox read-only 'Follow review/README.md; run all three reviewers against origin/main.'
+```
+
+For an interactive review, start `codex --sandbox read-only` and ask it to follow `review/README.md` for your base.
+
+**Claude Code:** use subscription login (`claude auth login --claudeai`). Remove API credentials so they do not override it. [Authentication](https://code.claude.com/docs/en/authentication).
+
+```sh
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+claude auth status
+```
+
+Continue only if the auth method is `claude.ai`:
+
+```sh
+CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 \
+  claude -p '/review-local'
+```
+
+The command waits for all three reports. In an existing Claude Code session, use `/review-local [base]`. The [agent settings](../.claude/agents) select Opus 5.5 with high effort; your account needs access to that model. The [command adapter](../.claude/skills/review-local/SKILL.md) loads the shared workflow.
+
 ### Release evidence
 
 Release archives contain the binary, MIT license and notices for linked Go modules, subpackage licenses and the Go runtime. `--version` reports the build version, commit, Go and franz-go version. Production builds use `CGO_ENABLED=0`; Confluent is linked only into broker test fixtures.
