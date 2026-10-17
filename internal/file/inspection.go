@@ -9,10 +9,9 @@ import (
 )
 
 type ArchiveInspection struct {
-	Exists       bool
-	ID           string
-	Size         int64
-	RecordsStart int64
+	Exists bool
+	ID     string
+	Size   int64
 }
 
 type SourceInspection struct {
@@ -65,7 +64,7 @@ func inspectArchive(path string, limit int64) (reader *archiveReader, err error)
 }
 
 func (r *archiveReader) inspection() ArchiveInspection {
-	return ArchiveInspection{Exists: true, ID: r.header.ID, Size: r.info.Size(), RecordsStart: r.start}
+	return ArchiveInspection{Exists: true, ID: r.header.ID, Size: r.info.Size()}
 }
 
 func (i *Inspector) Source(p plan.Plan, fingerprint string, limits config.Worker) (SourceInspection, error) {
