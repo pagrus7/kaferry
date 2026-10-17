@@ -122,14 +122,19 @@ Missing measurements are unavailable. Coverage and vulnerability scans describe 
 
 ### Local reviews
 
-Each PR needs independent **docs**, **tests** and **simplicity** reviews. [AGENTS.md](../AGENTS.md) defines when to run them and what to record. The criteria, workflow and report contract live in [review/](../review/README.md); client definitions point there without copying them.
+Each PR needs independent **docs**, **tests** and **simplicity** reviews. [AGENTS.md](../AGENTS.md) defines when to run them and what to record; [review/](../review/README.md) holds the shared workflow and criteria.
 
-Fetch the intended base before starting. Both clients review committed, staged, unstaged and relevant untracked changes. Reviewers inspect files without running tests; run CI and local test commands separately. Calls count against the active client's subscription limits.
-
-**Codex:** use its ChatGPT login (`codex login`), confirmed by `codex login status`. The [native agent definitions](../.codex/agents) inherit the parent model and permissions. [Codex agents](https://learn.chatgpt.com/docs/agent-configuration/subagents).
+Fetch the intended base from the repository root before starting:
 
 ```sh
 git fetch origin main
+```
+
+Reviewers inspect files without running tests; run CI and local test commands separately. Calls count against the active client's subscription limits.
+
+**Codex:** use its ChatGPT login (`codex login`). The [native agent definitions](../.codex/agents) use your Codex model settings. [Codex agents](https://learn.chatgpt.com/docs/agent-configuration/subagents).
+
+```sh
 codex login status
 ```
 
@@ -139,7 +144,7 @@ After confirming ChatGPT login, from the repository root:
 codex exec --sandbox read-only 'Follow review/README.md; run all three reviewers against origin/main.'
 ```
 
-In an existing Codex session, ask it to follow `review/README.md` for your base. If the client cannot discover custom names, the shared workflow supplies the role files to independent agents. Codex permissions come from the parent session; instructions alone do not create a read-only sandbox.
+For an interactive review, start `codex --sandbox read-only` and ask it to follow `review/README.md` for your base.
 
 **Claude Code:** use subscription login (`claude auth login --claudeai`). Remove API credentials so they do not override it. [Authentication](https://code.claude.com/docs/en/authentication).
 
@@ -155,7 +160,7 @@ CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 \
   claude -p '/review-local'
 ```
 
-The setting keeps reviewer calls in the foreground. In an existing Claude Code session, use `/review-local [base]`; the default is `origin/main`. Its [agent adapters](../.claude/agents) set Claude-specific tools and model settings; the [command adapter](../.claude/skills/review-local/SKILL.md) loads the shared workflow.
+The command waits for all three reports. In an existing Claude Code session, use `/review-local [base]`. Its [agent adapters](../.claude/agents) retain the requested model and effort; the [command adapter](../.claude/skills/review-local/SKILL.md) loads the shared workflow.
 
 ### Release evidence
 

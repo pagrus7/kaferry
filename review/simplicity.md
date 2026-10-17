@@ -7,3 +7,5 @@ Review the supplied changes for opportunities to delete, simplify or consolidate
 - Keep focused components and useful interfaces for actual responsibilities, dependency injection or independent testing. Do not flatten good boundaries, remove meaningful failure handling or invent another abstraction to make something look cleaner.
 - In tests, remove redundant scenarios, assertion-free coverage chasing, excessive setup, broad mocks and helper layers that hide the behavior. Preserve useful regression detection and the testing pyramid.
 - In docs, remove repetition, stale detail, backstory and files that answer no current user or contributor question. Preserve necessary instructions, limits and compatibility guarantees.
+
+Report concrete simplifications or evidence for keeping the reviewed complexity, including when there are no findings.

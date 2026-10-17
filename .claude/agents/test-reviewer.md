@@ -4,7 +4,6 @@ description: Required local reviewer for meaningful test coverage, maintainabili
 tools: Read, Grep, Glob
 model: claude-opus-5-5
 effort: high
-maxTurns: 20
 ---
 
 Read `review/README.md` (Reviewer contract) and `review/tests.md`, then review the supplied scope. Do not run the coordinating workflow.

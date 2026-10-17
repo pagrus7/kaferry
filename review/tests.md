@@ -1,6 +1,6 @@
 # Tests review
 
-Review the supplied behavior changes and tests.
+Review the supplied behavior changes, tests and files used by tests or CI, including documented examples.
 
 - Check that assertions would detect a plausible regression in observable behavior. Flag tests that only execute code, repeat the implementation or succeed after cancellation without verifying completion.
 - Identify useful gaps in failure handling, boundaries, ownership, progress, ordering, shutdown, restart and compatibility of saved progress, checkpoints and query fingerprints with the previous version. For each gap, propose the smallest useful scenario and its expected outcome. Do not chase a percentage or demand tests for unreachable states, simple getters or trivial pass-throughs.
