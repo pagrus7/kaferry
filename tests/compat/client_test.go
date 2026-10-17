@@ -345,7 +345,7 @@ func TestTransactionalTailAndTimestampLookup(t *testing.T) {
 			if abort && visible != 0 || !abort && visible != 1 {
 				t.Fatal("transaction isolation failed")
 			}
-			metadata := "kfwd2:1;probe=yes"
+			metadata := "kaferry-probe;yes"
 			committed, err := c.CommitOffsets([]k.TopicPartition{{Topic: &name, Partition: 0, Offset: eof, Metadata: &metadata}})
 			if err != nil || committed[0].Error != nil {
 				t.Fatalf("commit EOF: %v %+v", err, committed)

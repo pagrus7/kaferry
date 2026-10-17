@@ -6,7 +6,7 @@ Pass `-c connections.toml` to load TOML; it is not loaded otherwise. SQL overrid
 
 ## Permissions
 
-Kafka 3.9 StandardAuthorizer: source topic/group READ; destination WRITE. These imply DESCRIBE. Other brokers may require cluster IDEMPOTENT_WRITE. File-only copies need no Kafka grants. For Kafka-source `GROUP = ONE_OFF`, grant group READ on the `kaferry-` prefix. Destination DESCRIBE_CONFIGS is optional; if denied, [dependent checks are skipped](../design/client-compatibility.md#optional-destination-configuration).
+Kafka needs source topic/group READ and destination WRITE (including DESCRIBE); some brokers also need cluster IDEMPOTENT_WRITE. For `ONE_OFF`, grant group READ on the `kaferry-` prefix. File-only copies need no Kafka grants. [Optional DESCRIBE_CONFIGS](../design/client-compatibility.md#optional-destination-configuration).
 
 ## Preview a copy
 
@@ -15,11 +15,11 @@ kaferry explain -c connections.toml -f copy.sql
 kaferry explain -c connections.toml -f copy.sql --json
 ```
 
-Shows endpoints, progress, time windows, stopping rules and error policies. It never joins a group, commits, creates files or takes locks. JSON includes every partition. Records, output bytes and duration are not estimated; write access is not checked. Fresh `NOW()` resolves again when you run. [Output contract](../design/decisions.md#inspection).
+Shows endpoints, progress, windows and policies without joining, writing or locking. JSON includes every partition. Records, bytes, duration and write access are not checked. Fresh `NOW()` resolves again when run. [Output contract](../design/decisions.md#inspection).
 
 ## Run a copy
 
-Pass SQL with `-f file`, `-f -` (stdin) or `-e "SQL"`. Both commands accept `-h`.
+Pass SQL with `-f file`, `-f -` (stdin) or `-e "SQL"`. All commands accept `-h`.
 
 **Archive retained records, then follow new ones.** Create the output directory:
 
@@ -40,17 +40,23 @@ kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM FILE cbor('archive/orders.cbor') OPTIONS (GROUP = 'orders-restore');"
 ```
 
-Kafka input needs `WHERE` or `START`, not both. `EARLIEST` means oldest retained; `LATEST` means records readable after startup. Saved progress determines the start. File input takes no `START` and reads up to its size when the run starts. [Examples](../design/grammar.md#valid-examples).
+Kafka input needs `WHERE` or `START`: `EARLIEST` for retained records or `LATEST` for new ones. Saved progress takes precedence. File input reads up to its opening size. [Examples](../design/grammar.md#valid-examples).
 
 ## Stop and check results
 
-SIGINT/SIGTERM stop reading, allow ten seconds for writes, then save confirmed progress. A second signal forces termination. At `worker.shutdown_timeout` (default 30 s), the CLI exits `1`; unsaved work may replay. Check `copy summary` on stderr for `confirmed`, `filtered` and `skipped` counts. [Exit codes](../design/decisions.md#cli-and-exit-codes) describe only this worker's outcome.
+SIGINT/SIGTERM stop reading, allow ten seconds for writes, then save confirmed progress. A second signal forces termination. At `worker.shutdown_timeout` (default 30 s), the CLI exits `1`; unsaved work may replay. Check `copy summary` on stderr for write/filter/skip counts. Check saved stops with:
+
+```sh
+kaferry status -c connections.toml -f copy.sql --json
+```
+
+`stopped` means a stop was saved for every current partition; the cutoff rule can still miss records within the time range. Kafka activity is checked twice, without an atomic snapshot; file activity is not checked. Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](../design/decisions.md#saved-status).
 
 ## Resume or start over
 
 Rerun with the same `GROUP`, endpoints, filter, `CUTOFF` and checkpoint directory (default `~/.kaferry/checkpoints`). Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
 
-Keep output, checkpoints and locks. Lost output or progress requires a new group and, for file output, a new path. [Recovery rules](../design/decisions.md#output-recovery).
+Keep output, checkpoints and locks; losing them requires a new group/output. [Recovery rules](../design/decisions.md#output-recovery).
 
 ## Errors
 
@@ -58,4 +64,4 @@ Errors stop the copy by default. `ON_ERROR = SKIP` drops identified records reje
 
 ## Workers
 
-For topic-to-topic copies, run identical SQL and a dedicated named `GROUP` on each machine. Each process is a worker. Use fixed timestamps; `NOW()` can differ. Stop workers before upgrading. File queries use one process. Rerun workers that received no partition assignment to pick up unfinished work.
+For topic-to-topic copies, run identical SQL and a dedicated `GROUP` on each machine. Use fixed timestamps; `NOW()` can differ. Stop workers before upgrading. File queries use one process. Rerun unassigned workers to pick up unfinished work.

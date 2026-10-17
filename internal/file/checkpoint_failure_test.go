@@ -80,14 +80,17 @@ func TestCheckpointReplacementFailuresPreserveAtomicPublication(t *testing.T) {
 }
 
 func TestCorruptCheckpointFailsAndReleasesLock(t *testing.T) {
-	valid := []byte(`{"version":1,"fingerprint":"fp","source_id":"source","position":0}`)
+	valid := []byte(`{"version":2,"fingerprint":"fp","source_id":"source","position":0}`)
 	for _, tc := range []struct{ name, data string }{
 		{"oversized", strings.Repeat("x", 65537)},
 		{"trailing JSON", string(valid) + `{}`},
-		{"unknown field", `{"version":1,"fingerprint":"fp","source_id":"source","position":0,"extra":1}`},
-		{"unsupported version", `{"version":2,"fingerprint":"fp","source_id":"source","position":0}`},
-		{"negative position", `{"version":1,"fingerprint":"fp","source_id":"source","position":-1}`},
-		{"destination without extent", `{"version":1,"fingerprint":"fp","source_id":"source","position":0,"destination_id":"output"}`},
+		{"unknown field", `{"version":2,"fingerprint":"fp","source_id":"source","position":0,"extra":1}`},
+		{"unsupported version", `{"version":3,"fingerprint":"fp","source_id":"source","position":0}`},
+		{"opening size below position", `{"version":2,"fingerprint":"fp","source_id":"source","position":1,"opening_size":0}`},
+		{"wrong stop reason", `{"version":2,"fingerprint":"fp","source_id":"source","position":0,"stop":{"reason":"tip","at":0}}`},
+		{"different stop position", `{"version":2,"fingerprint":"fp","source_id":"source","position":0,"stop":{"reason":"eof","at":1}}`},
+		{"negative position", `{"version":2,"fingerprint":"fp","source_id":"source","position":-1}`},
+		{"destination without extent", `{"version":2,"fingerprint":"fp","source_id":"source","position":0,"destination_id":"output"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given an invalid saved checkpoint for this group.
@@ -168,7 +171,7 @@ func TestCheckpointRejectsInvalidSaveWithoutChangingDurableProgress(t *testing.T
 				t.Fatal(err)
 			}
 			defer cp.Close()
-			cp.Initialize(Checkpoint{Version: 1, Fingerprint: "fp", SourceID: "source"})
+			cp.Initialize(Checkpoint{Version: 2, OpeningSize: 0, Fingerprint: "fp", SourceID: "source"})
 			if _, err := cp.Save(t.Context(), []core.Cursor{{Partition: 0}}); err != nil {
 				t.Fatal(err)
 			}

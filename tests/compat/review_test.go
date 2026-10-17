@@ -14,6 +14,7 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/pagrus7/kaferry/internal/commitmeta"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
@@ -133,7 +134,7 @@ func probeSourceProgress(t *testing.T, name, group string) (*adapter.Source, kaf
 	}
 	clients := adapter.NewClients()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	factory := adapter.NewFactory(clients, kafkaport.NewPositionerFactory(core.RealClock{}, logger), core.RealClock{}, logger)
+	factory := adapter.NewFactory(commitmeta.NewCodec(), clients, kafkaport.NewPositionerFactory(core.RealClock{}, logger), core.RealClock{}, logger)
 	connection, err := factory.Open(context.Background(), p.Source)
 	if err != nil {
 		t.Fatal(err)

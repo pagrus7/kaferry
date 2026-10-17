@@ -84,11 +84,26 @@ Resume requires matching query and endpoint identity:
 
 Policies can therefore change to SKIP when resuming a failed record. `NOW()` bounds are fingerprinted as expressions; resolved windows are stored separately.
 
-- Kafka commit metadata is `kfwd2:1;` plus compact JSON: SHA256 `fp`, source topic ID `tid`, optional `win` bounds, and file-output `fid`/`extent`. The prefix is a fixed wire identifier.
+- Kafka saves each next offset with [commit metadata](#commit-metadata).
 - Startup and assignment reject mismatched fingerprints/topic IDs, foreign metadata and missing saved `NOW()` windows. Topic IDs must be nonzero. Source identity is checked at startup and assignment, without continuous monitoring; destination recreation is not detected.
-- File-source checkpoints store fingerprint, resolved window, source file ID, last-frame CRC and next position; file output also stores destination ID and acknowledged extent. Output headers store group, file ID and fingerprint.
+- File-source checkpoints (version `2`) store fingerprint, resolved window, source file ID, last-frame CRC, next byte position, opening size and optional EOF stop; file output adds destination ID and acknowledged extent. Output headers store group, file ID and fingerprint.
 
 Before subscribing, group inspection also rejects active members whose client IDs do not start with `kaferry-` or are assigned to another topic. An absent group passes; an unavailable check fails. The topic check sees assigned partitions, so it cannot check subscriptions of members with no partitions.
+
+### Commit metadata
+
+Kafka stores `kaferry:1;` followed by a UTF-8 JSON object with each committed offset. The complete string is at most 4,096 bytes; a broker may enforce a smaller limit.
+
+| Field | Meaning |
+| --- | --- |
+| `fp`, `tid` | Query SHA256 hex fingerprint; source topic UUID in unpadded standard Base64 |
+| `win` | Optional `{"lower": integer-or-null, "upper": integer-or-null}`; signed 64-bit Unix milliseconds, lower inclusive/upper exclusive. Required for saved `NOW()` bounds |
+| `fid`, `extent` | Optional destination archive ID and positive acknowledged byte extent; both present or both absent |
+| `stop` | Optional `{"reason": "timestamp" or "tip", "at": integer}`; nonnegative source offset where the stopping rule was reached, at or below the committed offset. `at` is not a timestamp |
+
+Absent `stop` means no saved stop. Zero is a valid offset or time bound. Unknown/duplicate fields, null fields other than window bounds, invalid values, foreign prefixes and unsupported versions are rejected. JSON whitespace and field order do not matter. A format version defines encoding, fields and meaning; any contract change needs a new version. Only version `1` JSON is supported; other encodings require another version.
+
+The initial assignment commit clears the previous stop. A later commit includes it only after every earlier required write succeeds (Kafka acknowledgment or file fsync), including stops at unchanged offsets. Lost assignments never commit. A crash before saving can replay writes. File checkpoints save the same stop shape with reason `eof`; opening size includes any partial final frame.
 
 ## Kafka output
 
@@ -191,6 +206,16 @@ File inspection reads the archive header, checkpoint and last checkpointed frame
 | `window` | Inclusive `lower`, exclusive `upper`; null means unbounded. `window_origin`: `literal`, `saved`, `adopted` or `resolved` for preview-only NOW |
 | `warnings` | Detected retention gaps and unavailable/changed destination timestamp behavior; may be empty |
 
+### Saved status
+
+`kaferry status` accepts the same query and configuration as `run`; a named `GROUP` is required. It reads saved progress without joining, consuming, producing, committing, creating files or taking locks. It needs no permissions beyond existing source/group DESCRIBE and endpoint metadata access. `ONE_OFF` requires the actual logged group name; a deleted file checkpoint has no saved status.
+
+Verdicts: incompatible/unreadable progress → `unknown`; incompatible active members → `unknown`; active members, unsettled group state or changed membership → `running`; no saved progress → `unknown`; any current partition without a saved stop → `incomplete`; otherwise → `stopped`. Added partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. File growth since opening makes a saved EOF stop `incomplete`.
+
+`stopped` means a stop was saved for every current partition; the cutoff rule can still miss records within the time range. Workers remain independent: they never wait for other workers' stops.
+
+Text lists up to eight partitions; `--json` includes all. JSON version `1` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `stop`, `window`). File status adds `opening_size_bytes` and current source `file.size_bytes`. Kafka positions are offsets; file positions are bytes. Status does not scan records or verify destination writes.
+
 ## Configuration and CLI
 
 Connections use TOML profiles or `WITH CONNECTION`; SQL keys override TOML. `ENV('NAME')` resolves at startup, fails if unset and is redacted. Worker settings are in TOML.
@@ -248,14 +273,17 @@ Auto-commit/reset, group ID/protocol, read isolation, cooperative assignment, au
 
 ### CLI and exit codes
 
-Both `run` and `explain` accept exactly one input: `--file/-f path`, `--sql/-e statement`, or `--file -`. `--config/-c path` loads TOML. `explain` writes text or `--json` to stdout; `run` keeps stdout empty. Events are JSON on stderr; nonzero exits also print a plain-text message after cleanup. Shutdown timeout diagnostics name the operation still running.
+`run`, `explain` and `status` accept exactly one input: `--file/-f path`, `--sql/-e statement`, or `--file -`. `--config/-c path` loads TOML. `explain` and `status` write text or `--json` to stdout; `run` keeps stdout empty. Events are JSON on stderr; errors also print a plain-text message after cleanup. Status verdicts use stdout, including nonzero verdicts. Shutdown timeout diagnostics name the operation still running.
 
 | Normal exit | Meaning |
 | --- | --- |
-| 0 | The preview was printed, or this worker finished its file input or remaining assigned Kafka partitions, or a signal cleanly stopped a copy from Kafka with no end time. SKIP counts do not change the code |
+| 0 | Status is `stopped`, or the preview was printed, or this worker finished its file input or remaining assigned Kafka partitions, or a signal cleanly stopped a copy from Kafka with no end time. SKIP counts do not change the code |
 | 1 | Copy, inspection, output, cleanup or the shutdown deadline failed, or a signal interrupted startup, a file copy, or a Kafka copy with an end time. Conflicts after the first consumed record also exit 1 |
 | 2 | Usage/parse/plan/configuration error, or identity/ownership/self-copy conflict before the first consumed record |
 | 3 | For a copy from Kafka with an end time, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |
+| 4 | Status is `incomplete`: input lacks a saved stop, or the source file grew |
+| 5 | Status is `unknown`: progress is absent, incompatible or unreadable, or the group has an incompatible active member |
+| 6 | Status is `running`: group activity or a change was observed |
 
 Busy locks and broker/record failures exit 1. Conflicts include foreign progress/members, changed input and unowned/short/corrupt acknowledged output. The first failure determines the code; cleanup cannot replace it. A second signal or external forced termination can use system signal status.
 

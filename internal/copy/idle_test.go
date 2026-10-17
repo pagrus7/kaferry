@@ -25,7 +25,7 @@ func TestUnassignedTimeoutHasDistinctOutcomeBeforeAndAfterIntake(t *testing.T) {
 			r.log = slog.New(slog.NewJSONHandler(&logs, nil))
 			source.assignments = nil
 			if afterIntake {
-				source.assignments = []Assignment{{Cursor: Cursor{0, 0}, Window: plan.Window{Upper: &upper}}}
+				source.assignments = []Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}
 				input := incoming(0, 0, 1)
 				input.Record.TimestampMS = &stamp
 				source.events = []Event{{Input: &input}}
@@ -64,7 +64,7 @@ func TestUnassignedTimeoutHasDistinctOutcomeBeforeAndAfterIntake(t *testing.T) {
 				t.Fatal("idle outcome is missing its structured context", logs.String())
 			}
 			if afterIntake {
-				if !revoked || len(sink.writes) != 1 || !reflect.DeepEqual(store.saves, [][]Cursor{{{0, 1}}}) {
+				if !revoked || len(sink.writes) != 1 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1}}}) {
 					t.Fatal("confirmed progress was lost or advanced after release", sink.writes, store.saves)
 				}
 			} else if len(sink.writes) != 0 || len(store.saves) != 0 {
@@ -88,7 +88,7 @@ func TestAssignmentBeforeIdleDeadlineCompletesNormally(t *testing.T) {
 	defer cancel()
 	clock.tick = func() {
 		if !assigned && clock.Now().Sub(started) >= 500*time.Millisecond {
-			if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}, Window: plan.Window{Upper: &upper}}}); err != nil {
+			if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}); err != nil {
 				t.Fatal(err)
 			}
 			input := incoming(0, 0, 1)
@@ -105,7 +105,7 @@ func TestAssignmentBeforeIdleDeadlineCompletesNormally(t *testing.T) {
 	err := r.Run(ctx)
 
 	// Then complete successfully without submitting or committing past the trigger.
-	if err != nil || !assigned || r.timestampStops != 1 || len(sink.writes) != 0 || len(store.saves) != 0 {
+	if err != nil || !assigned || r.timestampStops != 1 || len(sink.writes) != 0 || len(store.saves) != 1 || store.saves[0][0].Position != 0 || store.saves[0][0].Stop == nil {
 		t.Fatal("assignment did not supersede idle termination", err, sink.writes, store.saves)
 	}
 }
@@ -121,8 +121,8 @@ func TestDelayedHandoffDistinguishesPartitionCompletionFromIdleExit(t *testing.T
 		runner.limits.IdleExit = "1s"
 	}
 	if err := a.Assign([]Assignment{
-		{Cursor: Cursor{0, 0}, Window: plan.Window{Upper: &upper}},
-		{Cursor: Cursor{1, 0}, Window: plan.Window{Upper: &upper}},
+		{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}},
+		{Cursor: Cursor{Partition: 1, Position: 0}, Window: plan.Window{Upper: &upper}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestDelayedHandoffDistinguishesPartitionCompletionFromIdleExit(t *testing.T
 	if err := a.input(trigger); err != nil {
 		t.Fatal(err)
 	}
-	if a.partitions[1].stopped {
+	if a.partitions[1].stop != nil {
 		t.Fatal("fixture completed the partition intended for handoff")
 	}
 

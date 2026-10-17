@@ -5,7 +5,6 @@ package compat
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,10 +20,11 @@ import (
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/app"
+	"github.com/pagrus7/kaferry/internal/commitmeta"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
 	adapter "github.com/pagrus7/kaferry/internal/franz"
-	"github.com/pagrus7/kaferry/internal/kafkaport"
+	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/fx"
 )
@@ -218,18 +218,21 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 	}
 }
 
-func relativeWindows(t *testing.T, parts []k.TopicPartition) map[int32]kafkaport.Progress {
+func relativeWindows(t *testing.T, parts []k.TopicPartition) map[int32]plan.Window {
 	t.Helper()
-	result := make(map[int32]kafkaport.Progress)
+	result := make(map[int32]plan.Window)
 	for _, part := range parts {
-		var progress kafkaport.Progress
-		if part.Metadata == nil || !strings.HasPrefix(*part.Metadata, "kfwd2:1;") || json.Unmarshal([]byte(strings.TrimPrefix(*part.Metadata, "kfwd2:1;")), &progress) != nil || progress.Window == nil || progress.Window.Lower == nil || progress.Window.Upper == nil {
-			t.Fatal("relative progress has no concrete window", part)
+		if part.Metadata == nil {
+			t.Fatal("missing commit metadata", part)
+		}
+		progress, err := commitmeta.NewCodec().Decode(*part.Metadata)
+		if err != nil || progress.Window == nil || progress.Window.Lower == nil || progress.Window.Upper == nil {
+			t.Fatal("relative progress has no concrete window", part, err)
 		}
 		if *progress.Window.Upper-*progress.Window.Lower != int64(2*time.Hour/time.Millisecond) {
 			t.Fatal("window bounds used different NOW instants", progress)
 		}
-		result[part.Partition] = progress
+		result[part.Partition] = *progress.Window
 	}
 	return result
 }

@@ -37,9 +37,16 @@ func (r Record) Size() int64 {
 	return n
 }
 
+// Stop records the source position where a partition reached its stopping rule.
+type Stop struct {
+	Reason string `json:"reason"`
+	At     int64  `json:"at"`
+}
+
 type Cursor struct {
 	Partition int32
 	Position  int64
+	Stop      *Stop
 }
 type Input struct {
 	Cursor Cursor

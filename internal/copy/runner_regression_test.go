@@ -42,7 +42,7 @@ func TestFatalDeliveryFailsDespiteSkipPolicies(t *testing.T) {
 	if !errors.Is(err, fatal) || exitCode(err) != 1 || r.skipped != 0 || len(sink.writes) != 2 {
 		t.Fatalf("err=%v skipped=%d writes=%v", err, r.skipped, sink.writes)
 	}
-	if len(store.saves) != 1 || len(store.saves[0]) != 1 || store.saves[0][0] != (Cursor{0, 1}) {
+	if len(store.saves) != 1 || len(store.saves[0]) != 1 || store.saves[0][0] != (Cursor{Partition: 0, Position: 1}) {
 		t.Fatalf("unsafe progress: %v", store.saves)
 	}
 }
@@ -81,7 +81,7 @@ func TestQueueFullDeadlinePreservesConfirmedProgress(t *testing.T) {
 	if elapsed := clock.Now().Sub(started); elapsed < 60*time.Millisecond || elapsed > 120*time.Millisecond {
 		t.Fatalf("queue deadline elapsed=%s", elapsed)
 	}
-	if len(source.events) != 1 || len(store.saves) != 1 || store.saves[0][0] != (Cursor{0, 1}) {
+	if len(source.events) != 1 || len(store.saves) != 1 || store.saves[0][0] != (Cursor{Partition: 0, Position: 1}) {
 		t.Fatalf("unread=%v progress=%v", source.events, store.saves)
 	}
 }
@@ -92,7 +92,7 @@ func TestRevokeDiscardsHeldWorkBeforeReassignment(t *testing.T) {
 			t.Run(held+map[bool]string{false: "/revoked", true: "/lost"}[lost], func(t *testing.T) {
 				// Given held work for a partition that is about to change owners.
 				r, _, sink, _, _ := fixture(t)
-				if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+				if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
 					t.Fatal(err)
 				}
 				if held == "queue-full submission" {
@@ -108,7 +108,7 @@ func TestRevokeDiscardsHeldWorkBeforeReassignment(t *testing.T) {
 					old = r.pending.token
 				} else {
 					old = sink.writes[0]
-					if err := r.accept(Event{Input: ptrInput(incoming(0, 1, 1)), EOF: &Cursor{0, 2}}); err != nil {
+					if err := r.accept(Event{Input: ptrInput(incoming(0, 1, 1)), EOF: &Cursor{Partition: 0, Position: 2}}); err != nil {
 						t.Fatal(err)
 					}
 					if r.deferred == nil || r.deferredEOF == nil {
@@ -121,7 +121,7 @@ func TestRevokeDiscardsHeldWorkBeforeReassignment(t *testing.T) {
 				if err := r.Revoke([]int32{0}, lost); err != nil {
 					t.Fatal(err)
 				}
-				if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+				if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
 					t.Fatal(err)
 				}
 				sink.submit = nil
@@ -130,7 +130,7 @@ func TestRevokeDiscardsHeldWorkBeforeReassignment(t *testing.T) {
 				}
 
 				// Then held work and EOF cannot leak into the new assignment.
-				if r.pending != nil || r.deferred != nil || r.deferredEOF != nil || len(sink.writes) != before || r.partitions[0].stopped {
+				if r.pending != nil || r.deferred != nil || r.deferredEOF != nil || len(sink.writes) != before || r.partitions[0].stop != nil {
 					t.Fatal("revoked work survived reassignment")
 				}
 				if err := r.input(incoming(0, 0, 1)); err != nil {
@@ -150,13 +150,13 @@ func TestRevokePreservesHeldWorkForRemainingPartition(t *testing.T) {
 	// Given one partition filling the cap and another with deferred input and EOF.
 	r, _, sink, _, _ := fixture(t)
 	r.limits.RecordCap = 1
-	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}, {Cursor: Cursor{1, 0}}}); err != nil {
+	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}, {Cursor: Cursor{Partition: 1, Position: 0}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.input(incoming(0, 0, 1)); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.accept(Event{Input: ptrInput(incoming(1, 0, 1)), EOF: &Cursor{1, 1}}); err != nil {
+	if err := r.accept(Event{Input: ptrInput(incoming(1, 0, 1)), EOF: &Cursor{Partition: 1, Position: 1}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -169,7 +169,7 @@ func TestRevokePreservesHeldWorkForRemainingPartition(t *testing.T) {
 	}
 
 	// Then the remaining partition's held record and EOF are processed normally.
-	if len(sink.writes) != 2 || sink.writes[1].Partition != 1 || !r.partitions[1].stopped || r.partitions[1].position != 1 {
+	if len(sink.writes) != 2 || sink.writes[1].Partition != 1 || r.partitions[1].stop == nil || r.partitions[1].position != 1 {
 		t.Fatalf("remaining partition lost input or EOF: writes=%v state=%+v", sink.writes, r.partitions[1])
 	}
 }
@@ -179,7 +179,7 @@ func TestHalfCapFlushesAndCommitsBeforePeriodicDeadline(t *testing.T) {
 		t.Run(cap, func(t *testing.T) {
 			// Given one record below half the selected cap and no periodic commit due.
 			r, _, sink, store, clock := fixture(t)
-			if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+			if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
 				t.Fatal(err)
 			}
 			r.lastCommit = clock.Now()
@@ -215,7 +215,7 @@ func TestHalfCapFlushesAndCommitsBeforePeriodicDeadline(t *testing.T) {
 			err := r.checkpoint()
 
 			// Then the sink flush precedes a confirmed commit and releases accounting.
-			if err != nil || flushes != 1 || len(store.saves) != 1 || store.saves[0][0] != (Cursor{0, 2}) {
+			if err != nil || flushes != 1 || len(store.saves) != 1 || store.saves[0][0] != (Cursor{Partition: 0, Position: 2}) {
 				t.Fatalf("err=%v flushes=%d progress=%v", err, flushes, store.saves)
 			}
 			if records, bytes := r.tracker.Total(); records != 0 || bytes != 0 {
@@ -255,7 +255,7 @@ func TestSignalDuringBoundedCopySavesProgressAndFails(t *testing.T) {
 			if err == nil || exitCode(err) != 1 || !strings.Contains(err.Error(), "bounded copy interrupted") || len(sink.writes) != 1 {
 				t.Fatalf("err=%v writes=%v", err, sink.writes)
 			}
-			if len(store.saves) != 1 || store.saves[0][0] != (Cursor{0, 1}) {
+			if len(store.saves) != 1 || store.saves[0][0] != (Cursor{Partition: 0, Position: 1}) {
 				t.Fatalf("incorrect interrupted progress: %v", store.saves)
 			}
 		})
@@ -284,7 +284,7 @@ func TestWriteRejectedDuringFollowShutdownFailsAndSavesOnlyConfirmedPrefix(t *te
 	err := r.Run(ctx)
 
 	// Then a following copy cannot report clean shutdown or commit the rejected input.
-	if !errors.Is(err, rejected) || exitCode(err) != 1 || len(sink.writes) != 2 || !reflect.DeepEqual(store.saves, [][]Cursor{{{0, 1}}}) {
+	if !errors.Is(err, rejected) || exitCode(err) != 1 || len(sink.writes) != 2 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1}}}) {
 		t.Fatal("shutdown hid a write failure or advanced past it", err, store.saves)
 	}
 }

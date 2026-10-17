@@ -13,6 +13,7 @@ import (
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/app"
+	"github.com/pagrus7/kaferry/internal/commitmeta"
 )
 
 func TestTimeBoundariesOutOfOrderAndTriggerReplay(t *testing.T) {
@@ -115,6 +116,20 @@ func TestExpiredAndAboveEndCommits(t *testing.T) {
 	if _, err := a.DeleteRecords(ctx, []k.TopicPartition{{Topic: &src, Partition: 0, Offset: 3}}); err != nil {
 		t.Fatal(err)
 	}
+	// Rewinding an offset also clears the saved stop that referred to its old position.
+	if part.Metadata == nil {
+		t.Fatal("missing metadata")
+	}
+	saved, err := commitmeta.NewCodec().Decode(*part.Metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved.Stop = nil
+	text, err := commitmeta.NewCodec().Encode(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part.Metadata = &text
 	part.Offset = 1
 	if _, err := a.AlterConsumerGroupOffsets(ctx, []k.ConsumerGroupTopicPartitions{{Group: group, Partitions: []k.TopicPartition{part}}}); err != nil {
 		t.Fatal(err)

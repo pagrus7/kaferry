@@ -21,6 +21,8 @@ type SourceInspection struct {
 	Saved          bool
 	CheckpointPath string
 	Output         DestinationProgress
+	OpeningSize    *int64
+	Stop           *core.Stop
 }
 
 // Inspector reads archive headers and saved progress without opening locks.
@@ -104,6 +106,7 @@ func (i *Inspector) Source(p plan.Plan, fingerprint string, limits config.Worker
 	} else {
 		result.Position, result.Window, err = resumePoint(reader.file, reader.info.Size(), reader.start, reader.header.ID, saved, fingerprint, p.Window, limits.MaxFrameBytes)
 		result.Saved = true
+		result.OpeningSize, result.Stop = &saved.OpeningSize, saved.Stop
 		result.Output = DestinationProgress{ID: saved.DestinationID, Extent: saved.Extent, Exists: true}
 	}
 	return result, err

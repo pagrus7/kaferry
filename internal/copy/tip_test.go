@@ -51,7 +51,7 @@ func TestTipSamplingRetriesWithoutStartingWaitOrBlockingOtherPartitions(t *testi
 		t.Fatal("query retry was unbounded or failed", query.calls, err)
 	}
 	for _, p := range r.partitions {
-		if p.high != nil || !p.waitStarted.IsZero() || p.stopped {
+		if p.high != nil || !p.waitStarted.IsZero() || p.stop != nil {
 			t.Fatal("outage was mistaken for a sampled tip", p)
 		}
 	}
@@ -70,7 +70,7 @@ func TestTipSamplingRetriesWithoutStartingWaitOrBlockingOtherPartitions(t *testi
 		t.Fatal(query.calls, err)
 	}
 	for _, p := range r.partitions {
-		if !p.stopped || p.high == nil || !p.waitStarted.Equal(clock.Now()) {
+		if p.stop == nil || p.high == nil || !p.waitStarted.Equal(clock.Now()) {
 			t.Fatal("recovery did not complete", p)
 		}
 	}
@@ -138,7 +138,7 @@ func TestTipSamplingBackoffCapsResetsAndLimitsLogs(t *testing.T) {
 	err := r.tips()
 
 	// Then retry state resets, the partition completes, and logs remain bounded.
-	if err != nil || !p.stopped || p.sampling.delay != 0 || p.sampling.attempts != 0 || !p.sampling.next.IsZero() || !p.sampling.logged.IsZero() || !p.waitStarted.Equal(clock.Now()) {
+	if err != nil || p.stop == nil || p.sampling.delay != 0 || p.sampling.attempts != 0 || !p.sampling.next.IsZero() || !p.sampling.logged.IsZero() || !p.waitStarted.Equal(clock.Now()) {
 		t.Fatal("retry state not reset", p, err)
 	}
 	if strings.Count(logs.String(), "tip watermark query retrying") != 2 || strings.Count(logs.String(), "tip watermark query recovered") != 1 {

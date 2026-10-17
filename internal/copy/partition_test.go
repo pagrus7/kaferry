@@ -31,7 +31,7 @@ func TestPartitionTimestampThreshold(t *testing.T) {
 			stop, err := p.pastTimestamp(tc.stamp, 100)
 
 			// Then the rule is strict, checked for overflow, and does not mutate state.
-			if stop != tc.stop || (err != nil) != tc.fail || p.stopped || p.position != 0 {
+			if stop != tc.stop || (err != nil) != tc.fail || p.stop != nil || p.position != 0 {
 				t.Fatal(stop, err, p)
 			}
 		})
@@ -111,7 +111,7 @@ func TestPartitionEmptyAndFileEnds(t *testing.T) {
 	file.reachedTip(80, true)
 
 	// Then Kafka can stop immediately and file EOF stops at its captured position.
-	if err != nil || action != tipStop || !file.stopped || !file.atTip || file.position != 80 || file.stable != 80 {
+	if err != nil || action != tipStop || file.stop == nil || !file.atTip || file.position != 80 || file.stable != 80 {
 		t.Fatal(action, err, file)
 	}
 }

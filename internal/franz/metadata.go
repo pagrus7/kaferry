@@ -7,12 +7,14 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/pagrus7/kaferry/internal/commitmeta"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 type Inspector struct {
+	codec     commitmeta.Codec
 	client    MetadataClient
 	topic     string
 	topicID   [16]byte

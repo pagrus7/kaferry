@@ -12,25 +12,28 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-func (i *Inspector) CheckMembers(parent context.Context, group string) error {
+func (i *Inspector) describeGroup(parent context.Context, group string) (kmsg.DescribeGroupsResponseGroup, error) {
 	ctx, cancel := requestContext(parent)
 	defer cancel()
 	req := kmsg.NewPtrDescribeGroupsRequest()
 	req.Groups = []string{group}
 	response, err := req.RequestWith(ctx, i.client)
 	if err != nil {
-		return err
+		return kmsg.DescribeGroupsResponseGroup{}, err
 	}
 	if len(response.Groups) != 1 || response.Groups[0].Group != group {
-		return fmt.Errorf("missing group description")
+		return kmsg.DescribeGroupsResponseGroup{}, fmt.Errorf("missing group description")
 	}
 	g := response.Groups[0]
 	if errors.Is(kerr.ErrorForCode(g.ErrorCode), kerr.GroupIDNotFound) {
-		return nil
+		return kmsg.DescribeGroupsResponseGroup{Group: group, State: "Empty"}, nil
 	}
 	if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
-		return err
+		return kmsg.DescribeGroupsResponseGroup{}, err
 	}
+	return g, nil
+}
+func compatibleMembers(g kmsg.DescribeGroupsResponseGroup, topic string) error {
 	for _, m := range g.Members {
 		if !strings.HasPrefix(m.ClientID, "kaferry-") {
 			return conflict("GROUP has a foreign active member")
@@ -43,12 +46,27 @@ func (i *Inspector) CheckMembers(parent context.Context, group string) error {
 			return conflict("GROUP has an unreadable member assignment")
 		}
 		for _, t := range assignment.Topics {
-			if t.Topic != i.topic {
+			if t.Topic != topic {
 				return conflict("GROUP has a member assigned to another topic")
 			}
 		}
 	}
 	return nil
+}
+
+func (i *Inspector) CheckMembers(parent context.Context, group string) error {
+	g, err := i.describeGroup(parent, group)
+	if err != nil {
+		return err
+	}
+	return compatibleMembers(g, i.topic)
+}
+func (i *Inspector) Membership(ctx context.Context, group string) (kafkaport.Membership, error) {
+	g, err := i.describeGroup(ctx, group)
+	if err != nil {
+		return kafkaport.Membership{}, err
+	}
+	return kafkaport.Membership{State: g.State, Members: len(g.Members), Foreign: compatibleMembers(g, i.topic) != nil, Idle: len(g.Members) == 0 && (g.State == "Empty" || g.State == "Dead")}, nil
 }
 
 func (i *Inspector) Saved(parent context.Context, group, fp string, window plan.WindowSpec, cutoff int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {
@@ -122,12 +140,15 @@ func (i *Inspector) decodeSaved(parts map[int32]kmsg.OffsetFetchResponseTopicPar
 		if p.Offset < 0 {
 			continue
 		}
-		progress, err := kafkaport.DecodeProgress(p.Metadata, fp, topicID(i.topicID), window.Relative())
+		progress, err := kafkaport.DecodeProgress(i.codec, p.Metadata, fp, topicID(i.topicID), window.Relative())
 		if err != nil {
 			return nil, nil, err
 		}
 		if err = kafkaport.ValidateWindow(progress, window, cutoff); err != nil {
 			return nil, nil, err
+		}
+		if progress.Stop != nil && progress.Stop.At > p.Offset {
+			return nil, nil, conflict("stop exceeds committed offset")
 		}
 		positions[id], metadata[id] = p.Offset, progress
 	}

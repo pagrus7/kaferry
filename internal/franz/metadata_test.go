@@ -5,9 +5,12 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/pagrus7/kaferry/internal/commitmeta"
+	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -41,7 +44,7 @@ func TestMetadataRefreshChecksIdentityAndSharesPartitionChanges(t *testing.T) {
 		}
 		return response, nil
 	}}
-	i := &Inspector{client: m, topic: "input", log: quietLogger()}
+	i := &Inspector{codec: commitmeta.NewCodec(), client: m, topic: "input", log: quietLogger()}
 	if err := i.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +63,7 @@ func TestMetadataRefreshChecksIdentityAndSharesPartitionChanges(t *testing.T) {
 func TestMetadataRequestsRespectCallerDeadline(t *testing.T) {
 	// Given a broker transport that never answers.
 	m := &metadataMock{request: func(ctx context.Context, _ kmsg.Request) (kmsg.Response, error) { <-ctx.Done(); return nil, ctx.Err() }}
-	i := &Inspector{client: m, topic: "input", log: quietLogger()}
+	i := &Inspector{codec: commitmeta.NewCodec(), client: m, topic: "input", log: quietLogger()}
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 	// When its caller expires before the fixed request budget, then the request returns that deadline.
@@ -95,7 +98,7 @@ func TestOffsetLookupRejectsIncompleteAndFailedPartitions(t *testing.T) {
 				}
 				return &kmsg.ListOffsetsResponse{Topics: []kmsg.ListOffsetsResponseTopic{{Topic: topic, Partitions: p}}}, nil
 			}}
-			i := &Inspector{client: m, topic: "input"}
+			i := &Inspector{codec: commitmeta.NewCodec(), client: m, topic: "input"}
 			// When looking up both starts, then failures never become offset zero.
 			result, err := i.OffsetsForTimes(t.Context(), map[int32]int64{0: 100, 2: 100})
 			if mode == "valid" {
@@ -114,7 +117,7 @@ func TestSavedProgressRequiresEveryPartitionAndExactMetadata(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			// Given current source partitions and progress encoded with the shared released format.
 			id := [16]byte{1}
-			metadata := (kafkaport.Progress{Fingerprint: "fp", TopicID: topicID(id)}).Encode()
+			metadata := encodeMetadata(kafkaport.Progress{Fingerprint: "fp", TopicID: topicID(id)})
 			parts := map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Partition: 0, Offset: 42, Metadata: &metadata}, 2: {Partition: 2, Offset: -1}}
 			switch mode {
 			case "absent":
@@ -128,14 +131,14 @@ func TestSavedProgressRequiresEveryPartitionAndExactMetadata(t *testing.T) {
 				p.ErrorCode = kerr.TopicAuthorizationFailed.Code
 				parts[2] = p
 			}
-			i := &Inspector{topicID: id, parts: []int32{0, 2}}
+			i := &Inspector{codec: commitmeta.NewCodec(), topicID: id, parts: []int32{0, 2}}
 			// When decoding the assignment's saved starts, then only absent commits permit a fresh start.
 			positions, progress, err := i.decodeSaved(parts, "fp", plan.WindowSpec{}, 0)
 			valid := mode == "valid" || mode == "absent"
 			if (err == nil) != valid {
 				t.Fatal("invalid saved-position decision", err)
 			}
-			if mode == "valid" && (positions[0] != 42 || progress[0].Encode() != metadata) {
+			if mode == "valid" && (positions[0] != 42 || encodeMetadata(progress[0]) != metadata) {
 				t.Fatal("progress changed", positions, progress)
 			}
 		})
@@ -143,7 +146,7 @@ func TestSavedProgressRequiresEveryPartitionAndExactMetadata(t *testing.T) {
 }
 
 func TestSavedWindowsAndFileExtentsNeverBecomeAStartFallback(t *testing.T) {
-	for _, scenario := range []string{"valid", "fingerprint", "topic identity", "file extent", "missing relative window", "window shape", "literal mismatch", "cutoff overflow"} {
+	for _, scenario := range []string{"valid", "fingerprint", "topic identity", "file extent", "missing relative window", "stop beyond commit", "window shape", "literal mismatch", "cutoff overflow"} {
 		t.Run(scenario, func(t *testing.T) {
 			// Given committed progress whose query, window or output may be incompatible.
 			id := [16]byte{1}
@@ -157,7 +160,9 @@ func TestSavedWindowsAndFileExtentsNeverBecomeAStartFallback(t *testing.T) {
 			case "topic identity":
 				progress.TopicID = "other"
 			case "file extent":
-				progress.FileID, progress.Extent = "archive", -1
+				progress.FileID, progress.Extent = "archive", 1
+			case "stop beyond commit":
+				progress.Stop = &core.Stop{Reason: "tip", At: 43}
 			case "missing relative window":
 				spec.Lower = &plan.Expression{Now: true}
 			case "window shape":
@@ -171,8 +176,11 @@ func TestSavedWindowsAndFileExtentsNeverBecomeAStartFallback(t *testing.T) {
 				spec.Upper = &plan.Expression{LiteralMS: upper}
 				cutoff = 1
 			}
-			text := progress.Encode()
-			inspector := &Inspector{topicID: id, parts: []int32{0}}
+			text := encodeMetadata(progress)
+			if scenario == "file extent" {
+				text = strings.Replace(text, `"extent":1`, `"extent":-1`, 1)
+			}
+			inspector := &Inspector{codec: commitmeta.NewCodec(), topicID: id, parts: []int32{0}}
 			// When startup or assignment validates saved progress through their common path.
 			positions, metadata, err := inspector.decodeSaved(map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 42, Metadata: &text}}, "fp", spec, cutoff)
 			// Then only compatible progress can reach positioning.

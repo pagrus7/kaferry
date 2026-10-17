@@ -134,14 +134,14 @@ func (s *testStore) Save(_ context.Context, cursors []Cursor) (map[int32]error, 
 func fixture(t *testing.T) (*Runner, *testSource, *testSink, *testStore, *testClock) {
 	t.Helper()
 	c := &testClock{now: time.Unix(100, 0)}
-	s := &testSource{clock: c, paused: make(map[int32]bool), assignments: []Assignment{{Cursor: Cursor{0, 0}}}}
+	s := &testSource{clock: c, paused: make(map[int32]bool), assignments: []Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}}
 	d := &testSink{reports: make(chan Delivery, 100)}
 	p := &testStore{}
 	r := NewRunner(s, d, p, c, slog.New(slog.NewTextHandler(io.Discard, nil)), plan.Plan{Source: plan.Endpoint{Kind: "FILE"}}, config.Defaults(t.TempDir()).Worker, NewTracker(), NoopStopObserver{})
 	return r, s, d, p, c
 }
 func incoming(id int32, position int64, size int) Input {
-	return Input{Cursor: Cursor{id, position}, Next: position + 1, Record: Record{Value: make([]byte, size)}}
+	return Input{Cursor: Cursor{Partition: id, Position: position}, Next: position + 1, Record: Record{Value: make([]byte, size)}}
 }
 
 func TestRunnerDoesNotCommitPastFailedWrite(t *testing.T) {
@@ -151,7 +151,7 @@ func TestRunnerDoesNotCommitPastFailedWrite(t *testing.T) {
 		in := incoming(0, int64(i), 1)
 		s.events = append(s.events, Event{Input: &in})
 	}
-	s.events = append(s.events, Event{EOF: &Cursor{0, 3}})
+	s.events = append(s.events, Event{EOF: &Cursor{Partition: 0, Position: 3}})
 	d.flush = func() error {
 		if len(d.writes) == 3 {
 			d.reports <- Delivery{Token: d.writes[2]}
@@ -179,7 +179,7 @@ func TestRunnerCapsIncludeConfirmedWorkAndOversizedAlone(t *testing.T) {
 	r, _, d, p, _ := fixture(t)
 	r.limits.ByteCap = 150
 	r.limits.PartitionByteCap = 150
-	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -230,7 +230,7 @@ func TestRunnerQueueFullPreservesSubmissionOrder(t *testing.T) {
 	// Given
 	r, s, d, _, _ := fixture(t)
 	in := incoming(0, 0, 1)
-	s.events = []Event{{Input: &in}, {EOF: &Cursor{0, 1}}}
+	s.events = []Event{{Input: &in}, {EOF: &Cursor{Partition: 0, Position: 1}}}
 	tries := 0
 	d.submit = func(_ Record, tok Token) error {
 		tries++
@@ -258,7 +258,7 @@ func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 	for _, lost := range []bool{false, true} {
 		t.Run(map[bool]string{false: "revoked", true: "lost"}[lost], func(t *testing.T) {
 			r, _, d, p, _ := fixture(t)
-			if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+			if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
 				t.Fatal(err)
 			}
 			_ = r.input(incoming(0, 0, 1))
@@ -271,7 +271,7 @@ func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 			if revokeErr != nil {
 				t.Fatal(revokeErr)
 			}
-			if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+			if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
 				t.Fatal(err)
 			}
 			_ = r.input(incoming(0, 0, 1))
@@ -285,7 +285,7 @@ func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 		})
 	}
 	r, _, d, p, _ := fixture(t)
-	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
 		t.Fatal(err)
 	}
 	_ = r.input(incoming(0, 0, 1))
@@ -306,7 +306,7 @@ func TestPartialCommitReleasesSuccessfulPartitionsOnly(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			// Given confirmed writes on two partitions and one unconfirmed commit result.
 			r, _, d, p, _ := fixture(t)
-			if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}, {Cursor: Cursor{1, 0}}}); err != nil {
+			if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}, {Cursor: Cursor{Partition: 1, Position: 0}}}); err != nil {
 				t.Fatal(err)
 			}
 			for _, id := range []int32{0, 1} {
@@ -345,7 +345,7 @@ func TestPartialCommitReleasesSuccessfulPartitionsOnly(t *testing.T) {
 func TestShutdownDrainDeadlineCommitsConfirmedPrefix(t *testing.T) {
 	// Given
 	r, _, d, p, c := fixture(t)
-	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
 		t.Fatal(err)
 	}
 	_ = r.input(incoming(0, 0, 1))
@@ -388,7 +388,7 @@ func TestTimestampTriggerReplaysTriggerOffset(t *testing.T) {
 	if runErr != nil {
 		t.Fatal(runErr)
 	}
-	if len(d.writes) != 0 || len(p.saves) != 0 {
+	if len(d.writes) != 0 || len(p.saves) != 1 || p.saves[0][0].Position != 0 || p.saves[0][0].Stop == nil || p.saves[0][0].Stop.Reason != "timestamp" {
 		t.Fatal("trigger record was written or checkpointed past")
 	}
 }
@@ -400,9 +400,9 @@ func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 	r.plan.Source.Kind = "TOPIC"
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: hi}
 	r.limits.TipWait = "1s"
-	_ = r.Assign([]Assignment{{Cursor: Cursor{0, 0}, Window: plan.Window{Upper: &hi}}})
+	_ = r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &hi}}})
 	s.high = 2
-	_ = r.eof(Cursor{0, 0})
+	_ = r.eof(Cursor{Partition: 0, Position: 0})
 
 	// When
 	tipsErr := r.tips()
@@ -444,7 +444,7 @@ func TestIdleExitRequiresProcessedEmptyAssignment(t *testing.T) {
 	if !r.readyToExit() {
 		t.Fatal("bounded idle worker did not exit")
 	}
-	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
 		t.Fatal(err)
 	}
 	_ = r.Revoke([]int32{0}, false)
@@ -586,7 +586,7 @@ func TestCapturedTipFinishesWithoutAnotherEOF(t *testing.T) {
 			if gap {
 				s.high = 3
 			}
-			s.events = []Event{{EOF: &Cursor{0, 0}}, {Input: &first}, {Input: &second}}
+			s.events = []Event{{EOF: &Cursor{Partition: 0, Position: 0}}, {Input: &first}, {Input: &second}}
 			d.flush = func() error {
 				if len(d.writes) > 0 {
 					for _, tok := range d.writes {
@@ -632,7 +632,7 @@ func TestRevocationCommitFailures(t *testing.T) {
 			r, _, _, _, _ := fixture(t)
 			store := &requestStore{err: tc.err, request: tc.request}
 			r.store = store
-			if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+			if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
 				t.Fatal(err)
 			}
 			in := incoming(0, 0, 1)
@@ -654,10 +654,10 @@ func TestRevocationCommitFailures(t *testing.T) {
 	// Outside revocation a recoverable error still fails the commit.
 	r, _, _, _, _ := fixture(t)
 	r.store = &requestStore{err: &Recoverable{Err: errors.New("rebalance in progress")}}
-	if err := r.Assign([]Assignment{{Cursor: Cursor{0, 0}}}); err != nil {
+	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
 		t.Fatal(err)
 	}
-	token, _ := r.tracker.Observe(Cursor{0, 0}, 1, 1)
+	token, _ := r.tracker.Observe(Cursor{Partition: 0, Position: 0}, 1, 1)
 	r.tracker.Settle(token, true)
 	if err := r.commit([]int32{0}); err == nil {
 		t.Fatal("periodic commit must fail on a recoverable error")

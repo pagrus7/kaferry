@@ -134,7 +134,7 @@ func (t *Tracker) Confirmed(partition int32) Cursor {
 		}
 		position = e.next
 	}
-	return Cursor{partition, position}
+	return Cursor{Partition: partition, Position: position}
 }
 func (t *Tracker) Saved(partition int32) int64 {
 	if p := t.partitions[partition]; p != nil {

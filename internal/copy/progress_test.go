@@ -5,11 +5,11 @@ import "testing"
 func TestConfirmedPrefixIncludesNumericGaps(t *testing.T) {
 	// Given
 	tk := NewTracker()
-	tk.Assign(Cursor{0, 100})
+	tk.Assign(Cursor{Partition: 0, Position: 100})
 
 	// When
-	a, _ := tk.Observe(Cursor{0, 100}, 101, 10)
-	b, _ := tk.Observe(Cursor{0, 105}, 106, 20)
+	a, _ := tk.Observe(Cursor{Partition: 0, Position: 100}, 101, 10)
+	b, _ := tk.Observe(Cursor{Partition: 0, Position: 105}, 106, 20)
 	tk.Settle(b, true)
 
 	// Then
@@ -29,7 +29,7 @@ func TestConfirmedPrefixIncludesNumericGaps(t *testing.T) {
 	}
 
 	// When only the first confirmed position is committed.
-	tk.Committed(Cursor{0, 101})
+	tk.Committed(Cursor{Partition: 0, Position: 101})
 
 	// Then later confirmed work still counts against the caps.
 	if records, bytes := tk.Total(); records != 1 || bytes != 20 {
@@ -37,7 +37,7 @@ func TestConfirmedPrefixIncludesNumericGaps(t *testing.T) {
 	}
 
 	// When the remaining confirmed position is committed.
-	tk.Committed(Cursor{0, 106})
+	tk.Committed(Cursor{Partition: 0, Position: 106})
 
 	// Then its work is released.
 	if records, bytes := tk.Total(); records != 0 || bytes != 0 {
@@ -48,11 +48,11 @@ func TestConfirmedPrefixIncludesNumericGaps(t *testing.T) {
 func TestOldGenerationDeliveryCannotAdvanceNewOwner(t *testing.T) {
 	// Given a new assignment after the previous generation was revoked.
 	tk := NewTracker()
-	tk.Assign(Cursor{0, 0})
-	old, _ := tk.Observe(Cursor{0, 0}, 1, 1)
+	tk.Assign(Cursor{Partition: 0, Position: 0})
+	old, _ := tk.Observe(Cursor{Partition: 0, Position: 0}, 1, 1)
 	tk.Revoke(0)
-	tk.Assign(Cursor{0, 0})
-	current, _ := tk.Observe(Cursor{0, 0}, 1, 1)
+	tk.Assign(Cursor{Partition: 0, Position: 0})
+	current, _ := tk.Observe(Cursor{Partition: 0, Position: 0}, 1, 1)
 
 	// When an old delivery arrives late.
 	resolved := tk.Settle(old, true)
@@ -74,10 +74,10 @@ func TestOldGenerationDeliveryCannotAdvanceNewOwner(t *testing.T) {
 func TestControlRecordCursorAndTimestampStop(t *testing.T) {
 	// Given
 	tk := NewTracker()
-	tk.Assign(Cursor{0, 0})
+	tk.Assign(Cursor{Partition: 0, Position: 0})
 
 	// When
-	err := tk.Advance(Cursor{0, 2})
+	err := tk.Advance(Cursor{Partition: 0, Position: 2})
 
 	// Then
 	if err != nil {
@@ -88,13 +88,13 @@ func TestControlRecordCursorAndTimestampStop(t *testing.T) {
 	}
 
 	// When an unchanged position marker follows the control cursor.
-	err = tk.Advance(Cursor{0, 2})
+	err = tk.Advance(Cursor{Partition: 0, Position: 2})
 
 	// Then it adds no unresolved work.
 	if err != nil {
 		t.Fatal(err)
 	}
-	tk.Committed(Cursor{0, 2})
+	tk.Committed(Cursor{Partition: 0, Position: 2})
 	if records, _ := tk.Total(); records != 0 {
 		t.Fatal("trigger marker retained")
 	}
@@ -103,28 +103,28 @@ func TestControlRecordCursorAndTimestampStop(t *testing.T) {
 func TestBackwardsSourceCursorCannotChangeProgressOrWork(t *testing.T) {
 	// Given saved progress followed by one outstanding write.
 	tracker := NewTracker()
-	tracker.Assign(Cursor{0, 10})
-	first, err := tracker.Observe(Cursor{0, 10}, 11, 7)
+	tracker.Assign(Cursor{Partition: 0, Position: 10})
+	first, err := tracker.Observe(Cursor{Partition: 0, Position: 10}, 11, 7)
 	if err != nil || !tracker.Settle(first, true) {
 		t.Fatal("initial progress failed", err)
 	}
-	tracker.Committed(Cursor{0, 11})
+	tracker.Committed(Cursor{Partition: 0, Position: 11})
 	// When a source redelivers below the saved position with no outstanding work.
-	_, err = tracker.Observe(Cursor{0, 10}, 11, 1)
+	_, err = tracker.Observe(Cursor{Partition: 0, Position: 10}, 11, 1)
 	// Then rejection keeps the durable cursor and budget unchanged.
 	if records, bytes := tracker.Total(); err == nil || records != 0 || bytes != 0 || tracker.Saved(0) != 11 || tracker.Confirmed(0).Position != 11 {
 		t.Fatal("backwards record changed saved progress", err, records, bytes)
 	}
-	pending, err := tracker.Observe(Cursor{0, 11}, 12, 9)
+	pending, err := tracker.Observe(Cursor{Partition: 0, Position: 11}, 12, 9)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// When a source supplies a backwards record, next position, or EOF cursor.
 	for _, operation := range []func() error{
-		func() error { _, err := tracker.Observe(Cursor{0, 9}, 10, 100); return err },
-		func() error { _, err := tracker.Observe(Cursor{0, 12}, 11, 100); return err },
-		func() error { return tracker.Advance(Cursor{0, 5}) },
+		func() error { _, err := tracker.Observe(Cursor{Partition: 0, Position: 9}, 10, 100); return err },
+		func() error { _, err := tracker.Observe(Cursor{Partition: 0, Position: 12}, 11, 100); return err },
+		func() error { return tracker.Advance(Cursor{Partition: 0, Position: 5}) },
 	} {
 		err := operation()
 
@@ -138,7 +138,7 @@ func TestBackwardsSourceCursorCannotChangeProgressOrWork(t *testing.T) {
 	if !tracker.Settle(pending, true) || tracker.Confirmed(0).Position != 12 {
 		t.Fatal("cursor rejection damaged pending delivery")
 	}
-	tracker.Committed(Cursor{0, 12})
+	tracker.Committed(Cursor{Partition: 0, Position: 12})
 	if records, bytes := tracker.Total(); records != 0 || bytes != 0 || tracker.Saved(0) != 12 {
 		t.Fatal("legitimate work could not be committed")
 	}
