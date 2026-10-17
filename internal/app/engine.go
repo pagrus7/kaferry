@@ -121,6 +121,8 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Work
 		return err
 	}
 	if p.OneOff && input != nil {
+		stop.Begin()
+		stop.Stage("deleting one-off checkpoint")
 		return input.DeleteCheckpoint()
 	}
 	return nil

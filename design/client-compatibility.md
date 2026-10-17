@@ -4,7 +4,7 @@ Kafka-client and deployment constraints. See [permissions](../docs/usage.md#perm
 
 ## Known issues
 
-Kafka input can misread timestamps outside ±9,223,372,036,854 Unix milliseconds (roughly 1677–2262), affecting copied timestamps and time filters. Kaferry cannot detect this decoding error. Kafka output rejects timestamps outside this range unless the destination is known to replace them with broker time. Ordinary modern timestamps are unaffected. For such sources, use another tool that preserves 64-bit millisecond timestamps. File-to-file copies retain the full signed millisecond value.
+Kafka output rejects file timestamps outside ±9,223,372,036,854 Unix milliseconds (roughly 1677–2262) unless the topic is known to use LogAppendTime, which replaces them with broker time. This check cannot catch out-of-range Kafka input: franz-go misreads those timestamps as other dates without warning, affecting copied timestamps and time filters. Ordinary modern timestamps are unaffected. For such sources, use another tool that preserves 64-bit millisecond timestamps. File-to-file copies retain the full signed millisecond value.
 
 The pinned [decoder](https://github.com/twmb/franz-go/blob/v1.22.2/pkg/kgo/source.go#L2438) multiplies milliseconds into a signed nanosecond value. Overflow changes the timestamp before Kaferry receives it. [Kafka 4.x's default future-timestamp bound](https://kafka.apache.org/41/configuration/topic-configs/#message.timestamp.after.max.ms) reduces acceptance of new far-future records; it does not protect existing records, extreme past timestamps or permissive topic settings. Occurrence in production is unknown.
 
@@ -14,7 +14,8 @@ The pinned [decoder](https://github.com/twmb/franz-go/blob/v1.22.2/pkg/kgo/sourc
 | --- | --- |
 | Broker | Apache Kafka 3.9.0, KRaft; single-broker and three-broker clusters. Kafka 4.1.2: file paths, resume, cooperative ownership and transactions |
 | Runtime client | `franz-go v1.22.2`, pure Go; Confluent is an independent test-fixture client only |
-| Build/test platforms | Linux AMD64 (CI) and macOS ARM64 |
+| Broker integration | Linux AMD64 (CI) and macOS ARM64 |
+| Release builds and unit tests | Linux AMD64/ARM64 and macOS AMD64/ARM64 |
 | Client authentication | SASL/PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512 over TLS; mTLS handshakes in component tests |
 | Failover | Replication factor 3, minimum ISR 2, destination-leader failure |
 
@@ -54,13 +55,13 @@ Size preflight counts an uncompressed single-record batch and the client’s 4�
 | JoinGroup / SyncGroup / Heartbeat / LeaveGroup | Ordinary consumer-group membership and ownership |
 | Produce / InitProducerId | Idempotent output and delivery acknowledgements |
 
-While partitions are assigned, input checks stable ends once per second. Each check can also request 1 MiB from one partition behind its stable end, including partitions still receiving records. Kafka can return a larger first batch. These probes count against client quotas; a throttled empty reply proves no progress and retries on the next check. Output checks partition count every 30 s.
+While partitions are assigned, input checks stable ends once per second. Each check can also request 1 MiB from one partition behind its stable end, including partitions still receiving records. Kafka can return a larger first batch. These probes count against client quotas; a throttled empty reply proves no progress and retries on the next check. When writing, output checks the partition count if at least 30 s have passed since the last check.
 
 Completion samples the log end including open transactions. A stable offset alone never proves that records were consumed: gap probes parse batches and validate CRCs. Fixture administrators create, alter and delete test resources; those permissions are not CLI requirements.
 
 ## Operational limits
 
-- Required inspection or initial/periodic commit errors stop the run. Restart after broker recovery. Network, leader and coordinator errors marked retryable by the client retry without a total deadline. If Kafka reports that this worker is no longer a group member, it exits 1; rerun to rejoin.
+- Consumer polling can retry temporary network, leader and coordinator errors indefinitely. Required inspections and initial/periodic commits stop the run on error or deadline; writes use the delivery timeout. If Kafka reports that this worker is no longer a group member, it exits 1; rerun to rejoin.
 - SIGINT/SIGTERM stop reads, allow up to ten seconds for outstanding writes, then save confirmed progress. The CLI's overall shutdown deadline defaults to 30 s and covers cleanup and blocked I/O. Expiry exits 1 without further cleanup; records after the last saved position can replay. Set `worker.shutdown_timeout` for your environment; a second signal forces termination.
 - Leaving the group allows up to 5 s. A failed leave exits 1, even if progress was already saved. Other workers may wait for the session timeout before receiving its partitions. Resume with the same named group.
 - If a gap check reports an unknown source topic or partition, the run stops; rerun after the topic is available. Source replica reassignment is untested and may trigger this.

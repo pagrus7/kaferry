@@ -68,9 +68,9 @@ func TestShutdownDeadlineStopsBlockedCleanup(t *testing.T) {
 	runShutdownHelper(t, "cleanup", "closing Kafka input")
 }
 
-type blockingInput struct{}
+type blockingInput struct{ cancel context.CancelFunc }
 
-func (blockingInput) Read([]byte) (int, error) { select {} }
+func (b blockingInput) Read([]byte) (int, error) { b.cancel(); select {} }
 
 type blockingErrorOutput struct{}
 
@@ -78,13 +78,12 @@ func (blockingErrorOutput) Write([]byte) (int, error) { select {} }
 
 func TestShutdownDeadlineCoversFinalErrorPrinting(t *testing.T) {
 	if os.Getenv("KAFERRY_SHUTDOWN_HELPER") == "error" {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
+		ctx := context.Background()
 		budget := newShutdownBudget(ctx, 40*time.Millisecond, forceShutdown)
 		_ = executeWithShutdown(ctx, []string{"run", "--sql", "x"}, nil, io.Discard, blockingErrorOutput{}, budget)
 		t.Fatal("blocked error writer returned")
 	}
-	// Given an error returned from Command.Run, when stderr is blocked after a signal,
+	// Given an error returned from Command.Run, when stderr is blocked without a signal,
 	// then the same process guard stays alive until printing and execution have both ended.
 	runShutdownHelper(t, "error", "printing error")
 }
@@ -105,12 +104,30 @@ func TestShutdownDeadlineCoversSummaryAfterStartupFailure(t *testing.T) {
 	// then the shutdown deadline still ends the process with a clear error.
 	runShutdownHelper(t, "summary", "printing copy summary")
 }
+
+func TestShutdownDeadlineNamesBlockedCheckpointDeletion(t *testing.T) {
+	if os.Getenv("KAFERRY_SHUTDOWN_HELPER") == "checkpoint" {
+		fixture := newEngineFixture()
+		fixture.onStage = func(stage string) {
+			if stage == "delete-checkpoint" {
+				select {}
+			}
+		}
+		p := enginePlan("FILE", "FILE")
+		p.OneOff = true
+		budget := newShutdownBudget(context.Background(), 40*time.Millisecond, forceShutdown)
+		_ = newEngine(fixture, fixture, fixture, engineLogger()).Run(context.Background(), p, config.Worker{}, budget)
+		t.Fatal("blocked checkpoint deletion returned")
+	}
+	// Given a completed one-off copy, when checkpoint deletion blocks,
+	// then the timeout names that operation and bounds cleanup without a signal.
+	runShutdownHelper(t, "checkpoint", "deleting one-off checkpoint")
+}
 func TestShutdownDeadlineAlsoCoversBlockedSQLInput(t *testing.T) {
 	if os.Getenv("KAFERRY_SHUTDOWN_HELPER") == "input" {
 		ctx, cancel := context.WithCancel(context.Background())
 		budget := newShutdownBudget(ctx, 40*time.Millisecond, forceShutdown)
-		cancel()
-		_ = executeWithShutdown(ctx, []string{"run", "--file", "-"}, blockingInput{}, io.Discard, os.Stderr, budget)
+		_ = executeWithShutdown(ctx, []string{"run", "--file", "-"}, blockingInput{cancel: cancel}, io.Discard, os.Stderr, budget)
 		t.Fatal("blocked input returned")
 	}
 	// Given stdin that never returns, when a signal arrives before parsing SQL,
