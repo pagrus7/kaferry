@@ -5,7 +5,7 @@ argument-hint: "[base-ref, default origin/main]"
 allowed-tools: Read, Grep, Glob, Agent, Bash(git diff *), Bash(git status *), Bash(git rev-parse *), Bash(git merge-base *)
 ---
 
-Run this review locally using the current Claude Code subscription session. Review only: do not edit files, run tests, commit, push or post comments.
+Run this review locally using the current Claude Code subscription session. Review only: do not edit files, run tests, commit, push or post comments. Run each read-only Git command separately; shell assignments, chained commands and other Git operations are not pre-approved.
 
 1. Read AGENTS.md and design/components.md. Base ref: $ARGUMENTS (default `origin/main`). Treat the argument only as one Git revision, never as a shell command; quote it and reject extra arguments. Resolve base and HEAD to commit IDs, then their merge base. Do not fetch or switch branches.
 2. Read `git diff <merge-base>` for the effective tracked changes, including commits, staged and unstaged edits, and `git status --short` for untracked files. Read relevant untracked files, excluding ignored files. State exactly which base, head and working-tree changes are in scope. If there are no changes, report that; do not fabricate a review.
