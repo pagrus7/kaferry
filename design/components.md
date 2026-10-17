@@ -111,6 +111,25 @@ python3 scripts/ci.py soak make soak
 
 Missing measurements are unavailable. Coverage and Go vulnerability scans exclude native C/C++; badges report only the listed checks.
 
+### PR reviews
+
+The **Docs review** and **Test review** checks run after the `checks` workflow for each PR, including forks. They use Claude Opus 5.5 at HIGH effort, with the reusable prompts in [.claude/agents](../.claude/agents). Each result names its PR commit; newer commits get new reviews.
+
+Reports appear in the PR checks and Actions summary, with JSON/Markdown artifacts retained for 30 days. Findings are advisory. Missing credentials, provider errors and unfinished reviews fail the check. The agents inspect source and tests without executing them; CI runs tests separately.
+
+Setup requires an `ANTHROPIC_API_KEY` repository secret and this workflow on the default branch. The normal Claude CLI login is not used. CI gives each reviewer a US$3 API budget, 20 turns and ten minutes; model usage is billed to the API account. To retry, manually run **PR reviews** in Actions with the PR number.
+
+Automatic runs use default-branch code and prompts; manual runs use the selected workflow ref. PR source is read from snapshots with commands, hooks and MCP disabled. GitHub tokens stay out of the model process.
+
+For local review with Claude Code, supply the diff to the same agents:
+
+```sh
+mkdir -p .cache
+git diff origin/main...HEAD > .cache/pr-review.patch
+claude --agent docs-reviewer -p 'Review .cache/pr-review.patch and the affected source.'
+claude --agent test-reviewer -p 'Review .cache/pr-review.patch and the affected source.'
+```
+
 ### Release evidence
 
 Release archives contain the binary, MIT license and third-party notices for linked Go modules, Go runtime and the reviewed native bundle. `--version` reports the build version, commit, Go and linked librdkafka. CI and packaging check all supported native archives against `licenses/native.json`; bundle changes require reviewing their notices in `licenses/native.txt`.
