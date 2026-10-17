@@ -229,6 +229,12 @@ func TestCompactedOffsetsReachTheBoundedEnd(t *testing.T) {
 			if got := cluster.PartitionInfo("output", 0).HighWatermark; got != want {
 				t.Fatalf("copied %d records, wanted %d", got, want)
 			}
+			producer.AddConsumePartitions(map[string]map[int32]kgo.Offset{"output": {0: kgo.NewOffset().AtStart()}})
+			for index, record := range readN(t, producer, len(retained)) {
+				if got, want := string(record.Value), fmt.Sprintf("retained-%d", retained[index]); got != want {
+					t.Fatalf("retained record %d changed: got %q, wanted %q", index, got, want)
+				}
+			}
 			// When the same query restarts at the verified end.
 			if err := runComponentCopy(componentContext(t), p, config.Defaults(t.TempDir()).Worker); err != nil {
 				t.Fatal(err)
