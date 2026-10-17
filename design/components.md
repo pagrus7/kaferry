@@ -122,14 +122,28 @@ Missing measurements are unavailable. Coverage and vulnerability scans describe 
 
 ### Local reviews
 
-Each PR needs independent **docs**, **tests** and **simplicity** reviews. [AGENTS.md](../AGENTS.md) defines when to run them and what to record; the [local workflow](../.claude/skills/review-local/SKILL.md) runs the [three agents](../.claude/agents).
+Each PR needs independent **docs**, **tests** and **simplicity** reviews. [AGENTS.md](../AGENTS.md) defines when to run them and what to record. The criteria, workflow and report contract live in [review/](../review/README.md); client definitions point there without copying them.
 
-Use Claude Code's subscription login (`claude auth login --claudeai`). Remove API credentials from the environment so they do not override that login. [Authentication](https://code.claude.com/docs/en/authentication).
+Fetch the intended base before starting. Both clients review committed, staged, unstaged and relevant untracked changes. Reviewers inspect files without running tests; run CI and local test commands separately. Calls count against the active client's subscription limits.
 
-From the repository root, in either Claude Code or Codex's terminal:
+**Codex:** use its ChatGPT login (`codex login`), confirmed by `codex login status`. The [native agent definitions](../.codex/agents) inherit the parent model and permissions. [Codex agents](https://learn.chatgpt.com/docs/agent-configuration/subagents).
 
 ```sh
 git fetch origin main
+codex login status
+```
+
+After confirming ChatGPT login, from the repository root:
+
+```sh
+codex exec --sandbox read-only 'Follow review/README.md; run all three reviewers against origin/main.'
+```
+
+In an existing Codex session, ask it to follow `review/README.md` for your base. If the client cannot discover custom names, the shared workflow supplies the role files to independent agents. Codex permissions come from the parent session; instructions alone do not create a read-only sandbox.
+
+**Claude Code:** use subscription login (`claude auth login --claudeai`). Remove API credentials so they do not override it. [Authentication](https://code.claude.com/docs/en/authentication).
+
+```sh
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 claude auth status
 ```
@@ -141,9 +155,7 @@ CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 \
   claude -p '/review-local'
 ```
 
-The environment setting keeps reviewer calls in the foreground. The base defaults to `origin/main`; use `'/review-local <base>'` to select another fetched ref. In an existing Claude Code subscription session, use `/review-local [base]`. Staged, unstaged and relevant untracked changes are also reviewed.
-
-Reviewers inspect files without running tests; CI and local test commands run separately. Calls count against subscription limits.
+The setting keeps reviewer calls in the foreground. In an existing Claude Code session, use `/review-local [base]`; the default is `origin/main`. Its [agent adapters](../.claude/agents) set Claude-specific tools and model settings; the [command adapter](../.claude/skills/review-local/SKILL.md) loads the shared workflow.
 
 ### Release evidence
 
