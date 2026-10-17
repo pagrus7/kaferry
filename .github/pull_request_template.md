@@ -4,18 +4,16 @@
 
 ## Validation
 
-<!-- Checks actually run, the commit each ran on, results and remaining limits. -->
-
-Local review scope: <!-- Base/head and any uncommitted changes; applies to all three reviews. -->
+<!-- Only checks beyond CI and their results, or None. -->
 
 ## Docs review
 
-<!-- Result and finding dispositions; confirm the documentation checks required by AGENTS.md. -->
+<!-- Passed, or Failed with a brief reason (including incomplete reviews). -->
 
 ## Tests review
 
-<!-- Reviewer result; useful coverage, gaps and finding dispositions. -->
+<!-- Passed, or Failed with a brief reason (including incomplete reviews). -->
 
 ## Simplicity review
 
-<!-- Reviewer result and finding dispositions. -->
+<!-- Passed, or Failed with a brief reason (including incomplete reviews). -->
