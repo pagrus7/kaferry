@@ -1,6 +1,6 @@
 # Local reviews
 
-Shared instructions for Claude Code, Codex and other coding clients. The role criteria live in [docs](docs.md), [tests](tests.md) and [simplicity](simplicity.md). Client-specific agent definitions only select settings and point here.
+Shared instructions for coding clients with file access and independent agents. The role criteria live in [docs](docs.md), [tests](tests.md) and [simplicity](simplicity.md). Client-specific agent definitions only select settings and point here.
 
 ## Run a review
 

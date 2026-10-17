@@ -160,7 +160,7 @@ CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 \
   claude -p '/review-local'
 ```
 
-The command waits for all three reports. In an existing Claude Code session, use `/review-local [base]`. Its [agent adapters](../.claude/agents) retain the requested model and effort; the [command adapter](../.claude/skills/review-local/SKILL.md) loads the shared workflow.
+The command waits for all three reports. In an existing Claude Code session, use `/review-local [base]`. The [agent settings](../.claude/agents) select Opus 5.5 with high effort; your account needs access to that model. The [command adapter](../.claude/skills/review-local/SKILL.md) loads the shared workflow.
 
 ### Release evidence
 

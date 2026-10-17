@@ -4,7 +4,7 @@
 
 ## Validation
 
-<!-- Checks actually run, results and remaining limits. -->
+<!-- Checks actually run, the commit each ran on, results and remaining limits. -->
 
 Local review scope: <!-- Base/head and any uncommitted changes; applies to all three reviews. -->
 
