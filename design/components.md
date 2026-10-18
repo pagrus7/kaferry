@@ -119,6 +119,8 @@ Use targeted package tests during local edits; full local suites are optional wh
 
 `python3 scripts/ci_latency.py` reports recent CI wall time (including queues, excluding local review/description updates) and runner minutes. Percentiles need 20 complete heads. A six-minute PR p95 is a target, not a gate. Track reruns, escaped regressions and local review time when investigating delays; tighten checks around actual failures before adding broad suites.
 
+After retargeting a PR to a different base branch, push a new commit so CI compares the new base and head.
+
 ### Quality indicators
 
 | Indicator | Where / meaning |

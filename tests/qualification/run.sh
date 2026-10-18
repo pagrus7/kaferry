@@ -23,4 +23,4 @@ export KAFERRY_QUAL_BROKERS=127.0.0.1:41092,127.0.0.1:42092,127.0.0.1:43092
 export KAFERRY_QUAL_CA="$cert_dir/ca.pem"
 export KAFERRY_QUAL_WRONG_CA="$cert_dir/wrong-ca.pem"
 CGO_ENABLED=1 "${GO:-go}" test -count=1 -timeout=5m -race -tags=integration,qualification \
-  -run 'TestSaslTls|TestReplicatedCluster' -json ./tests/compat
+  -run 'TestSaslTls|TestReplicatedCluster' "${KAFERRY_TEST_OUTPUT:--v}" ./tests/compat

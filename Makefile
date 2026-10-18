@@ -5,6 +5,13 @@ KAFERRY_REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || printf unknown)$(i
 FUZZ_ITERATIONS ?= 100000
 KAFKA_TEST_BROKERS ?= 127.0.0.1:39092
 KAFKA_TEST_DEST_BROKERS ?= 127.0.0.1:40092
+KAFERRY_TEST_OUTPUT ?= -v
+SOAK_TEST_TIMEOUT ?= 1h
+ifeq ($(KAFERRY_TEST_BINARY),)
+TEST_BINARY_PREREQUISITE = build
+load soak qualification: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/kaferry
+endif
+export KAFERRY_TEST_OUTPUT
 
 .PHONY: build test check fast integration fault load soak qualification fuzz benchmark metrics broker broker-down
 build:
@@ -34,13 +41,13 @@ broker-down:
 integration:
 	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_TEST_DEST_BROKERS=$(KAFKA_TEST_DEST_BROKERS) CGO_ENABLED=1 $(GO) test -count=1 -race -tags=integration ./...
 fault:
-	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_FAULT_CONTAINER=kaferry-compat-kafka-1 $(GO) test -count=1 -tags=integration,fault -run 'TestBlockingCommit|TestRebalanceChurn' -v ./tests/compat
-load: build
-	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry $(GO) test -count=1 -tags=integration,load -run '^TestLoad' -v ./tests/compat
-soak: build
-	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry $(GO) test -count=1 -timeout=1h -tags=integration,load -run TestStreamingSoak -v ./tests/compat
-qualification: build
-	GO=$(GO) KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry sh tests/qualification/run.sh
+	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_FAULT_CONTAINER=kaferry-compat-kafka-1 $(GO) test -count=1 -tags=integration,fault -run 'TestBlockingCommit|TestRebalanceChurn' $(KAFERRY_TEST_OUTPUT) ./tests/compat
+load: $(TEST_BINARY_PREREQUISITE)
+	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) $(GO) test -count=1 -tags=integration,load -run '^TestLoad' $(KAFERRY_TEST_OUTPUT) ./tests/compat
+soak: $(TEST_BINARY_PREREQUISITE)
+	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) $(GO) test -count=1 -timeout=$(SOAK_TEST_TIMEOUT) -tags=integration,load -run TestStreamingSoak $(KAFERRY_TEST_OUTPUT) ./tests/compat
+qualification: $(TEST_BINARY_PREREQUISITE)
+	GO=$(GO) sh tests/qualification/run.sh
 fuzz:
 	$(GO) test -run '^$$' -fuzz FuzzParse -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/sql
 	$(GO) test -run '^$$' -fuzz FuzzFraming -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/file

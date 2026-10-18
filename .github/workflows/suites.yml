@@ -72,19 +72,19 @@ jobs:
               python3 scripts/ci.py verify-tests integration 'TestTopicToTopicSlice' 'TestAllFileDirectionsAndResume' 'TestCLIInterruptCommitsAndResumeDoesNotRecopy'
               ;;
             load)
-              python3 scripts/ci.py load go test -count=1 -json -tags=integration,load -run '^TestLoad' ./tests/compat
+              python3 scripts/ci.py load make load KAFERRY_TEST_OUTPUT=-json
               python3 scripts/ci.py verify-tests load 'TestLoadBoundedKafkaCopy/default' 'TestLoadObservability/round-0/disabled'
               ;;
             soak)
-              python3 scripts/ci.py soak go test -count=1 -timeout=40m -json -tags=integration,load -run '^TestStreamingSoak' ./tests/compat
+              python3 scripts/ci.py soak make soak KAFERRY_TEST_OUTPUT=-json SOAK_TEST_TIMEOUT=40m
               python3 scripts/ci.py verify-tests soak 'TestStreamingSoakFidelityCommitLagMemoryAndShutdown'
               ;;
             qualification)
-              python3 scripts/ci.py qualification sh tests/qualification/run.sh
+              python3 scripts/ci.py qualification make qualification KAFERRY_TEST_OUTPUT=-json
               python3 scripts/ci.py verify-tests qualification 'TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight' 'TestSaslTlsScramMechanisms/SCRAM-SHA-256' 'TestSaslTlsScramMechanisms/SCRAM-SHA-512' 'TestReplicatedClusterLeaderFailurePreservesCopy'
               ;;
             fault)
-              python3 scripts/ci.py fault go test -count=1 -json -tags=integration,fault -run 'TestBlockingCommit|TestRebalanceChurn' ./tests/compat
+              python3 scripts/ci.py fault make fault KAFERRY_TEST_OUTPUT=-json
               python3 scripts/ci.py verify-tests fault 'TestBlockingCommitAcrossBrokerOutage' 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits'
               ;;
             fuzz|benchmark) python3 scripts/ci.py "$SUITE" make "$SUITE" ;;
