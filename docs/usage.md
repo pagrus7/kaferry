@@ -32,7 +32,7 @@ OPTIONS (GROUP = 'orders-archive', START = EARLIEST);
 SQL
 ```
 
-Stop archiving with Ctrl+C before restoring. Create the checkpoint directory:
+Stop archiving with Ctrl+C before restoring. Create the default checkpoint directory:
 
 ```sh
 mkdir -p ~/.kaferry/checkpoints

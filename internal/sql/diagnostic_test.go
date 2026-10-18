@@ -32,6 +32,7 @@ func TestParserDiagnosticsLocateTheOffendingToken(t *testing.T) {
 		{"invisible character", "\x00", "unexpected invisible or control character; remove it", Position{1, 1}},
 		{"format", "INSERT INTO FILE cbor('out')\nSELECT * FROM FILE json('in')\nOPTIONS(GROUP='g')", "expected cbor; found identifier", Position{2, 20}},
 		{"unit before invalid character", prefix + "WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' WEEK ?", "expected SECOND, MINUTE, HOUR or DAY; found identifier", Position{3, 48}},
+		{"unquoted interval", prefix + "OPTIONS(GROUP='g', CUTOFF=INTERVAL 5 MINUTE)", "expected single-quoted string; found integer", Position{3, 36}},
 		{"option before invalid character", prefix + "OPTIONS(STRAT ?)", "expected GROUP, START, CUTOFF, WORKER_STOP_AFTER_RECORDS, ON_ERROR, ON_MISSING_TIMESTAMP or ON_REJECTED_TIMESTAMP; found identifier", Position{3, 9}},
 		{"projection", "INSERT INTO FILE cbor('out')\nSELECT 'secret' FROM FILE cbor('in') OPTIONS(GROUP='g')", "expected \"*\"; found string literal", Position{2, 8}},
 		{"missing equals", prefix + "OPTIONS(GROUP 'g')", "expected \"=\"; found string literal", Position{3, 15}},

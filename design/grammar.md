@@ -119,7 +119,7 @@ Topic→topic, stop each worker after accepting 100 records for writing:
 ```sql
 INSERT INTO TOPIC 'orders@staging'
 SELECT * FROM TOPIC 'orders@prod'
-OPTIONS (GROUP = ONE_OFF, START = EARLIEST, WORKER_STOP_AFTER_RECORDS = 100);
+OPTIONS (GROUP = 'orders-sample', START = EARLIEST, WORKER_STOP_AFTER_RECORDS = 100);
 ```
 
 ## Invalid examples
