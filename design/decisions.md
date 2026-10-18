@@ -60,7 +60,8 @@ File sources read from their checkpoint or first frame to the size observed at o
 - At the cap, the worker stops reading, allows up to 10 seconds for writes from partitions it still owns, saves confirmed progress and exits `0`. Earlier file EOF or Kafka time-window completion also exits `0`. A quiet Kafka follow query can wait indefinitely for enough records. A signal before the cap exits `1`; after the cap it exits `0` if writes and saving succeed.
 - Writes accepted before a partition is revoked still count. Their late outcomes are discarded; the next owner may copy them again. Only progress for currently owned partitions is saved. Delivery, save and shutdown failures fail the run.
 - Each worker has its own cap; records follow consumption order, not a global timestamp order. Rerunning starts at saved progress with a fresh cap, so the total across runs can exceed `n`; unsaved writes can repeat.
-- Reaching the cap adds no source-completion stop. `status` remains `incomplete` for unfinished input; real EOF/time stops remain valid. `explain` shows the cap in text and the optional JSON `limit` field, without estimating records.
+- With ten source partitions and three workers using `LIMIT 100`, workers that each reach the cap accept 300 writes total. Each worker shares its 100 across all assigned partitions; there is no per-partition quota. Rebalances do not reset the count; replays can reduce the number of unique records copied.
+- Reaching the cap does not mark the input finished. Once all workers exit, `status` is `incomplete` while partitions lack saved EOF/time stops; exit `0` means this worker's run succeeded. Another run resumes with a fresh cap. `explain` shows the cap in text and the optional JSON `limit` field, without estimating records.
 
 ## Groups and workers
 
