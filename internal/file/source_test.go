@@ -5,14 +5,37 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
+
+func TestFreshFileRejectsEmptyResolvedWindowWithoutSavingOrKeepingLock(t *testing.T) {
+	// Given a fresh query whose NOW bound has passed its literal upper bound.
+	p, limits, _, _ := inspectionFixture(t)
+	p.Window = plan.WindowSpec{Lower: &plan.Expression{Now: true}, Upper: &plan.Expression{LiteralMS: 500}}
+	factory := NewFactory(&fileClock{now: time.UnixMilli(1000)}, logger(), DurableWriter{}, NewPublisher())
+
+	// When opening the source.
+	input, err := factory.OpenSource(p, "query", limits)
+
+	// Then it fails before saving, and correcting the query can reuse the group.
+	require.Nil(t, input)
+	var conflict *Conflict
+	require.ErrorAs(t, err, &conflict)
+	require.Equal(t, 2, conflict.ExitCode())
+	require.ErrorContains(t, err, "time range is empty")
+	_, statErr := os.Stat(checkpointPath(*limits.CheckpointDir, p.Group))
+	require.ErrorIs(t, statErr, os.ErrNotExist, "invalid startup must not save progress")
+	p.Window = plan.WindowSpec{}
+	input, err = factory.OpenSource(p, "query", limits)
+	require.NoError(t, err, "failed startup must release the group lock")
+	t.Cleanup(func() { require.NoError(t, input.Close()) })
+}
 
 type fileClock struct{ now time.Time }
 
@@ -26,27 +49,17 @@ func TestFileSavedMixedWindowSurvivesClockAdvance(t *testing.T) {
 	path := filepath.Join(dir, "source.cbor")
 	c := codec(t)
 	header, err := c.EncodeHeader(Header{Version: 1, ID: "source", Group: "fixture", Fingerprint: "fixture"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, header, 0600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, header, 0600))
 	checkpoints, err := NewCheckpoints(dir, "mixed", DurableWriter{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer checkpoints.Close()
 	hi := int64(7200000)
 	spec := plan.WindowSpec{Lower: &plan.Expression{Now: true, AdjustmentMS: -3600000}, Upper: &plan.Expression{LiteralMS: hi}}
 	clock := &fileClock{now: time.UnixMilli(7200000)}
 	source, err := NewSource(path, "fp", spec, c, checkpoints, clock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := source.Start(&lifecycle{}, nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, source.Start(&lifecycle{}, nil))
 	saved := source.window
 	source.Close()
 	clock.now = time.UnixMilli(14400000)
@@ -59,9 +72,7 @@ func TestFileSavedMixedWindowSurvivesClockAdvance(t *testing.T) {
 		t.Fatal("restart re-resolved the saved window", err)
 	}
 	defer source.Close()
-	if !reflect.DeepEqual(source.window, saved) {
-		t.Fatal("saved window changed", source.window, saved)
-	}
+	require.Equal(t, saved, source.window, "resume keeps the saved window")
 }
 
 type truncatingFileSource struct {
@@ -103,25 +114,15 @@ func TestOpenSourceTruncationFailsUnderSkipPolicy(t *testing.T) {
 	path := filepath.Join(dir, "source.cbor")
 	c := codec(t)
 	header, err := c.EncodeHeader(Header{Version: 1, ID: "source", Group: "fixture", Fingerprint: "fixture"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	data, err := c.EncodeRecord(sample())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, append(append(header, data...), data...), 0600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, append(append(header, data...), data...), 0600))
 	cp, err := NewCheckpoints(dir, "truncate", DurableWriter{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer cp.Close()
 	source, err := NewSource(path, "fp", plan.WindowSpec{}, c, cp, core.RealClock{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer source.Close()
 	sink := &unusedFileSink{reports: make(chan core.Delivery, 2)}
 	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE"}, Policies: plan.Policies{MissingTimestamp: "SKIP", RejectedTimestamp: "SKIP", OtherRecord: "SKIP"}}
@@ -143,16 +144,10 @@ func TestFileAssignmentClearsStopAndRefreshesOpeningSize(t *testing.T) {
 	path := filepath.Join(dir, "source.cbor")
 	codec := codec(t)
 	header, err := codec.EncodeHeader(Header{Version: 1, ID: "source", Group: "fixture", Fingerprint: "fixture"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, append(header, 0), 0600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, append(header, 0), 0600))
 	cp, err := NewCheckpoints(dir, "job", DurableWriter{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer cp.Close()
 	pos := int64(len(header))
 	cp.Initialize(Checkpoint{Version: 2, Fingerprint: "fp", SourceID: "source", Position: pos, OpeningSize: pos})
@@ -161,13 +156,9 @@ func TestFileAssignmentClearsStopAndRefreshesOpeningSize(t *testing.T) {
 	}
 	// When reopening and assigning the same file query.
 	source, err := NewSource(path, "fp", plan.WindowSpec{}, codec, cp, core.RealClock{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer source.Close()
-	if err := source.Start(&lifecycle{}, nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, source.Start(&lifecycle{}, nil))
 	// Then the first saved checkpoint clears the old stop before reading and records the new opening size.
 	saved, err := readCheckpoint(cp.path)
 	if err != nil || saved.Stop != nil || saved.Position != pos || saved.OpeningSize != pos+1 {

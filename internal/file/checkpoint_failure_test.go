@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/stretchr/testify/require"
 )
 
 type checkpointFaultFS struct {
@@ -56,9 +57,7 @@ func TestCheckpointReplacementFailuresPreserveAtomicPublication(t *testing.T) {
 			// Given an existing checkpoint and a failure at one replacement boundary.
 			path := filepath.Join(t.TempDir(), "checkpoint.json")
 			before, after := []byte("old checkpoint"), []byte("new checkpoint")
-			if err := os.WriteFile(path, before, 0600); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, os.WriteFile(path, before, 0600))
 			failure := errors.New("checkpoint I/O failed")
 
 			// When attempting the atomic replacement.
@@ -96,9 +95,7 @@ func TestCorruptCheckpointFailsAndReleasesLock(t *testing.T) {
 			// Given an invalid saved checkpoint for this group.
 			dir := t.TempDir()
 			path := checkpointPath(dir, "group")
-			if err := os.WriteFile(path, []byte(tc.data), 0600); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, os.WriteFile(path, []byte(tc.data), 0600))
 
 			// When opening progress for a resumed query.
 			cp, err := NewCheckpoints(dir, "group", DurableWriter{})
@@ -108,9 +105,7 @@ func TestCorruptCheckpointFailsAndReleasesLock(t *testing.T) {
 			if cp != nil || !errors.As(err, &conflict) {
 				t.Fatal("corrupt checkpoint treated as new progress", cp, err)
 			}
-			if err := os.WriteFile(path, valid, 0600); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, os.WriteFile(path, valid, 0600))
 			cp, err = NewCheckpoints(dir, "group", DurableWriter{})
 			if err != nil {
 				t.Fatal("failed open retained group lock", err)
@@ -124,9 +119,7 @@ func TestUnreadableCheckpointFailsAndReleasesLock(t *testing.T) {
 	// Given a checkpoint path that cannot be read as a file.
 	dir := t.TempDir()
 	path := checkpointPath(dir, "group")
-	if err := os.Mkdir(path, 0700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(path, 0700))
 
 	// When a job attempts to resume that group's progress.
 	store, err := NewCheckpoints(dir, "group", DurableWriter{})
@@ -140,9 +133,7 @@ func TestUnreadableCheckpointFailsAndReleasesLock(t *testing.T) {
 	if err == nil || statErr != nil || !info.IsDir() {
 		t.Fatal("read failure was ignored or changed the checkpoint", err, statErr)
 	}
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Remove(path))
 
 	// When the path is repaired, then a new owner can acquire the released lock.
 	store, err = NewCheckpoints(dir, "group", DurableWriter{})
@@ -167,18 +158,14 @@ func TestCheckpointRejectsInvalidSaveWithoutChangingDurableProgress(t *testing.T
 		t.Run(tc.name, func(t *testing.T) {
 			// Given durable progress at the initial frame boundary.
 			cp, err := NewCheckpoints(t.TempDir(), "group", DurableWriter{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			defer cp.Close()
 			cp.Initialize(Checkpoint{Version: 2, OpeningSize: 0, Fingerprint: "fp", SourceID: "source"})
 			if _, err := cp.Save(t.Context(), []core.Cursor{{Partition: 0}}); err != nil {
 				t.Fatal(err)
 			}
 			before, err := os.ReadFile(cp.path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			if tc.cancel {
@@ -208,18 +195,14 @@ func TestInvalidCheckpointSavePreservesSavedBytes(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			// Given a valid checkpoint at a known source boundary.
 			cp, err := NewCheckpoints(t.TempDir(), "group", DurableWriter{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			defer cp.Close()
 			cp.Initialize(Checkpoint{Version: 2, Fingerprint: "fp", SourceID: "source"})
 			if _, err := cp.Save(t.Context(), []core.Cursor{{}}); err != nil {
 				t.Fatal(err)
 			}
 			before, err := os.ReadFile(cp.path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			cursor := core.Cursor{}
 			switch mode {
 			case "stop reason":

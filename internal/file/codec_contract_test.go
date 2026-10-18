@@ -5,8 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/stretchr/testify/require"
 	"io"
-	"reflect"
 	"testing"
 )
 
@@ -51,17 +51,14 @@ func TestProvenanceArchiveWireBytesAreStable(t *testing.T) {
 	data, err := c.EncodeRecord(record)
 
 	// Then the archive wire representation remains byte-identical.
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	const golden = "00000064a6636b6579f66576616c75654066736f75726365a365746f706963666f7264657273666f6666736574182a69706172746974696f6e036768656164657273806c74696d657374616d705f6d73f66e74696d657374616d705f7479706567756e6b6e6f776e3b069d95"
 	if hex.EncodeToString(data) != golden {
 		t.Fatalf("archive provenance wire bytes changed: %x", data)
 	}
 	decoded, err := c.DecodeRecord(data[4 : len(data)-4])
-	if err != nil || !reflect.DeepEqual(decoded, record) {
-		t.Fatal("provenance round trip changed", decoded, err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, record, decoded, "provenance survives archive round trip")
 }
 
 type failedReader struct{ err error }

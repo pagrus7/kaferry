@@ -58,7 +58,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 
 ## Tests
 
-Most tests exercise pure functions or individual components with handwritten mocks. Kafka and filesystem failures use injected ports; file-component tests use real files, and app tests replace Fx factories. Fewer [broker/CLI tests](../tests/compat) cover complete copy paths, rebalances and restart. PR checks also build the base revision, verify resume or explicit format rejection in both directions, and check archive interoperability. Functional tests use Given/When/Then phases.
+Most tests exercise pure functions or individual components with handwritten mocks. Kafka and filesystem failures use injected ports; file-component tests use real files, and app tests replace Fx factories. Fewer [broker/CLI tests](../tests/compat) cover complete copy paths, rebalances and restart. PR checks also build the base revision, verify resume or explicit format rejection in both directions, and check archive interoperability. Functional tests use Given/When/Then phases. Use `testify/require` for routine assertions; keep direct domain checks where clearer. Fatal assertions run in the test goroutine.
 
 ### Test targets
 

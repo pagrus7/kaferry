@@ -11,6 +11,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 // A failed fsync must never be retried into an acknowledgment: after Linux
@@ -22,35 +23,23 @@ func TestFailedSyncIsNeverAcknowledged(t *testing.T) {
 	dir := t.TempDir()
 	src, dst := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "output.cbor")
 	fixture, err := NewOutput(NewPublisher(), src, "fixture", "fixture", "", 0, c, 10, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for _, value := range []string{"a", "b", "c"} {
-		if err := fixture.Submit(core.Record{Value: []byte(value), TimestampType: "unknown"}, core.Token{}); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, fixture.Submit(core.Record{Value: []byte(value), TimestampType: "unknown"}, core.Token{}))
 	}
 
-	if err := fixture.Flush(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, fixture.Flush())
 	fixture.Close()
 
 	limits := config.Defaults(dir).Worker
 	cp, err := NewCheckpoints(t.TempDir(), "durable", DurableWriter{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer cp.Close()
 	source, err := NewSource(src, "fp", plan.WindowSpec{}, c, cp, core.RealClock{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer source.Close()
 	out, err := NewOutput(NewPublisher(), dst, "durable", "fp", "", 0, c, limits.RecordCap, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer out.Close()
 	_, initial := out.DurableOutput()
 	syncs := 0

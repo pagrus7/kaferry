@@ -44,7 +44,7 @@ Kafka input needs `WHERE` or `START`: `EARLIEST` for retained records or `LATEST
 
 ## Stop and check results
 
-SIGINT/SIGTERM stop reading, drain writes for up to 10 s, then save progress. A second signal forces termination. At `worker.shutdown_timeout` (default 30 s), the CLI exits `1`; unsaved work may replay. Read counts in `copy summary` on stderr; check saved stops with:
+SIGINT/SIGTERM stop reading, allow 10 s for writes, then save progress. File flushes can block saving. At `worker.shutdown_timeout` (default 30 s), the CLI exits `1`; unsaved work may replay. A second signal forces exit. See `copy summary` on stderr; check saved stops with:
 
 ```sh
 kaferry status -c connections.toml -f copy.sql --json
@@ -80,4 +80,4 @@ export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT='https://collector.example/v1/metrics
 kaferry run -c connections.toml -f copy.sql
 ```
 
-Progress logs default to 30 s; `worker.progress_interval='0'` disables them. [Metric meanings and settings](../design/decisions.md#observability).
+Progress logs run every 30 s; `worker.progress_interval='0'` disables them. [Metric meanings and settings](../design/decisions.md#observability).

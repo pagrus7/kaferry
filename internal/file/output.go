@@ -23,7 +23,6 @@ type Output struct {
 	extent     int64
 	pending    []copy.Token
 	deliveries chan copy.Delivery
-	logger     *slog.Logger
 	sync       func() error
 	failed     error // A retried fsync can succeed after the kernel dropped failed pages.
 }
@@ -77,7 +76,7 @@ func initializeOutput(f *os.File, created bool, group, fp, expectedID string, ex
 	if _, err = f.Seek(position, io.SeekStart); err != nil {
 		return nil, err
 	}
-	return &Output{file: f, buffer: bufio.NewWriterSize(f, 65536), codec: codec, header: header, position: position, extent: extent, deliveries: make(chan copy.Delivery, capacity+1), logger: logger, sync: f.Sync}, nil
+	return &Output{file: f, buffer: bufio.NewWriterSize(f, 65536), codec: codec, header: header, position: position, extent: extent, deliveries: make(chan copy.Delivery, capacity+1), sync: f.Sync}, nil
 }
 
 func outputIdentity(header Header, start, size int64, created bool, group, fp, expectedID string, extent int64) (int64, error) {

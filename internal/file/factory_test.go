@@ -3,12 +3,13 @@ package file
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSourceFactoryReleasesCheckpointLockOnOpenFailure(t *testing.T) {
@@ -38,12 +39,8 @@ func TestSourceFactoryRejectsFileAliasesBeforeCheckpointCreation(t *testing.T) {
 	// Given
 	dir := t.TempDir()
 	source, destination := filepath.Join(dir, "source"), filepath.Join(dir, "alias")
-	if err := os.WriteFile(source, []byte("source"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Link(source, destination); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(source, []byte("source"), 0600))
+	require.NoError(t, os.Link(source, destination))
 	limits := config.Defaults(dir).Worker
 	checkpointDir := filepath.Join(dir, "checkpoints")
 	limits.CheckpointDir = &checkpointDir
@@ -85,27 +82,17 @@ func TestConfiguredDirectoryResumesProgressAndKeepsItsLock(t *testing.T) {
 	homeDir := t.TempDir()
 	archive := filepath.Join(homeDir, "input.cbor")
 	output, err := NewOutput(NewPublisher(), archive, "archive", "archive-fp", "", 0, codec(t), 10, logger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for _, value := range []string{"first", "second"} {
-		if err := output.Submit(core.Record{Value: []byte(value), TimestampType: "unknown"}, core.Token{}); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, output.Submit(core.Record{Value: []byte(value), TimestampType: "unknown"}, core.Token{}))
 	}
-	if err := output.Flush(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, output.Flush())
 	output.Close()
 	checkpointDir := t.TempDir()
 	checkpoints, err := NewCheckpoints(checkpointDir, "restore", DurableWriter{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	oldSource, err := NewSource(archive, "fp", plan.WindowSpec{}, codec(t), checkpoints, core.RealClock{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	first, err := oldSource.Poll(0)
 	if err != nil || first.Input == nil || string(first.Input.Record.Value) != "first" {
 		t.Fatal("cannot establish original progress", first, err)
@@ -115,10 +102,9 @@ func TestConfiguredDirectoryResumesProgressAndKeepsItsLock(t *testing.T) {
 	}
 	oldSource.Close()
 	checkpoints.Close()
-	cfg, err := config.Decode(strings.NewReader("[worker]\ncheckpoint_dir='"+checkpointDir+"'\n"), homeDir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	files := fstest.MapFS{"config.toml": {Data: []byte("[worker]\ncheckpoint_dir='" + checkpointDir + "'\n")}}
+	cfg, err := config.NewLoader(files, homeDir).Load("config.toml")
+	require.NoError(t, err)
 	limits := cfg.Worker
 	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Name: archive}, Destination: plan.Endpoint{Kind: "TOPIC"}, Group: "restore"}
 	factory := NewFactory(core.RealClock{}, logger(), DurableWriter{}, NewPublisher())
@@ -127,9 +113,7 @@ func TestConfiguredDirectoryResumesProgressAndKeepsItsLock(t *testing.T) {
 	source, err := factory.OpenSource(p, "fp", limits)
 
 	// Then it retains saved ownership and excludes a second reader of that group.
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer source.Close()
 	if !source.Progress().Exists {
 		t.Fatal("configured checkpoint was not resumed")

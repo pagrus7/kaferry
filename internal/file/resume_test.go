@@ -5,7 +5,33 @@ import (
 	"testing"
 
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
+
+func TestResumePointReportsLowerFrameLimitWithoutChangingProgress(t *testing.T) {
+	// Given an unchanged archive and its last confirmed frame.
+	data := append([]byte("header"), frame([]byte("record"))...)
+	reader := bytes.NewReader(data)
+	start, size := int64(6), int64(len(data))
+	_, _, crc, err := readFrame(reader, start, size, 1024)
+	require.NoError(t, err)
+	saved := &Checkpoint{Fingerprint: "fp", SourceID: "archive", Position: size, LastFrame: &FrameIdentity{Position: start, CRC: crc}}
+
+	// When resuming with a lower frame limit.
+	_, _, err = resumePoint(reader, size, start, "archive", saved, "fp", plan.WindowSpec{}, 5)
+
+	// Then the error names the limit and remedy, and raising it permits resume.
+	var limit *FrameLimit
+	require.ErrorAs(t, err, &limit)
+	require.Equal(t, &FrameLimit{Length: 6, Limit: 5}, limit)
+	require.ErrorContains(t, err, "raise worker.max_frame_bytes")
+	var conflict *Conflict
+	require.ErrorAs(t, err, &conflict)
+	require.Equal(t, 2, conflict.ExitCode())
+	position, _, err := resumePoint(reader, size, start, "archive", saved, "fp", plan.WindowSpec{}, 6)
+	require.NoError(t, err)
+	require.Equal(t, size, position)
+}
 
 func TestResumePointValidatesCheckpointWithoutOwningReader(t *testing.T) {
 	for _, scenario := range []string{"valid", "fingerprint", "source identity", "past end", "before start", "CRC", "next position", "missing frame", "stored window"} {
@@ -14,9 +40,7 @@ func TestResumePointValidatesCheckpointWithoutOwningReader(t *testing.T) {
 			data := append([]byte("header"), frame([]byte("record"))...)
 			start, size := int64(6), int64(len(data))
 			_, _, crc, err := readFrame(bytes.NewReader(data), start, size, 1024)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			saved := &Checkpoint{Fingerprint: "fp", SourceID: "archive", Position: size, LastFrame: &FrameIdentity{Position: start, CRC: crc}}
 			switch scenario {
 			case "fingerprint":

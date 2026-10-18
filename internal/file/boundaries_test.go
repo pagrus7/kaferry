@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/stretchr/testify/require"
 )
 
 type decoderMock struct {
@@ -100,9 +101,7 @@ func TestFileSourcePausePreservesTheNextFrame(t *testing.T) {
 	decoder := &decoderMock{record: core.Record{Value: payload}}
 	checkpoints := &checkpointsMock{remembered: make(map[int64]FrameIdentity)}
 	source := &Source{file: readerCloser{bytes.NewReader(data)}, codec: decoder, checkpoints: checkpoints, size: int64(len(data))}
-	if err := source.Pause(0, true); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, source.Pause(0, true))
 
 	// When polling while paused, then no frame is decoded or checkpointed.
 	event, err := source.Poll(0)
@@ -111,9 +110,7 @@ func TestFileSourcePausePreservesTheNextFrame(t *testing.T) {
 	}
 
 	// When resumed, then that same first frame is delivered once, followed by EOF.
-	if err := source.Pause(0, false); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, source.Pause(0, false))
 	event, err = source.Poll(0)
 	if err != nil || event.Input == nil || event.Input.Cursor.Position != 0 || event.Input.Next != int64(len(data)) || !bytes.Equal(event.Input.Record.Value, payload) {
 		t.Fatal("resume skipped or changed the frame", event, err)

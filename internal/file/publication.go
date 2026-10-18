@@ -50,9 +50,7 @@ func NewPublisher() Publisher { return &publisher{fs: nativePublication{}} }
 
 func (p *publisher) Create(path, group, fp string, codec ArchiveEncoder) (*os.File, bool, error) {
 	var id [16]byte
-	if _, err := rand.Read(id[:]); err != nil {
-		return nil, false, err
-	}
+	rand.Read(id[:])
 	temporary, err := p.fs.CreateTemp(filepath.Dir(path), temporaryPrefix(path)+"*")
 	if err != nil {
 		return nil, false, err
