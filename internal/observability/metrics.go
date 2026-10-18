@@ -17,7 +17,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/metric"
 	sdk "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 )
 
@@ -59,7 +58,7 @@ func (f *Factory) Open(group string) (Session, error) {
 	exporter, err := otlpmetrichttp.New(context.Background(),
 		otlpmetrichttp.WithAggregationSelector(sdk.DefaultAggregationSelector),
 		otlpmetrichttp.WithRetry(otlpmetrichttp.RetryConfig{Enabled: false}),
-		otlpmetrichttp.WithTemporalitySelector(func(sdk.InstrumentKind) metricdata.Temporality { return metricdata.CumulativeTemporality }))
+		otlpmetrichttp.WithTemporalitySelector(sdk.CumulativeTemporalitySelector))
 	if err != nil {
 		return nil, fmt.Errorf("metrics: cannot configure HTTP exporter")
 	}

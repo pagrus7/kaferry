@@ -294,19 +294,7 @@ A cleanup error can occur after all records are copied and progress is saved; th
 
 JSON `progress` logs on stderr report local counters and buffer usage every `worker.progress_interval` (default 30 s; `0` disables). The final `copy summary` is independent of this setting.
 
-Metric export is off by default. Enable it in the TOML passed with `-c`:
-
-```toml
-[metrics]
-enabled = true
-```
-
-Set an OTLP HTTP/protobuf receiver before running the copy:
-
-```sh
-export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT='https://collector.example/v1/metrics'
-export OTEL_METRIC_EXPORT_INTERVAL=30000
-```
+Metric export is off by default. [Setup](../docs/usage.md#monitoring).
 
 A Collector or compatible backend receives metrics; no scrape listener or Kafka requests are added. `explain` and `status` start no telemetry.
 

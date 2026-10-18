@@ -68,4 +68,16 @@ For topic-to-topic copies, run identical SQL and a dedicated `GROUP` on each mac
 
 ## Monitoring
 
-Progress logs every 30 s. [Configure logs and optional metrics](../design/decisions.md#observability).
+With an OTLP/HTTP receiver, append to `connections.toml`:
+
+```toml
+[metrics]
+enabled = true
+```
+
+```sh
+export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT='https://collector.example/v1/metrics'
+kaferry run -c connections.toml -f copy.sql
+```
+
+Progress logs default to 30 s; `worker.progress_interval='0'` disables them. [Metric meanings and settings](../design/decisions.md#observability).

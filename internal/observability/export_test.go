@@ -30,6 +30,7 @@ func metricEnv(t *testing.T, endpoint string) {
 	t.Setenv("OTEL_METRIC_EXPORT_TIMEOUT", "1000")
 }
 func TestOTLPExportPreservesMetricAndResourceContract(t *testing.T) {
+	seen := map[string]bool{}
 	for _, specific := range []bool{false, true} {
 		t.Run(map[bool]string{false: "base endpoint", true: "full metrics endpoint"}[specific], func(t *testing.T) {
 			// Given an OTLP receiver and credentials supplied outside the SQL.
@@ -82,6 +83,11 @@ func TestOTLPExportPreservesMetricAndResourceContract(t *testing.T) {
 				if attrs["service.name"] != "kaferry" || attrs["service.version"] != "test-version" || attrs["messaging.consumer.group.name"] != "test-group" || len(attrs["service.instance.id"]) != 32 || attrs["deployment.environment.name"] != "test" {
 					t.Fatal(attrs)
 				}
+				id := attrs["service.instance.id"]
+				if seen[id] {
+					t.Fatal("sessions for the same group reused an instance identity")
+				}
+				seen[id] = true
 				found := false
 				for _, s := range request.ResourceMetrics[0].ScopeMetrics {
 					for _, m := range s.Metrics {
