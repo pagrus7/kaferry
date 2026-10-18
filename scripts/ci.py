@@ -15,6 +15,20 @@ from quality import benchmarks, markdown
 from history import comparison
 
 
+def verify_tests(log, expected):
+    passed = set()
+    for line in log.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get('Action') == 'pass' and event.get('Test'):
+            passed.add(event['Test'])
+    missing = [name for name in expected if name not in passed]
+    if missing:
+        raise ValueError('Required tests did not pass: ' + ', '.join(missing))
+
+
 def capture(command):
     result = subprocess.run(command, capture_output=True, text=True, timeout=10)
     return result.stdout.strip()
@@ -23,7 +37,7 @@ def capture(command):
 def run(label, command, directory):
     directory.mkdir(parents=True, exist_ok=True)
     os.environ["KAFERRY_REPORT_DIR"] = str(directory.resolve())
-    binary = Path("bin/kaferry")
+    binary = Path(os.environ.get("KAFERRY_TEST_BINARY", "bin/kaferry"))
     environment = {
         "commit": capture(["git", "rev-parse", "HEAD"]),
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -96,5 +110,7 @@ if __name__ == "__main__":
     output = Path(os.environ.get("KAFERRY_REPORT_DIR", "build-results"))
     if sys.argv[1] == "summary":
         summarize(output)
+    elif sys.argv[1] == 'verify-tests':
+        verify_tests((output / f'{sys.argv[2]}.log').read_text(), sys.argv[3:])
     else:
         sys.exit(run(sys.argv[1], sys.argv[2:], output))

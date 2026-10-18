@@ -35,7 +35,7 @@ def sections(body):
     return result
 
 
-def validate(body, author=None):
+def validate(body, author=None, draft=False):
     if author and author.get("login") == "dependabot[bot]" and author.get("type") == "Bot":
         return []
     errors = []
@@ -48,8 +48,11 @@ def validate(body, author=None):
             errors.append(f"'## {name}' must appear exactly once")
         elif not values[0]:
             errors.append(f"'## {name}' needs content")
-        elif name.endswith("review") and values[0] != "Passed" and not re.fullmatch(r"Failed:[ \t]+\S[^\n]*", values[0]):
-            errors.append(f"'## {name}' must contain only 'Passed' or 'Failed: reason'")
+        elif name.endswith("review") and values[0] != "Passed":
+            if not draft:
+                errors.append(f"'## {name}' must be 'Passed' before the PR is ready")
+            elif values[0] != "Pending" and not re.fullmatch(r"Failed:[ \t]+\S[^\n]*", values[0]):
+                errors.append(f"'## {name}' must contain only 'Passed', 'Pending' or 'Failed: reason'")
     return errors
 
 
@@ -57,7 +60,7 @@ if __name__ == "__main__":
     try:
         event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
         pull_request = event["pull_request"]
-        errors = validate(pull_request.get("body") or "", pull_request.get("user"))
+        errors = validate(pull_request.get("body") or "", pull_request.get("user"), pull_request.get("draft", False))
     except (KeyError, OSError, ValueError):
         sys.exit("Cannot read the pull request event.")
     if errors:

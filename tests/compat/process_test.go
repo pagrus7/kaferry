@@ -33,6 +33,20 @@ func startCLI(t *testing.T, ctx context.Context, binary, input string, args ...s
 	return p
 }
 
+func binaryWorker(t *testing.T, ctx context.Context, statement, config string) workerResult {
+	t.Helper()
+	process := startCLI(t, ctx, testBinary(t), statement, "run", "--file", "-", "--config", config)
+	err := process.wait()
+	require.NoError(t, ctx.Err(), "worker must exit before its deadline: %s", process.logs())
+	code := 0
+	if err != nil {
+		var exit *exec.ExitError
+		require.ErrorAs(t, err, &exit, "worker must start and return an exit status")
+		code = exit.ExitCode()
+	}
+	return workerResult{code, process.logs()}
+}
+
 func launchCLI(t *testing.T, ctx context.Context, binary string, args ...string) *cliProcess {
 	t.Helper()
 	p := &cliProcess{command: exec.CommandContext(ctx, binary, args...), done: make(chan struct{})}

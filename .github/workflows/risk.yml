@@ -1,0 +1,46 @@
+name: integrity
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+concurrency:
+  group: integrity-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  select:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+      suites: ${{ steps.scope.outputs.suites }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: scope
+        run: python3 scripts/risk.py
+  suites:
+    needs: select
+    if: needs.select.outputs.run == 'true'
+    uses: ./.github/workflows/suites.yml
+    with:
+      suites: ${{ needs.select.outputs.suites }}
+  risk-check:
+    needs: [select, suites]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - env:
+          SELECT_RESULT: ${{ needs.select.result }}
+          SUITE_RESULT: ${{ needs.suites.result }}
+          RUN_SUITES: ${{ needs.select.outputs.run }}
+        run: |
+          test "$SELECT_RESULT" = success
+          if [ "$RUN_SUITES" = true ]; then
+            test "$SUITE_RESULT" = success
+          else
+            test "$RUN_SUITES" = false
+            test "$SUITE_RESULT" = skipped
+          fi

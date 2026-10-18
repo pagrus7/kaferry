@@ -10,12 +10,12 @@
 
 ## Docs review
 
-<!-- Passed or Failed: reason -->
+<!-- Pending while draft; Passed when ready; Failed: reason for a failed review. -->
 
 ## Tests review
 
-<!-- Passed or Failed: reason -->
+<!-- Pending while draft; Passed when ready; Failed: reason for a failed review. -->
 
 ## Simplicity review
 
-<!-- Passed or Failed: reason -->
+<!-- Pending while draft; Passed when ready; Failed: reason for a failed review. -->

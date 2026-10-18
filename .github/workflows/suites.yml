@@ -1,0 +1,100 @@
+name: extended suite
+on:
+  workflow_call:
+    inputs:
+      suites:
+        type: string
+        required: true
+      artifact:
+        description: 'Release archive artifact; empty builds source'
+        type: string
+        default: ''
+permissions:
+  contents: read
+env:
+  CGO_ENABLED: "0"
+jobs:
+  suite:
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.suite == 'soak' && 60 || 45 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(inputs.suites) }}
+    env:
+      KAFKA_TEST_BROKERS: 127.0.0.1:39092
+      KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
+      KAFKA_FAULT_CONTAINER: kaferry-compat-kafka-1
+      KAFERRY_SOAK_DURATION: 30m
+      KAFERRY_SOAK_DEST_STALL_CONTAINER: kaferry-compat-kafka-dr-1
+      SUITE: ${{ matrix.suite }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.9'
+          cache: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.artifact != ''
+        with:
+          name: ${{ inputs.artifact }}
+          path: release/
+      - name: Use the packaged binary
+        if: inputs.artifact != ''
+        run: |
+          set -- release/*.tar.gz
+          test "$#" = 1
+          mkdir -p .cache/release-test
+          tar -xzf "$1" -C .cache/release-test
+          echo "KAFERRY_TEST_BINARY=$PWD/.cache/release-test/kaferry" >> "$GITHUB_ENV"
+          echo "KAFERRY_EXPECT_BINARY_SHA256=$(sha256sum .cache/release-test/kaferry | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
+          sha256sum "$1" >> "$GITHUB_STEP_SUMMARY"
+      - name: Build source binary
+        if: inputs.artifact == ''
+        run: |
+          python3 scripts/ci.py build make build
+          echo "KAFERRY_TEST_BINARY=$PWD/bin/kaferry" >> "$GITHUB_ENV"
+      - name: Start plain Kafka fixtures
+        if: contains(fromJSON('["integration","load","soak","fault"]'), matrix.suite)
+        run: python3 scripts/ci.py broker make broker
+      - name: Run suite
+        run: |
+          case "$SUITE" in
+            integration)
+              python3 scripts/ci.py integration env CGO_ENABLED=1 go test -count=1 -json -race -tags=integration ./tests/compat
+              python3 scripts/ci.py verify-tests integration 'TestTopicToTopicSlice' 'TestAllFileDirectionsAndResume' 'TestCLIInterruptCommitsAndResumeDoesNotRecopy'
+              ;;
+            load)
+              python3 scripts/ci.py load make load KAFERRY_TEST_OUTPUT=-json
+              python3 scripts/ci.py verify-tests load 'TestLoadBoundedKafkaCopy/default' 'TestLoadObservability/round-0/disabled'
+              ;;
+            soak)
+              python3 scripts/ci.py soak make soak KAFERRY_TEST_OUTPUT=-json SOAK_TEST_TIMEOUT=40m
+              python3 scripts/ci.py verify-tests soak 'TestStreamingSoakFidelityCommitLagMemoryAndShutdown'
+              ;;
+            qualification)
+              python3 scripts/ci.py qualification make qualification KAFERRY_TEST_OUTPUT=-json
+              python3 scripts/ci.py verify-tests qualification 'TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight' 'TestSaslTlsScramMechanisms/SCRAM-SHA-256' 'TestSaslTlsScramMechanisms/SCRAM-SHA-512' 'TestReplicatedClusterLeaderFailurePreservesCopy'
+              ;;
+            fault)
+              python3 scripts/ci.py fault make fault KAFERRY_TEST_OUTPUT=-json
+              python3 scripts/ci.py verify-tests fault 'TestBlockingCommitAcrossBrokerOutage' 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits'
+              ;;
+            *) echo 'Unknown extended test suite' >&2; exit 1 ;;
+          esac
+      - name: Reject source rebuilds in archive tests
+        if: always() && inputs.artifact != ''
+        run: test ! -e bin/kaferry
+      - if: always() && contains(fromJSON('["integration","load","soak","fault"]'), matrix.suite)
+        run: |
+          mkdir -p build-results
+          docker compose -p kaferry-compat --profile cross-cluster logs --no-color > build-results/brokers.log
+          make broker-down
+      - if: always()
+        run: python3 scripts/ci.py summary
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qualification-${{ matrix.suite }}
+          path: build-results/
+          retention-days: 30
