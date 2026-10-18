@@ -48,7 +48,7 @@ func runComponentCopy(ctx context.Context, p plan.Plan, limits config.Worker) (e
 		return err
 	}
 	defer sink.Close()
-	return core.NewRunner(source, sink, store, core.RealClock{}, quietLogger(), p, limits, core.NewTracker(), core.NoopStopObserver{}).Run(ctx)
+	return core.NewRunner(source, sink, store, core.RealClock{}, quietLogger(), p, limits, core.NewTracker(), core.NoopStopObserver{}, nil).Run(ctx)
 }
 func boundedComponentPlan(t *testing.T, cluster *kfake.Cluster) plan.Plan {
 	t.Helper()

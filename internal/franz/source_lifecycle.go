@@ -48,7 +48,7 @@ func (s *Source) lifecycle(event lifecycleEvent) error {
 	}
 	// Let the group callback finish before committing with the member generation.
 	event.answer <- lifecycleAnswer{assignments: positioned.Assignments}
-	results, err := s.store.Save(ctx, cursors)
+	results, err := core.SaveProgress(ctx, s.store, cursors, s.observer)
 	if err != nil {
 		return err
 	}

@@ -497,3 +497,4 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 type testShutdown struct{ core.NoopStopObserver }
 
 func (testShutdown) Configure(time.Duration) {}
+func (testShutdown) Deadline() time.Time     { return time.Now().Add(time.Hour) }

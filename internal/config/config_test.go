@@ -115,3 +115,29 @@ func TestLoaderDefersDefaultCheckpointDirectoryWithoutHome(t *testing.T) {
 		})
 	}
 }
+
+func TestObservabilityDefaultsAndOverrides(t *testing.T) {
+	for _, tc := range []struct {
+		input          string
+		valid, enabled bool
+		interval       string
+	}{
+		{"", true, false, "30s"},
+		{"[metrics]\nenabled=true\n[worker]\nprogress_interval='0'", true, true, "0"},
+		{"[worker]\nprogress_interval='5s'", true, false, "5s"},
+		{"[worker]\nprogress_interval='-1s'", false, false, ""},
+		{"[metrics]\nlisten='localhost:1234'", false, false, ""},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			// Given TOML controlling metrics independently from progress logs.
+			cfg, err := Decode(strings.NewReader(tc.input), "home")
+			// When loading, then defaults are safe and unsupported or negative settings fail.
+			if (err == nil) != tc.valid {
+				t.Fatal(cfg, err)
+			}
+			if tc.valid && (cfg.Metrics.Enabled != tc.enabled || cfg.Worker.ProgressInterval != tc.interval) {
+				t.Fatal(cfg)
+			}
+		})
+	}
+}

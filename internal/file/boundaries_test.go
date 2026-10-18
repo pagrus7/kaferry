@@ -85,7 +85,7 @@ func TestFileSourceCannotAssignBeforeInitialCheckpoint(t *testing.T) {
 	lifecycle := &lifecycle{}
 
 	// When
-	startErr := source.Start(lifecycle)
+	startErr := source.Start(lifecycle, nil)
 
 	// Then
 	if !errors.Is(startErr, checkpoints.err) || len(lifecycle.assignments) != 0 || len(checkpoints.saved) != 1 || checkpoints.saved[0].Position != 100 {

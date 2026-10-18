@@ -11,11 +11,12 @@ import (
 	copy "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
+	"github.com/pagrus7/kaferry/internal/observability"
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 type Engine interface {
-	Run(context.Context, plan.Plan, config.Worker, copy.StopObserver) error
+	Run(context.Context, plan.Plan, config.Config, Shutdown) error
 }
 type KafkaFactory interface {
 	Open(context.Context, plan.Endpoint) (kafkaport.Connection, error)
@@ -26,21 +27,26 @@ type FileFactory interface {
 }
 type Execution interface{ Run(context.Context) error }
 type RunnerFactory interface {
-	New(copy.Source, copy.Sink, copy.ProgressStore, plan.Plan, config.Worker, copy.StopObserver) Execution
+	New(copy.Source, copy.Sink, copy.ProgressStore, plan.Plan, config.Worker, copy.StopObserver, copy.Observer) Execution
+}
+
+type MetricsFactory interface {
+	Open(string) (observability.Session, error)
 }
 
 type runtimeEngine struct {
-	kafka  KafkaFactory
-	files  FileFactory
-	runner RunnerFactory
-	log    *slog.Logger
+	kafka   KafkaFactory
+	files   FileFactory
+	runner  RunnerFactory
+	log     *slog.Logger
+	metrics MetricsFactory
 }
 
-func newEngine(kafka KafkaFactory, files FileFactory, runner RunnerFactory, logger *slog.Logger) Engine {
-	return &runtimeEngine{kafka: kafka, files: files, runner: runner, log: logger}
+func newEngine(kafka KafkaFactory, files FileFactory, runner RunnerFactory, logger *slog.Logger, metrics MetricsFactory) Engine {
+	return &runtimeEngine{kafka: kafka, files: files, runner: runner, log: logger, metrics: metrics}
 }
 
-func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Worker, stop copy.StopObserver) (result error) {
+func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config, stop Shutdown) (result error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -52,6 +58,16 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Work
 		}
 		e.log.Info("one-off group generated", "group", p.Group)
 	}
+	var observer copy.Observer
+	if cfg.Metrics.Enabled {
+		session, err := e.metrics.Open(p.Group)
+		if err != nil {
+			return &copy.Exit{Err: err, Code: 2}
+		}
+		observer = session
+		defer closeMetrics(session, stop)
+	}
+	limits := cfg.Worker
 	stop.Stage("inspecting Kafka endpoints")
 	sourceEndpoint, err := e.inspect(ctx, p.Source, stop)
 	if err != nil {
@@ -115,7 +131,7 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Work
 		sink.Close()
 	}()
 	bindOutput(output)
-	if err := e.runner.New(source, sink, store, p, limits, stop).Run(ctx); err != nil {
+	if err := e.runner.New(source, sink, store, p, limits, stop, observer).Run(ctx); err != nil {
 		return err
 	}
 	if p.OneOff && input != nil {
@@ -124,6 +140,21 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, limits config.Work
 		return input.DeleteCheckpoint()
 	}
 	return nil
+}
+
+func closeMetrics(session observability.Session, stop Shutdown) {
+	stop.Begin()
+	deadline := minTime(time.Now().Add(time.Second), stop.Deadline().Add(-50*time.Millisecond))
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	session.Close(ctx)
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
 
 func oneOffGroup() (string, error) {

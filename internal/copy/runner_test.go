@@ -69,7 +69,7 @@ type testSource struct {
 	high        int64
 }
 
-func (s *testSource) Start(l Lifecycle) error { return l.Assign(s.assignments) }
+func (s *testSource) Start(l Lifecycle, _ Observer) error { return l.Assign(s.assignments) }
 func (s *testSource) Poll(d time.Duration) (Event, error) {
 	s.clock.Sleep(d)
 	if len(s.events) == 0 {
@@ -137,7 +137,7 @@ func fixture(t *testing.T) (*Runner, *testSource, *testSink, *testStore, *testCl
 	s := &testSource{clock: c, paused: make(map[int32]bool), assignments: []Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}}
 	d := &testSink{reports: make(chan Delivery, 100)}
 	p := &testStore{}
-	r := NewRunner(s, d, p, c, slog.New(slog.NewTextHandler(io.Discard, nil)), plan.Plan{Source: plan.Endpoint{Kind: "FILE"}}, config.Defaults(t.TempDir()).Worker, NewTracker(), NoopStopObserver{})
+	r := NewRunner(s, d, p, c, slog.New(slog.NewTextHandler(io.Discard, nil)), plan.Plan{Source: plan.Endpoint{Kind: "FILE"}}, config.Defaults(t.TempDir()).Worker, NewTracker(), NoopStopObserver{}, nil)
 	return r, s, d, p, c
 }
 func incoming(id int32, position int64, size int) Input {
@@ -738,7 +738,7 @@ type failingStart struct {
 	err error
 }
 
-func (s *failingStart) Start(Lifecycle) error { return s.err }
+func (s *failingStart) Start(Lifecycle, Observer) error { return s.err }
 
 type failingPoll struct {
 	*testSource

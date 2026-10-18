@@ -44,7 +44,7 @@ func TestFileSavedMixedWindowSurvivesClockAdvance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := source.Start(&lifecycle{}); err != nil {
+	if err := source.Start(&lifecycle{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	saved := source.window
@@ -125,7 +125,7 @@ func TestOpenSourceTruncationFailsUnderSkipPolicy(t *testing.T) {
 	defer source.Close()
 	sink := &unusedFileSink{reports: make(chan core.Delivery, 2)}
 	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE"}, Policies: plan.Policies{MissingTimestamp: "SKIP", RejectedTimestamp: "SKIP", OtherRecord: "SKIP"}}
-	runner := core.NewRunner(&truncatingFileSource{Source: source, path: path, cut: int64(len(header)+len(data)) + 2}, sink, cp, core.RealClock{}, logger(), p, config.Defaults(dir).Worker, core.NewTracker(), core.NoopStopObserver{})
+	runner := core.NewRunner(&truncatingFileSource{Source: source, path: path, cut: int64(len(header)+len(data)) + 2}, sink, cp, core.RealClock{}, logger(), p, config.Defaults(dir).Worker, core.NewTracker(), core.NoopStopObserver{}, nil)
 
 	// When the file shrinks after intake starts and the runner polls it.
 	err = runner.Run(context.Background())
@@ -165,7 +165,7 @@ func TestFileAssignmentClearsStopAndRefreshesOpeningSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer source.Close()
-	if err := source.Start(&lifecycle{}); err != nil {
+	if err := source.Start(&lifecycle{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	// Then the first saved checkpoint clears the old stop before reading and records the new opening size.

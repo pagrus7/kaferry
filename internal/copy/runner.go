@@ -33,10 +33,16 @@ type Runner struct {
 	failure        error
 	intake         bool
 	stop           StopObserver
+
+	observer                      Observer
+	iterations                    uint64
+	progressInterval              time.Duration
+	nextProgress, nextObservation time.Time
 }
 
-func NewRunner(source Source, sink Sink, store ProgressStore, clock Clock, logger *slog.Logger, p plan.Plan, limits config.Worker, tracker ProgressTracker, stop StopObserver) *Runner {
-	return &Runner{source: source, sink: sink, store: store, clock: clock, log: logger, plan: p, limits: limits, tracker: tracker, partitions: make(map[int32]*partition), stop: stop}
+func NewRunner(source Source, sink Sink, store ProgressStore, clock Clock, logger *slog.Logger, p plan.Plan, limits config.Worker, tracker ProgressTracker, stop StopObserver, observer Observer) *Runner {
+	interval, _ := time.ParseDuration(limits.ProgressInterval)
+	return &Runner{source: source, sink: sink, store: store, clock: clock, log: logger, plan: p, limits: limits, tracker: tracker, partitions: make(map[int32]*partition), stop: stop, observer: observer, progressInterval: interval}
 }
 func (r *Runner) Assign(assignments []Assignment) error {
 	r.assignmentSeen = true
@@ -71,6 +77,7 @@ func (r *Runner) Revoke(partitions []int32, lost bool) error {
 func (r *Runner) Run(ctx context.Context) error {
 	defer func() {
 		r.stop.Begin()
+		r.report(true)
 		r.stop.Stage("printing copy summary")
 		r.log.Info("copy summary", "submitted", r.submitted, "confirmed", r.confirmed, "filtered", r.filtered, "skipped", r.skipped, "timestamp_stops", r.timestampStops, "tip_stops", r.tipStops, "peak_uncommitted_records", r.peakRecords, "peak_uncommitted_bytes", r.peakBytes)
 	}()
@@ -81,7 +88,8 @@ func (r *Runner) Run(ctx context.Context) error {
 }
 
 func (r *Runner) run(ctx context.Context) error {
-	if err := r.source.Start(r); err != nil {
+	r.nextProgress = r.clock.Now().Add(r.progressInterval)
+	if err := r.source.Start(r, r.observer); err != nil {
 		return err
 	}
 	for {
@@ -92,6 +100,8 @@ func (r *Runner) run(ctx context.Context) error {
 			return errors.Join(r.failure, r.drain())
 		}
 		done, err := r.step(ctx)
+		r.iterations++
+		r.report(false)
 		if done {
 			return err
 		}

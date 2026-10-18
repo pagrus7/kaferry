@@ -47,7 +47,7 @@ func (c *command) Explain(ctx context.Context, statement, configPath string, sto
 	if err != nil {
 		return inspect.Report{}, err
 	}
-	return c.explainer.Explain(ctx, p, limits, stop)
+	return c.explainer.Explain(ctx, p, limits.Worker, stop)
 }
 
 func (c *command) Status(ctx context.Context, statement, configPath string, stop Shutdown) (inspect.StatusReport, error) {
@@ -55,30 +55,30 @@ func (c *command) Status(ctx context.Context, statement, configPath string, stop
 	if err != nil {
 		return inspect.StatusReport{}, err
 	}
-	return c.status.Status(ctx, p, limits, stop)
+	return c.status.Status(ctx, p, limits.Worker, stop)
 }
 
-func (c *command) prepare(statement, configPath string, stop Shutdown) (plan.Plan, config.Worker, error) {
+func (c *command) prepare(statement, configPath string, stop Shutdown) (plan.Plan, config.Config, error) {
 	stop.Stage("parsing SQL")
 	ast, err := c.parser.Parse(statement)
 	if err != nil {
-		return plan.Plan{}, config.Worker{}, &copy.Exit{Err: err, Code: 2}
+		return plan.Plan{}, config.Config{}, &copy.Exit{Err: err, Code: 2}
 	}
 	stop.Stage("reading configuration")
 	cfg, err := c.config.Load(configPath)
 	if err != nil {
-		return plan.Plan{}, config.Worker{}, &copy.Exit{Err: err, Code: 2}
+		return plan.Plan{}, config.Config{}, &copy.Exit{Err: err, Code: 2}
 	}
 	budget, _ := time.ParseDuration(cfg.Worker.ShutdownTimeout)
 	stop.Configure(budget)
 	stop.Stage("planning query")
 	p, err := c.planner.Build(ast, cfg.Connections)
 	if err != nil {
-		return plan.Plan{}, config.Worker{}, &copy.Exit{Err: err, Code: 2}
+		return plan.Plan{}, config.Config{}, &copy.Exit{Err: err, Code: 2}
 	}
 	stop.Stage("checking connection settings")
 	if err = c.validator.Validate(p, cfg.Worker); err != nil {
-		return plan.Plan{}, config.Worker{}, &copy.Exit{Err: err, Code: 2}
+		return plan.Plan{}, config.Config{}, &copy.Exit{Err: err, Code: 2}
 	}
-	return p, cfg.Worker, nil
+	return p, cfg, nil
 }

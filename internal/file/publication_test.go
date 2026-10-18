@@ -162,7 +162,7 @@ func TestCrashAtEveryOutputInitializationBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 		cp.BindOutput(out)
-		if err := source.Start(&lifecycle{}); err != nil {
+		if err := source.Start(&lifecycle{}, nil); err != nil {
 			t.Fatal(err)
 		}
 		t.Fatal("initialization crash boundary not reached")
@@ -232,7 +232,7 @@ func TestCrashAtEveryOutputInitializationBoundary(t *testing.T) {
 			}
 			defer out.Close()
 			cp.BindOutput(out)
-			r := core.NewRunner(source, out, cp, core.RealClock{}, logger(), plan.Plan{Source: plan.Endpoint{Kind: "FILE"}}, config.Defaults(dir).Worker, core.NewTracker(), core.NoopStopObserver{})
+			r := core.NewRunner(source, out, cp, core.RealClock{}, logger(), plan.Plan{Source: plan.Endpoint{Kind: "FILE"}}, config.Defaults(dir).Worker, core.NewTracker(), core.NoopStopObserver{}, nil)
 			if err := r.Run(context.Background()); err != nil {
 				t.Fatal(err)
 			}

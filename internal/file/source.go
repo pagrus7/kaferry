@@ -90,11 +90,11 @@ func resumePoint(reader io.ReaderAt, size, start int64, sourceID string, saved *
 	}
 	return position, resolved, nil
 }
-func (s *Source) Start(lifecycle copy.Lifecycle) error {
+func (s *Source) Start(lifecycle copy.Lifecycle, observer copy.Observer) error {
 	cursor := copy.Cursor{Partition: 0, Position: s.position}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := s.checkpoints.Save(ctx, []copy.Cursor{cursor}); err != nil {
+	if _, err := copy.SaveProgress(ctx, s.checkpoints, []copy.Cursor{cursor}, observer); err != nil {
 		return err
 	}
 	return lifecycle.Assign([]copy.Assignment{{Cursor: cursor, Window: s.window}})

@@ -174,7 +174,7 @@ func TestCooperativeReassignmentResumesOnlyNewPartitions(t *testing.T) {
 	group := name + "-pause"
 	first := probeSource(t, name, group)
 	ownershipA := &probeOwnership{owned: make(map[int32]bool), revoked: -1}
-	if err := first.Start(ownershipA); err != nil {
+	if err := first.Start(ownershipA, nil); err != nil {
 		t.Fatal(err)
 	}
 	pollOwnership(t, []*adapter.Source{first}, func() bool { return len(ownershipA.owned) == 2 })
@@ -185,7 +185,7 @@ func TestCooperativeReassignmentResumesOnlyNewPartitions(t *testing.T) {
 	}
 	second := probeSource(t, name, group)
 	ownershipB := &probeOwnership{owned: make(map[int32]bool)}
-	if err := second.Start(ownershipB); err != nil {
+	if err := second.Start(ownershipB, nil); err != nil {
 		t.Fatal(err)
 	}
 	pollOwnership(t, []*adapter.Source{first, second}, func() bool { return len(ownershipA.owned) == 1 && len(ownershipB.owned) == 1 })

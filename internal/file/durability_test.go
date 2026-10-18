@@ -64,7 +64,7 @@ func TestFailedSyncIsNeverAcknowledged(t *testing.T) {
 	}
 	cp.BindOutput(out)
 	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE"}, Destination: plan.Endpoint{Kind: "FILE"}}
-	runner := core.NewRunner(source, out, cp, core.RealClock{}, logger, p, limits, core.NewTracker(), core.NoopStopObserver{})
+	runner := core.NewRunner(source, out, cp, core.RealClock{}, logger, p, limits, core.NewTracker(), core.NoopStopObserver{}, nil)
 
 	// When copying records to an output whose first fsync fails.
 	runErr := runner.Run(context.Background())

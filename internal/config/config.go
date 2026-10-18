@@ -24,6 +24,11 @@ type Worker struct {
 	IdleExit           string  `toml:"idle_exit"`
 	TipWait            string  `toml:"tip_wait"`
 	CheckpointDir      *string `toml:"checkpoint_dir"` // Nil selects the default when opening a file source.
+	ProgressInterval   string  `toml:"progress_interval"`
+}
+
+type Metrics struct {
+	Enabled bool `toml:"enabled"`
 }
 
 const DefaultShutdownTimeout = 30 * time.Second
@@ -31,6 +36,7 @@ const DefaultShutdownTimeout = 30 * time.Second
 type Config struct {
 	Connections plan.Profiles `toml:"connections"`
 	Worker      Worker        `toml:"worker"`
+	Metrics     Metrics       `toml:"metrics"`
 }
 
 type FileReader interface{ ReadFile(string) ([]byte, error) }
@@ -48,7 +54,7 @@ func Defaults(home string) Config {
 		directory := filepath.Join(home, ".kaferry", "checkpoints")
 		checkpointDir = &directory
 	}
-	return Config{Connections: make(plan.Profiles), Worker: Worker{MaxFrameBytes: 64 << 20, PartitionRecordCap: 5000, PartitionByteCap: 16 << 20, RecordCap: 20000, ByteCap: 128 << 20, DeliveryTimeout: "60s", ShutdownTimeout: DefaultShutdownTimeout.String(), IdleExit: "30s", TipWait: "15m", CheckpointDir: checkpointDir}}
+	return Config{Connections: make(plan.Profiles), Worker: Worker{MaxFrameBytes: 64 << 20, PartitionRecordCap: 5000, PartitionByteCap: 16 << 20, RecordCap: 20000, ByteCap: 128 << 20, DeliveryTimeout: "60s", ShutdownTimeout: DefaultShutdownTimeout.String(), IdleExit: "30s", TipWait: "15m", CheckpointDir: checkpointDir, ProgressInterval: "30s"}}
 }
 
 func (l *Loader) Load(path string) (Config, error) {
@@ -80,6 +86,9 @@ func (l *Loader) Load(path string) (Config, error) {
 }
 
 func (w Worker) Validate() error {
+	if d, err := time.ParseDuration(w.ProgressInterval); err != nil || d < 0 {
+		return fmt.Errorf("worker.progress_interval must be a nonnegative duration")
+	}
 	if w.MaxFrameBytes < 1 || w.MaxFrameBytes > 4294967295 {
 		return fmt.Errorf("worker.max_frame_bytes must fit a positive u32")
 	}

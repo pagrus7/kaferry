@@ -235,9 +235,10 @@ Optional keys in TOML's `[worker]` table; byte values are integers:
 | `shutdown_timeout` | `'30s'` | Whole-process stop deadline |
 | `idle_exit` | `'30s'` | Wait after an empty assignment before exit 3 |
 | `tip_wait` | `'15m'` | Wait to reach sampled H |
+| `progress_interval` | '30s' | Progress logs; '0' disables |
 | `checkpoint_dir` | `~/.kaferry/checkpoints` | File-source checkpoint directory |
 
-Caps must be positive; `max_frame_bytes` is at most 4,294,967,295. Durations are positive Go duration strings; `delivery_timeout` is 1 ms–2,147,483,647 ms. `checkpoint_dir` must not be empty. Unknown keys fail.
+Caps must be positive; `max_frame_bytes` is at most 4,294,967,295. Durations are positive Go duration strings, except `progress_interval` permits zero; `delivery_timeout` is 1 ms–2,147,483,647 ms. `checkpoint_dir` must not be empty. Unknown keys fail.
 
 Caps include delivered records whose source progress is not yet saved. [Delivery and progress](#delivery-and-progress).
 
@@ -288,3 +289,45 @@ Auto-commit/reset, group ID/protocol, read isolation, cooperative assignment, au
 Busy locks and broker/record failures exit 1. Conflicts include foreign progress/members, changed input and unowned/short/corrupt acknowledged output. The first failure determines the code; cleanup cannot replace it. A second signal or external forced termination can use system signal status.
 
 A cleanup error can occur after all records are copied and progress is saved; the error names the close operation. Resume using the same named group to avoid starting over. `ONE_OFF` always creates a new group, so rerunning it can copy records again.
+
+## Observability
+
+JSON `progress` logs on stderr report local counters and buffer usage every `worker.progress_interval` (default 30 s; `0` disables). The final `copy summary` is independent of this setting.
+
+Metric export is off by default. Enable it in the TOML passed with `-c`:
+
+```toml
+[metrics]
+enabled = true
+```
+
+Set an OTLP HTTP/protobuf receiver before running the copy:
+
+```sh
+export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT='https://collector.example/v1/metrics'
+export OTEL_METRIC_EXPORT_INTERVAL=30000
+```
+
+A Collector or compatible backend receives metrics; no scrape listener or Kafka requests are added. `explain` and `status` start no telemetry.
+
+Supported exporter environment suffixes: `ENDPOINT`, `PROTOCOL` (`http/protobuf` only), `HEADERS`, `TIMEOUT`, `INSECURE`, `CERTIFICATE` (CA PEM), `CLIENT_CERTIFICATE` and `CLIENT_KEY` (PEM pair). Prefix them with `OTEL_EXPORTER_OTLP_` or `OTEL_EXPORTER_OTLP_METRICS_`; metric-specific settings take precedence. Client certificate/key settings must form a pair under the same prefix. A generic endpoint is a base URL with `/v1/metrics` appended; a metric-specific endpoint is the complete URL. Endpoint credentials, queries and fragments are rejected. Headers use comma-separated `name=value` entries with percent-encoded values.
+
+`OTEL_METRIC_EXPORT_INTERVAL` defaults to 60000 ms; `OTEL_METRIC_EXPORT_TIMEOUT` to 30000 ms; exporter `TIMEOUT` to 10000 ms. Durations use positive integer milliseconds. `[metrics].enabled` is the only enable switch; `OTEL_METRICS_EXPORTER` does not control it. Counters use cumulative totals without exporter retries.
+
+Resources include `service.name=kaferry`, version, a generated `service.instance.id` and `messaging.consumer.group.name`. `OTEL_RESOURCE_ATTRIBUTES` adds deployment/query attributes; built-in identity takes precedence. Automatic attributes exclude SQL, record contents, file paths and credentials. Attributes increase the number of series; use stable deployment values.
+
+Metric names are experimental. All describe this worker's invocation; restarts and rebalances can replay records. Source partitions and topics are not metric attributes.
+
+| Metric (`kaferry.` prefix) | Meaning |
+| --- | --- |
+| `records.submitted`, `records.confirmed` | Separate cumulative counts accepted and acknowledged by the destination; not unique records |
+| `records.filtered`, `records.skipped` | Separate cumulative counts excluded by time filters or error policy |
+| `buffer.entries`, `buffer.entry_limit` | Unsaved tracked progress entries and their worker cap; entries can include cursor gaps and exclude a record deferred before tracking |
+| `buffer.estimated_size`, `buffer.estimated_size_limit` | Tracked cap-accounting bytes and their cap; not payload/wire bytes or total memory |
+| `partitions.held`, `partitions.stopped` | Current held partitions and held partitions at their stop rule, split by `reason=timestamp|tip|eof`; not group completion |
+| `progress.saves` | Nonempty save operations, including startup and metadata-only writes; `outcome=success|partial|failure` reflects requested partitions |
+| `progress.save.duration` | Save duration in seconds |
+| `progress.last_success` | Unix seconds of the last nonempty save where every requested partition succeeded; absent until then |
+| `loop.iterations` | Completed loop steps, including quiet polls; not successful copying or group health |
+
+Snapshots refresh at most once per second and once at exit. Gauges may lag current state; metric delivery is best effort. Invalid transport settings fail before output opens. Receiver failures produce a redacted, rate-limited warning and copying continues. Cleanup attempts final export for at most one second within the remaining process deadline. Lost exports, short runs, crashes and receiver outages can leave missing metrics; saved source progress is unaffected. Lag sampling and an HTTP health endpoint are not provided.

@@ -34,6 +34,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Kafka input | [franz](../internal/franz) | Hand off callbacks/fetches to the core loop; position, pause and prove gaps | ConsumerClient, sourceMetadata, gapReader, rebalanceBridge |
 | Kafka output | [franz](../internal/franz) | Validate records, bound admission and report asynchronous deliveries | ProducerClient, destinationMetadata, Clock |
 | Kafka commits | [franz](../internal/franz) | Save positions, eligible stops and, for file outputs, file ID and extent; reject commits without a group member ID and generation | offsetCommitter, copy.OutputProgress |
+| Observability | [observability](../internal/observability) | Export immutable copy snapshots and actual save results through OTLP/HTTP; bound cleanup and redact diagnostics | `copy.Observer`, per-query Session/Factory, environment/file ports; SDK stays in adapter |
 | Shutdown budget | [app/shutdown.go](../internal/app/shutdown.go) | Enforce whole-process stop deadline; identify the blocked operation | StopObserver, Shutdown; CLI alone owns termination |
 | File adapters | [file](../internal/file) | Encode/decode frames, snapshot input, recover output, persist checkpoints | ArchiveDecoder, ArchiveEncoder, CheckpointStore, I/O ports |
 | File publication | [file](../internal/file) | Publish a durable header without replacing another creator | Publisher, private filesystem port |
@@ -69,7 +70,7 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 | `make broker` | Start disposable source/destination Kafka clusters |
 | `make integration` | Broker/CLI paths, fidelity, resume and rebalances; run `make broker` first |
 | `make fault` | Outages and ownership loss; run `make broker` first |
-| `make load` | Bounded Kafka-copy throughput and caps; run `make broker` first |
+| `make load` | Bounded Kafka-copy throughput/caps and file-copy metric export overhead; run `make broker` first |
 | `make soak` | Streaming fidelity, lag, memory and shutdown; run `make broker` first |
 | `make qualification` | Security/ACLs and replicated failover; starts its own TLS/SASL fixture |
 | `make fuzz` | SQL parser, frames and record decoding; default 100,000 iterations per target |
