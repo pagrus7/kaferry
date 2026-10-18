@@ -34,6 +34,33 @@ Passed
 
 
 class PRDescriptionTest(unittest.TestCase):
+    def test_only_dependabot_keeps_its_generated_description(self):
+        # Given generated release notes that exceed the human template's limit.
+        body = "Dependency release notes\n" + "x" * MAX_CHARACTERS
+        for author, exempt in (
+            ({"login": "dependabot[bot]", "type": "Bot"}, True),
+            ({"login": "dependabot[bot]", "type": "User"}, False),
+            ({"login": "github-actions[bot]", "type": "Bot"}, False),
+            ({"login": "contributor", "type": "User"}, False),
+            (None, False),
+        ):
+            with self.subTest(author=author):
+                # When checking the author, then only Dependabot skips formatting.
+                self.assertEqual(not validate(body, author), exempt)
+
+    def test_editing_dependabot_description_uses_pr_author_not_event_sender(self):
+        # Given a human edit to Dependabot's generated PR description.
+        script = Path(__file__).with_name("pr_description.py")
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            event.write_text(json.dumps({
+                "sender": {"login": "maintainer", "type": "User"},
+                "pull_request": {"body": "Generated dependency notes", "user": {"login": "dependabot[bot]", "type": "Bot"}},
+            }), encoding="utf-8")
+            # When running the real check, then the original author controls formatting.
+            result = subprocess.run([sys.executable, str(script)], env=dict(os.environ, GITHUB_EVENT_PATH=str(event)), capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_concise_results_and_failure_reasons_are_valid(self):
         # Given a concise description with successful or failed reviews.
         for result in ("Passed", "Failed: review incomplete; provider limit"):

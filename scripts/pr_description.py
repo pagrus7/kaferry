@@ -1,4 +1,4 @@
-"""Check PR description length, required sections and review-result format."""
+"""Check human PR descriptions; retain Dependabot's generated release notes."""
 
 import json
 import os
@@ -35,7 +35,9 @@ def sections(body):
     return result
 
 
-def validate(body):
+def validate(body, author=None):
+    if author and author.get("login") == "dependabot[bot]" and author.get("type") == "Bot":
+        return []
     errors = []
     if len(body) > MAX_CHARACTERS:
         errors.append(f"description exceeds {MAX_CHARACTERS} characters (including comments)")
@@ -54,7 +56,8 @@ def validate(body):
 if __name__ == "__main__":
     try:
         event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
-        errors = validate(event["pull_request"].get("body") or "")
+        pull_request = event["pull_request"]
+        errors = validate(pull_request.get("body") or "", pull_request.get("user"))
     except (KeyError, OSError, ValueError):
         sys.exit("Cannot read the pull request event.")
     if errors:
