@@ -1,13 +1,12 @@
 package plan
 
 import (
-	"errors"
-	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/pagrus7/kaferry/internal/sql"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
@@ -19,6 +18,9 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 		connections                  Profiles
 	}{
 		{"missing group", files + "OPTIONS(ON_ERROR=SKIP)", "OPTIONS", "GROUP is required; add GROUP = 'name' or GROUP = ONE_OFF to OPTIONS", nil, nil},
+		{"whitespace group", files + "OPTIONS(GROUP=' ')", "' '", "GROUP must not be blank; use a quoted name or ONE_OFF", nil, nil},
+		{"empty file endpoint", "INSERT INTO FILE cbor('')\nSELECT * FROM FILE cbor('in') OPTIONS(GROUP='g')", "''", "INTO endpoint: endpoint name is empty", nil, nil},
+		{"empty topic endpoint", "INSERT INTO TOPIC ''\nSELECT * FROM TOPIC 'a' OPTIONS(GROUP='g', START=EARLIEST)", "''", "INTO endpoint: endpoint name is empty", nil, nil},
 		{"empty group", files + "OPTIONS(GROUP='')", "''", "GROUP must not be blank; use a quoted name or ONE_OFF", nil, nil},
 		{"duplicate group", files + "OPTIONS(GROUP='g', GROUP='h')", "GROUP='h'", "option GROUP repeats; specify it once; first declaration at line 3, column 9", nil, nil},
 		{"invalid policy", files + "OPTIONS(GROUP='g', ON_ERROR=FAIL)", "FAIL", "ON_ERROR must be FAIL or SKIP", func(s *sql.Statement) { s.Options[1].Value = "RETRY" }, nil},
@@ -55,9 +57,7 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 			if err == nil && tc.mutate != nil {
 				tc.mutate(&statement)
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			prefix := tc.query[:strings.Index(tc.query, tc.marker)]
 			lines := strings.Split(prefix, "\n")
 			position := sql.Position{Line: len(lines), Column: utf8.RuneCountInString(lines[len(lines)-1]) + 1}
@@ -69,9 +69,9 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 			_, err = NewPlanner(environment{}).Build(statement, connections)
 			// Then identify the offending value or second conflicting entry precisely.
 			var diagnostic *sql.Diagnostic
-			if !errors.As(err, &diagnostic) || diagnostic.Position != position || diagnostic.Err.Error() != tc.message {
-				t.Fatalf("error=%v, want %v: %s", err, position, tc.message)
-			}
+			require.ErrorAs(t, err, &diagnostic)
+			require.Equal(t, position, diagnostic.Position)
+			require.Equal(t, tc.message, diagnostic.Err.Error())
 		})
 	}
 }
@@ -80,29 +80,23 @@ func TestSourcePositionsDoNotChangePlansOrSavedIdentity(t *testing.T) {
 	// Given equivalent queries with different comments, whitespace and locations.
 	query := "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR OPTIONS(GROUP='g')"
 	formatted := "-- header\n" + strings.ReplaceAll(query, " SELECT ", "\nSELECT /* comment */ ")
-	first, _ := sql.NewParser().Parse(query)
-	second, _ := sql.NewParser().Parse(formatted)
-	if first.Source.Position == second.Source.Position {
-		t.Fatal("test did not change the source location")
-	}
+	first, err := sql.NewParser().Parse(query)
+	require.NoError(t, err)
+	second, err := sql.NewParser().Parse(formatted)
+	require.NoError(t, err)
+	require.NotEqual(t, second.Source.Position, first.Source.Position)
 	// When compiling and fingerprinting both queries.
 	a, err := NewPlanner(environment{}).Build(first, profiles)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	b, err := NewPlanner(environment{}).Build(second, profiles)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	fa, err := a.Fingerprint("source", "destination")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	fb, err := b.Fingerprint("source", "destination")
 	// Then transient positions never change normalized plans or checkpoint identity.
-	if err != nil || !reflect.DeepEqual(a, b) || fa != fb {
-		t.Fatal("source positions affected copy identity", err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, b, a)
+	require.Equal(t, fb, fa)
 }
 
 func TestPlannerDiagnosticsRedactLiteralAndResolvedSecrets(t *testing.T) {
@@ -127,15 +121,13 @@ func TestPlannerDiagnosticsRedactLiteralAndResolvedSecrets(t *testing.T) {
 		if tc.invalidPolicy && err == nil {
 			statement.Options[len(statement.Options)-1].Value = secret
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		// When planning fails after reading available environment values.
 		_, err = NewPlanner(environment{"PASSWORD": secret}).Build(statement, profiles)
 		// Then neither the arbitrary SQL text nor the resolved credential is exposed.
-		if err == nil || strings.Contains(strings.ToLower(err.Error()), strings.ToLower(secret)) || strings.Contains(err.Error(), "PASSWORD") {
-			t.Fatal("unsafe planner diagnostic", err)
-		}
+		require.Error(t, err)
+		require.NotContains(t, strings.ToLower(err.Error()), strings.ToLower(secret))
+		require.NotContains(t, err.Error(), "PASSWORD")
 	}
 }
 
@@ -143,9 +135,7 @@ func TestConnectionErrorsDistinguishUndefinedAndMissingSettings(t *testing.T) {
 	// Given an existing connection with no bootstrap.servers.
 	query := "INSERT INTO FILE cbor('out') SELECT * FROM TOPIC 'a@empty' OPTIONS(GROUP='g', START=EARLIEST)"
 	statement, err := sql.NewParser().Parse(query)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	// When comparing validation of a defined and an undefined connection.
 	for _, tc := range []struct {
 		profiles Profiles
@@ -153,16 +143,14 @@ func TestConnectionErrorsDistinguishUndefinedAndMissingSettings(t *testing.T) {
 	}{{Profiles{"empty": {}}, "connection requires bootstrap.servers"}, {Profiles{"empty": {"bootstrap.servers": ""}}, "bootstrap.servers is empty"}, {nil, "connection alias is not defined"}} {
 		_, err := NewPlanner(environment{}).Build(statement, tc.profiles)
 		// Then the corrective action matches the actual missing configuration.
-		if err == nil || !strings.Contains(err.Error(), tc.message) {
-			t.Fatal("conflated connection diagnostic", err)
-		}
+		require.Error(t, err)
+		require.Contains(t, err.Error(), tc.message)
 	}
 	// Given a caller-created AST without source locations, then omit false coordinates.
 	statement.Source.Position = sql.Position{}
 	_, err = NewPlanner(environment{}).Build(statement, nil)
-	if err == nil || err.Error() != "FROM endpoint: connection alias is not defined; add it with WITH CONNECTION or TOML [connections.alias]" {
-		t.Fatal("invented location for an AST without source metadata", err)
-	}
+	require.Error(t, err)
+	require.Equal(t, "FROM endpoint: connection alias is not defined; add it with WITH CONNECTION or TOML [connections.alias]", err.Error())
 }
 
 func TestConnectionSettingsReportEmptyValuesAndOrigins(t *testing.T) {
@@ -184,22 +172,20 @@ func TestConnectionSettingsReportEmptyValuesAndOrigins(t *testing.T) {
 			line = 3
 		}
 		statement, err := sql.NewParser().Parse(query)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		// When resolving settings and compiling the query.
 		_, err = NewPlanner(environment{"EMPTY": ""}).Build(statement, tc.profiles)
 		// Then the error identifies the endpoint and the actual empty value's origin.
 		var diagnostic *sql.Diagnostic
-		if !errors.As(err, &diagnostic) || diagnostic.Position != (sql.Position{Line: line, Column: 21}) || diagnostic.Err.Error() != "FROM endpoint: "+tc.message {
-			t.Fatalf("wrong settings origin: %v", err)
-		}
+		require.ErrorAs(t, err, &diagnostic)
+		require.Equal(t, (sql.Position{Line: line, Column: 21}), diagnostic.Position)
+		require.Equal(t, "FROM endpoint: "+tc.message, diagnostic.Err.Error())
 	}
 	// Given an invalid configured alias, then identify configuration without echoing it.
 	_, err := NewPlanner(environment{}).Build(sql.Statement{}, Profiles{"sensitive-SENTINEL": {}})
-	if err == nil || !strings.HasPrefix(err.Error(), "configuration:") || strings.Contains(err.Error(), "sensitive-SENTINEL") {
-		t.Fatal("unsafe or ambiguous configuration error", err)
-	}
+	require.Error(t, err)
+	require.True(t, strings.HasPrefix(err.Error(), "configuration:"))
+	require.NotContains(t, err.Error(), "sensitive-SENTINEL")
 }
 
 func TestLocationFreeASTsKeepCompleteMessages(t *testing.T) {
@@ -208,13 +194,11 @@ func TestLocationFreeASTsKeepCompleteMessages(t *testing.T) {
 	// When validating the plan without invented coordinates.
 	_, err := NewPlanner(environment{}).Build(statement, nil)
 	// Then retain a complete corrective hint with no dangling location reference.
-	if err == nil || err.Error() != "option GROUP repeats; specify it once" {
-		t.Fatal("incomplete diagnostic", err)
-	}
+	require.Error(t, err)
+	require.Equal(t, "option GROUP repeats; specify it once", err.Error())
 	// Given repeated unknown names, then the first unsupported entry fails without echoing it.
 	statement.Options = []sql.Option{{Name: "sensitive-SENTINEL"}, {Name: "sensitive-SENTINEL"}}
 	_, err = NewPlanner(environment{}).Build(statement, nil)
-	if err == nil || strings.Contains(strings.ToLower(err.Error()), "sensitive-sentinel") {
-		t.Fatal("unknown option exposed", err)
-	}
+	require.Error(t, err)
+	require.NotContains(t, strings.ToLower(err.Error()), "sensitive-sentinel")
 }
