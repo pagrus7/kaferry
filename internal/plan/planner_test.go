@@ -57,7 +57,7 @@ func TestUsageCommandSQL(t *testing.T) {
 	data, err := os.ReadFile("../../docs/usage.md")
 	require.NoError(t, err)
 	input := string(data)
-	heredoc := regexp.MustCompile("(?s)<<'SQL'\\n(.*?)\\nSQL").FindAllStringSubmatch(input, -1)
+	heredoc := regexp.MustCompile(`(?s)<<'SQL'\n(.*?)\nSQL`).FindAllStringSubmatch(input, -1)
 	argument := regexp.MustCompile(`(?s)-e "(INSERT.*?)"`).FindAllStringSubmatch(input, -1)
 	examples := append(heredoc, argument...)
 	require.Len(t, examples, 2, "both runnable copy examples must be checked")
