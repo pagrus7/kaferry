@@ -114,6 +114,8 @@ python3 scripts/ci.py soak make soak
 
 PRs also run quality/security checks and [additional integrity suites](../.github/workflows/risk.yml). Only the prose allowlist skips fault and security/failover tests; unknown paths run both. The ordinary PR suites always run. Strict branch protection applies to admins; CodeQL errors and High/Critical security findings block merging.
 
+After retargeting a PR to a different base branch, push a new commit so CI compares the new base and head.
+
 ### Quality indicators
 
 | Indicator | Where / meaning |

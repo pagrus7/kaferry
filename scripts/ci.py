@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import platform
-import re
 import subprocess
 import sys
 import time
@@ -25,7 +24,7 @@ def verify_tests(log, expected):
             continue
         if isinstance(event, dict) and event.get('Action') == 'pass' and event.get('Test'):
             passed.add(event['Test'])
-    missing = [pattern for pattern in expected if not any(re.fullmatch(pattern, name) for name in passed)]
+    missing = [name for name in expected if name not in passed]
     if missing:
         raise ValueError('Required tests did not pass: ' + ', '.join(missing))
 
