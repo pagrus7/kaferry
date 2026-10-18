@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -20,6 +21,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
+
+func loadRecordCount(t *testing.T, name string, fallback, maximum int) int {
+	t.Helper()
+	text := os.Getenv(name)
+	if text == "" {
+		return fallback
+	}
+	count, err := strconv.Atoi(text)
+	require.NoError(t, err, "%s must be an integer", name)
+	require.Greater(t, count, 0, "%s must be positive", name)
+	require.LessOrEqual(t, count, maximum, "%s exceeds the fixture's memory budget", name)
+	return count
+}
 
 type copySummary struct {
 	Message     string `json:"msg"`

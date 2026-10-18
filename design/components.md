@@ -135,6 +135,12 @@ After retargeting a PR to a different base branch, push a new commit so CI compa
 
 Missing measurements are unavailable. Coverage and vulnerability scans describe Go code; badges report only the listed checks.
 
+### Paired performance
+
+[Performance runs](../.github/workflows/performance.yml) are separate from required PR checks. They reuse the Kafka default-copy and disabled-metrics file-copy assertions, with larger inputs, a warm-up per binary and six interleaved pairs, alternating which binary runs first on one runner. Summaries show median head/base throughput and the pair range; raw metrics, binary/toolchain identities and broker images stay in the `performance` artifact for 30 days. Kafka input is capped at 160,000 records; file input at 200,000 records.
+
+Nightly runs start with A/A calibration (the same binary on both sides). Review at least 20 calibration runs before setting the repository variable `PERFORMANCE_MODE=comparison`; this enables changed-main comparisons against the last retained compatible scheduled measurement. No compatible baseline starts another calibration. Expired data requires a fresh baseline. Manual dispatch accepts a base revision; adding `ci:performance` opts a PR into the configured mode. In comparison mode, PRs compare against the merge base. No performance threshold blocks merging; choose warnings only after measuring A/A noise.
+
 ### Local reviews
 
 Each PR needs independent **docs**, **tests** and **simplicity** reviews. [AGENTS.md](../AGENTS.md) defines when to run them and what to record; [review/](../review/README.md) holds the shared workflow and criteria.
