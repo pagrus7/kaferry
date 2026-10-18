@@ -37,6 +37,7 @@ func binaryWorker(t *testing.T, ctx context.Context, statement, config string) w
 	t.Helper()
 	process := startCLI(t, ctx, testBinary(t), statement, "run", "--file", "-", "--config", config)
 	err := process.wait()
+	require.NoError(t, ctx.Err(), "worker must exit before its deadline: %s", process.logs())
 	code := 0
 	if err != nil {
 		var exit *exec.ExitError

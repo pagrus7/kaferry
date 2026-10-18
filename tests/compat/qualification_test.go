@@ -237,10 +237,11 @@ func TestSaslTlsScramMechanisms(t *testing.T) {
 
 			// Given an incorrect password, when retried with SKIP, then authentication still fails.
 			cfg["sasl.password"] = "unique-wrong-scram-secret"
-			result = binaryWorker(t, ctx, strings.Replace(statement, "CUTOFF=", "ON_ERROR=SKIP,CUTOFF=", 1), secureConfig(t, cfg))
-			if result.code == 0 || strings.Contains(result.detail, "unique-wrong-scram-secret") {
-				t.Fatal("SCRAM authentication failure was skipped or exposed credentials", result)
-			}
+			failureCtx, failureCancel := context.WithTimeout(t.Context(), 15*time.Second)
+			defer failureCancel()
+			result = binaryWorker(t, failureCtx, strings.Replace(statement, "CUTOFF=", "ON_ERROR=SKIP,CUTOFF=", 1), secureConfig(t, cfg))
+			require.Equal(t, 1, result.code, "wrong SCRAM password must fail: %s", result.detail)
+			require.NotContains(t, result.detail, "unique-wrong-scram-secret", "credentials must stay redacted")
 		})
 	}
 }

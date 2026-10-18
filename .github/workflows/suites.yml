@@ -9,18 +9,14 @@ on:
         description: 'Release archive artifact; empty builds source'
         type: string
         default: ''
-      soak_duration:
-        type: string
-        default: '30m'
 permissions:
   contents: read
-  actions: read
 env:
   CGO_ENABLED: "0"
 jobs:
   suite:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.suite == 'soak' && 60 || 45 }}
     strategy:
       fail-fast: false
       matrix:
@@ -29,7 +25,7 @@ jobs:
       KAFKA_TEST_BROKERS: 127.0.0.1:39092
       KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
       KAFKA_FAULT_CONTAINER: kaferry-compat-kafka-1
-      KAFERRY_SOAK_DURATION: ${{ inputs.soak_duration }}
+      KAFERRY_SOAK_DURATION: 30m
       KAFERRY_SOAK_DEST_STALL_CONTAINER: kaferry-compat-kafka-dr-1
       SUITE: ${{ matrix.suite }}
     steps:
@@ -54,7 +50,7 @@ jobs:
           echo "KAFERRY_EXPECT_BINARY_SHA256=$(sha256sum .cache/release-test/kaferry | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
           sha256sum "$1" >> "$GITHUB_STEP_SUMMARY"
       - name: Build source binary
-        if: inputs.artifact == '' && matrix.suite != 'fuzz' && matrix.suite != 'benchmark'
+        if: inputs.artifact == ''
         run: |
           python3 scripts/ci.py build make build
           echo "KAFERRY_TEST_BINARY=$PWD/bin/kaferry" >> "$GITHUB_ENV"
@@ -64,13 +60,31 @@ jobs:
       - name: Run suite
         run: |
           case "$SUITE" in
-            integration) python3 scripts/ci.py integration env CGO_ENABLED=1 go test -count=1 -race -tags=integration ./tests/compat ;;
-            load) python3 scripts/ci.py load go test -count=1 -tags=integration,load -run '^TestLoad' -v ./tests/compat ;;
-            soak) python3 scripts/ci.py soak go test -count=1 -timeout=40m -tags=integration,load -run '^TestStreamingSoak' -v ./tests/compat ;;
-            qualification) python3 scripts/ci.py qualification sh tests/qualification/run.sh ;;
-            fault|fuzz|benchmark) python3 scripts/ci.py "$SUITE" make "$SUITE" ;;
+            integration)
+              python3 scripts/ci.py integration env CGO_ENABLED=1 go test -count=1 -json -race -tags=integration ./tests/compat
+              python3 scripts/ci.py verify-tests integration 'TestTopicToTopicSlice' 'TestAllFileDirectionsAndResume' 'TestCLIInterruptCommitsAndResumeDoesNotRecopy'
+              ;;
+            load)
+              python3 scripts/ci.py load go test -count=1 -json -tags=integration,load -run '^TestLoad' ./tests/compat
+              python3 scripts/ci.py verify-tests load 'TestLoadBoundedKafkaCopy/default' 'TestLoadObservability/round-0/disabled'
+              ;;
+            soak)
+              python3 scripts/ci.py soak go test -count=1 -timeout=40m -json -tags=integration,load -run '^TestStreamingSoak' ./tests/compat
+              python3 scripts/ci.py verify-tests soak 'TestStreamingSoakFidelityCommitLagMemoryAndShutdown'
+              ;;
+            qualification)
+              python3 scripts/ci.py qualification sh tests/qualification/run.sh
+              python3 scripts/ci.py verify-tests qualification 'TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight' 'TestSaslTlsScramMechanisms/SCRAM-SHA-256' 'TestSaslTlsScramMechanisms/SCRAM-SHA-512' 'TestReplicatedClusterLeaderFailurePreservesCopy'
+              ;;
+            fault)
+              python3 scripts/ci.py fault go test -count=1 -json -tags=integration,fault -run 'TestBlockingCommit|TestRebalanceChurn' ./tests/compat
+              python3 scripts/ci.py verify-tests fault 'TestBlockingCommitAcrossBrokerOutage' 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits'
+              ;;
             *) echo 'Unknown extended test suite' >&2; exit 1 ;;
           esac
+      - name: Reject source rebuilds in archive tests
+        if: always() && inputs.artifact != ''
+        run: test ! -e bin/kaferry
       - if: always() && contains(fromJSON('["integration","load","soak","fault"]'), matrix.suite)
         run: |
           mkdir -p build-results
