@@ -15,6 +15,7 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/stretchr/testify/require"
 )
 
 func secureProperties(t *testing.T, username, password string) k.ConfigMap {
@@ -39,9 +40,7 @@ func secureConfig(t *testing.T, cfg k.ConfigMap) string {
 		fmt.Fprintf(&text, "%q=%q\n", key, fmt.Sprint(cfg[key]))
 	}
 	path := filepath.Join(t.TempDir(), "connection.toml")
-	if err := os.WriteFile(path, []byte(text.String()), 0600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(path, []byte(text.String()), 0600))
 	return path
 }
 
@@ -49,9 +48,7 @@ func secureFixture(t *testing.T) (*k.AdminClient, *k.Producer, string, string, s
 	t.Helper()
 	cfg := secureProperties(t, "admin", "fixture-admin-secret")
 	a, err := k.NewAdminClient(&cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { closeAdmin(t, a) })
 	prefix := fmt.Sprintf("kaferry-security-%d", time.Now().UnixNano())
 	src, dst, group := prefix+"-src", prefix+"-dst", prefix+"-copy"
@@ -62,9 +59,7 @@ func secureFixture(t *testing.T) (*k.AdminClient, *k.Producer, string, string, s
 		t.Fatal("create secure fixtures", created, err)
 	}
 	for _, result := range created {
-		if result.Error.Code() != k.ErrNoError {
-			t.Fatal(result)
-		}
+		require.Equal(t, k.ErrNoError, result.Error.Code())
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -86,9 +81,7 @@ func secureFixture(t *testing.T) (*k.AdminClient, *k.Producer, string, string, s
 		t.Fatal("create restricted ACLs", results, err)
 	}
 	for _, result := range results {
-		if result.Error.Code() != k.ErrNoError {
-			t.Fatal(result)
-		}
+		require.Equal(t, k.ErrNoError, result.Error.Code())
 	}
 	for _, mechanism := range []k.ScramMechanism{k.ScramMechanismSHA256, k.ScramMechanismSHA512} {
 		credentials, err := a.AlterUserScramCredentials(ctx, []k.UserScramCredentialUpsertion{
@@ -105,9 +98,7 @@ func secureFixture(t *testing.T) (*k.AdminClient, *k.Producer, string, string, s
 	cfg["enable.idempotence"] = true
 	cfg["message.timeout.ms"] = 20000
 	p, err := k.NewProducer(&cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(p.Close)
 	return a, p, src, dst, group
 }
@@ -122,9 +113,7 @@ func waitSecureFixture(t *testing.T, a *k.AdminClient, src, dst, group string) {
 	cfg := secureProperties(t, "copier", "fixture-copy-secret")
 	cfg["group.id"], cfg["enable.auto.commit"] = group, false
 	reader, err := k.NewConsumer(&cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer reader.Close()
 	var last string
 	for {
@@ -154,9 +143,7 @@ func waitCopierPermissions(t *testing.T, src, dst string) {
 	t.Helper()
 	cfg := secureProperties(t, "copier", "fixture-copy-secret")
 	a, err := k.NewAdminClient(&cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer closeAdmin(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -195,13 +182,9 @@ func secureReader(t *testing.T, topic string) *k.Consumer {
 	cfg["group.id"] = topic + "-verify"
 	cfg["enable.auto.commit"] = false
 	c, err := k.NewConsumer(&cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
-	if err := c.Assign([]k.TopicPartition{{Topic: &topic, Partition: 0, Offset: 0}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.Assign([]k.TopicPartition{{Topic: &topic, Partition: 0, Offset: 0}}))
 	return c
 }
 
@@ -229,9 +212,7 @@ func secureRead(t *testing.T, reader *k.Consumer) *k.Message {
 	for time.Now().Before(deadline) {
 		switch event := reader.Poll(100).(type) {
 		case *k.Message:
-			if event.TopicPartition.Error != nil {
-				t.Fatal(event.TopicPartition.Error)
-			}
+			require.NoError(t, event.TopicPartition.Error)
 			return event
 		case k.Error:
 			if event.IsFatal() || event.Code() != k.ErrTransport && event.Code() != k.ErrAllBrokersDown && event.Code() != k.ErrTimedOut {
@@ -325,9 +306,7 @@ func TestSaslTlsScramMechanisms(t *testing.T) {
 func waitScramReady(t *testing.T, cfg k.ConfigMap, topic string) {
 	t.Helper()
 	admin, err := k.NewAdminClient(&cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer closeAdmin(t, admin)
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
@@ -383,9 +362,7 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 
 	signalErr := process.signal(os.Interrupt)
 
-	if signalErr != nil {
-		t.Fatal(signalErr)
-	}
+	require.NoError(t, signalErr)
 	if err := process.wait(); err != nil {
 		t.Fatalf("copy failed on broker failover: %v %s", err, process.logs())
 	}
@@ -399,7 +376,5 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 		}
 	}
 	progress := committedPartitions(t, a, group, src, 1)
-	if progress[0].Offset != 64 {
-		t.Fatal("failover shutdown did not save confirmed progress", progress)
-	}
+	require.Equal(t, k.Offset(64), progress[0].Offset, "failover shutdown did not save confirmed progress")
 }

@@ -3,54 +3,96 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
-	"strings"
+	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func TestShutdownBudgetUsesConfiguredTimeoutAndCurrentStage(t *testing.T) {
-	// Given a signal watcher with a long default and a short explicit configuration.
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	exited := make(chan string, 1)
-	budget := newShutdownBudget(ctx, time.Hour, func(stage string) { exited <- stage })
-	defer budget.Done()
-	budget.Configure(20 * time.Millisecond)
-	budget.Stage("saving progress")
-	// When a signal starts shutdown, then the configured budget reports the blocked operation.
-	cancel()
-	select {
-	case stage := <-exited:
-		if stage != "saving progress" {
-			t.Fatal("wrong stage", stage)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("configured shutdown budget ignored")
+	synctest.Test(t, func(t *testing.T) {
+		// Given a signal watcher with a long default and a short explicit configuration.
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		exited := make(chan string, 1)
+		budget := newShutdownBudget(ctx, time.Hour, func(stage string) { exited <- stage })
+		defer budget.Done()
+		budget.Configure(20 * time.Millisecond)
+		budget.Stage("saving progress")
+		// When cancellation starts the configured shutdown budget.
+		cancel()
+		synctest.Wait()
+		time.Sleep(20 * time.Millisecond)
+		synctest.Wait()
+		// Then the timeout reports the current blocked operation.
+		require.Len(t, exited, 1)
+		require.Equal(t, "saving progress", <-exited)
+	})
+}
+
+func TestShutdownReconfigurationKeepsTheOriginalStart(t *testing.T) {
+	for _, timeout := range []time.Duration{5 * time.Second, 20 * time.Second} {
+		t.Run(timeout.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				// Given shutdown already started with a ten-second allowance.
+				exited := make(chan string, 1)
+				budget := newShutdownBudget(context.Background(), 10*time.Second, func(stage string) { exited <- stage })
+				defer budget.Done()
+				started := time.Now()
+				budget.Begin()
+				time.Sleep(3 * time.Second)
+				// When configuration shortens or extends the allowance after shutdown begins.
+				budget.Configure(timeout)
+				budget.Stage("closing input")
+				// Then the deadline remains start plus timeout, including the elapsed three seconds.
+				require.Equal(t, started.Add(timeout), budget.Deadline())
+				time.Sleep(timeout - 3*time.Second - time.Nanosecond)
+				synctest.Wait()
+				require.Empty(t, exited)
+				time.Sleep(time.Nanosecond)
+				synctest.Wait()
+				require.Len(t, exited, 1)
+				require.Equal(t, "closing input", <-exited)
+			})
+		})
 	}
 }
+
 func TestCompletedShutdownBudgetCannotBeRearmed(t *testing.T) {
-	// Given a completed command whose cancellation can arrive later.
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	exited := make(chan string, 1)
-	budget := newShutdownBudget(ctx, time.Millisecond, func(stage string) { exited <- stage })
-	budget.Done()
-	// When cleanup and cancellation race after completion, then no exit is scheduled.
-	budget.Begin()
-	budget.Done()
-	cancel()
-	select {
-	case stage := <-exited:
-		t.Fatal("completed query armed an exit", stage)
-	case <-time.After(20 * time.Millisecond):
+	for _, active := range []bool{false, true} {
+		t.Run(fmt.Sprint(active), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				// Given a command with an idle or already active shutdown timer.
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				exited := make(chan string, 1)
+				budget := newShutdownBudget(ctx, time.Second, func(stage string) { exited <- stage })
+				if active {
+					budget.Begin()
+					time.Sleep(500 * time.Millisecond)
+				}
+				// When cleanup finishes before later cancellation and repeated shutdown calls.
+				budget.Done()
+				budget.Begin()
+				budget.Configure(time.Millisecond)
+				budget.Done()
+				cancel()
+				time.Sleep(2 * time.Second)
+				synctest.Wait()
+				// Then completion suppresses an active timer and any later attempt to begin.
+				require.Empty(t, exited)
+			})
+		})
 	}
 }
 
@@ -144,7 +186,42 @@ func runShutdownHelper(t *testing.T, mode, stage string) {
 	command.Env = append(os.Environ(), "KAFERRY_SHUTDOWN_HELPER="+mode)
 	output, err := command.CombinedOutput()
 	var exit *exec.ExitError
-	if ctx.Err() != nil || !errors.As(err, &exit) || exit.ExitCode() != 1 || !strings.Contains(string(output), "shutdown timed out while "+stage) {
-		t.Fatalf("deadline did not force a clear exit: err=%v output=%s", err, output)
+	require.Nil(t, ctx.Err())
+	require.ErrorAs(t, err, &exit)
+	require.EqualValues(t, 1, exit.ExitCode())
+	require.Contains(t, string(output), "shutdown timed out while "+stage)
+}
+
+func TestForcedShutdownExitsWithAFullUndrainedStderrPipe(t *testing.T) {
+	if os.Getenv("KAFERRY_SHUTDOWN_HELPER") == "full-stderr" {
+		forceShutdown("writing blocked stderr")
+		t.Fatal("forced shutdown returned")
 	}
+	// Given the subprocess's actual stderr pipe filled to capacity and left undrained.
+	reader, writer, err := os.Pipe()
+	require.NoError(t, err)
+	defer reader.Close()
+	defer writer.Close()
+	fd := int(writer.Fd())
+	require.NoError(t, syscall.SetNonblock(fd, true))
+	for {
+		_, err = syscall.Write(fd, make([]byte, 64<<10))
+		if errors.Is(err, syscall.EAGAIN) {
+			break
+		}
+		require.NoError(t, err)
+	}
+	require.NoError(t, syscall.SetNonblock(fd, false))
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+t.Name()+"$")
+	command.Env = append(os.Environ(), "KAFERRY_SHUTDOWN_HELPER=full-stderr")
+	command.Stderr = writer
+	// When forced shutdown tries to print its best-effort diagnostic to that full pipe.
+	err = command.Run()
+	// Then blocked diagnostic output cannot prevent exit 1.
+	require.NoError(t, ctx.Err())
+	var exit *exec.ExitError
+	require.ErrorAs(t, err, &exit)
+	require.Equal(t, 1, exit.ExitCode())
 }

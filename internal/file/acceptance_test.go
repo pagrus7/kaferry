@@ -4,11 +4,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSourceCheckpointDetectsChangedLastFrameAndShortenedSource(t *testing.T) {
@@ -22,27 +24,15 @@ func TestSourceCheckpointDetectsChangedLastFrameAndShortenedSource(t *testing.T)
 			out, err := NewOutput(NewPublisher(), path, "fixture", "fixture", "", 0, codec(t), 10, logger())
 
 			// Then
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := out.Submit(sample(), core.Token{}); err != nil {
-				t.Fatal(err)
-			}
-			if err := out.Flush(); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
+			require.NoError(t, out.Submit(sample(), core.Token{}))
+			require.NoError(t, out.Flush())
 			out.Close()
 			cp, err := NewCheckpoints(dir, "g", DurableWriter{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			source, err := NewSource(path, "fp", plan.WindowSpec{}, codec(t), cp, core.RealClock{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := source.Start(&lifecycle{}, nil); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
+			require.NoError(t, source.Start(&lifecycle{}, nil))
 			event, err := source.Poll(0)
 			if err != nil || event.Input == nil {
 				t.Fatal(err)
@@ -57,19 +47,13 @@ func TestSourceCheckpointDetectsChangedLastFrameAndShortenedSource(t *testing.T)
 				err = os.Truncate(path, saved.Position-1)
 			} else {
 				f, openErr := os.OpenFile(path, os.O_RDWR, 0600)
-				if openErr != nil {
-					t.Fatal(openErr)
-				}
+				require.NoError(t, openErr)
 				_, err = f.WriteAt([]byte{0, 0, 0, 0}, saved.LastFrame.Position)
 				f.Close()
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			cp, err = NewCheckpoints(dir, "g", DurableWriter{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			defer cp.Close()
 			if source, err := NewSource(path, "fp", plan.WindowSpec{}, codec(t), cp, core.RealClock{}); source != nil || err == nil {
 				t.Fatal("changed source was silently resumed", err)
@@ -93,15 +77,9 @@ func TestOutputRequiresExistingIdentityAndFrameBoundaryExtent(t *testing.T) {
 		t.Fatal("failed identity check created an output", err)
 	}
 	out, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, codec(t), 10, logger())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := out.Submit(sample(), core.Token{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := out.Flush(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, out.Submit(sample(), core.Token{}))
+	require.NoError(t, out.Flush())
 	id, extent := out.DurableOutput()
 	out.Close()
 	if out, err := NewOutput(NewPublisher(), path, "g", "fp", id, extent-1, codec(t), 10, logger()); out != nil || err == nil {
@@ -128,16 +106,38 @@ func TestSimultaneousOutputCreatorsCannotReplaceWinner(t *testing.T) {
 	// Given
 	path := filepath.Join(t.TempDir(), "out.cbor")
 	ready, release := make(chan struct{}, 2), make(chan struct{})
+	releaseCreators := sync.OnceFunc(func() { close(release) })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
 	type result struct {
 		out *Output
 		err error
 	}
 	results := make(chan result, 2)
+	remaining := 2
+	t.Cleanup(func() {
+		releaseCreators()
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		for remaining > 0 {
+			select {
+			case result := <-results:
+				remaining--
+				if result.out != nil {
+					result.out.Close()
+				}
+			case <-timer.C:
+				t.Error("creators did not finish during cleanup")
+				return
+			}
+		}
+	})
 	for range 2 {
+		c := codec(t)
 		go func() {
 
 			// When
-			out, err := NewOutput(simultaneousPublisher{NewPublisher(), ready, release}, path, "g", "fp", "", 0, codec(t), 10, logger())
+			out, err := NewOutput(simultaneousPublisher{NewPublisher(), ready, release}, path, "g", "fp", "", 0, c, 10, logger())
 			results <- result{out, err}
 		}()
 	}
@@ -147,29 +147,35 @@ func TestSimultaneousOutputCreatorsCannotReplaceWinner(t *testing.T) {
 		select {
 		case <-ready:
 		case result := <-results:
-			close(release)
+			remaining--
+			if result.out != nil {
+				result.out.Close()
+			}
 			t.Fatalf("creator exited before publication: %v", result.err)
-		case <-time.After(5 * time.Second):
-			close(release)
+		case <-ctx.Done():
 			t.Fatal("creators did not reach publication")
 		}
 	}
-	close(release)
+	releaseCreators()
 	successes := 0
 	for range 2 {
-		result := <-results
-		if result.err != nil {
+		var completed result
+		select {
+		case completed = <-results:
+			remaining--
+		case <-ctx.Done():
+			t.Fatal("creators did not finish publication")
+		}
+		if completed.err != nil {
 			continue
 		}
 		successes++
-		defer result.out.Close()
-		id, extent := result.out.DurableOutput()
+		t.Cleanup(completed.out.Close)
+		id, extent := completed.out.DurableOutput()
 		f, err := os.Open(path)
 
 		// Then
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		info, _ := f.Stat()
 		header, end, err := codec(t).Header(f, info.Size())
 		f.Close()

@@ -3,7 +3,6 @@ package app
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/pagrus7/kaferry/internal/inspect"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func explanationFixture() inspect.Report {
@@ -26,22 +26,17 @@ func explanationFixture() inspect.Report {
 func TestExplanationJSONContract(t *testing.T) {
 	// Given the public version-one JSON report.
 	want, err := os.ReadFile("testdata/explain.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var output bytes.Buffer
 	// When rendering, then field names, units and outcomes match the contract.
-	if err := renderExplanation(&output, explanationFixture(), true); err != nil || !bytes.Equal(output.Bytes(), want) {
-		t.Fatalf("JSON differs: %v\n%s", err, output.String())
-	}
+	require.NoError(t, renderExplanation(&output, explanationFixture(), true))
+	require.Equal(t, want, output.Bytes())
 }
 
 func textExplanation(t *testing.T, report inspect.Report) string {
 	t.Helper()
 	var output bytes.Buffer
-	if err := renderExplanation(&output, report, false); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, renderExplanation(&output, report, false))
 	return output.String()
 }
 
@@ -55,20 +50,14 @@ func TestTextExplanationStructuresBehaviorAndEscapesNames(t *testing.T) {
 	previous := -1
 	for _, section := range []string{"Endpoints\n", "\nProgress\n", "\nTime window\n", "\nBehavior\n", "\nAttention\n", "\nPreview limits\n"} {
 		position := strings.Index(output, section)
-		if position <= previous {
-			t.Fatalf("missing or misplaced %q:\n%s", section, output)
-		}
+		require.Greater(t, position, previous)
 		previous = position
 	}
-	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "1970-01-01T00:00:03Z", "clock past it", "saved offset 1 expired", "Record errors: stop", "Output: create a new file"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("missing %q:\n%s", want, output)
-		}
+	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "1970-01-01T00:00:03Z", "clock passes it and reading reaches a sampled log end", "Open transactions", "worker.tip_wait", "saved offset 1 expired", "Record errors: stop", "Output: create a new file"} {
+		require.Contains(t, output, want)
 	}
 	for _, absent := range []string{"query-id", "topic-id", "lookup end", "span", "Run permissions", "\x1b"} {
-		if strings.Contains(output, absent) {
-			t.Fatalf("unexpected %q:\n%s", absent, output)
-		}
+		require.NotContains(t, output, absent)
 	}
 }
 
@@ -77,15 +66,14 @@ type shortOutput struct{}
 func (shortOutput) Write([]byte) (int, error) { return 0, nil }
 
 func TestExplanationOutputFailures(t *testing.T) {
-	// Given a closed or short-writing output stream.
-	for _, output := range []io.Writer{closedOutput{}, shortOutput{}} {
-		for _, asJSON := range []bool{false, true} {
-			// When writing a report, then output loss is reported to the CLI.
-			err := renderExplanation(output, explanationFixture(), asJSON)
-			if err == nil || !errors.Is(err, io.ErrShortWrite) && err.Error() != "output closed" {
-				t.Fatal(err)
-			}
-		}
+	for _, asJSON := range []bool{false, true} {
+		// Given closed and short-writing output streams.
+		// When writing the buffered report.
+		closedErr := renderExplanation(closedOutput{}, explanationFixture(), asJSON)
+		shortErr := renderExplanation(shortOutput{}, explanationFixture(), asJSON)
+		// Then both output failures reach the caller with their original classification.
+		require.EqualError(t, closedErr, "output closed")
+		require.ErrorIs(t, shortErr, io.ErrShortWrite)
 	}
 }
 
@@ -101,9 +89,7 @@ func TestTextExplanationDistinguishesSavedAndFreshWindows(t *testing.T) {
 	// When rendering, then keep each window's origin, bounds and stop threshold distinct.
 	output := textExplanation(t, report)
 	for _, want := range []string{"Resume: 1 of 3", "Without saved offsets: 2", "saved progress", "adopted from the lowest saved partition", "NOW() preview only", "first timestamp lookup match", "1970-01-01T00:00:02Z", "1970-01-01T00:00:06Z", "1970-01-01T00:00:07Z"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("missing %q:\n%s", want, output)
-		}
+		require.Contains(t, output, want)
 	}
 }
 
@@ -119,20 +105,15 @@ func TestTextExplanationFollowingRoutingAndSkipPolicies(t *testing.T) {
 			// When rendering, then state continuous follow, dropped-record scope, and whether the timestamp policy is known.
 			output := textExplanation(t, report)
 			for _, want := range []string{"current read-committed end", "Filter: none", "no end time; follow", "original key bytes; destination partitioner", "Skip before writing: rejected timestamps (records dropped)", "Delivery and unclassified errors: stop"} {
-				if !strings.Contains(output, want) {
-					t.Fatalf("missing %q:\n%s", want, output)
-				}
+				require.Contains(t, output, want)
 			}
 			if policy == "" {
-				if !strings.Contains(output, "Destination timestamp policy: unknown.") {
-					t.Fatal(output)
-				}
-			} else if !strings.Contains(output, policy) {
-				t.Fatal(output)
+				require.Contains(t, output, "Destination timestamp policy: unknown.")
+			} else {
+				require.Contains(t, output, policy)
 			}
-			if strings.Contains(output, "Stop threshold") || strings.Contains(output, "Attention") {
-				t.Fatal(output)
-			}
+			require.NotContains(t, output, "Stop threshold")
+			require.NotContains(t, output, "Attention")
 		})
 	}
 }
@@ -154,22 +135,18 @@ func TestTextExplanationFileProgressAndOpeningSize(t *testing.T) {
 			// When rendering, then report bytes before filtering and EOF, never a timestamp stop or work estimate.
 			output := textExplanation(t, report)
 			for _, want := range []string{"Input position: 200 bytes", "Encoded input after position: 300 bytes (before filtering)", "Stop: end of input as observed when the run opens the file"} {
-				if !strings.Contains(output, want) {
-					t.Fatalf("missing %q:\n%s", want, output)
-				}
+				require.Contains(t, output, want)
 			}
 			if saved {
 				for _, want := range []string{"saved file checkpoint", "saved.json", "resume existing file", "Acknowledged output: 100 bytes", "reads every existing output frame"} {
-					if !strings.Contains(output, want) {
-						t.Fatalf("missing %q:\n%s", want, output)
-					}
+					require.Contains(t, output, want)
 				}
-			} else if !strings.Contains(output, "fresh group") || !strings.Contains(output, "no saved checkpoint") {
-				t.Fatal(output)
+			} else {
+				require.Contains(t, output, "each run starts fresh")
+				require.Contains(t, output, "Resume an unfinished run with its logged generated group name")
+				require.Contains(t, output, "no saved checkpoint")
 			}
-			if strings.Contains(output, "Stop threshold") {
-				t.Fatal(output)
-			}
+			require.NotContains(t, output, "Stop threshold")
 		})
 	}
 }
@@ -188,15 +165,14 @@ func TestTextExplanationShowsOnlyApplicableSkipCategories(t *testing.T) {
 			// When rendering, then missing timestamps matter only with a filter;
 			// timestamp rejection does not apply to a file destination.
 			output := textExplanation(t, report)
-			if strings.Contains(output, "Skip before writing: missing timestamps") != filtered || strings.Contains(output, "rejected timestamps") {
-				t.Fatal(output)
-			}
+			require.Equal(t, filtered, strings.Contains(output, "Skip before writing: missing timestamps"))
+			require.NotContains(t, output, "rejected timestamps")
 			if filtered {
-				if !strings.Contains(output, "Fresh start: earliest retained offset; apply the time filter while reading.") || !strings.Contains(output, "Stop threshold: 1970-01-01T00:00:03Z") {
-					t.Fatal(output)
-				}
-			} else if !strings.Contains(output, "Record errors: stop") || !strings.Contains(output, "start at the earliest retained offset.") {
-				t.Fatal(output)
+				require.Contains(t, output, "Fresh start: earliest retained offset; apply the time filter while reading.")
+				require.Contains(t, output, "Stop threshold: 1970-01-01T00:00:03Z")
+			} else {
+				require.Contains(t, output, "Record errors: stop")
+				require.Contains(t, output, "start at the earliest retained offset.")
 			}
 		})
 	}
@@ -218,27 +194,21 @@ func TestTextExplanationSummarizesLargePartitionSets(t *testing.T) {
 			}
 			// When rendering, then aggregate bounds, disclose omitted IDs/windows, and retain all JSON rows.
 			output := textExplanation(t, report)
-			if !strings.Contains(output, "Resume: 1000 of 1000") || !strings.Contains(output, "12 more warnings; see --json") {
-				t.Fatal(output)
-			}
-			if strings.Count(output, "  From:") != min(8, windows) {
-				t.Fatal(output)
-			}
-			if windows == 1000 && !strings.Contains(output, "992 more distinct windows; see --json") {
-				t.Fatal(output)
+			require.Contains(t, output, "Resume: 1000 of 1000")
+			require.Contains(t, output, "12 more warnings; see --json")
+			require.Equal(t, min(8, windows), strings.Count(output, "  From:"))
+			if windows == 1000 {
+				require.Contains(t, output, "992 more distinct windows; see --json")
 			}
 			if windows == 2 {
-				if !strings.Contains(output, "Partitions: [0 2 4 6 8 10 12 14] (+492 more; see --json)") {
-					t.Fatal(output)
-				}
+				require.Contains(t, output, "Partitions: [0 2 4 6 8 10 12 14] (+492 more; see --json)")
 				var raw bytes.Buffer
-				if err := renderExplanation(&raw, report, true); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, renderExplanation(&raw, report, true))
 				var decoded inspect.Report
-				if err := json.Unmarshal(raw.Bytes(), &decoded); err != nil || len(decoded.Partitions) != 1000 || decoded.Partitions[999].ID != 999 || len(decoded.Warnings) != 20 {
-					t.Fatal("JSON was truncated", len(decoded.Partitions), len(decoded.Warnings), err)
-				}
+				require.NoError(t, json.Unmarshal(raw.Bytes(), &decoded))
+				require.Len(t, decoded.Partitions, 1000)
+				require.EqualValues(t, 999, decoded.Partitions[999].ID)
+				require.Len(t, decoded.Warnings, 20)
 			}
 		})
 	}

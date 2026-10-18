@@ -2,11 +2,10 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/plan"
@@ -69,7 +68,7 @@ func (l *Loader) Load(path string) (Config, error) {
 	if len(data) > 1<<20 {
 		return Config{}, fmt.Errorf("configuration exceeds 1 MiB")
 	}
-	err = toml.NewDecoder(strings.NewReader(string(data))).DisallowUnknownFields().Decode(&config)
+	err = toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields().Decode(&config)
 	if err != nil {
 		var syntax *toml.DecodeError
 		if errors.As(err, &syntax) {
@@ -90,7 +89,7 @@ func (w Worker) Validate() error {
 		return fmt.Errorf("worker.progress_interval must be a nonnegative duration")
 	}
 	if w.MaxFrameBytes < 1 || w.MaxFrameBytes > 4294967295 {
-		return fmt.Errorf("worker.max_frame_bytes must fit a positive u32")
+		return fmt.Errorf("worker.max_frame_bytes must be between 1 and 4294967295 bytes")
 	}
 	if w.PartitionRecordCap <= 0 || w.PartitionByteCap <= 0 || w.RecordCap <= 0 || w.ByteCap <= 0 {
 		return fmt.Errorf("worker record and byte caps must be positive")
@@ -109,16 +108,3 @@ func (w Worker) Validate() error {
 	}
 	return nil
 }
-
-// Decode is useful for config sources that already own a reader.
-func Decode(reader io.Reader, home string) (Config, error) {
-	data, err := io.ReadAll(io.LimitReader(reader, (1<<20)+1))
-	if err != nil {
-		return Config{}, err
-	}
-	return NewLoader(memoryFile(data), home).Load("config")
-}
-
-type memoryFile []byte
-
-func (m memoryFile) ReadFile(string) ([]byte, error) { return m, nil }

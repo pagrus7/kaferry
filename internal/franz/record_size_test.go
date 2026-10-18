@@ -3,14 +3,14 @@ package franz
 import (
 	"bytes"
 	"context"
-	"errors"
-	"github.com/pagrus7/kaferry/internal/config"
-	"github.com/twmb/franz-go/pkg/kfake"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -37,37 +37,31 @@ func TestProducerBoundaryRefusesOversizeBeforeAsyncSubmission(t *testing.T) {
 	p := testPlan(t, map[string]string{"bootstrap.servers": strings.Join(cluster.ListenAddrs(), ","), "message.max.bytes": "1000"})
 	factory := componentFactory()
 	connection, err := factory.Open(t.Context(), p.Destination)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer connection.Close(context.Background())
 	if _, err = connection.ClusterID(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	sink, err := connection.Sink(t.Context(), config.Defaults("").Worker)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer sink.Close()
-	for _, length := range []int{926, 927, 930} {
-		record := core.Record{Value: make([]byte, length)}
+	for _, tc := range []struct {
+		length   int
+		rejected bool
+	}{{926, false}, {927, true}, {930, true}} {
+		record := core.Record{Value: make([]byte, tc.length)}
 		// When a record touches the ceiling, including the enclosing bytes prefix.
 		err := sink.Submit(record, core.Token{})
 		// Then any oversize result is synchronously skippable; accepted records deliver successfully.
-		if kafkaRecordBufferBytes(record) > 1000 {
+		if tc.rejected {
 			var rejected *core.RecordError
-			if !errors.As(err, &rejected) {
-				t.Fatal("oversize record escaped preflight", length, err)
-			}
+			require.ErrorAs(t, err, &rejected)
+			require.Equal(t, "validation", rejected.Class)
 		} else {
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			select {
 			case result := <-sink.Deliveries():
-				if result.Err != nil {
-					t.Fatal("preflight allowed an async size failure", result.Err)
-				}
+				require.NoError(t, result.Err, "preflight allowed an async size failure")
 			case <-time.After(3 * time.Second):
 				t.Fatal("boundary record did not deliver")
 			}

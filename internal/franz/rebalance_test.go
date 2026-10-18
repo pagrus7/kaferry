@@ -2,12 +2,12 @@ package franz
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"testing"
 	"time"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -16,9 +16,7 @@ func bridgeClient(t *testing.T, b *rebalanceBridge) *kgo.Client {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	c, err := kgo.NewClient(append(b.options(), kgo.WithContext(ctx), kgo.ConsumerGroup("group"))...)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(c.CloseAllowingRebalance)
 	return c
 }
@@ -36,7 +34,12 @@ func TestBridgeTransfersAssignmentAndLostCallbacksToTheCore(t *testing.T) {
 	done := make(chan struct{})
 	go func() { assigned(ctx, c, map[string][]int32{"input": {0}}); close(done) }()
 	// When the core resolves the callback, then the adjustment uses exactly its chosen start.
-	event := <-b.events
+	var event lifecycleEvent
+	select {
+	case event = <-b.events:
+	case <-time.After(time.Second):
+		t.Fatal("assignment callback did not emit an event")
+	}
 	if event.revoke || !reflect.DeepEqual(event.ids, []int32{0}) {
 		t.Fatal("assignment event changed", event)
 	}
@@ -54,7 +57,11 @@ func TestBridgeTransfersAssignmentAndLostCallbacksToTheCore(t *testing.T) {
 	lost := c.OptValue(kgo.OnPartitionsLost).(func(context.Context, *kgo.Client, map[string][]int32))
 	done = make(chan struct{})
 	go func() { lost(ctx, c, map[string][]int32{"input": {0}}); close(done) }()
-	event = <-b.events
+	select {
+	case event = <-b.events:
+	case <-time.After(time.Second):
+		t.Fatal("lost callback did not emit an event")
+	}
 	if !event.revoke || !event.lost {
 		t.Fatal("lost ownership became an ordinary revoke")
 	}
@@ -78,9 +85,7 @@ func TestBridgeCancellationReleasesCallbacksWithoutACorePoll(t *testing.T) {
 	cancel()
 	select {
 	case result := <-done:
-		if !errors.Is(result.err, context.Canceled) {
-			t.Fatal(result.err)
-		}
+		require.ErrorIs(t, result.err, context.Canceled)
 	case <-time.After(time.Second):
 		t.Fatal("callback did not cancel")
 	}

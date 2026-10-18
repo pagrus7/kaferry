@@ -11,6 +11,7 @@ import (
 
 	"github.com/pagrus7/kaferry/internal/config"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 type testClock struct {
@@ -179,26 +180,18 @@ func TestRunnerCapsIncludeConfirmedWorkAndOversizedAlone(t *testing.T) {
 	r, _, d, p, _ := fixture(t)
 	r.limits.ByteCap = 150
 	r.limits.PartitionByteCap = 150
-	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 
 	// When
 	inputErr := r.input(incoming(0, 0, 30))
 
 	// Then
-	if inputErr != nil {
-		t.Fatal(inputErr)
-	}
+	require.NoError(t, inputErr)
 
 	// When the first write succeeds but is still uncommitted.
 	d.reports <- Delivery{Token: d.writes[0]}
-	if err := r.deliveries(); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.input(incoming(0, 1, 200)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.deliveries())
+	require.NoError(t, r.input(incoming(0, 1, 200)))
 
 	// Then the oversized record waits for the outstanding work.
 	if len(d.writes) != 1 || r.deferred == nil {
@@ -206,15 +199,9 @@ func TestRunnerCapsIncludeConfirmedWorkAndOversizedAlone(t *testing.T) {
 	}
 
 	// When confirmed progress is committed and intake resumes.
-	if err := r.pause(); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.commit(r.ids()); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.admitDeferred(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.pause())
+	require.NoError(t, r.commit(r.ids()))
+	require.NoError(t, r.admitDeferred())
 
 	// Then the oversized record is admitted alone.
 	if len(d.writes) != 2 || p.saves[0][0].Position != 1 {
@@ -245,9 +232,7 @@ func TestRunnerQueueFullPreservesSubmissionOrder(t *testing.T) {
 	runErr := r.Run(context.Background())
 
 	// Then
-	if runErr != nil {
-		t.Fatal(runErr)
-	}
+	require.NoError(t, runErr)
 	if tries != 3 || len(d.writes) != 1 {
 		t.Fatalf("tries=%d submitted=%d", tries, len(d.writes))
 	}
@@ -258,9 +243,7 @@ func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 	for _, lost := range []bool{false, true} {
 		t.Run(map[bool]string{false: "revoked", true: "lost"}[lost], func(t *testing.T) {
 			r, _, d, p, _ := fixture(t)
-			if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 			_ = r.input(incoming(0, 0, 1))
 			old := d.writes[0]
 
@@ -268,33 +251,23 @@ func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 			revokeErr := r.Revoke([]int32{0}, lost)
 
 			// Then
-			if revokeErr != nil {
-				t.Fatal(revokeErr)
-			}
-			if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, revokeErr)
+			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 			_ = r.input(incoming(0, 0, 1))
 			d.reports <- Delivery{Token: old, Err: errors.New("late rejected write")}
-			if err := r.deliveries(); err != nil {
-				t.Fatal("late outcome affected new owner", err)
-			}
+			require.NoError(t, r.deliveries(), "late outcome affected new owner")
 			if r.tracker.Resolved(0) || len(p.saves) != 0 {
 				t.Fatal("late delivery advanced durable progress")
 			}
 		})
 	}
 	r, _, d, p, _ := fixture(t)
-	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 	_ = r.input(incoming(0, 0, 1))
 
 	// When the first write succeeds but is still uncommitted.
 	d.reports <- Delivery{Token: d.writes[0]}
-	if err := r.deliveries(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.deliveries())
 	_ = r.Revoke([]int32{0}, true)
 	if len(p.saves) != 0 {
 		t.Fatal("committed after ownership loss")
@@ -306,20 +279,14 @@ func TestPartialCommitReleasesSuccessfulPartitionsOnly(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			// Given confirmed writes on two partitions and one unconfirmed commit result.
 			r, _, d, p, _ := fixture(t)
-			if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}, {Cursor: Cursor{Partition: 1, Position: 0}}}); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}, {Cursor: Cursor{Partition: 1, Position: 0}}}))
 			for _, id := range []int32{0, 1} {
-				if err := r.input(incoming(id, 0, 1)); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, r.input(incoming(id, 0, 1)))
 			}
 			for _, tok := range d.writes {
 				d.reports <- Delivery{Token: tok}
 			}
-			if err := r.deliveries(); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, r.deliveries())
 			if scenario == "missing result" {
 				p.omit = map[int32]bool{1: true}
 			} else {
@@ -345,9 +312,7 @@ func TestPartialCommitReleasesSuccessfulPartitionsOnly(t *testing.T) {
 func TestShutdownDrainDeadlineCommitsConfirmedPrefix(t *testing.T) {
 	// Given
 	r, _, d, p, c := fixture(t)
-	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 	_ = r.input(incoming(0, 0, 1))
 	_ = r.input(incoming(0, 1, 1))
 	d.reports <- Delivery{Token: d.writes[0]}
@@ -385,9 +350,7 @@ func TestTimestampTriggerReplaysTriggerOffset(t *testing.T) {
 	runErr := r.Run(context.Background())
 
 	// Then
-	if runErr != nil {
-		t.Fatal(runErr)
-	}
+	require.NoError(t, runErr)
 	if len(d.writes) != 0 || len(p.saves) != 1 || p.saves[0][0].Position != 0 || p.saves[0][0].Stop == nil || p.saves[0][0].Stop.Reason != "timestamp" {
 		t.Fatal("trigger record was written or checkpointed past")
 	}
@@ -408,9 +371,7 @@ func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 	tipsErr := r.tips()
 
 	// Then
-	if tipsErr != nil {
-		t.Fatal(tipsErr)
-	}
+	require.NoError(t, tipsErr)
 
 	// When the topic grows after the sample and tip_wait expires.
 	s.high = 999
@@ -444,9 +405,7 @@ func TestIdleExitRequiresProcessedEmptyAssignment(t *testing.T) {
 	if !r.readyToExit() {
 		t.Fatal("bounded idle worker did not exit")
 	}
-	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 	_ = r.Revoke([]int32{0}, false)
 	c.Sleep(time.Hour)
 	if r.readyToExit() {
@@ -470,9 +429,7 @@ func TestSignalDuringPollDoesNotSubmitReturnedRecord(t *testing.T) {
 	runErr := r.Run(ctx)
 
 	// Then
-	if runErr != nil {
-		t.Fatal(runErr)
-	}
+	require.NoError(t, runErr)
 	if len(d.writes) != 0 || !pausedBeforeFlush {
 		t.Fatal("signal submitted new input or flushed before pausing intake")
 	}
@@ -601,9 +558,7 @@ func TestCapturedTipFinishesWithoutAnotherEOF(t *testing.T) {
 			runErr := r.Run(context.Background())
 
 			// Then
-			if runErr != nil {
-				t.Fatal("sampled H incorrectly required another EOF", runErr)
-			}
+			require.NoError(t, runErr, "sampled H incorrectly required another EOF")
 			want := 2
 			if gap {
 				want = 1
@@ -632,9 +587,7 @@ func TestRevocationCommitFailures(t *testing.T) {
 			r, _, _, _, _ := fixture(t)
 			store := &requestStore{err: tc.err, request: tc.request}
 			r.store = store
-			if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 			in := incoming(0, 0, 1)
 			token, _ := r.tracker.Observe(in.Cursor, in.Next, 1)
 			r.tracker.Settle(token, true)
@@ -654,14 +607,10 @@ func TestRevocationCommitFailures(t *testing.T) {
 	// Outside revocation a recoverable error still fails the commit.
 	r, _, _, _, _ := fixture(t)
 	r.store = &requestStore{err: &Recoverable{Err: errors.New("rebalance in progress")}}
-	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 	token, _ := r.tracker.Observe(Cursor{Partition: 0, Position: 0}, 1, 1)
 	r.tracker.Settle(token, true)
-	if err := r.commit([]int32{0}); err == nil {
-		t.Fatal("periodic commit must fail on a recoverable error")
-	}
+	require.Error(t, r.commit([]int32{0}), "periodic commit must fail on a recoverable error")
 }
 
 type requestStore struct {

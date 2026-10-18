@@ -44,10 +44,7 @@ func renderExplanation(output io.Writer, report inspect.Report, asJSON bool) err
 		}
 		fmt.Fprintln(&buffer, "  Full partition details and identities: --json.")
 	}
-	n, err := output.Write(buffer.Bytes())
-	if err == nil && n != buffer.Len() {
-		return io.ErrShortWrite
-	}
+	_, err := buffer.WriteTo(output)
 	return err
 }
 
@@ -64,7 +61,7 @@ func renderEndpoint(output io.Writer, label string, endpoint inspect.Endpoint) {
 func renderProgress(output io.Writer, report inspect.Report) {
 	fmt.Fprintf(output, "\nProgress\n  Group: %q\n", report.Group)
 	if report.OneOff {
-		fmt.Fprintln(output, "  ONE_OFF: a run generates a fresh group; there is nothing to resume.")
+		fmt.Fprintln(output, "  ONE_OFF: each run starts fresh. Resume an unfinished run with its logged generated group name.")
 	}
 	if file := report.Source.File; file != nil {
 		if *file.CheckpointExists {

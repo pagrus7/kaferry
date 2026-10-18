@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/inspect"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/pagrus7/kaferry/internal/sql"
+	"github.com/stretchr/testify/require"
 )
 
 type commandMocks struct {
@@ -33,40 +33,34 @@ func (m *commandMocks) stage(name string) error {
 	return nil
 }
 func (m *commandMocks) Parse(input string) (sql.Statement, error) {
-	if input != "statement" {
-		m.t.Fatal("wrong statement", input)
-	}
+	require.Equal(m.t, "statement", input)
 	return m.ast, m.stage("parse")
 }
 func (m *commandMocks) Load(path string) (config.Config, error) {
-	if path != "config.toml" {
-		m.t.Fatal("wrong config path", path)
-	}
+	require.Equal(m.t, "config.toml", path)
 	return m.cfg, m.stage("load")
 }
 func (m *commandMocks) Build(ast sql.Statement, profiles plan.Profiles) (plan.Plan, error) {
-	if !reflect.DeepEqual(ast, m.ast) || !reflect.DeepEqual(profiles, m.cfg.Connections) {
-		m.t.Fatal("planning input changed")
-	}
+	require.Equal(m.t, m.ast, ast)
+	require.Equal(m.t, m.cfg.Connections, profiles)
 	return m.plan, m.stage("build")
 }
 func (m *commandMocks) Run(ctx context.Context, p plan.Plan, cfg config.Config, _ Shutdown) error {
-	if ctx != m.ctx || !reflect.DeepEqual(p, m.plan) || !reflect.DeepEqual(cfg, m.cfg) {
-		m.t.Fatal("execution input changed")
-	}
+	require.True(m.t, ctx == m.ctx, "context identity changed")
+	require.Equal(m.t, m.plan, p)
+	require.Equal(m.t, m.cfg, cfg)
 	return m.stage("execute")
 }
 func (m *commandMocks) Validate(p plan.Plan, worker config.Worker) error {
-	if !reflect.DeepEqual(p, m.plan) || worker != m.cfg.Worker {
-		m.t.Fatal("validation input changed")
-	}
+	require.Equal(m.t, m.plan, p)
+	require.Equal(m.t, m.cfg.Worker, worker)
 	return m.stage("validate")
 }
 
 func (m *commandMocks) Explain(ctx context.Context, p plan.Plan, worker config.Worker, _ core.StopObserver) (inspect.Report, error) {
-	if ctx != m.ctx || !reflect.DeepEqual(p, m.plan) || worker != m.cfg.Worker {
-		m.t.Fatal("inspection input changed")
-	}
+	require.True(m.t, ctx == m.ctx, "context identity changed")
+	require.Equal(m.t, m.plan, p)
+	require.Equal(m.t, m.cfg.Worker, worker)
 	return inspect.Report{Version: 1, Group: p.Group}, m.stage("inspect")
 }
 
@@ -82,8 +76,12 @@ func TestExplainPlansAndInspectsWithoutExecuting(t *testing.T) {
 			if failure == "parse" {
 				want = want[:1]
 			}
-			if !reflect.DeepEqual(m.calls, want) || failure == "" && (err != nil || report.Group != m.plan.Group) || failure != "" && !errors.Is(err, m.failure) {
-				t.Fatal(report, err, m.calls)
+			require.Equal(t, want, m.calls)
+			if failure == "" {
+				require.NoError(t, err)
+				require.Equal(t, m.plan.Group, report.Group)
+			} else {
+				require.ErrorIs(t, err, m.failure)
 			}
 		})
 	}
@@ -102,22 +100,18 @@ func TestCommandPlansBeforeExecutingAndStopsOnFailure(t *testing.T) {
 			// Then
 			if fail != "" {
 				wanted = stages[:index+1]
-				if !errors.Is(err, m.failure) {
-					t.Fatal("failure lost", err)
-				}
+				require.ErrorIs(t, err, m.failure)
 				var coded interface{ ExitCode() int }
-				if index < 4 && (!errors.As(err, &coded) || coded.ExitCode() != 2) {
-					t.Fatal("planning failure has wrong exit code", err)
+				if index < 4 {
+					require.ErrorAs(t, err, &coded)
+					require.Equal(t, 2, coded.ExitCode())
+				} else {
+					require.True(t, err == m.failure, "execution error identity changed")
 				}
-				if index == 4 && err != m.failure {
-					t.Fatal("execution failure was reclassified", err)
-				}
-			} else if err != nil {
-				t.Fatal(err)
+			} else {
+				require.NoError(t, err)
 			}
-			if !reflect.DeepEqual(m.calls, wanted) {
-				t.Fatal("unexpected component calls", m.calls, wanted)
-			}
+			require.Equal(t, wanted, m.calls)
 		})
 	}
 }
@@ -131,9 +125,7 @@ func TestCommandPreservesExecutionExitCode(t *testing.T) {
 		runErr := newCommand(m, m, m, m, m, nil, nil).Run(m.ctx, "statement", "config.toml", noopShutdown{})
 
 		// Then
-		if runErr != failure {
-			t.Fatal("execution classification lost", runErr)
-		}
+		require.Same(t, failure, runErr)
 	}
 }
 
@@ -171,26 +163,19 @@ func TestRunnerFactoryInjectsFreshProgressPerExecution(t *testing.T) {
 	source := assignmentSource{failure: stop}
 	first := factory.New(source, nil, nil, enginePlan("FILE", "FILE"), config.Worker{}, core.NoopStopObserver{}, nil)
 	second := factory.New(source, nil, nil, enginePlan("FILE", "FILE"), config.Worker{}, core.NoopStopObserver{}, nil)
-	if len(progress.made) != 2 || progress.made[0] == progress.made[1] {
-		t.Fatal("progress state shared between executions")
-	}
+	require.Len(t, progress.made, 2)
+	require.NotSame(t, progress.made[0], progress.made[1])
 
 	// When
 	runErr := first.Run(context.Background())
 
 	// Then
-	if !errors.Is(runErr, stop) {
-		t.Fatal(runErr)
-	}
-	if progress.made[0].assignments != 1 || progress.made[1].assignments != 0 {
-		t.Fatal("first execution used wrong tracker")
-	}
-	if err := second.Run(context.Background()); !errors.Is(err, stop) {
-		t.Fatal(err)
-	}
-	if progress.made[0].assignments != 1 || progress.made[1].assignments != 1 {
-		t.Fatal("second execution used wrong tracker")
-	}
+	require.ErrorIs(t, runErr, stop)
+	require.EqualValues(t, 1, progress.made[0].assignments)
+	require.Zero(t, progress.made[1].assignments)
+	require.ErrorIs(t, second.Run(context.Background()), stop)
+	require.EqualValues(t, 1, progress.made[0].assignments)
+	require.EqualValues(t, 1, progress.made[1].assignments)
 }
 
 type noopShutdown struct{ core.NoopStopObserver }

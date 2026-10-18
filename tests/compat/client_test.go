@@ -14,6 +14,7 @@ import (
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/app"
+	"github.com/stretchr/testify/require"
 )
 
 func broker(t *testing.T) string {
@@ -44,17 +45,13 @@ func TestTopicToTopicSlice(t *testing.T) {
 	executeCode := app.Execute(ctx, []string{"run", "--sql", statement}, nil, io.Discard, &output)
 
 	// Then
-	if executeCode != 0 {
-		t.Fatalf("copy exit=%d: %s", executeCode, output.String())
-	}
+	require.Zero(t, executeCode, "copy exit=%d: %s", executeCode, output.String())
 	c := consumer(t, destination+"-reader")
 	parts := make([]k.TopicPartition, 3)
 	for i := range parts {
 		parts[i] = k.TopicPartition{Topic: &destination, Partition: int32(i), Offset: 0}
 	}
-	if err := c.Assign(parts); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.Assign(parts))
 	seen := make(map[string]bool)
 	for range 40 {
 		record := read(t, c)
@@ -70,14 +67,13 @@ func TestTopicToTopicSlice(t *testing.T) {
 	if code := app.Execute(ctx, []string{"run", "--sql", statement}, nil, io.Discard, &output); code != 0 {
 		t.Fatalf("resume exit=%d: %s", code, output.String())
 	}
+	require.Equal(t, int64(40), topicRecordCount(t, a, destination, 3), "completed resume published extra records")
 }
 
 func admin(t *testing.T) *k.AdminClient {
 	t.Helper()
 	a, err := k.NewAdminClient(&k.ConfigMap{"bootstrap.servers": broker(t)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { closeAdmin(t, a) })
 	return a
 }
@@ -192,9 +188,7 @@ func producer(t *testing.T, extra k.ConfigMap) *k.Producer {
 		cfg[key] = value
 	}
 	p, err := k.NewProducer(&cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(p.Close)
 	return p
 }
@@ -202,9 +196,7 @@ func producer(t *testing.T, extra k.ConfigMap) *k.Producer {
 func consumer(t *testing.T, group string) *k.Consumer {
 	t.Helper()
 	c, err := k.NewConsumer(&k.ConfigMap{"bootstrap.servers": broker(t), "group.id": group, "client.id": "kaferry-compat", "enable.auto.commit": false, "enable.auto.offset.store": false, "auto.offset.reset": "error", "isolation.level": "read_committed", "enable.partition.eof": true, "partition.assignment.strategy": "cooperative-sticky"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 	return c
 }
@@ -212,14 +204,10 @@ func consumer(t *testing.T, group string) *k.Consumer {
 func publish(t *testing.T, p *k.Producer, message *k.Message) {
 	t.Helper()
 	reports := make(chan k.Event, 1)
-	if err := p.Produce(message, reports); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, p.Produce(message, reports))
 	select {
 	case event := <-reports:
-		if err := event.(*k.Message).TopicPartition.Error; err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, event.(*k.Message).TopicPartition.Error)
 	case <-time.After(15 * time.Second):
 		t.Fatal("delivery timed out")
 	}
@@ -231,9 +219,7 @@ func read(t *testing.T, c *k.Consumer) *k.Message {
 	for time.Now().Before(deadline) {
 		switch event := c.Poll(100).(type) {
 		case *k.Message:
-			if event.TopicPartition.Error != nil {
-				t.Fatal(event.TopicPartition.Error)
-			}
+			require.NoError(t, event.TopicPartition.Error)
 			return event
 		case k.Error:
 			t.Fatal(event)
@@ -258,9 +244,7 @@ func TestRecordFidelityAndTopicID(t *testing.T) {
 	}
 	t.Logf("topic ID=%s", description.TopicDescriptions[0].TopicID.String())
 	c := consumer(t, name+"-g")
-	if err := c.Assign([]k.TopicPartition{{Topic: &name, Partition: 0, Offset: 0}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.Assign([]k.TopicPartition{{Topic: &name, Partition: 0, Offset: 0}}))
 	for _, data := range []struct{ key, value []byte }{{nil, nil}, {[]byte{}, []byte{}}, {[]byte{0, 255}, []byte{1, 0, 255}}} {
 		m := &k.Message{TopicPartition: k.TopicPartition{Topic: &name, Partition: 0}, Key: data.key, Value: data.value, Timestamp: time.UnixMilli(1791000000123), Headers: []k.Header{{Key: "x", Value: nil}, {Key: "x", Value: []byte{}}, {Key: "x", Value: []byte{0, 255}}}}
 		publish(t, p, m)
@@ -284,12 +268,8 @@ func TestTransactionalTailAndTimestampLookup(t *testing.T) {
 			p := producer(t, k.ConfigMap{"transactional.id": name + "-tx"})
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			if err := p.InitTransactions(ctx); err != nil {
-				t.Fatal(err)
-			}
-			if err := p.BeginTransaction(); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, p.InitTransactions(ctx))
+			require.NoError(t, p.BeginTransaction())
 			publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &name, Partition: 0}, Value: []byte("txn"), Timestamp: time.UnixMilli(1791000000000)})
 			c := consumer(t, name+"-g")
 
@@ -297,23 +277,17 @@ func TestTransactionalTailAndTimestampLookup(t *testing.T) {
 			lookup, err := c.OffsetsForTimes([]k.TopicPartition{{Topic: &name, Partition: 0, Offset: k.Offset(1791000000000)}}, 5000)
 
 			// Then
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			t.Logf("lookup during open transaction=%v", lookup)
 			ends, err := a.ListOffsets(ctx, map[k.TopicPartition]k.OffsetSpec{{Topic: &name, Partition: 0}: k.LatestOffsetSpec}, k.SetAdminIsolationLevel(k.IsolationLevelReadCommitted))
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			t.Logf("read-committed end while open=%+v", ends.ResultInfos)
 			if abort {
 				err = p.AbortTransaction(ctx)
 			} else {
 				err = p.CommitTransaction(ctx)
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			if err = c.Assign([]k.TopicPartition{{Topic: &name, Partition: 0, Offset: 0}}); err != nil {
 				t.Fatal(err)
 			}
@@ -331,17 +305,11 @@ func TestTransactionalTailAndTimestampLookup(t *testing.T) {
 				}
 			}
 			_, high, err := c.QueryWatermarkOffsets(name, 0, 5000)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			positions, err := c.Position([]k.TopicPartition{{Topic: &name, Partition: 0}})
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			t.Logf("visible=%d H=%d EOF=%d Position=%d", visible, high, eof, positions[0].Offset)
-			if int64(eof) != high {
-				t.Fatal("EOF did not reach high watermark")
-			}
+			require.Equal(t, high, int64(eof), "EOF did not reach high watermark")
 			if abort && visible != 0 || !abort && visible != 1 {
 				t.Fatal("transaction isolation failed")
 			}
@@ -375,9 +343,7 @@ func TestTimestampLookupOutOfOrder(t *testing.T) {
 		positions, err := c.OffsetsForTimes([]k.TopicPartition{{Topic: &name, Partition: 0, Offset: k.Offset(base + delta)}}, 5000)
 
 		// Then
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		t.Logf("timestamp delta=%d lookup=%v", delta, positions)
 		if delta <= 2000 && positions[0].Offset != 0 {
 			t.Fatal("lookup skipped earlier qualifying record")
@@ -404,20 +370,35 @@ func TestMixedTimestampBatchHasNoRecordAttribution(t *testing.T) {
 		produceErr := p.Produce(&k.Message{TopicPartition: k.TopicPartition{Topic: &name, Partition: 0}, Value: []byte("x"), Timestamp: when, Opaque: i}, reports)
 
 		// Then
-		if produceErr != nil {
-			t.Fatal(produceErr)
-		}
+		require.NoError(t, produceErr)
 	}
 	for range 2 {
 		select {
 		case event := <-reports:
 			message := event.(*k.Message)
 			t.Logf("record=%v error=%v", message.Opaque, message.TopicPartition.Error)
-			if message.TopicPartition.Error == nil {
-				t.Fatal("expected rejected mixed batch")
-			}
+			require.Error(t, message.TopicPartition.Error, "expected rejected mixed batch")
 		case <-time.After(15 * time.Second):
 			t.Fatal("delivery timed out")
 		}
 	}
+}
+
+func topicRecordCount(t *testing.T, a *k.AdminClient, topic string, partitions int) int64 {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	request := make(map[k.TopicPartition]k.OffsetSpec, partitions)
+	for id := range partitions {
+		request[k.TopicPartition{Topic: &topic, Partition: int32(id)}] = k.LatestOffsetSpec
+	}
+	result, err := a.ListOffsets(ctx, request)
+	require.NoError(t, err)
+	require.Len(t, result.ResultInfos, partitions)
+	var total int64
+	for _, info := range result.ResultInfos {
+		require.Equal(t, k.ErrNoError, info.Error.Code())
+		total += int64(info.Offset)
+	}
+	return total
 }

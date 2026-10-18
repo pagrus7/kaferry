@@ -10,6 +10,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCheckpointDirectoryMustAlreadyExist(t *testing.T) {
@@ -21,9 +22,7 @@ func TestCheckpointDirectoryMustAlreadyExist(t *testing.T) {
 				directory = filepath.Join(directory, "checkpoints")
 			}
 			if scenario == "not a directory" {
-				if err := os.WriteFile(directory, []byte("keep"), 0600); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, os.WriteFile(directory, []byte("keep"), 0600))
 			}
 
 			// When a file-source group opens its checkpoint store.
@@ -31,9 +30,7 @@ func TestCheckpointDirectoryMustAlreadyExist(t *testing.T) {
 
 			// Then only an existing directory permits ownership; other paths stay untouched.
 			if scenario == "existing" {
-				if err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, err)
 				defer store.Close()
 				if second, err := NewCheckpoints(directory, "restore", DurableWriter{}); err == nil {
 					second.Close()

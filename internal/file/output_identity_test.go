@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/stretchr/testify/require"
 )
 
 func TestOutputRejectsForeignQueryOrArchiveWithoutChangingBytes(t *testing.T) {
@@ -17,9 +18,7 @@ func TestOutputRejectsForeignQueryOrArchiveWithoutChangingBytes(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "archive.cbor")
 			c := codec(t)
 			output, err := NewOutput(NewPublisher(), path, "group", "fp", "", 0, c, 10, logger())
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			if err := output.Submit(sample(), core.Token{}); err != nil {
 				output.Close()
 				t.Fatal(err)
@@ -32,13 +31,9 @@ func TestOutputRejectsForeignQueryOrArchiveWithoutChangingBytes(t *testing.T) {
 			originalID := id
 			output.Close()
 			before, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			before = append(before, []byte("unacknowledged tail")...)
-			if err := os.WriteFile(path, before, 0600); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, os.WriteFile(path, before, 0600))
 			group, fp := "group", "fp"
 			switch scenario {
 			case "fingerprint":

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -118,18 +119,14 @@ func TestIntermediateGapDoesNotSignalTip(t *testing.T) {
 	source, proof := sourceWithGaps(t, 1)
 	proof.next = 5
 	// When a bounded gap is proven before the actual tip.
-	if err := source.pollTips(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, source.pollTips(t.Context()))
 	// Then progress advances locally without telling the core it reached the tip.
 	if source.positions[0] != 5 || len(source.readyEOF) != 0 {
 		t.Fatal("intermediate gap looked like EOF", source.positions, source.readyEOF)
 	}
 	// When a later proof reaches the sampled stable end.
 	proof.next = 10
-	if err := source.pollTips(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, source.pollTips(t.Context()))
 	// Then the core receives exactly the actual consumed end.
 	if len(source.readyEOF) != 1 || source.readyEOF[0].Position != 10 {
 		t.Fatal("actual tip was not reported", source.readyEOF)
@@ -141,9 +138,7 @@ func TestGapProbesRotateAndExcludePausedOrHeldPartitions(t *testing.T) {
 	source, proof := sourceWithGaps(t, 3)
 	// When each timer turn can probe only one partition.
 	for range 3 {
-		if err := source.pollTips(t.Context()); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, source.pollTips(t.Context()))
 	}
 	seen := make(map[int32]bool)
 	for _, id := range proof.calls {
@@ -158,9 +153,7 @@ func TestGapProbesRotateAndExcludePausedOrHeldPartitions(t *testing.T) {
 	source.held = map[int32]*kgo.Record{2: {Partition: 2, Offset: 0}}
 	proof.calls = nil
 	// When polling tips again.
-	if err := source.pollTips(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, source.pollTips(t.Context()))
 	// Then neither partition is probed or advanced.
 	if len(proof.calls) != 1 || proof.calls[0] != 0 || source.positions[1] != 0 || source.positions[2] != 0 {
 		t.Fatal("paused or held record was bypassed", proof.calls, source.positions)
@@ -227,5 +220,42 @@ func TestThrottledGapReplyProvesNothingAndCanRetry(t *testing.T) {
 		if next != 7 || err == nil || errors.As(err, &retry) != throttled {
 			t.Fatal("unsafe empty fetch handling", next, err)
 		}
+	}
+}
+
+func TestGapMetadataFailureCannotAdvanceCursorOrFetch(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		identity [16]byte
+		leader   int32
+		code     int16
+		retry    bool
+	}{
+		{name: "recreated topic", identity: [16]byte{2}},
+		{name: "leader election", identity: [16]byte{1}, leader: -1, retry: true},
+		{name: "retryable partition", identity: [16]byte{1}, code: kerr.NotLeaderForPartition.Code, retry: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given a source cursor and metadata that no longer permits a safe gap fetch.
+			fetches := 0
+			client := &metadataMock{request: func(_ context.Context, request kmsg.Request) (kmsg.Response, error) {
+				if _, ok := request.(*kmsg.MetadataRequest); !ok {
+					fetches++
+					return nil, errors.New("unsafe fetch")
+				}
+				response := metadataResponse(tc.identity)
+				response.Topics[0].Partitions[0].Leader = tc.leader
+				response.Topics[0].Partitions[0].ErrorCode = tc.code
+				return response, nil
+			}}
+			proof := &fetchGap{client: client, topic: "input", topicID: topicID([16]byte{1})}
+			// When probing for a compaction gap, then no cursor or fetch escapes failed metadata.
+			next, err := proof.Next(t.Context(), 0, 7)
+			require.Equal(t, int64(7), next)
+			require.Error(t, err)
+			var retry *core.Recoverable
+			require.Equal(t, tc.retry, errors.As(err, &retry))
+			require.Zero(t, fetches)
+		})
 	}
 }

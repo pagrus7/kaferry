@@ -13,6 +13,7 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/stretchr/testify/require"
 )
 
 func testBinary(t *testing.T) string {
@@ -69,9 +70,7 @@ func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 			// When
 			signalErr := process.signal(syscall.SIGSTOP)
 
-			if signalErr != nil {
-				t.Fatal(signalErr)
-			}
+			require.NoError(t, signalErr)
 
 			// When a partition is added while the resumed worker is stopped.
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -86,9 +85,7 @@ func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 				t.Fatal("fixture metadata refresh", err)
 			}
 			publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 1}, Value: []byte("new partition before assignment"), Timestamp: time.Now()})
-			if err := process.signal(syscall.SIGCONT); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, process.signal(syscall.SIGCONT))
 			waitMembers(t, a, group, 1, 2, nil)
 		}
 
@@ -97,9 +94,7 @@ func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 			publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Key: []byte("key"), Value: []byte(fmt.Sprintf("run-%d-%d", run, i)), Timestamp: time.Now()})
 		}
 		waitEnd(t, a, dst, int64((run+1)*10+run))
-		if err := process.signal(os.Interrupt); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, process.signal(os.Interrupt))
 		select {
 		case <-process.done:
 			if err := process.wait(); err != nil {

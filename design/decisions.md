@@ -124,7 +124,7 @@ The initial assignment commit clears the previous stop. A later commit includes 
 - A later failure leaves earlier output intact. Restart can duplicate output acknowledged after the last saved position, and revisits the failing record unless conditions or policy change.
 - Default uncommitted caps: 5,000 records / 16 MiB per partition; 20,000 records / 128 MiB per worker. Pause reading at a cap until commit succeeds; a single oversized record may proceed alone. These bound tracked work, not total process memory, which also includes client buffers and overhead.
 - Commit all worker partitions in one request, with at most one request in flight: every second, at 50% of a worker/partition cap, while paused at a cap with confirmed progress, and on shutdown/revocation. Check results per partition.
-- Shutdown stops reading, drains writes for up to ten seconds, then commits confirmed progress. The CLI enforces `worker.shutdown_timeout` (default 30 s) across draining, saving and cleanup, starting when a signal arrives or stopping begins. Expiry exits 1 immediately; unsaved work may replay. A short budget can end before the final save.
+- Shutdown stops reading, allows ten seconds for outstanding writes, then commits confirmed progress. Synchronous file flush/fsync can block that save until the whole-process deadline. The CLI enforces `worker.shutdown_timeout` (default 30 s) across draining, saving and cleanup, starting when a signal arrives or stopping begins. Expiry exits 1 immediately; unsaved work may replay. A short budget can end before the final save.
 
 ## Errors
 
@@ -210,7 +210,7 @@ File inspection reads the archive header, checkpoint and last checkpointed frame
 
 `kaferry status` accepts the same query and configuration as `run`; a named `GROUP` is required. It reads saved progress without joining, consuming, producing, committing, creating files or taking locks. It needs no permissions beyond existing source/group DESCRIBE and endpoint metadata access. `ONE_OFF` requires the actual logged group name; a deleted file checkpoint has no saved status.
 
-Verdicts: incompatible/unreadable progress → `unknown`; incompatible active members → `unknown`; active members, unsettled group state or changed membership → `running`; no saved progress → `unknown`; any current partition without a saved stop → `incomplete`; otherwise → `stopped`. Added partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. File growth since opening makes a saved EOF stop `incomplete`.
+Verdicts: invalid/incompatible progress → `unknown`; incompatible active members → `unknown`; active members, unsettled group state or changed membership → `running`; no saved progress → `unknown`; any current partition without a saved stop → `incomplete`; otherwise → `stopped`. Added partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. File growth since opening makes a saved EOF stop `incomplete`. Broker/filesystem read failures exit 1 with an error and no verdict output.
 
 `stopped` means a stop was saved for every current partition; the cutoff rule can still miss records within the time range. Workers remain independent: they never wait for other workers' stops.
 
@@ -268,7 +268,7 @@ Values are strings in TOML and SQL. Unknown keys, unsupported values and contrad
 | `linger.ms` | Batch wait, default 5; 0–60,000 |
 | `metadata.max.age.ms`, `topic.metadata.refresh.interval.ms` | Metadata refresh age, default 300,000; aliases must agree; 10–3,600,000 |
 
-Queue/fetch overrides must be positive. Byte queue settings use KiB. Large or compressed batches can exceed fetch ceilings; these do not cap total client memory. Only one fetch request runs at a time. Kaferry's uncommitted-work caps remain independent.
+Queue/fetch overrides must be positive. Byte queue settings use KiB. Large or compressed batches can exceed fetch ceilings; these do not cap total client memory. The ordinary consumer runs one fetch request at a time; separate requests checking offset gaps can overlap it. Kaferry's uncommitted-work caps remain independent.
 
 Auto-commit/reset, group ID/protocol, read isolation, cooperative assignment, auto topic creation, idempotence, acknowledgements and delivery handling are owned by Kaferry. Kaferry sets these; the corresponding property names are rejected as unsupported. Sources use the SQL group, classic protocol, read-committed and no automatic offset reset. Producers use idempotence and all-ISR acknowledgements. Topic auto-creation is disabled.
 
@@ -280,13 +280,13 @@ Auto-commit/reset, group ID/protocol, read isolation, cooperative assignment, au
 | --- | --- |
 | 0 | Status is `stopped`, or the preview was printed, or this worker finished its file input or remaining assigned Kafka partitions, or a signal cleanly stopped a copy from Kafka with no end time. SKIP counts do not change the code |
 | 1 | Copy, inspection, output, cleanup or the shutdown deadline failed, or a signal interrupted startup, a file copy, or a Kafka copy with an end time. Conflicts after the first consumed record also exit 1 |
-| 2 | Usage/parse/plan/configuration error, or identity/ownership/self-copy conflict before the first consumed record |
+| 2 | Usage/parse/plan/configuration error, or Kafka topic-validation or identity/ownership/self-copy conflict before the first consumed record |
 | 3 | For a copy from Kafka with an end time, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |
 | 4 | Status is `incomplete`: input lacks a saved stop, or the source file grew |
-| 5 | Status is `unknown`: progress is absent, incompatible or unreadable, or the group has an incompatible active member |
+| 5 | Status is `unknown`: progress is absent, invalid or incompatible, or the group has an incompatible active member |
 | 6 | Status is `running`: group activity or a change was observed |
 
-Busy locks and broker/record failures exit 1. Conflicts include foreign progress/members, changed input and unowned/short/corrupt acknowledged output. The first failure determines the code; cleanup cannot replace it. A second signal or external forced termination can use system signal status.
+Busy locks and broker/record failures exit 1, except startup Kafka topic-validation conflicts (for example, topic authorization denied), which exit 2. Conflicts include foreign progress/members, changed input and unowned/short/corrupt acknowledged output. The first failure determines the code; cleanup cannot replace it. A second signal or external forced termination can use system signal status.
 
 A cleanup error can occur after all records are copied and progress is saved; the error names the close operation. Resume using the same named group to avoid starting over. `ONE_OFF` always creates a new group, so rerunning it can copy records again.
 

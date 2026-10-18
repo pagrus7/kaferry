@@ -2,34 +2,12 @@ package sql
 
 import (
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/stretchr/testify/require"
 )
-
-func TestDocumentedExamples(t *testing.T) {
-	// Given
-	data, err := os.ReadFile("../../design/grammar.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	examples := strings.Split(string(data), "```sql\n")[1:]
-	if len(examples) == 0 {
-		t.Fatal("no documented SQL examples found")
-	}
-	for _, example := range examples {
-		statement := strings.SplitN(example, "```", 2)[0]
-
-		// When
-		_, parseErr := NewParser().Parse(statement)
-
-		// Then
-		if parseErr != nil {
-			t.Fatalf("documented example failed: %v", parseErr)
-		}
-	}
-}
 
 func TestLexicalRules(t *testing.T) {
 	// Given
@@ -39,12 +17,10 @@ func TestLexicalRules(t *testing.T) {
 	s, err := NewParser().Parse(input)
 
 	// Then
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.Destination.Name != "a'b.cbor" || s.Source.Name != "源.cbor" || !s.Options[0].Quoted {
-		t.Fatalf("incorrect parse: %+v", s)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "a'b.cbor", s.Destination.Name)
+	require.Equal(t, "源.cbor", s.Source.Name)
+	require.True(t, s.Options[0].Quoted)
 }
 
 func TestInvalidStatements(t *testing.T) {
@@ -60,27 +36,13 @@ func TestInvalidStatements(t *testing.T) {
 		strings.Replace(base, "OPTIONS", "WHERE RECORD_TIMESTAMP '>=' NOW() OPTIONS", 1),
 		strings.Replace(base, "OPTIONS", "WHERE RECORD_TIMESTAMP '<' NOW() OPTIONS", 1),
 	}
-	for i, input := range cases {
+	for _, input := range cases {
 
 		// When
 		_, parseErr := NewParser().Parse(input)
 
 		// Then
-		if parseErr == nil {
-			t.Errorf("case %d accepted invalid syntax", i)
-		}
-	}
-}
-
-func TestErrorsHavePositionsAndDoNotEchoSecrets(t *testing.T) {
-	// Given
-
-	// When
-	_, err := NewParser().Parse("INSERT\nINTO TOPIC 'secret-value' SELECT 'password' FROM TOPIC 'a' OPTIONS(GROUP='g')")
-
-	// Then
-	if err == nil || !strings.Contains(err.Error(), "line 2, column") || strings.Contains(err.Error(), "password") || strings.Contains(err.Error(), "secret-value") {
-		t.Fatalf("unsafe or missing diagnostic: %v", err)
+		require.Error(t, parseErr)
 	}
 }
 

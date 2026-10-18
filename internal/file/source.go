@@ -77,6 +77,10 @@ func resumePoint(reader io.ReaderAt, size, start int64, sourceID string, saved *
 	}
 	if saved.LastFrame != nil {
 		_, next, crc, err := readFrame(reader, saved.LastFrame.Position, size, frameLimit)
+		var limit *FrameLimit
+		if errors.As(err, &limit) {
+			return 0, plan.Window{}, conflict("%w; raise worker.max_frame_bytes", err)
+		}
 		if err != nil || next != saved.Position || crc != saved.LastFrame.CRC {
 			return 0, plan.Window{}, conflict("source file changed: last checkpointed frame differs")
 		}

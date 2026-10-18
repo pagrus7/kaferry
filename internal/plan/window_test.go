@@ -2,9 +2,10 @@ package plan
 
 import (
 	"math"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestWindowResolve(t *testing.T) {
@@ -39,27 +40,20 @@ func TestWindowResolve(t *testing.T) {
 
 			// Then bounds resolve exactly; empty or overflowing ranges fail distinctly.
 			if tc.wantError != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
-					t.Fatalf("Resolve error = %v, want %q", err, tc.wantError)
-				}
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.wantError)
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if window.Lower == nil || window.Upper == nil {
-				t.Fatalf("missing resolved bounds: %+v", window)
-			}
-			if *window.Lower != tc.wantLower || *window.Upper != tc.wantUpper {
-				t.Fatalf("resolved bounds = [%d, %d), want [%d, %d)", *window.Lower, *window.Upper, tc.wantLower, tc.wantUpper)
-			}
+			require.NoError(t, err)
+			require.NotNil(t, window.Lower)
+			require.NotNil(t, window.Upper)
+			require.Equal(t, tc.wantLower, *window.Lower)
+			require.Equal(t, tc.wantUpper, *window.Upper)
 			// Then valid windows include their first and last millisecond, excluding the upper bound.
-			if !window.Contains(tc.wantLower) || !window.Contains(tc.wantUpper-1) || window.Contains(tc.wantUpper) {
-				t.Fatal("window does not preserve inclusive start and exclusive end")
-			}
-			if tc.wantLower > math.MinInt64 && window.Contains(tc.wantLower-1) {
-				t.Fatal("window includes a timestamp before its start")
-			}
+			require.True(t, window.Contains(tc.wantLower))
+			require.True(t, window.Contains(tc.wantUpper-1))
+			require.False(t, window.Contains(tc.wantUpper))
+			require.False(t, tc.wantLower > math.MinInt64 && window.Contains(tc.wantLower-1))
 		})
 	}
 }

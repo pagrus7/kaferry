@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/copy"
+	"github.com/stretchr/testify/require"
 	sdk "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 )
@@ -85,9 +86,7 @@ func TestSDKDiagnosticsAreRedactedWithoutPreventingExport(t *testing.T) {
 	output := &warningOutput{}
 	// When the real SDK logs the generic parse failure and exports using the override.
 	session, err := NewFactory(systemEnvironment{}, slog.New(slog.NewJSONHandler(output, nil)), "test").Open("group")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	session.Publish(copy.Snapshot{Confirmed: 1})
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
@@ -111,9 +110,7 @@ func TestBlockedWarningCannotHoldMetricsCleanup(t *testing.T) {
 	defer close(output.release)
 	w := &warnings{log: slog.New(slog.NewJSONHandler(output, nil))}
 	session, err := newSession(sdk.NewManualReader(), resource.Empty(), w)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	handled := make(chan struct{})
 	go func() { w.Handle(errors.New("secret")); close(handled) }()
 	select {

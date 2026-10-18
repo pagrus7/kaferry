@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPartitionTimestampThreshold(t *testing.T) {
@@ -16,12 +17,12 @@ func TestPartitionTimestampThreshold(t *testing.T) {
 		stop  bool
 		fail  bool
 	}{
-		{"no timestamp", nil, ptr(int64(1000)), false, false},
-		{"unbounded", ptr(int64(2000)), nil, false, false},
-		{"below", ptr(int64(1099)), ptr(int64(1000)), false, false},
-		{"equal", ptr(int64(1100)), ptr(int64(1000)), false, false},
-		{"above", ptr(int64(1101)), ptr(int64(1000)), true, false},
-		{"overflow", ptr(int64(math.MaxInt64)), ptr(int64(math.MaxInt64)), false, true},
+		{"no timestamp", nil, new(int64(1000)), false, false},
+		{"unbounded", new(int64(2000)), nil, false, false},
+		{"below", new(int64(1099)), new(int64(1000)), false, false},
+		{"equal", new(int64(1100)), new(int64(1000)), false, false},
+		{"above", new(int64(1101)), new(int64(1000)), true, false},
+		{"overflow", new(int64(math.MaxInt64)), new(int64(math.MaxInt64)), false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given a record timestamp and a window with a 100ms cutoff.
@@ -31,9 +32,10 @@ func TestPartitionTimestampThreshold(t *testing.T) {
 			stop, err := p.pastTimestamp(tc.stamp, 100)
 
 			// Then the rule is strict, checked for overflow, and does not mutate state.
-			if stop != tc.stop || (err != nil) != tc.fail || p.stop != nil || p.position != 0 {
-				t.Fatal(stop, err, p)
-			}
+			require.Equal(t, tc.stop, stop)
+			require.Equal(t, tc.fail, err != nil, "timestamp check error: %v", err)
+			require.Nil(t, p.stop)
+			require.Zero(t, p.position)
 		})
 	}
 }
@@ -46,16 +48,20 @@ func TestPartitionSamplesOnlyAfterThresholdAndRetryDeadline(t *testing.T) {
 	assertAction := func(want tipAction) {
 		t.Helper()
 		got, err := p.tipAction(now, 100, time.Second)
-		if err != nil || got != want {
-			t.Fatal(got, want, err)
-		}
+		require.NoError(t, err)
+		require.Equal(t, want, got)
 	}
 
-	// When the tip is reached exactly at the threshold, then wall time advances.
+	// When the readable tip is reached exactly at the threshold, equality still waits.
 	assertAction(tipWait)
 	p.reachedTip(0, false)
 	assertAction(tipWait)
+	// When more input clears the tip and wall time passes the threshold, it still waits.
+	p.atTip = false
 	now = now.Add(time.Millisecond)
+	assertAction(tipWait)
+	// Then sampling still waits until the tip is reached at the same wall time.
+	p.reachedTip(0, false)
 	assertAction(tipSample)
 	p.sampling.failed(now)
 	assertAction(tipWait)
@@ -66,9 +72,9 @@ func TestPartitionSamplesOnlyAfterThresholdAndRetryDeadline(t *testing.T) {
 	p.sampled(3, now)
 	p.reachedTip(1, false)
 	assertAction(tipWait)
-	if p.reachedHigh(2) || !p.reachedHigh(3) || !p.reachedHigh(100) {
-		t.Fatal("fixed end was not respected")
-	}
+	require.False(t, p.reachedHigh(2))
+	require.True(t, p.reachedHigh(3))
+	require.True(t, p.reachedHigh(100))
 	p.position = 3
 	assertAction(tipStop)
 }
@@ -82,20 +88,17 @@ func TestPartitionTipTimeoutIsStrictAndCompletionWins(t *testing.T) {
 
 	// When the wait budget is exactly reached, then exceeded.
 	atDeadline, err := p.tipAction(now.Add(time.Second), 0, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	afterDeadline, err := p.tipAction(now.Add(time.Second+time.Nanosecond), 0, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	p.position = 3
 	completed, err := p.tipAction(now.Add(2*time.Second), 0, time.Second)
 
 	// Then equality keeps waiting, timeout is strict, and a reached end completes.
-	if err != nil || atDeadline != tipWait || afterDeadline != tipTimeout || completed != tipStop {
-		t.Fatal(atDeadline, afterDeadline, completed, err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, tipWait, atDeadline)
+	require.Equal(t, tipTimeout, afterDeadline)
+	require.Equal(t, tipStop, completed)
 }
 
 func TestPartitionEmptyAndFileEnds(t *testing.T) {
@@ -111,9 +114,10 @@ func TestPartitionEmptyAndFileEnds(t *testing.T) {
 	file.reachedTip(80, true)
 
 	// Then Kafka can stop immediately and file EOF stops at its captured position.
-	if err != nil || action != tipStop || file.stop == nil || !file.atTip || file.position != 80 || file.stable != 80 {
-		t.Fatal(action, err, file)
-	}
+	require.NoError(t, err)
+	require.Equal(t, tipStop, action)
+	require.Equal(t, &Stop{Reason: "eof", At: 80}, file.stop)
+	require.True(t, file.atTip)
+	require.Equal(t, int64(80), file.position)
+	require.Equal(t, int64(80), file.stable)
 }
-
-func ptr[T any](value T) *T { return &value }

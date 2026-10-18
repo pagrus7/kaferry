@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/config"
+	"github.com/stretchr/testify/require"
 )
 
 type workCount struct {
@@ -25,7 +26,12 @@ func (m mockWorkCounts) Work(id int32) (int, int64) {
 
 func TestFlowAdmissionHonorsEveryCapAndAllowsOversizedAlone(t *testing.T) {
 	input := incoming(3, 0, 16)
-	size := input.Record.Size()
+	input.Record.Key = []byte("k")
+	input.Record.Headers = []Header{{Name: "name", Value: []byte("header")}}
+	input.Record.Source = &Provenance{Topic: "orders", Partition: 3, Offset: 0}
+	// The estimate includes the envelope, key/value, header and source topic.
+	const size int64 = 64 + 1 + 16 + 24 + 4 + 6 + 24 + 6
+	require.Equal(t, size, input.Record.Size())
 	for _, tc := range []struct {
 		name       string
 		total      workCount
@@ -33,7 +39,7 @@ func TestFlowAdmissionHonorsEveryCapAndAllowsOversizedAlone(t *testing.T) {
 		inputBytes int
 		want       bool
 	}{
-		{"fits exactly", workCount{1, size}, workCount{1, size}, 16, true},
+		{"fits exactly", workCount{1, 3 * size}, workCount{1, size}, 16, true},
 		{"worker records", workCount{4, size}, workCount{1, size}, 16, false},
 		{"partition records", workCount{2, size}, workCount{2, size}, 16, false},
 		{"worker bytes", workCount{1, 3*size + 1}, workCount{1, size}, 16, false},
@@ -47,57 +53,97 @@ func TestFlowAdmissionHonorsEveryCapAndAllowsOversizedAlone(t *testing.T) {
 			f := flow{}
 
 			// When admitting the next record, including its key/value/header accounting.
-			got := f.admits(incoming(3, 0, tc.inputBytes), work, limits)
+			next := input
+			next.Record.Value = make([]byte, tc.inputBytes)
+			got := f.admits(next, work, limits)
 
 			// Then every cap applies and the lone oversized-record exception is retained.
-			if got != tc.want {
-				t.Fatal(got, tc.want)
-			}
+			require.Equal(t, tc.want, got)
 		})
 	}
 }
 
 func TestFlowCommitCadenceAndPauseReasons(t *testing.T) {
-	for _, reason := range []string{"none", "periodic", "worker records", "worker bytes", "worker full records", "worker full bytes", "partition records", "partition bytes", "deferred", "pending"} {
-		t.Run(reason, func(t *testing.T) {
-			// Given work below every half-cap and a periodic save not yet due.
+	for _, tc := range []struct {
+		name                string
+		total, partition    workCount
+		elapsed             time.Duration
+		deferred, pending   bool
+		wantDue, wantPaused bool
+	}{
+		{name: "none", total: workCount{1, 100}, partition: workCount{1, 100}},
+		{name: "periodic", total: workCount{1, 100}, partition: workCount{1, 100}, elapsed: time.Second, wantDue: true},
+		{name: "worker records", total: workCount{5, 100}, partition: workCount{1, 100}, wantDue: true},
+		{name: "worker bytes", total: workCount{1, 500}, partition: workCount{1, 100}, wantDue: true},
+		{name: "worker full records", total: workCount{10, 100}, partition: workCount{1, 100}, wantDue: true, wantPaused: true},
+		{name: "worker full bytes", total: workCount{1, 1000}, partition: workCount{1, 100}, wantDue: true, wantPaused: true},
+		{name: "partition records", total: workCount{4, 100}, partition: workCount{4, 100}, wantDue: true},
+		{name: "partition bytes", total: workCount{1, 400}, partition: workCount{1, 400}, wantDue: true},
+		{name: "deferred", total: workCount{1, 100}, partition: workCount{1, 100}, deferred: true, wantDue: true, wantPaused: true},
+		{name: "pending", total: workCount{1, 100}, partition: workCount{1, 100}, pending: true, wantPaused: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given independent work counts, held input and elapsed time.
 			now := time.Unix(10, 0)
 			f := flow{lastCommit: now}
-			limits := config.Worker{RecordCap: 10, ByteCap: 1000, PartitionRecordCap: 8, PartitionByteCap: 800}
-			work := mockWorkCounts{total: workCount{1, 100}, partitions: map[int32]workCount{3: {1, 100}}}
-			switch reason {
-			case "periodic":
-				now = now.Add(time.Second)
-			case "worker records":
-				work.total.records = 5
-			case "worker bytes":
-				work.total.bytes = 500
-			case "worker full records":
-				work.total.records = 10
-			case "worker full bytes":
-				work.total.bytes = 1000
-			case "partition records":
-				work.total.records = 4
-				work.partitions[3] = workCount{4, 100}
-			case "partition bytes":
-				work.total.bytes = 400
-				work.partitions[3] = workCount{1, 400}
-			case "deferred":
+			if tc.deferred {
 				f.deferred = &Input{}
-			case "pending":
+			}
+			if tc.pending {
 				f.pending = &submission{}
 			}
+			limits := config.Worker{RecordCap: 10, ByteCap: 1000, PartitionRecordCap: 8, PartitionByteCap: 800}
+			work := mockWorkCounts{total: tc.total, partitions: map[int32]workCount{3: tc.partition}}
 
 			// When evaluating commit cadence and worker-wide pause independently.
-			due := f.commitDue(now, work, map[int32]*partition{3: {}}, limits)
+			due := f.commitDue(now.Add(tc.elapsed), work, map[int32]*partition{3: {}}, limits)
 			paused := f.full(work, limits)
 
 			// Then half-caps save; held input pauses; pending alone does not force saves.
-			wantDue := reason != "none" && reason != "pending"
-			wantPaused := reason == "pending" || reason == "deferred" || reason == "worker full records" || reason == "worker full bytes"
-			if due != wantDue || paused != wantPaused {
-				t.Fatal(reason, due, paused)
-			}
+			require.Equal(t, tc.wantDue, due, "commit due")
+			require.Equal(t, tc.wantPaused, paused, "worker paused")
+		})
+	}
+}
+
+func TestPartitionCapsPauseOnlyTheFullPartitionUntilSaved(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		records int
+		bytes   int64
+	}{
+		{"records", 2, 1000000},
+		{"bytes", 100, 2 * (64 + 10)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given two partitions below the worker caps, with only partition zero full.
+			r, source, sink, store, _ := fixture(t)
+			r.limits.RecordCap, r.limits.ByteCap = 100, 1000000
+			r.limits.PartitionRecordCap, r.limits.PartitionByteCap = tc.records, tc.bytes
+			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0}}, {Cursor: Cursor{Partition: 1}}}))
+			require.NoError(t, r.input(incoming(0, 0, 10)))
+			require.NoError(t, r.input(incoming(0, 1, 10)))
+			require.NoError(t, r.input(incoming(1, 0, 10)))
+
+			// When applying pauses, then only the partition at its cap pauses.
+			require.NoError(t, r.pause())
+			require.Equal(t, map[int32]bool{0: true}, source.paused)
+			require.False(t, r.partitions[1].paused)
+
+			// When both writes for partition zero are confirmed, they still use its budget.
+			sink.reports <- Delivery{Token: sink.writes[0]}
+			sink.reports <- Delivery{Token: sink.writes[1]}
+			require.NoError(t, r.deliveries())
+			require.NoError(t, r.pause())
+			require.True(t, source.paused[0])
+
+			// When confirmed progress is saved, then that partition resumes independently.
+			require.NoError(t, r.commit(r.ids()))
+			require.NoError(t, r.pause())
+			require.Equal(t, [][]Cursor{{{Partition: 0, Position: 2}}}, store.saves)
+			require.Equal(t, map[int32]bool{0: false}, source.paused)
+			require.False(t, r.partitions[0].paused)
+			require.False(t, r.partitions[1].paused)
 		})
 	}
 }

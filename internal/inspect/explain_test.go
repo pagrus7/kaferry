@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"math"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -18,6 +17,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 type fixedClock struct{ now time.Time }
@@ -27,6 +27,7 @@ func (fixedClock) Sleep(time.Duration) {}
 func number(n int64) *int64            { return &n }
 
 type topicMock struct {
+	afterSaved      func()
 	memberships     []kafkaport.Membership
 	observations    []string
 	membershipReads int
@@ -72,6 +73,9 @@ func (m *topicMock) Membership(context.Context, string) (kafkaport.Membership, e
 func (m *topicMock) Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {
 	m.groupReads++
 	m.observations = append(m.observations, "saved")
+	if m.afterSaved != nil {
+		m.afterSaved()
+	}
 	return m.positions, m.metadata, m.err("saved")
 }
 func (m *topicMock) Offsets(_ context.Context, _ []int32, kind kafkaport.OffsetKind, committed bool) (map[int32]int64, error) {
@@ -143,9 +147,7 @@ func fixture() (*Service, plan.Plan, *factoryMock, *filesMock) {
 func preview(t *testing.T, service *Service, p plan.Plan) Report {
 	t.Helper()
 	r, err := service.Explain(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return r
 }
 
@@ -159,23 +161,26 @@ func TestTopicPreviewUsesSavedPositionsAndOnlyRequiredStartLookups(t *testing.T)
 	// When previewing through the real shared positioner with mocked metadata ports.
 	report := preview(t, service, p)
 	// Then starts, bounds and error policies are explicit without estimating work or changing progress.
-	if report.Version != 1 || report.Fingerprint == "" || report.Group != "g" || len(report.Partitions) != 2 {
-		t.Fatal(report)
-	}
+	require.EqualValues(t, 1, report.Version)
+	require.NotEmpty(t, report.Fingerprint)
+	require.Equal(t, "g", report.Group)
+	require.Len(t, report.Partitions, 2)
 	window := plan.Window{Lower: number(100), Upper: number(1000)}
 	want := []Partition{
 		{ID: 0, Start: 4, Saved: true, LogEnd: 10, Window: window, WindowOrigin: "literal"},
 		{ID: 1, Start: 3, LogEnd: 11, Window: window, WindowOrigin: "literal"},
 	}
-	if !reflect.DeepEqual(report.Partitions, want) {
-		t.Fatal("wrong positions or bounds", report.Partitions)
-	}
-	if len(source.queries) != 1 || len(source.queries[0]) != 1 || source.queries[0][1] != 100 || source.memberChecks != 1 || source.groupReads != 1 || !reflect.DeepEqual(source.positions, map[int32]int64{0: 4}) {
-		t.Fatal("positioning or progress changed", source)
-	}
-	if source.closed != 1 || factory.connections["output"].closed != 1 || !strings.Contains(strings.Join(report.Warnings, " "), "LogAppendTime") || len(report.Warnings) != 1 {
-		t.Fatal("cleanup or warnings lost", report)
-	}
+	require.Equal(t, want, report.Partitions)
+	require.Len(t, source.queries, 1)
+	require.Len(t, source.queries[0], 1)
+	require.EqualValues(t, 100, source.queries[0][1])
+	require.EqualValues(t, 1, source.memberChecks)
+	require.EqualValues(t, 1, source.groupReads)
+	require.Equal(t, map[int32]int64{0: 4}, source.positions)
+	require.EqualValues(t, 1, source.closed)
+	require.EqualValues(t, 1, factory.connections["output"].closed)
+	require.Contains(t, strings.Join(report.Warnings, " "), "LogAppendTime")
+	require.Len(t, report.Warnings, 1)
 }
 
 func TestLatestAndUnmatchedTimestampStartAtCommittedEnd(t *testing.T) {
@@ -191,9 +196,8 @@ func TestLatestAndUnmatchedTimestampStartAtCommittedEnd(t *testing.T) {
 			// When inspecting an unbounded statement.
 			report := preview(t, service, p)
 			// Then the run starts at the stable end and no stopping lookup is invented.
-			if report.Partitions[0].Start != 9 || report.Partitions[0].LogEnd != 10 {
-				t.Fatal(report.Partitions)
-			}
+			require.EqualValues(t, 9, report.Partitions[0].Start)
+			require.EqualValues(t, 10, report.Partitions[0].LogEnd)
 		})
 	}
 }
@@ -209,15 +213,15 @@ func TestRelativeWindowsPreserveSavedAndAdoptedBounds(t *testing.T) {
 	source.metadata = map[int32]kafkaport.Progress{0: {Window: &plan.Window{Lower: number(100), Upper: number(1000)}}, 1: {Window: &plan.Window{Lower: number(200), Upper: number(2000)}}}
 	// When inspecting, then old partitions keep their windows and the new one adopts the lowest partition's window.
 	report := preview(t, service, p)
-	if *report.Partitions[1].Window.Upper != 2000 || report.Partitions[1].WindowOrigin != "saved" || *report.Partitions[2].Window.Upper != 1000 || report.Partitions[2].WindowOrigin != "adopted" {
-		t.Fatal(report.Partitions)
-	}
+	require.EqualValues(t, 2000, *report.Partitions[1].Window.Upper)
+	require.Equal(t, "saved", report.Partitions[1].WindowOrigin)
+	require.EqualValues(t, 1000, *report.Partitions[2].Window.Upper)
+	require.Equal(t, "adopted", report.Partitions[2].WindowOrigin)
 	// Given fresh progress instead, when inspecting, then NOW is preview-only.
 	service, _, _, _ = fixture()
 	report = preview(t, service, p)
-	if *report.Partitions[0].Window.Upper != 5000 || report.Partitions[0].WindowOrigin != "resolved" {
-		t.Fatal(report)
-	}
+	require.EqualValues(t, 5000, *report.Partitions[0].Window.Upper)
+	require.Equal(t, "resolved", report.Partitions[0].WindowOrigin)
 }
 
 func TestOneOffDoesNotReadOrGenerateAConsumerGroup(t *testing.T) {
@@ -226,9 +230,10 @@ func TestOneOffDoesNotReadOrGenerateAConsumerGroup(t *testing.T) {
 	p.OneOff = true
 	// When inspecting, then no group is generated or queried.
 	report := preview(t, service, p)
-	if report.Group != "ONE_OFF" || !report.OneOff || factory.connections["input"].groupReads != 0 || factory.connections["input"].memberChecks != 0 {
-		t.Fatal(report, factory.connections["input"])
-	}
+	require.Equal(t, "ONE_OFF", report.Group)
+	require.True(t, report.OneOff)
+	require.Zero(t, factory.connections["input"].groupReads)
+	require.Zero(t, factory.connections["input"].memberChecks)
 }
 
 func TestFileInspectionCarriesPositionsAndAcknowledgedOutputExtent(t *testing.T) {
@@ -240,9 +245,11 @@ func TestFileInspectionCarriesPositionsAndAcknowledgedOutputExtent(t *testing.T)
 	// When inspecting both file endpoints.
 	report := preview(t, service, p)
 	// Then the saved byte position and output extent are reported without Kafka access.
-	if factory.opened != 0 || *report.Source.File.StartBytes != 200 || !*report.Source.File.CheckpointExists || *report.Destination.File.AcknowledgedExtent != 300 || files.output.ID != "destination" {
-		t.Fatal(report)
-	}
+	require.Zero(t, factory.opened)
+	require.EqualValues(t, 200, *report.Source.File.StartBytes)
+	require.True(t, *report.Source.File.CheckpointExists)
+	require.EqualValues(t, 300, *report.Destination.File.AcknowledgedExtent)
+	require.Equal(t, "destination", files.output.ID)
 	// Given a Kafka source with per-partition extents, then the greatest acknowledged extent is used.
 	service, p, factory, files = fixture()
 	p.Destination.Kind = "FILE"
@@ -251,9 +258,9 @@ func TestFileInspectionCarriesPositionsAndAcknowledgedOutputExtent(t *testing.T)
 		factory.connections["input"].metadata[int32(id)] = kafkaport.Progress{FileID: "archive", Extent: int64(200 + id*100)}
 	}
 	report = preview(t, service, p)
-	if files.output.ID != "archive" || files.output.Extent != 300 || *report.Destination.File.AcknowledgedExtent != 300 {
-		t.Fatal(report, files.output)
-	}
+	require.Equal(t, "archive", files.output.ID)
+	require.EqualValues(t, 300, files.output.Extent)
+	require.EqualValues(t, 300, *report.Destination.File.AcknowledgedExtent)
 }
 
 func TestInspectionFailuresCloseOnlyAcquiredConnections(t *testing.T) {
@@ -280,9 +287,9 @@ func TestInspectionFailuresCloseOnlyAcquiredConnections(t *testing.T) {
 			}
 			// When inspecting, then preserve the failure and close each acquired connection once.
 			_, err := service.Explain(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
-			if !errors.Is(err, injected) || source.closed != wantSource || destination.closed != wantDestination {
-				t.Fatal(err, source.closed, destination.closed)
-			}
+			require.ErrorIs(t, err, injected)
+			require.Equal(t, wantSource, source.closed)
+			require.Equal(t, wantDestination, destination.closed)
 		})
 	}
 }
@@ -305,9 +312,9 @@ func TestInvalidSavedPositionsAndWindowOverflowFailBeforeLookup(t *testing.T) {
 			}
 			// When inspecting, then reject the invalid evidence and release both connections.
 			_, err := service.Explain(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
-			if err == nil || source.closed != 1 || factory.connections["output"].closed != 1 {
-				t.Fatal(err)
-			}
+			require.Error(t, err)
+			require.EqualValues(t, 1, source.closed)
+			require.EqualValues(t, 1, factory.connections["output"].closed)
 		})
 	}
 }
@@ -319,9 +326,8 @@ func TestUpperBoundOnlyDoesNotRequestTimestampLookups(t *testing.T) {
 	p.CutoffMS = 20
 	// When previewing, then start at the earliest offset without looking up an end timestamp.
 	report := preview(t, service, p)
-	if len(factory.connections["input"].queries) != 0 || report.Partitions[0].Start != 0 {
-		t.Fatal(report)
-	}
+	require.Len(t, factory.connections["input"].queries, 0)
+	require.Zero(t, report.Partitions[0].Start)
 }
 
 func TestExpiredPositionStartsAtLogStartWithOneWarning(t *testing.T) {
@@ -332,9 +338,8 @@ func TestExpiredPositionStartsAtLogStartWithOneWarning(t *testing.T) {
 	source.low[0], source.positions[0], source.metadata[0] = 3, 1, kafkaport.Progress{}
 	// When previewing, then show the actual resumed start and the skipped offset range.
 	report := preview(t, service, p)
-	if report.Partitions[0].Start != 3 || !strings.Contains(strings.Join(report.Warnings, " "), "saved offset 1 expired") {
-		t.Fatal(report)
-	}
+	require.EqualValues(t, 3, report.Partitions[0].Start)
+	require.Contains(t, strings.Join(report.Warnings, " "), "saved offset 1 expired")
 }
 
 func TestCancelledInspectionDoesNotAcquireConnections(t *testing.T) {
@@ -344,9 +349,8 @@ func TestCancelledInspectionDoesNotAcquireConnections(t *testing.T) {
 	cancel()
 	// When inspecting, then return cancellation before acquiring resources.
 	_, err := service.Explain(ctx, p, config.Worker{}, core.NoopStopObserver{})
-	if !errors.Is(err, context.Canceled) || factory.opened != 0 {
-		t.Fatal(err, factory.opened)
-	}
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, factory.opened)
 }
 
 func TestPreviewReportsNewPartitionFallbackAndEffectiveRecordPolicies(t *testing.T) {
@@ -358,9 +362,9 @@ func TestPreviewReportsNewPartitionFallbackAndEffectiveRecordPolicies(t *testing
 	source.positions[0], source.metadata[0] = 4, kafkaport.Progress{}
 	// When inspecting, then new partitions start earliest and the actual policy is exposed.
 	report := preview(t, service, p)
-	if report.StartRule != "EARLIEST" || report.Partitions[1].Start != 0 || report.RecordErrors != (ErrorPolicies{MissingTimestamp: "SKIP", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}) {
-		t.Fatal(report)
-	}
+	require.Equal(t, "EARLIEST", report.StartRule)
+	require.Zero(t, report.Partitions[1].Start)
+	require.Equal(t, (ErrorPolicies{MissingTimestamp: "SKIP", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}), report.RecordErrors)
 }
 
 func TestFilePreviewPreservesFreshAndSavedRelativeWindows(t *testing.T) {
@@ -378,9 +382,13 @@ func TestFilePreviewPreservesFreshAndSavedRelativeWindows(t *testing.T) {
 			// When composing the preview, then retain the inspector's bounds and describe their origin accurately.
 			report := preview(t, service, p)
 			info := report.Source.File
-			if info.WindowOrigin != origin || !reflect.DeepEqual(*info.Window, files.source.Window) || *info.StartBytes != 200 || *info.CheckpointExists != saved || info.Checkpoint != "checkpoint.json" || factory.opened != 1 || factory.connections["output"].closed != 1 {
-				t.Fatal(report)
-			}
+			require.Equal(t, origin, info.WindowOrigin)
+			require.Equal(t, files.source.Window, *info.Window)
+			require.EqualValues(t, 200, *info.StartBytes)
+			require.Equal(t, saved, *info.CheckpointExists)
+			require.Equal(t, "checkpoint.json", info.Checkpoint)
+			require.EqualValues(t, 1, factory.opened)
+			require.EqualValues(t, 1, factory.connections["output"].closed)
 		})
 	}
 }
@@ -391,7 +399,8 @@ func TestFreshTimeWindowWarnsWhenEarlierOffsetsAreNotRetained(t *testing.T) {
 	factory.connections["input"].low[0] = 2
 	// When inspecting, then report the selected offset and possible missing history, without claiming proven loss.
 	report := preview(t, service, p)
-	if report.Partitions[0].Start != 2 || report.Partitions[0].Saved || len(report.Warnings) != 1 || !strings.Contains(report.Warnings[0], "start of the requested window may be unavailable") {
-		t.Fatal(report)
-	}
+	require.EqualValues(t, 2, report.Partitions[0].Start)
+	require.False(t, report.Partitions[0].Saved)
+	require.Len(t, report.Warnings, 1)
+	require.Contains(t, report.Warnings[0], "start of the requested window may be unavailable")
 }

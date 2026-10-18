@@ -7,13 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 type interruptedPublication struct {
@@ -63,6 +64,42 @@ func (p *interruptedPublication) SyncDirectory(path string) error {
 	return p.after("directory-sync", p.nativePublication.SyncDirectory(path))
 }
 
+func TestPublicationSyncsBeforeAndAfterPublishing(t *testing.T) {
+	// Given a publisher that records completed filesystem operations.
+	fs := &interruptedPublication{}
+	path := filepath.Join(t.TempDir(), "out.cbor")
+
+	// When publishing a new output.
+	out, created, err := (&publisher{fs: fs}).Create(path, "group", "fp", codec(t))
+
+	// Then its header is durable before linking and the directory is synced before success.
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, out.Close()) })
+	require.True(t, created)
+	want := []string{"temporary", "header-write", "header-sync", "publish", "temporary-unlink", "directory-sync"}
+	require.GreaterOrEqual(t, len(fs.calls), len(want))
+	require.Equal(t, want, fs.calls[:len(want)])
+}
+
+func TestOversizedPublicationHeaderLeavesNoFilesOrLocks(t *testing.T) {
+	// Given a group whose archive header exceeds the fixed header limit.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.cbor")
+
+	// When creating the output.
+	out, err := NewOutput(NewPublisher(), path, strings.Repeat("g", int(headerLimit)), "fp", "", 0, codec(t), 10, logger())
+
+	// Then publication fails without an output or temporary file, and a valid retry succeeds.
+	require.Nil(t, out)
+	require.ErrorContains(t, err, "archive header too large")
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+	out, err = NewOutput(NewPublisher(), path, "group", "fp", "", 0, codec(t), 10, logger())
+	require.NoError(t, err)
+	out.Close()
+}
+
 func TestPublicationFailuresNeverPermitUnownedOutput(t *testing.T) {
 	// Given
 	for _, stage := range []string{"temporary", "header-write", "short-write", "header-sync", "publish", "temporary-unlink", "directory-sync"} {
@@ -82,11 +119,18 @@ func TestPublicationFailuresNeverPermitUnownedOutput(t *testing.T) {
 				t.Fatal("failed publication became writable", out, err)
 			}
 			_, exists := os.Stat(path)
+			if exists == nil {
+				// A post-link failure must release the published inode's lock.
+				published, openErr := os.OpenFile(path, os.O_RDWR, 0)
+				require.NoError(t, openErr)
+				t.Cleanup(func() { _ = published.Close() })
+				require.NoError(t, lock(published), "failed publication must release its file descriptor")
+				require.NoError(t, published.Close())
+			}
 			restarted, err := NewOutput(NewPublisher(), path, "group", "fp", "", 0, codec(t), 10, logger())
 			if exists == nil {
-				if restarted != nil || err == nil {
-					t.Fatal("unowned published header was adopted")
-				}
+				require.Nil(t, restarted)
+				require.ErrorContains(t, err, "no stored destination identity")
 			} else {
 				if err != nil {
 					t.Fatal("unpublished failure prevented clean creation", err)
@@ -149,22 +193,14 @@ func TestCrashAtEveryOutputInitializationBoundary(t *testing.T) {
 		args := os.Args[len(os.Args)-4:]
 		stage, src, dst, directory := args[0], args[1], args[2], args[3]
 		cp, err := NewCheckpoints(directory, "initialization", initializationWriter{stage})
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		source, err := NewSource(src, "fp", plan.WindowSpec{}, codec(t), cp, core.RealClock{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		pub := &publisher{fs: &interruptedPublication{stage: stage, crash: true}}
 		out, err := NewOutput(pub, dst, "initialization", "fp", "", 0, codec(t), 10, logger())
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		cp.BindOutput(out)
-		if err := source.Start(&lifecycle{}, nil); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, source.Start(&lifecycle{}, nil))
 		t.Fatal("initialization crash boundary not reached")
 	}
 	for _, stage := range []string{"temporary", "header-write", "header-sync", "publish", "temporary-unlink", "directory-sync", "before-checkpoint", "checkpoint-temporary", "checkpoint-write", "checkpoint-sync", "checkpoint-rename", "checkpoint-directory-sync", "after-checkpoint"} {
@@ -172,19 +208,15 @@ func TestCrashAtEveryOutputInitializationBoundary(t *testing.T) {
 			dir := t.TempDir()
 			src, dst, cpdir := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "out.cbor"), t.TempDir()
 			fixture, err := NewOutput(NewPublisher(), src, "fixture", "fixture", "", 0, codec(t), 10, logger())
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			for _, value := range []string{"a", "b", "c"} {
-				if err := fixture.Submit(core.Record{Value: []byte(value), TimestampType: "unknown"}, core.Token{}); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, fixture.Submit(core.Record{Value: []byte(value), TimestampType: "unknown"}, core.Token{}))
 			}
-			if err := fixture.Flush(); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, fixture.Flush())
 			fixture.Close()
-			child := exec.Command(os.Args[0], "-test.run=^TestCrashAtEveryOutputInitializationBoundary$", "--", stage, src, dst, cpdir)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCrashAtEveryOutputInitializationBoundary$", "--", stage, src, dst, cpdir)
 			child.Env = append(os.Environ(), "KAFERRY_INITIALIZATION_CRASH=1")
 
 			// When
@@ -195,14 +227,10 @@ func TestCrashAtEveryOutputInitializationBoundary(t *testing.T) {
 				t.Fatalf("initialization child: %v %s", err, data)
 			}
 			cp, err := NewCheckpoints(cpdir, "initialization", DurableWriter{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			defer cp.Close()
 			source, err := NewSource(src, "fp", plan.WindowSpec{}, codec(t), cp, core.RealClock{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			defer source.Close()
 			id, extent := "", int64(0)
 			if saved := cp.Existing(); saved != nil {
@@ -213,32 +241,22 @@ func TestCrashAtEveryOutputInitializationBoundary(t *testing.T) {
 				}
 				// The documented operator remedy is safe only for this header-only fixture.
 				f, err := os.Open(dst)
-				if err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, err)
 				info, _ := f.Stat()
 				_, end, err := codec(t).Header(f, info.Size())
 				f.Close()
 				if err != nil || end != info.Size() {
 					t.Fatal("initialization published record data before its checkpoint", err)
 				}
-				if err := os.Remove(dst); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, os.Remove(dst))
 			}
 			out, err := NewOutput(NewPublisher(), dst, "initialization", "fp", id, extent, codec(t), 10, logger())
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			defer out.Close()
 			cp.BindOutput(out)
 			r := core.NewRunner(source, out, cp, core.RealClock{}, logger(), plan.Plan{Source: plan.Endpoint{Kind: "FILE"}}, config.Defaults(dir).Worker, core.NewTracker(), core.NoopStopObserver{}, nil)
-			if err := r.Run(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			if values := outputValues(t, dst); !reflect.DeepEqual(values, []string{"a", "b", "c"}) {
-				t.Fatal("initialization recovery lost or duplicated records", values)
-			}
+			require.NoError(t, r.Run(ctx))
+			require.Equal(t, []string{"a", "b", "c"}, outputValues(t, dst), "initialization recovery preserves all records")
 			stale, _ := filepath.Glob(filepath.Join(dir, temporaryPrefix(dst)+"*"))
 			if len(stale) != 0 {
 				t.Fatal("orphan header files remained after recovery", stale)
@@ -250,26 +268,18 @@ func TestCrashAtEveryOutputInitializationBoundary(t *testing.T) {
 func outputValues(t *testing.T, path string) []string {
 	t.Helper()
 	f, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer f.Close()
 	info, _ := f.Stat()
 	c := codec(t)
 	_, position, err := c.Header(f, info.Size())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var values []string
 	for position < info.Size() {
 		payload, next, _, err := readFrame(f, position, info.Size(), c.FrameLimit())
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		record, err := c.DecodeRecord(payload)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		values = append(values, string(record.Value))
 		position = next
 	}
@@ -286,22 +296,14 @@ func TestZeroFilledOutputTailIsTruncatedOnlyBeyondDurableExtent(t *testing.T) {
 			out, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, codec(t), 10, logger())
 
 			// Then
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			id, start := out.DurableOutput()
-			if err := out.Submit(sample(), core.Token{}); err != nil {
-				t.Fatal(err)
-			}
-			if err := out.Flush(); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, out.Submit(sample(), core.Token{}))
+			require.NoError(t, out.Flush())
 			_, extent := out.DurableOutput()
 			out.Close()
 			f, err := os.OpenFile(path, os.O_RDWR, 0600)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			position := extent
 			if acknowledged {
 				position = start
@@ -317,9 +319,7 @@ func TestZeroFilledOutputTailIsTruncatedOnlyBeyondDurableExtent(t *testing.T) {
 				}
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			out.Close()
 			info, _ := os.Stat(path)
 			if info.Size() != extent {
@@ -339,9 +339,7 @@ func TestCheckpointRenameFailurePreservesSavedPositionAndPendingFrames(t *testin
 	// Given
 	dir := t.TempDir()
 	cp, err := NewCheckpoints(dir, "g", DurableWriter{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer cp.Close()
 	cp.Initialize(Checkpoint{Version: 2, OpeningSize: 10, Fingerprint: "fp", SourceID: "source", Position: 0})
 
@@ -349,26 +347,21 @@ func TestCheckpointRenameFailurePreservesSavedPositionAndPendingFrames(t *testin
 	_, saveErr := cp.Save(context.Background(), []core.Cursor{{Partition: 0}})
 
 	// Then
-	if saveErr != nil {
-		t.Fatal(saveErr)
-	}
+	require.NoError(t, saveErr)
 	before, err := os.ReadFile(cp.path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	cp.RememberFrame(10, FrameIdentity{Position: 0, CRC: 123})
 	blocked := filepath.Join(dir, "directory-target")
-	if err := os.Mkdir(blocked, 0700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(blocked, 0700))
 	cp.writer = blockedRename{target: blocked}
 	if _, err := cp.Save(context.Background(), []core.Cursor{{Partition: 0, Position: 10}}); err == nil {
 		t.Fatal("invalid checkpoint rename succeeded")
 	}
 	after, err := os.ReadFile(cp.path)
-	if err != nil || !reflect.DeepEqual(before, after) || cp.Existing().Position != 0 || cp.frames[10] == nil {
-		t.Fatal("rename failure advanced progress or discarded replay state", err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, before, after, "failed rename preserves checkpoint bytes")
+	require.Zero(t, cp.Existing().Position, "failed rename preserves progress")
+	require.NotNil(t, cp.frames[10], "failed rename preserves pending frame identity")
 	cp.writer = DurableWriter{}
 	if _, err := cp.Save(context.Background(), []core.Cursor{{Partition: 0, Position: 10}}); err != nil || cp.Existing().Position != 10 {
 		t.Fatal("retry could not persist the preserved frame", err)

@@ -160,9 +160,7 @@ func (t *Tracker) Committed(cursor Cursor) {
 		delete(p.pending, e.token.Sequence)
 		n++
 	}
-	for i := 0; i < n; i++ {
-		p.entries[i] = nil
-	}
+	clear(p.entries[:n])
 	p.entries = p.entries[n:]
 	p.committed = cursor.Position
 }

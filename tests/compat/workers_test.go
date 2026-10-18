@@ -12,6 +12,7 @@ import (
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/app"
+	"github.com/stretchr/testify/require"
 )
 
 type workerResult struct {
@@ -72,36 +73,42 @@ func TestDistributedWorkersFinishIndependently(t *testing.T) {
 	for i := range 60 {
 		publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &source, Partition: int32(i % 2)}, Key: []byte(fmt.Sprintf("key-%d", i%7)), Value: []byte(fmt.Sprintf("record-%d", i)), Timestamp: time.Now()})
 	}
-	for i := range 2 {
-		publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &source, Partition: int32(i)}, Value: []byte("trigger"), Timestamp: end.Add(time.Second)})
+	// When only partition zero receives its timestamp stop trigger.
+	publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &source, Partition: 0}, Value: []byte("trigger"), Timestamp: end.Add(time.Second)})
+	select {
+	case result := <-results:
+		// Then its worker finishes while the other partition still needs its trigger.
+		require.Zero(t, result.code, result.detail)
+	case <-ctx.Done():
+		t.Fatal("first worker waited for the other partition's stop trigger")
 	}
-	for range 2 {
-		select {
-		case r := <-results:
+	select {
+	case result := <-results:
+		t.Fatalf("remaining worker exited before its stop trigger: %+v", result)
+	case <-ctx.Done():
+		t.Fatal("workers exceeded their completion budget")
+	case <-time.After(300 * time.Millisecond):
+	}
+	// When the remaining partition receives its trigger, then its worker also completes.
+	publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &source, Partition: 1}, Value: []byte("trigger"), Timestamp: end.Add(time.Second)})
+	select {
+	case result := <-results:
+		require.Zero(t, result.code, result.detail)
+	case <-ctx.Done():
+		t.Fatal("remaining worker failed to finish")
+	}
 
-			// Then
-			if r.code != 0 {
-				t.Fatalf("worker exit=%d: %s", r.code, r.detail)
-			}
-		case <-ctx.Done():
-			t.Fatal("distributed workers failed to finish independently")
-		}
-	}
 	c := consumer(t, destination+"-reader")
 	var assignments []k.TopicPartition
 	for i := range 3 {
 		assignments = append(assignments, k.TopicPartition{Topic: &destination, Partition: int32(i), Offset: 0})
 	}
-	if err := c.Assign(assignments); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.Assign(assignments))
 	seen := make(map[string]int)
 	keyPartitions := make(map[string]int32)
 	for len(seen) < 60 {
 		r := read(t, c)
-		if string(r.Value) == "trigger" {
-			t.Fatal("stop trigger was published")
-		}
+		require.NotEqual(t, "trigger", string(r.Value), "stop trigger was published")
 		seen[string(r.Value)]++
 		if part, ok := keyPartitions[string(r.Key)]; ok && part != r.TopicPartition.Partition {
 			t.Fatal("same key routed to different partitions")
@@ -109,8 +116,6 @@ func TestDistributedWorkersFinishIndependently(t *testing.T) {
 		keyPartitions[string(r.Key)] = r.TopicPartition.Partition
 	}
 	for i := range 60 {
-		if seen[fmt.Sprintf("record-%d", i)] == 0 {
-			t.Fatal("record lost during worker completion")
-		}
+		require.NotZero(t, seen[fmt.Sprintf("record-%d", i)], "record lost during worker completion")
 	}
 }

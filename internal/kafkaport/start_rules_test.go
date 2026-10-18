@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 type fixedClock struct{ now time.Time }
@@ -137,12 +138,15 @@ func TestPositioningBatchesBrokerRequests(t *testing.T) {
 	positioned, err := positioner.Locate(t.Context(), parts, saved, metadata)
 
 	// Then
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(offsets.calls) != 3 || times.calls != 1 {
 		t.Fatalf("broker requests: offsets=%v timestamp lookups=%d", offsets.calls, times.calls)
 	}
+	ids := make([]int32, len(positioned.Assignments))
+	for i, a := range positioned.Assignments {
+		ids[i] = a.Cursor.Partition
+	}
+	require.Equal(t, parts, ids, "every requested partition is returned once, in order")
 	for _, a := range positioned.Assignments {
 		id := a.Cursor.Partition
 		want := int64(500)

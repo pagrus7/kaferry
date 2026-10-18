@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParserDiagnosticsLocateTheOffendingToken(t *testing.T) {
@@ -12,6 +14,8 @@ func TestParserDiagnosticsLocateTheOffendingToken(t *testing.T) {
 		name, query, message string
 		position             Position
 	}{
+		{"unquoted endpoint", "INSERT INTO TOPIC sensitive_SENTINEL_5c27", "expected single-quoted string; found identifier", Position{1, 19}},
+		{"invalid time operand", prefix + "WHERE RECORD_TIMESTAMP >= sensitive_SENTINEL_5c27", "expected NOW or TIMESTAMP; found identifier", Position{3, 27}},
 		{"empty input", "", "expected WITH or INSERT; found end of input", Position{1, 1}},
 		{"group name needs quotes", prefix + "OPTIONS(GROUP=orders)", "expected single-quoted string or ONE_OFF; found identifier", Position{3, 15}},
 		{"quoted start", prefix + "OPTIONS(GROUP='g', START='EARLIEST')", "expected EARLIEST or LATEST; found string literal", Position{3, 26}},
@@ -46,9 +50,10 @@ func TestParserDiagnosticsLocateTheOffendingToken(t *testing.T) {
 			_, err := NewParser().Parse(tc.query)
 			// Then identify that token and give a precise, redacted explanation.
 			var diagnostic *Diagnostic
-			if !errors.As(err, &diagnostic) || diagnostic.Position != tc.position || diagnostic.Err.Error() != tc.message {
-				t.Fatalf("error=%v, want %v: %s", err, tc.position, tc.message)
-			}
+			require.ErrorAs(t, err, &diagnostic)
+			require.Equal(t, tc.position, diagnostic.Position)
+			require.Equal(t, tc.message, diagnostic.Err.Error())
+			require.NotContains(t, err.Error(), "sensitive_SENTINEL_5c27")
 		})
 	}
 }
@@ -60,18 +65,12 @@ func TestDiagnosticPreservesCauseAndSpecificLocation(t *testing.T) {
 	// When a containing clause supplies a fallback location.
 	err := At(Position{1, 1}, specific)
 	// Then preserve both the value's position and the original cause.
-	if err != specific || !errors.Is(err, cause) || At(Position{}, nil) != nil {
-		t.Fatal("diagnostic lost location or cause", err)
-	}
-	if got := At(Position{}, cause).Error(); got != "invalid value" {
-		t.Fatal("unknown location rendered as a false position", got)
-	}
-	if got := At(Position{1, 4}, At(Position{}, cause)).Error(); got != "line 1, column 4: invalid value" {
-		t.Fatal("fallback location was lost", got)
-	}
-	if got := (&Diagnostic{}).Error(); got != "invalid SQL" {
-		t.Fatal("zero-value diagnostic is unsafe", got)
-	}
+	require.Same(t, specific, err)
+	require.ErrorIs(t, err, cause)
+	require.Nil(t, At(Position{}, nil))
+	require.Equal(t, "invalid value", At(Position{}, cause).Error())
+	require.Equal(t, "line 1, column 4: invalid value", At(Position{1, 4}, At(Position{}, cause)).Error())
+	require.Equal(t, "invalid SQL", (&Diagnostic{}).Error())
 }
 
 func TestParserDiagnosticsNeverEchoArbitraryInput(t *testing.T) {
@@ -82,9 +81,9 @@ func TestParserDiagnosticsNeverEchoArbitraryInput(t *testing.T) {
 		// When reporting the first parse error.
 		_, err := NewParser().Parse(query)
 		// Then never print arbitrary token text or SQL source.
-		if err == nil || strings.Contains(strings.ToLower(err.Error()), strings.ToLower(secret)) || strings.Contains(err.Error(), "sasl.password") {
-			t.Fatal("unsafe diagnostic", err)
-		}
+		require.Error(t, err)
+		require.NotContains(t, strings.ToLower(err.Error()), strings.ToLower(secret))
+		require.NotContains(t, err.Error(), "sasl.password")
 	}
 }
 
@@ -96,9 +95,7 @@ func TestASTCapturesEachAnchorBeforeAdvancingTokens(t *testing.T) {
 		"AND RECORD_TIMESTAMP < NOW() - INTERVAL '2' SECOND\nOPTIONS(GROUP='g', CUTOFF=INTERVAL '3' MINUTE)"
 	// When parsing while preserving transient locations.
 	statement, err := NewParser().Parse(input)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for _, tc := range []struct {
 		got    Position
 		marker string
@@ -121,8 +118,6 @@ func TestASTCapturesEachAnchorBeforeAdvancingTokens(t *testing.T) {
 		prefix := input[:strings.Index(input, tc.marker)]
 		lines := strings.Split(prefix, "\n")
 		want := Position{Line: len(lines), Column: len([]rune(lines[len(lines)-1])) + 1}
-		if tc.got != want {
-			t.Fatalf("%s: position=%v, want=%v", tc.marker, tc.got, want)
-		}
+		require.Equal(t, want, tc.got)
 	}
 }

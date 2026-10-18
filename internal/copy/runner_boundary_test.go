@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRunnerIgnoresLateInputAndEOFAfterStopOrRevocation(t *testing.T) {
@@ -17,34 +18,22 @@ func TestRunnerIgnoresLateInputAndEOFAfterStopOrRevocation(t *testing.T) {
 	upper, stamp := int64(100), int64(101)
 	r.plan.Source.Kind = "TOPIC"
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
-	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}, {Cursor: Cursor{Partition: 1, Position: 0}}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}, {Cursor: Cursor{Partition: 1, Position: 0}}}))
 	trigger := incoming(0, 5, 1)
 	trigger.Record.TimestampMS = &stamp
-	if err := r.input(trigger); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Revoke([]int32{1}, true); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.input(trigger))
+	require.NoError(t, r.Revoke([]int32{1}, true))
 	beforeRecords, beforeBytes := r.tracker.Total()
 
 	// When queued records and EOFs arrive for either partition after completion.
 	for _, id := range []int32{0, 1} {
-		if err := r.input(incoming(id, 6, 100)); err != nil {
-			t.Fatal(err)
-		}
-		if err := r.eof(Cursor{Partition: id, Position: 99}); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, r.input(incoming(id, 6, 100)))
+		require.NoError(t, r.eof(Cursor{Partition: id, Position: 99}))
 	}
 	if records, size := r.tracker.Total(); records != beforeRecords || size != beforeBytes {
 		t.Fatal("late input changed uncommitted work", records, size)
 	}
-	if err := r.commit(r.ids()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.commit(r.ids()))
 
 	// Then no writes or new work occur and the trigger itself remains replayable.
 	if records, size := r.tracker.Total(); records != 0 || size != 0 || len(sink.writes) != 0 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 5, Stop: &Stop{Reason: "timestamp", At: 5}}}}) {
@@ -55,13 +44,9 @@ func TestRunnerIgnoresLateInputAndEOFAfterStopOrRevocation(t *testing.T) {
 func TestRunnerRejectsNewInputWhileSubmissionIsPending(t *testing.T) {
 	// Given a full destination queue holding an unsubmitted record.
 	r, _, sink, store, _ := fixture(t)
-	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 	sink.submit = func(Record, Token) error { return &Busy{} }
-	if err := r.input(incoming(0, 0, 10)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.input(incoming(0, 0, 10)))
 	pending := r.pending
 	beforeRecords, beforeBytes := r.tracker.Total()
 
@@ -78,18 +63,12 @@ func TestRunnerRejectsNewInputWhileSubmissionIsPending(t *testing.T) {
 func TestDrainFlushFailureCommitsOnlyConfirmedPrefix(t *testing.T) {
 	// Given one confirmed write followed by one unconfirmed write.
 	r, source, sink, store, _ := fixture(t)
-	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 	for _, position := range []int64{0, 1} {
-		if err := r.input(incoming(0, position, 1)); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, r.input(incoming(0, position, 1)))
 	}
 	sink.reports <- Delivery{Token: sink.writes[0]}
-	if err := r.deliveries(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.deliveries())
 	failure := errors.New("destination flush failed")
 	sink.flush = func() error { return failure }
 
@@ -132,13 +111,9 @@ func TestRunnerReportsWriteAndFinalSaveFailures(t *testing.T) {
 func TestDrainTimeoutReportsWriteAndFinalSaveFailures(t *testing.T) {
 	// Given a confirmed record, a failed record, and a write that never finishes.
 	r, _, sink, store, clock := fixture(t)
-	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 	for i := range 3 {
-		if err := r.input(incoming(0, int64(i), 1)); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, r.input(incoming(0, int64(i), 1)))
 	}
 	writeErr, saveErr := errors.New("write failed"), errors.New("final save failed")
 	sink.reports <- Delivery{Token: sink.writes[0]}
@@ -198,14 +173,68 @@ func TestProgressFactoryDoesNotShareWorkBetweenQueries(t *testing.T) {
 	token, err := first.Observe(Cursor{Partition: 0, Position: 5}, 6, 100)
 
 	// Then
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if records, bytes := second.Total(); records != 0 || bytes != 0 {
 		t.Fatal("query state leaked")
 	}
 	second.Assign(Cursor{Partition: 0, Position: 20})
 	if first.Saved(0) != 5 || second.Saved(0) != 20 || !first.Settle(token, true) {
 		t.Fatal("query ownership shared")
+	}
+}
+
+func TestRunnerStopsBeforeNextInputWhenPeriodicCheckpointFails(t *testing.T) {
+	for _, stage := range []string{"save", "flush"} {
+		t.Run(stage, func(t *testing.T) {
+			// Given one confirmed record, a periodic save due, and an unread next record.
+			r, source, sink, store, clock := fixture(t)
+			r.plan.Source.Kind = "TOPIC"
+			first, next := incoming(0, 0, 1), incoming(0, 1, 1)
+			source.events = []Event{{Input: &first}, {Input: &next}}
+			failure := errors.New("periodic " + stage + " failed")
+			r.lastCommit = clock.Now()
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			deadline := clock.Now().Add(5 * time.Second)
+			clock.tick = func() {
+				if !clock.Now().Before(deadline) {
+					cancel()
+				}
+			}
+			sink.submit = func(_ Record, token Token) error {
+				sink.reports <- Delivery{Token: token}
+				clock.now = clock.now.Add(time.Second)
+				return nil
+			}
+			if stage == "save" {
+				store.fail = map[int32]error{0: failure}
+				store.onSave = func() {
+					// The periodic save fails; cleanup can subsequently save the same prefix.
+					store.onSave = func() { store.fail = nil }
+				}
+			} else {
+				sink.flush = func() error {
+					sink.flush = nil
+					return failure
+				}
+			}
+
+			// When the normal copy loop reaches its checkpoint.
+			err := r.Run(ctx)
+
+			// Then the original failure remains fatal even after cleanup saves the prefix.
+			require.ErrorIs(t, err, failure)
+			var exit *Exit
+			require.ErrorAs(t, err, &exit)
+			require.Equal(t, 1, exit.Code)
+			require.Len(t, sink.writes, 1, "unread record was submitted after checkpoint failure")
+			require.Equal(t, []Event{{Input: &next}}, source.events)
+			require.Equal(t, int64(1), r.tracker.Saved(0))
+			wantSaves := [][]Cursor{{{Partition: 0, Position: 1}}}
+			if stage == "save" {
+				wantSaves = append(wantSaves, []Cursor{{Partition: 0, Position: 1}})
+			}
+			require.Equal(t, wantSaves, store.saves)
+		})
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLowerFrameLimitCannotTruncateCompleteUnacknowledgedData(t *testing.T) {
@@ -18,16 +19,10 @@ func TestLowerFrameLimitCannotTruncateCompleteUnacknowledgedData(t *testing.T) {
 
 	o, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, large, 10, logger)
 
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	id, headerEnd := o.DurableOutput()
-	if err := o.Submit(core.Record{Value: make([]byte, 2000), TimestampType: "unknown"}, core.Token{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := o.Flush(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, o.Submit(core.Record{Value: make([]byte, 2000), TimestampType: "unknown"}, core.Token{}))
+	require.NoError(t, o.Flush())
 	o.Close()
 	before, _ := os.Stat(path)
 	small, _ := NewCodec(1000)
@@ -51,26 +46,18 @@ func TestTemporaryCleanupRespectsActiveLocks(t *testing.T) {
 	path := filepath.Join(dir, "out.cbor")
 	prefix := temporaryPrefix(path)
 	active, err := os.CreateTemp(dir, prefix)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer active.Close()
-	if err := lock(active); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, lock(active))
 	stale, err := os.CreateTemp(dir, prefix)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	stale.Close()
 
 	// When startup cleans up abandoned publication files.
 	err = cleanupTemporary(path)
 
 	// Then only the unlocked temporary file is removed.
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if _, err := os.Stat(active.Name()); err != nil {
 		t.Fatal("active temporary file was removed")
 	}
@@ -109,9 +96,7 @@ func TestHeadersRequireNameAndValue(t *testing.T) {
 	c := codec(t)
 	for _, h := range []map[string]any{{"name": []byte("header")}, {"value": nil}, {"name": "text", "value": nil}} {
 		payload, err := c.encoder.Marshal(map[string]any{"key": nil, "value": nil, "headers": []map[string]any{h}, "timestamp_ms": nil, "timestamp_type": "unknown"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		// When
 		_, decodeRecordErr := c.DecodeRecord(payload)

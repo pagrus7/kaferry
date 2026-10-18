@@ -76,7 +76,7 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 	report.Source, report.Destination = sourceInfo, destinationInfo
 	report.Fingerprint, err = p.Fingerprint(sourceInfo.ClusterID, destinationInfo.ClusterID)
 	if err != nil {
-		return report, err
+		return report, &kafkaport.Conflict{Err: err}
 	}
 	stop.Stage("reading saved status")
 	if source != nil {

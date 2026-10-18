@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 
 	"github.com/pagrus7/kaferry/internal/sql"
 )
@@ -26,9 +27,7 @@ type Properties struct{ values map[string]string }
 func (p Properties) Get(name string) string { return p.values[name] }
 func (p Properties) Values() map[string]string {
 	values := make(map[string]string, len(p.values))
-	for key, value := range p.values {
-		values[key] = value
-	}
+	maps.Copy(values, p.values)
 	return values
 }
 
@@ -107,9 +106,7 @@ func (p *Planner) connections(inline []sql.Connection, profiles Profiles) (Profi
 			return nil, fmt.Errorf("configuration: connection aliases must start with an ASCII letter or underscore and contain only ASCII letters, digits and underscores")
 		}
 		copy := make(map[string]string, len(properties))
-		for key, value := range properties {
-			copy[key] = value
-		}
+		maps.Copy(copy, properties)
 		connections[alias] = copy
 	}
 	seen := make(map[string]sql.Position)

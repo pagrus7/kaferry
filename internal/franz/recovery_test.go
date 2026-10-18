@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -63,22 +63,15 @@ func readN(t *testing.T, c *kgo.Client, count int) []*kgo.Record {
 	deadline := componentContext(t)
 	for len(records) < count {
 		fetch := c.PollRecords(deadline, count-len(records))
-		if err := fetch.Err(); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, fetch.Err())
 		records = append(records, fetch.Records()...)
 	}
 	return records
 }
-func holdRequests(c *kfake.Cluster, key int16) (<-chan struct{}, func()) {
+func holdRequests(c *kfake.Cluster, key int16) <-chan struct{} {
 	observed := make(chan struct{}, 1)
-	var enabled atomic.Bool
-	enabled.Store(true)
 	c.ControlKey(key, func(kmsg.Request) (kmsg.Response, error, bool) {
 		c.KeepControl()
-		if !enabled.Load() {
-			return nil, nil, false
-		}
 		select {
 		case observed <- struct{}{}:
 		default:
@@ -86,7 +79,7 @@ func holdRequests(c *kfake.Cluster, key int16) (<-chan struct{}, func()) {
 		// A handled request with no response leaves the client waiting on the network.
 		return nil, nil, true
 	})
-	return observed, func() { enabled.Store(false) }
+	return observed
 }
 func await(t *testing.T, done <-chan struct{}, label string) {
 	t.Helper()
@@ -103,15 +96,11 @@ func TestAmbiguousDeliveryReplaysWithoutLosingProgress(t *testing.T) {
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"), kfake.MaxVersions(kversion.V3_9_0()), kfake.ListenFn(gate.listen))
 	defer cluster.Close()
 	producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer producer.Close()
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	for _, value := range []string{"confirmed", "uncertain", "later"} {
-		if err := producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Key: []byte("key"), Value: []byte(value), Timestamp: stamp}).FirstErr(); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Key: []byte("key"), Value: []byte(value), Timestamp: stamp}).FirstErr())
 	}
 	p := boundedComponentPlan(t, cluster)
 	limits := config.Defaults(t.TempDir()).Worker
@@ -122,9 +111,7 @@ func TestAmbiguousDeliveryReplaysWithoutLosingProgress(t *testing.T) {
 	// When the copy times out after the destination has accepted its record.
 	started := time.Now()
 	err = runComponentCopy(componentContext(t), p, limits)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("wanted delivery deadline, got %v", err)
-	}
+	require.ErrorIs(t, err, context.DeadlineExceeded, "wanted delivery deadline, got %v", err)
 	if elapsed := time.Since(started); elapsed > 5*time.Second {
 		t.Fatalf("failed delivery delayed shutdown: %s", elapsed)
 	}
@@ -139,9 +126,7 @@ func TestAmbiguousDeliveryReplaysWithoutLosingProgress(t *testing.T) {
 	// When the destination recovers and the same query restarts.
 	gate.after.Store(0)
 	limits.DeliveryTimeout = "5s"
-	if err := runComponentCopy(componentContext(t), p, limits); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, runComponentCopy(componentContext(t), p, limits))
 	// Then the record replays, producing the permitted duplicate and saving its next offset.
 	saved, err = admin.FetchOffsets(componentContext(t), p.Group)
 	if err != nil || saved["input"][0].At != 3 {
@@ -151,9 +136,7 @@ func TestAmbiguousDeliveryReplaysWithoutLosingProgress(t *testing.T) {
 		t.Fatalf("wanted three source records plus one replay, got %d", end)
 	}
 	reader, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"output": {0: kgo.NewOffset().AtStart()}}))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer reader.Close()
 	for i, record := range readN(t, reader, 4) {
 		want := []string{"confirmed", "uncertain", "uncertain", "later"}[i]
@@ -176,20 +159,14 @@ func TestCompactedOffsetsReachTheBoundedEnd(t *testing.T) {
 			cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"), kfake.MaxVersions(versions))
 			defer cluster.Close()
 			producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...))
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			defer producer.Close()
 			for range 10 {
-				if err := producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Value: []byte("compacted")}).FirstErr(); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Value: []byte("compacted")}).FirstErr())
 			}
 			batch := compactedBatch(retained...)
 			metadata, err := kadm.NewClient(producer).Metadata(componentContext(t), "input")
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			id := metadata.Topics["input"].ID
 			cluster.ControlKey(int16(kmsg.Fetch), func(request kmsg.Request) (kmsg.Response, error, bool) {
 				cluster.KeepControl()
@@ -262,11 +239,8 @@ func TestProductionCopyClosesBlockedStartupAndFetchRequests(t *testing.T) {
 			defer cluster.Close()
 			producer := componentClient(t, cluster)
 			defer producer.Close()
-			if err := producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Value: []byte("one"), Timestamp: time.Now().Add(-time.Hour)}).FirstErr(); err != nil {
-				t.Fatal(err)
-			}
-			observed, release := holdRequests(cluster, int16(operation.key))
-			defer release()
+			require.NoError(t, producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Value: []byte("one"), Timestamp: time.Now().Add(-time.Hour)}).FirstErr())
+			observed := holdRequests(cluster, int16(operation.key))
 			deadline, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 			defer cancel()
 			result := make(chan error, 1)
@@ -277,9 +251,7 @@ func TestProductionCopyClosesBlockedStartupAndFetchRequests(t *testing.T) {
 			// Then the runner and client cleanup return without a broker response.
 			select {
 			case err := <-result:
-				if err == nil {
-					t.Fatal("blocked copy succeeded")
-				}
+				require.Error(t, err, "blocked copy succeeded")
 			case <-time.After(8 * time.Second):
 				t.Fatal("blocked request prevented cleanup")
 			}

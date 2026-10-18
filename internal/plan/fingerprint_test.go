@@ -1,6 +1,10 @@
 package plan
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 // These digests are persisted in commits and checkpoints; equivalence tests
 // alone cannot detect a change that rewrites every query's identity.
@@ -13,16 +17,15 @@ func TestPersistedFingerprintCompatibility(t *testing.T) {
 		{"INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR AND RECORD_TIMESTAMP < NOW() OPTIONS(GROUP='g')", "778cea5a3b644122a14bcc4d3953654db50e897da318701f0b12add9fe402352"},
 	} {
 		t.Run(tc.statement, func(t *testing.T) {
-			// Given a statement whose identity was captured before the refactor.
+			// Given a statement with a fixed persisted fingerprint digest.
 			p := build(t, tc.statement)
 
 			// When its canonical identity is fingerprinted.
 			got, err := p.Fingerprint("source-cluster", "destination-cluster")
 
 			// Then existing consumer groups and checkpoints keep the same identity.
-			if err != nil || got != tc.digest {
-				t.Fatalf("fingerprint=%s, want=%s: %v", got, tc.digest, err)
-			}
+			require.NoError(t, err)
+			require.Equal(t, tc.digest, got)
 		})
 	}
 }

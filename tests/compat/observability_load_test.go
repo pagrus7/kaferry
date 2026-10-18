@@ -18,29 +18,22 @@ import (
 
 	core "github.com/pagrus7/kaferry/internal/copy"
 	archive "github.com/pagrus7/kaferry/internal/file"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLoadObservability(t *testing.T) {
 	// Given the same file workload for disabled, healthy and unavailable export.
 	const count = 40000
 	codec, err := archive.NewCodec(1 << 20)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	dir := t.TempDir()
 	source := filepath.Join(dir, "source.cbor")
 	header, err := codec.EncodeHeader(archive.Header{Version: 1, ID: "load-input", Group: "fixture", Fingerprint: "fixture"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	frame, err := codec.EncodeRecord(core.Record{Key: []byte("key"), Value: make([]byte, 1024), TimestampType: "unknown"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	f, err := os.Create(source)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	buffer := bufio.NewWriter(f)
 	if _, err = buffer.Write(header); err != nil {
 		t.Fatal(err)
@@ -79,9 +72,7 @@ func TestLoadObservability(t *testing.T) {
 				output := filepath.Join(caseDir, mode+".cbor")
 				config := filepath.Join(caseDir, mode+".toml")
 				settings := fmt.Sprintf("[worker]\ncheckpoint_dir=%q\nprogress_interval='0'\n[metrics]\nenabled=%t\n", caseDir, mode != "disabled")
-				if err := os.WriteFile(config, []byte(settings), 0600); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, os.WriteFile(config, []byte(settings), 0600))
 				statement := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='%s')", output, source, mode)
 				report := newLoadReport(t, "observability")
 				report.WorkerRecordCap = 20000
@@ -99,9 +90,7 @@ func TestLoadObservability(t *testing.T) {
 				report.ElapsedSeconds = elapsed.Seconds()
 				report.ChildCPUSeconds = process.cpu().Seconds()
 				report.SampledPeakRSSBytes = memory.peak * 1024
-				if err != nil {
-					t.Fatal(err, process.logs())
-				}
+				require.NoError(t, err)
 				summary := summaryFrom(t, process.logs())
 				report.Records = summary.Confirmed
 				report.RecordsPerSecond = float64(report.Records) / elapsed.Seconds()
@@ -111,19 +100,13 @@ func TestLoadObservability(t *testing.T) {
 					t.Fatal(summary, memory)
 				}
 				data, err := os.ReadFile(output)
-				if err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, err)
 				_, startRecords, err := codec.Header(bytes.NewReader(data), int64(len(data)))
-				if err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, err)
 				if !bytes.Equal(data[startRecords:], bytes.Repeat(frame, count)) {
 					t.Fatal("record bytes changed")
 				}
-				if (requests.Load() == 0) != (mode == "disabled") {
-					t.Fatal("unexpected exporter activity", mode, requests.Load())
-				}
+				require.Equal(t, (mode == "disabled"), (requests.Load() == 0), "unexpected exporter activity")
 				t.Logf("records/s=%.0f cpu=%.3fs peakRSS=%dKiB requests=%d", report.RecordsPerSecond, report.ChildCPUSeconds, memory.peak, requests.Load())
 			})
 		}

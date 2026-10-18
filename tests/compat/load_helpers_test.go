@@ -16,6 +16,7 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/stretchr/testify/require"
 )
 
 type copySummary struct {
@@ -61,9 +62,7 @@ func (s *streamRecords) publish(t *testing.T, producer *k.Producer, reports chan
 			key = nil
 		}
 		message := &k.Message{TopicPartition: k.TopicPartition{Topic: &s.topic, Partition: int32(id % 4)}, Key: key, Value: payload, Timestamp: s.stamp, Headers: s.headers}
-		if err := producer.Produce(message, reports); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, producer.Produce(message, reports))
 		s.seen = append(s.seen, false)
 	}
 }
@@ -83,9 +82,10 @@ func (s *streamRecords) verify(t *testing.T, record *k.Message) {
 	if !bytes.Equal(record.Key, key) || (record.Key == nil) != (key == nil) || len(record.Value) != 1024+id%4096 || !record.Timestamp.Equal(s.stamp) || !reflect.DeepEqual(record.Headers, s.headers) {
 		t.Fatal("logical record changed", id)
 	}
-	for _, b := range record.Value[4:] {
-		if b != byte(id%251) {
-			t.Fatal("payload bytes changed", id)
+	wantByte := byte(id % 251)
+	for offset, b := range record.Value[4:] {
+		if b != wantByte {
+			t.Fatalf("record %d payload byte %d: got %d, want %d", id, offset+4, b, wantByte)
 		}
 	}
 	pair := [2]int32{int32(id % 4), record.TopicPartition.Partition}

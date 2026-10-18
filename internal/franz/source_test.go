@@ -11,6 +11,7 @@ import (
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -19,6 +20,7 @@ import (
 type consumerMock struct {
 	ConsumerClient
 	commitErr       error
+	commitResponse  *kmsg.OffsetCommitResponse
 	committed       map[int32]int64
 	paused, resumed []int32
 }
@@ -36,6 +38,9 @@ func (c *consumerMock) CommitOffsetsSync(_ context.Context, offsets map[string]m
 	for id, offset := range offsets["input"] {
 		c.committed[id] = offset.Offset
 		response.Topics[0].Partitions = append(response.Topics[0].Partitions, kmsg.OffsetCommitResponseTopicPartition{Partition: id})
+	}
+	if c.commitResponse != nil {
+		response = c.commitResponse
 	}
 	callback(nil, nil, response, c.commitErr)
 }
@@ -129,9 +134,7 @@ func TestSourceHoldsPausedRecordWhileOtherPartitionsContinue(t *testing.T) {
 	// Given a buffered record from a just-paused partition.
 	s, client := sourceFixture(t)
 	s.positions[2] = 0
-	if err := s.Pause(0, true); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.Pause(0, true))
 	feed(s, &kgo.Record{Partition: 0, Offset: 0, Value: []byte("held")}, nil)
 	if event, err := s.Poll(time.Second); err != nil || event.Input != nil {
 		t.Fatal("paused record delivered", event, err)
@@ -142,9 +145,7 @@ func TestSourceHoldsPausedRecordWhileOtherPartitionsContinue(t *testing.T) {
 		t.Fatal("held partition blocked another", event, err)
 	}
 	// When resuming, then the held record is delivered first and pause calls target only its partition.
-	if err := s.Pause(0, false); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.Pause(0, false))
 	event, err := s.Poll(time.Second)
 	if err != nil || event.Input == nil || string(event.Input.Record.Value) != "held" || !reflect.DeepEqual(client.paused, []int32{0}) || !reflect.DeepEqual(client.resumed, []int32{0}) {
 		t.Fatal("resume lost held record", event, err, client)
@@ -160,35 +161,55 @@ func TestSourceRevokesOnlyNamedPartitionsAndTreatsLostSeparately(t *testing.T) {
 	s.held[2] = &kgo.Record{Partition: 2}
 	// When partition zero is lost, then only its generation's state is removed.
 	event := lifecycleEvent{ids: []int32{0}, revoke: true, lost: true, answer: make(chan lifecycleAnswer, 1)}
-	if err := s.lifecycle(event); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.lifecycle(event))
 	life := s.life.(*lifecycleMock)
 	if !life.lost || !reflect.DeepEqual(life.revoked, []int32{0}) || len(s.positions) != 1 || s.positions[2] != 8 || s.held[0] != nil || s.held[2] == nil || !s.paused[2] {
 		t.Fatal("revocation crossed partition boundaries", s.positions, s.held, life)
 	}
 }
 func TestSourceCommitsResolvedStartBeforeExposingAssignment(t *testing.T) {
-	for _, fail := range []bool{false, true} {
-		t.Run(map[bool]string{false: "committed", true: "failed"}[fail], func(t *testing.T) {
-			// Given an assignment starting at saved offset seven.
+	failure := errors.New("initial commit failed")
+	for _, tc := range []struct {
+		name         string
+		requestError error
+		response     *kmsg.OffsetCommitResponse
+		wantError    string
+		cause        error
+	}{
+		{name: "committed"},
+		{name: "request failed", requestError: failure, cause: failure},
+		{name: "omitted partition", response: &kmsg.OffsetCommitResponse{}, wantError: "missing initial commit result for partition 0"},
+		{name: "partition authorization", response: &kmsg.OffsetCommitResponse{Topics: []kmsg.OffsetCommitResponseTopic{{Topic: "input", Partitions: []kmsg.OffsetCommitResponseTopicPartition{{Partition: 0, ErrorCode: kerr.TopicAuthorizationFailed.Code}}}}}, cause: kerr.TopicAuthorizationFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given an assignment starting at saved offset seven and an independent commit response.
 			s, client := sourceFixture(t)
 			s.inspector = &sourceMetadataMock{low: map[int32]int64{0: 0}, high: map[int32]int64{0: 10}, saved: map[int32]int64{0: 7}, progress: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: "id"}}}
-			failure := errors.New("initial commit failed")
-			if fail {
-				client.commitErr = failure
-			}
+			client.commitErr, client.commitResponse = tc.requestError, tc.response
 			event := lifecycleEvent{ids: []int32{0}, answer: make(chan lifecycleAnswer, 1)}
 			// When the core resolves and saves its initial position.
 			err := s.lifecycle(event)
-			// Then the core sees the assignment only after a successful initial commit.
+			// Then the core sees the assignment only after an explicit successful partition result.
+			require.Equal(t, map[int32]int64{0: 7}, client.committed)
 			life := s.life.(*lifecycleMock)
-			if (err != nil) != fail || fail && !errors.Is(err, failure) || client.committed[0] != 7 || (len(life.assignments) > 0) == fail {
-				t.Fatal("assignment exposed before safe start", err, client.committed, life)
+			if tc.cause != nil || tc.wantError != "" {
+				require.Error(t, err)
+				if tc.cause != nil {
+					require.ErrorIs(t, err, tc.cause)
+				}
+				if tc.wantError != "" {
+					require.EqualError(t, err, tc.wantError)
+				}
+				require.Empty(t, life.assignments)
+			} else {
+				require.NoError(t, err)
+				require.Len(t, life.assignments, 1)
+				require.Equal(t, int64(7), life.assignments[0].Cursor.Position)
 			}
 		})
 	}
 }
+
 func TestSourceDropsStaleRecordsAndRecognizesMissingTimestamps(t *testing.T) {
 	// Given a proven compaction gap ending at offset ten.
 	s, _ := sourceFixture(t)

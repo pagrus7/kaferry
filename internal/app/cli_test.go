@@ -12,10 +12,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/sql"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCLIInputsAndExitCodes(t *testing.T) {
@@ -27,14 +29,10 @@ func TestCLIInputsAndExitCodes(t *testing.T) {
 		executeCode := Execute(context.Background(), args, nil, io.Discard, &out)
 
 		// Then
-		if executeCode != 2 {
-			t.Fatalf("args=%v code=%d", args, executeCode)
-		}
+		require.EqualValues(t, 2, executeCode)
 	}
 	var out bytes.Buffer
-	if code := Execute(context.Background(), []string{"run", "--help"}, nil, io.Discard, &out); code != 0 {
-		t.Fatal("help failed")
-	}
+	require.Zero(t, Execute(context.Background(), []string{"run", "--help"}, nil, io.Discard, &out))
 }
 
 func TestCLIVersionWithoutConfigurationOrInput(t *testing.T) {
@@ -47,9 +45,10 @@ func TestCLIVersionWithoutConfigurationOrInput(t *testing.T) {
 	code := Execute(t.Context(), []string{"--version"}, forbiddenInput{}, &stdout, &stderr)
 
 	// Then report the build on stdout without loading configuration or reading SQL.
-	if code != 0 || !strings.HasPrefix(stdout.String(), want) || !strings.HasSuffix(stdout.String(), ")\n") || stderr.Len() != 0 {
-		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
+	require.Zero(t, code)
+	require.True(t, strings.HasPrefix(stdout.String(), want))
+	require.True(t, strings.HasSuffix(stdout.String(), ")\n"))
+	require.Zero(t, stderr.Len())
 }
 
 type forbiddenInput struct{}
@@ -64,9 +63,8 @@ func TestCLIVersionOutputFailure(t *testing.T) {
 	code := Execute(t.Context(), []string{"--version"}, nil, closedOutput{}, &stderr)
 
 	// Then report a failure instead of claiming the version was printed.
-	if code != 1 || !strings.Contains(stderr.String(), "output closed") {
-		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
-	}
+	require.EqualValues(t, 1, code)
+	require.Contains(t, stderr.String(), "output closed")
 }
 
 type closedOutput struct{}
@@ -80,25 +78,15 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 			dir := t.TempDir()
 			src, dst := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "destination.cbor")
 			codec, err := file.NewCodec(1 << 20)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			o, err := file.NewOutput(file.NewPublisher(), src, "fixture", "fixture", "", 0, codec, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := o.Submit(core.Record{Key: []byte{}, Value: nil, TimestampType: "unknown"}, core.Token{}); err != nil {
-				t.Fatal(err)
-			}
-			if err := o.Flush(); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
+			require.NoError(t, o.Submit(core.Record{Key: []byte{}, Value: nil, TimestampType: "unknown"}, core.Token{}))
+			require.NoError(t, o.Flush())
 			o.Close()
 			cpdir := t.TempDir()
 			cfg := filepath.Join(dir, "config.toml")
-			if err := os.WriteFile(cfg, []byte("[worker]\ncheckpoint_dir = '"+cpdir+"'\n"), 0600); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, os.WriteFile(cfg, []byte("[worker]\ncheckpoint_dir = '"+cpdir+"'\n"), 0600))
 			statement := "INSERT INTO FILE cbor('" + dst + "') SELECT * FROM FILE cbor('" + src + "') OPTIONS(GROUP=ONE_OFF)"
 			var out bytes.Buffer
 
@@ -107,25 +95,18 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 			if input == "file" {
 				stdin = nil // The SQL file must supply the statement independently.
 				inputPath = filepath.Join(dir, "copy.sql")
-				if err := os.WriteFile(inputPath, []byte(statement), 0600); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, os.WriteFile(inputPath, []byte(statement), 0600))
 			}
 			// When running a file-to-file copy through the selected SQL input.
 			executeCode := Execute(context.Background(), []string{"run", "-f", inputPath, "-c", cfg}, stdin, io.Discard, &out)
 
 			// Then
-			if executeCode != 0 {
-				t.Fatalf("exit=%d: %s", executeCode, out.String())
-			}
+			require.Zero(t, executeCode)
 			files, err := filepath.Glob(filepath.Join(cpdir, "*.json"))
-			if err != nil || len(files) != 0 {
-				t.Fatal("successful one-off checkpoint not removed")
-			}
+			require.NoError(t, err)
+			require.Len(t, files, 0)
 			statement = "INSERT INTO FILE cbor('" + src + "') SELECT * FROM FILE cbor('" + src + "') OPTIONS(GROUP='self')"
-			if code := Execute(context.Background(), []string{"run", "-e", statement, "-c", cfg}, nil, io.Discard, &out); code != 2 {
-				t.Fatal("file self-copy was allowed")
-			}
+			require.EqualValues(t, 2, Execute(context.Background(), []string{"run", "-e", statement, "-c", cfg}, nil, io.Discard, &out))
 		})
 	}
 }
@@ -148,9 +129,9 @@ func TestCLIMissingHomeReportsConfigurationErrors(t *testing.T) {
 			code := Execute(context.Background(), args, nil, io.Discard, &out)
 
 			// Then startup diagnostics identify the required configuration.
-			if code != 2 || !strings.Contains(out.String(), want) || strings.Contains(out.String(), "composition failed") {
-				t.Fatalf("exit=%d: %s", code, out.String())
-			}
+			require.EqualValues(t, 2, code)
+			require.Contains(t, out.String(), want)
+			require.NotContains(t, out.String(), "composition failed")
 		})
 	}
 }
@@ -174,9 +155,8 @@ func TestCLIRejectsUnavailableOrOversizedStatementInputs(t *testing.T) {
 			code := Execute(t.Context(), tc.args, tc.stdin, io.Discard, &diagnostics)
 
 			// Then fail as an input error before opening endpoints or creating progress.
-			if code != 2 || !strings.Contains(diagnostics.String(), tc.want) {
-				t.Fatalf("exit=%d: %s", code, diagnostics.String())
-			}
+			require.EqualValues(t, 2, code)
+			require.Contains(t, diagnostics.String(), tc.want)
 		})
 	}
 }
@@ -196,9 +176,7 @@ func TestCLISQLDiagnosticsIdentifyInputWithoutCreatingOutput(t *testing.T) {
 				want = "line 3, column 1: GROUP is required; add GROUP = 'name' or GROUP = ONE_OFF to OPTIONS"
 			}
 			config := filepath.Join(dir, "config.toml")
-			if err := os.WriteFile(config, []byte("[worker]\ncheckpoint_dir = '"+dir+"'\n"), 0600); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, os.WriteFile(config, []byte("[worker]\ncheckpoint_dir = '"+dir+"'\n"), 0600))
 			args := []string{"run", "-c", config}
 			var stdin io.Reader
 			source := ""
@@ -210,9 +188,7 @@ func TestCLISQLDiagnosticsIdentifyInputWithoutCreatingOutput(t *testing.T) {
 				stdin, source = strings.NewReader(query), "<stdin>"
 			default:
 				source = filepath.Join(dir, "copy.sql")
-				if err := os.WriteFile(source, []byte(query), 0600); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, os.WriteFile(source, []byte(query), 0600))
 				args = append(args, "-f", source)
 			}
 			var stdout, stderr bytes.Buffer
@@ -223,16 +199,17 @@ func TestCLISQLDiagnosticsIdentifyInputWithoutCreatingOutput(t *testing.T) {
 			if source != "" {
 				expected = "\"" + source + "\": " + expected
 			}
-			if code != 2 || stdout.Len() != 0 || stderr.String() != expected || strings.Contains(stderr.String(), "sensitive_SENTINEL_5c27") {
-				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-			}
-			if _, err := os.Stat(destination); !os.IsNotExist(err) {
-				t.Fatal("invalid SQL created output", err)
+			require.EqualValues(t, 2, code)
+			require.Zero(t, stdout.Len())
+			require.Equal(t, expected, stderr.String())
+			require.NotContains(t, stderr.String(), "sensitive_SENTINEL_5c27")
+			{
+				_, err := os.Stat(destination)
+				require.True(t, os.IsNotExist(err))
 			}
 			checkpoints, err := filepath.Glob(filepath.Join(dir, "*.json"))
-			if err != nil || len(checkpoints) != 0 {
-				t.Fatal("invalid SQL created progress", err)
-			}
+			require.NoError(t, err)
+			require.Len(t, checkpoints, 0)
 		})
 	}
 }
@@ -246,7 +223,23 @@ func TestSQLDiagnosticSourceLabelsEscapeControlCharacters(t *testing.T) {
 	printCommandError(&output, source, err)
 	// Then keep the error on one line without embedding terminal controls.
 	want := strconv.Quote(source) + ": line 2, column 8: invalid value\n"
-	if output.String() != want || strings.Count(output.String(), "\n") != 1 || strings.ContainsRune(output.String(), '\x1b') {
-		t.Fatalf("unsafe source label: %q", output.String())
-	}
+	require.Equal(t, want, output.String())
+	require.EqualValues(t, 1, strings.Count(output.String(), "\n"))
+	require.False(t, strings.ContainsRune(output.String(), '\x1b'))
+}
+
+func TestCLIRejectsReadFailureAfterValidSQL(t *testing.T) {
+	// Given complete valid SQL followed by a reader failure.
+	fixture := filePreview(t)
+	before := fileTree(t, fixture.directory)
+	failure := errors.New("SQL read sentinel")
+	input := io.MultiReader(strings.NewReader(fixture.query), iotest.ErrReader(failure))
+	var stdout, stderr bytes.Buffer
+	// When reading SQL from stdin through the public command.
+	code := Execute(t.Context(), []string{"run", "-f", "-", "-c", fixture.config}, input, &stdout, &stderr)
+	// Then the read error prevents execution, output and checkpoint creation.
+	require.Equal(t, 2, code)
+	require.Empty(t, stdout.String())
+	require.Equal(t, failure.Error()+"\n", stderr.String())
+	require.Equal(t, before, fileTree(t, fixture.directory))
 }

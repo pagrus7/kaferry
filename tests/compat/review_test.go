@@ -22,6 +22,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/pagrus7/kaferry/internal/sql"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCopyDestinationAcceptableRecordAboveProducerDefault(t *testing.T) {
@@ -40,9 +41,7 @@ func TestCopyDestinationAcceptableRecordAboveProducerDefault(t *testing.T) {
 
 	// Then the whole logical record reaches the destination unchanged.
 	c := consumer(t, dst+"-verify")
-	if err := c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}))
 	got := read(t, c)
 	if !bytes.Equal(got.Value, payload) || string(got.Key) != "large" || !got.Timestamp.Equal(stamp) || !reflect.DeepEqual(got.Headers, headers) {
 		t.Fatal("large record was rejected or changed")
@@ -62,23 +61,15 @@ func TestLegacyTimestampLimitSkipsOnlyRejectedRecord(t *testing.T) {
 	waitTopicConfig(t, a, dst, "message.timestamp.difference.max.ms", "3600000")
 	path := filepath.Join(t.TempDir(), "legacy.cbor")
 	c, err := file.NewCodec(1 << 20)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	out, err := file.NewOutput(file.NewPublisher(), path, "fixture", "fixture", "", 0, c, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	stamp := time.Now().Truncate(time.Millisecond)
 	for i, age := range []time.Duration{0, -24 * time.Hour, 0} {
 		ts := stamp.Add(age).UnixMilli()
-		if err := out.Submit(core.Record{Key: []byte("same"), Value: []byte(fmt.Sprint(i)), TimestampMS: &ts, TimestampType: "create_time"}, core.Token{}); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, out.Submit(core.Record{Key: []byte("same"), Value: []byte(fmt.Sprint(i)), TimestampMS: &ts, TimestampType: "create_time"}, core.Token{}))
 	}
-	if err := out.Flush(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, out.Flush())
 	out.Close()
 	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='%s-legacy',ON_REJECTED_TIMESTAMP=SKIP)", dst, path, dst)
 
@@ -87,9 +78,7 @@ func TestLegacyTimestampLimitSkipsOnlyRejectedRecord(t *testing.T) {
 
 	// Then only the too-old record is skipped and both innocent records are delivered.
 	reader := consumer(t, dst+"-verify")
-	if err := reader.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, reader.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}))
 	for _, want := range []string{"0", "2"} {
 		got := read(t, reader)
 		if string(got.Value) != want || !got.Timestamp.Equal(stamp) {
@@ -125,28 +114,20 @@ func probeSource(t *testing.T, name, group string) *adapter.Source {
 func probeSourceProgress(t *testing.T, name, group string) (*adapter.Source, kafkaport.SourceProgress) {
 	t.Helper()
 	statement, err := sql.NewParser().Parse(fmt.Sprintf("INSERT INTO TOPIC 'unused' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", name, group))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	p, err := plan.NewPlanner(nil).Build(statement, plan.Profiles{"default": {"bootstrap.servers": broker(t)}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	clients := adapter.NewClients()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	factory := adapter.NewFactory(commitmeta.NewCodec(), clients, kafkaport.NewPositionerFactory(core.RealClock{}, logger), core.RealClock{}, logger)
 	connection, err := factory.Open(context.Background(), p.Source)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = connection.Close(context.Background()) })
 	if _, err = connection.ClusterID(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	input, store, err := connection.Source(context.Background(), p, "pause-probe", config.Defaults(t.TempDir()).Worker)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	source := input.(*adapter.Source)
 	t.Cleanup(func() { _ = source.Close() })
 	return source, store
@@ -174,20 +155,14 @@ func TestCooperativeReassignmentResumesOnlyNewPartitions(t *testing.T) {
 	group := name + "-pause"
 	first := probeSource(t, name, group)
 	ownershipA := &probeOwnership{owned: make(map[int32]bool), revoked: -1}
-	if err := first.Start(ownershipA, nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, first.Start(ownershipA, nil))
 	pollOwnership(t, []*adapter.Source{first}, func() bool { return len(ownershipA.owned) == 2 })
 	for id := range ownershipA.owned {
-		if err := first.Pause(id, true); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, first.Pause(id, true))
 	}
 	second := probeSource(t, name, group)
 	ownershipB := &probeOwnership{owned: make(map[int32]bool)}
-	if err := second.Start(ownershipB, nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, second.Start(ownershipB, nil))
 	pollOwnership(t, []*adapter.Source{first, second}, func() bool { return len(ownershipA.owned) == 1 && len(ownershipB.owned) == 1 })
 	reassigned := ownershipA.revoked
 	if reassigned < 0 {
@@ -195,9 +170,7 @@ func TestCooperativeReassignmentResumesOnlyNewPartitions(t *testing.T) {
 	}
 
 	// When B exits and A reacquires its previously application-paused partition.
-	if err := second.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, second.Close())
 	pollOwnership(t, []*adapter.Source{first}, func() bool { return len(ownershipA.owned) == 2 })
 	p := producer(t, nil)
 	for id := range 2 {
@@ -209,13 +182,9 @@ func TestCooperativeReassignmentResumesOnlyNewPartitions(t *testing.T) {
 	seen := false
 	for time.Now().Before(deadline) {
 		event, err := first.Poll(20 * time.Millisecond)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		if event.Input != nil {
-			if event.Input.Cursor.Partition != reassigned {
-				t.Fatal("resumed a retained paused partition", event.Input.Cursor)
-			}
+			require.Equal(t, reassigned, event.Input.Cursor.Partition, "resumed a retained paused partition")
 			if event.Input.Cursor.Position != 0 || string(event.Input.Record.Value) != "resume" {
 				t.Fatal("resume changed assigned position", event.Input)
 			}

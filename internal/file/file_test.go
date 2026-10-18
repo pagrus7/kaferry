@@ -8,20 +8,18 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func logger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 func codec(t *testing.T) *Codec {
 	t.Helper()
 	c, err := NewCodec(1 << 20)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return c
 }
 func sample() core.Record {
@@ -38,20 +36,12 @@ func TestRecordCodecFullFidelity(t *testing.T) {
 	data, err := c.EncodeRecord(input)
 
 	// Then
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	payload, _, _, err := readFrame(bytes.NewReader(data), 0, int64(len(data)), c.limit)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, err := c.DecodeRecord(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got, input) {
-		t.Fatalf("codec lost data: %#v", got)
-	}
+	require.NoError(t, err)
+	require.Equal(t, input, got, "codec preserves full record")
 	data[len(data)-1] ^= 1
 	if _, _, _, err = readFrame(bytes.NewReader(data), 0, int64(len(data)), c.limit); err == nil {
 		t.Fatal("CRC damage accepted")
@@ -66,18 +56,14 @@ func TestOutputAcknowledgmentAndRecovery(t *testing.T) {
 	c := codec(t)
 	path := filepath.Join(t.TempDir(), "archive.cbor")
 	out, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, c, 10, logger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	id, headerEnd := out.DurableOutput()
 
 	// When
 	err = out.Submit(sample(), core.Token{Partition: 0, Generation: 1, Sequence: 1})
 
 	// Then
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	select {
 	case <-out.Deliveries():
 		t.Fatal("acknowledged before fsync")
@@ -88,9 +74,7 @@ func TestOutputAcknowledgmentAndRecovery(t *testing.T) {
 	err = out.Flush()
 
 	// Then its acknowledgment follows successful durability.
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	select {
 	case <-out.Deliveries():
 	default:
@@ -102,9 +86,7 @@ func TestOutputAcknowledgmentAndRecovery(t *testing.T) {
 	}
 	out.Close()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if _, err = f.Write([]byte{0, 0, 0, 100, 1, 2}); err != nil {
 		t.Fatal(err)
 	}
@@ -114,18 +96,14 @@ func TestOutputAcknowledgmentAndRecovery(t *testing.T) {
 	out, err = NewOutput(NewPublisher(), path, "g", "fp", id, extent, c, 10, logger())
 
 	// Then recovery truncates only the unacknowledged tail.
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	out.Close()
 	info, _ := os.Stat(path)
 	if info.Size() != extent {
 		t.Fatal("unacknowledged tail not truncated")
 	}
 	f, err = os.OpenFile(path, os.O_RDWR, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if _, err = f.WriteAt([]byte{1}, headerEnd+4); err != nil {
 		t.Fatal(err)
 	}
@@ -144,9 +122,7 @@ func TestOutputLocksAndUnownedHeader(t *testing.T) {
 	out, err := NewOutput(NewPublisher(), path, "g", "fp", "", 0, c, 10, logger())
 
 	// Then
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	id, extent := out.DurableOutput()
 	if _, err = NewOutput(NewPublisher(), path, "g", "fp", id, extent, c, 10, logger()); err == nil {
 		t.Fatal("two output writers admitted")
@@ -178,9 +154,7 @@ func TestCheckpointAndSourceSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "input.cbor")
 	out, err := NewOutput(NewPublisher(), path, "archive", "original-query", "", 0, c, 10, logger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if err = out.Submit(sample(), core.Token{}); err != nil {
 		t.Fatal(err)
 	}
@@ -190,29 +164,21 @@ func TestCheckpointAndSourceSnapshot(t *testing.T) {
 	out.Close()
 	checkpointDir := t.TempDir()
 	checkpoints, err := NewCheckpoints(checkpointDir, "../g", DurableWriter{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if _, err = NewCheckpoints(checkpointDir, "../g", DurableWriter{}); err == nil {
 		t.Fatal("exclusive checkpoint lock not enforced")
 	}
 	source, err := NewSource(path, "copy-query", plan.WindowSpec{}, c, checkpoints, core.RealClock{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	l := &lifecycle{}
 	if err = source.Start(l, nil); err != nil {
 		t.Fatal(err)
 	}
 	// Appends after open belong to the next run.
 	extra, err := c.EncodeRecord(sample())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if _, err = f.Write(extra); err != nil {
 		t.Fatal(err)
 	}
@@ -235,14 +201,10 @@ func TestCheckpointAndSourceSnapshot(t *testing.T) {
 	source.Close()
 	checkpoints.Close()
 	checkpoints, err = NewCheckpoints(checkpointDir, "../g", DurableWriter{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer checkpoints.Close()
 	source, err = NewSource(path, "copy-query", plan.WindowSpec{}, c, checkpoints, core.RealClock{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer source.Close()
 	if err = source.Start(&lifecycle{}, nil); err != nil {
 		t.Fatal(err)
@@ -264,19 +226,13 @@ func TestSourceReplacementFails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "input")
 	out, err := NewOutput(NewPublisher(), path, "archive", "fp", "", 0, c, 10, logger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	out.Close()
 	checkpointDir := t.TempDir()
 	cp, err := NewCheckpoints(checkpointDir, "group", DurableWriter{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	source, err := NewSource(path, "query", plan.WindowSpec{}, c, cp, core.RealClock{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if err = source.Start(&lifecycle{}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -287,18 +243,12 @@ func TestSourceReplacementFails(t *testing.T) {
 	err = os.Remove(path)
 
 	// Then
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	out, err = NewOutput(NewPublisher(), path, "archive", "fp", "", 0, c, 10, logger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	out.Close()
 	cp, err = NewCheckpoints(checkpointDir, "group", DurableWriter{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer cp.Close()
 	if _, err = NewSource(path, "query", plan.WindowSpec{}, c, cp, core.RealClock{}); err == nil {
 		t.Fatal("source replacement resumed at unrelated byte position")
@@ -321,9 +271,7 @@ func TestTimestampNull(t *testing.T) {
 	data, err := c.EncodeRecord(record)
 
 	// Then
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	payload, _, _, _ := readFrame(bytes.NewReader(data), 0, int64(len(data)), c.limit)
 	result, err := c.DecodeRecord(payload)
 	if err != nil || result.TimestampMS != nil {

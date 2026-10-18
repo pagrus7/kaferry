@@ -5,7 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,6 +14,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/fx"
 )
 
@@ -126,11 +127,9 @@ func (i *engineInput) DeleteCheckpoint() error            { return i.fixture.sta
 type engineOutput struct {
 	core.Sink
 	fixture *engineFixture
-	closed  bool
 }
 
 func (o *engineOutput) Close() {
-	o.closed = true
 	_ = o.fixture.stage("close-output")
 }
 func (*engineOutput) DurableOutput() (string, int64) { return "file-id", 100 }
@@ -154,40 +153,44 @@ func TestRuntimeCompositionAcceptsReplacementFactories(t *testing.T) {
 				func(RunnerFactory) RunnerFactory { return f },
 				func(*slog.Logger) *slog.Logger { return engineLogger() },
 			), fx.Populate(&engine))
-			if err := graph.Err(); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, graph.Err())
 
 			// When
 			runErr := engine.Run(context.Background(), enginePlan(kinds[0], kinds[1]), config.Config{}, noopShutdown{})
 
 			// Then
-			if runErr != nil {
-				t.Fatal(runErr)
-			}
-			if kinds[0] == "TOPIC" && kinds[1] == "FILE" && f.input.output != f.output {
-				t.Fatal("Kafka input did not receive durable output")
+			require.NoError(t, runErr)
+			if kinds[0] == "TOPIC" && kinds[1] == "FILE" {
+				require.Same(t, f.output, f.input.output)
 			}
 			if kinds[0] == "FILE" {
 				var wanted core.OutputProgress
 				if kinds[1] == "FILE" {
 					wanted = f.output
 				}
-				if f.input.output != wanted {
-					t.Fatal("file checkpoints bound to wrong output")
+				if wanted == nil {
+					require.Nil(t, f.input.output)
+				} else {
+					require.Same(t, wanted, f.input.output)
 				}
 			}
 			output := "topic-output"
 			if kinds[1] == "FILE" {
 				output = "file-output"
 			}
-			joined := strings.Join(f.trace, ",")
-			if kinds[0] == "TOPIC" && strings.Index(joined, "topic-input") > strings.Index(joined, output) {
-				t.Fatal("Kafka consumer constructed after destination", f.trace)
+			if kinds[0] == "TOPIC" {
+				inputIndex, outputIndex := slices.Index(f.trace, "topic-input"), slices.Index(f.trace, output)
+				require.NotEqual(t, -1, inputIndex)
+				require.NotEqual(t, -1, outputIndex)
+				require.Less(t, inputIndex, outputIndex)
 			}
-			if strings.Count(joined, "close-output") != 1 {
-				t.Fatal("destination was not closed exactly once", f.trace)
+			closed := 0
+			for _, stage := range f.trace {
+				if stage == "close-output" {
+					closed++
+				}
 			}
+			require.Equal(t, 1, closed)
 		})
 	}
 }
@@ -225,18 +228,14 @@ func TestEngineClosesOnlyAcquiredResourcesOnFailure(t *testing.T) {
 			runErr := engine.Run(context.Background(), enginePlan(test.source, test.destination), config.Config{}, noopShutdown{})
 
 			// Then
-			if !errors.Is(runErr, f.failure) {
-				t.Fatal("original failure was lost", runErr)
-			}
+			require.ErrorIs(t, runErr, f.failure)
 			var closed []string
 			for _, stage := range f.trace {
 				if strings.HasPrefix(stage, "close-") {
 					closed = append(closed, stage)
 				}
 			}
-			if !reflect.DeepEqual(closed, test.closed) {
-				t.Fatalf("closed %v, want %v", closed, test.closed)
-			}
+			require.Equal(t, test.closed, closed)
 		})
 	}
 }
@@ -251,9 +250,7 @@ func TestEngineReportsCleanupFailureAfterSuccessfulCopy(t *testing.T) {
 			// When all acquired resources are closed after the copy.
 			err := engine.Run(context.Background(), enginePlan("TOPIC", "TOPIC"), config.Config{}, noopShutdown{})
 			// Then the failure is reported and each remaining resource is still closed once.
-			if !errors.Is(err, fixture.failure) {
-				t.Fatal("cleanup failure was hidden", err)
-			}
+			require.ErrorIs(t, err, fixture.failure)
 			for _, closed := range []string{"close-topic-input", "close-output", "close-source", "close-destination"} {
 				count := 0
 				for _, action := range fixture.trace {
@@ -261,9 +258,7 @@ func TestEngineReportsCleanupFailureAfterSuccessfulCopy(t *testing.T) {
 						count++
 					}
 				}
-				if count != 1 {
-					t.Fatal("cleanup stopped or closed a resource twice", fixture.trace)
-				}
+				require.EqualValues(t, 1, count)
 			}
 		})
 	}
@@ -277,9 +272,8 @@ func TestEngineSkipsAcquisitionWhenStartupIsCancelled(t *testing.T) {
 	// When preparing Kafka input and file output.
 	err := newEngine(f, f, f, engineLogger(), nil).Run(ctx, enginePlan("TOPIC", "FILE"), config.Config{}, noopShutdown{})
 	// Then no connection, file or saved progress is created.
-	if !errors.Is(err, context.Canceled) || len(f.trace) != 0 {
-		t.Fatal("cancelled startup acquired resources", err, f.trace)
-	}
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, f.trace, 0)
 }
 
 func TestStartupCancellationClosesInputWithoutCreatingOutput(t *testing.T) {
@@ -304,16 +298,11 @@ func TestStartupCancellationClosesInputWithoutCreatingOutput(t *testing.T) {
 			err := newEngine(f, f, f, engineLogger(), nil).Run(ctx, enginePlan(kind, "FILE"), config.Config{}, noopShutdown{})
 
 			// Then cancellation preserves its cause, closes acquired input, and creates no output.
-			var afterCancellation []string
-			for index, name := range f.trace {
-				if name == stage {
-					afterCancellation = f.trace[index+1:]
-					break
-				}
-			}
-			if !errors.Is(err, context.Canceled) || !reflect.DeepEqual(afterCancellation, closed) {
-				t.Fatal("incorrect cancellation cleanup", err, f.trace)
-			}
+			index := slices.Index(f.trace, stage)
+			require.NotEqual(t, -1, index, "source acquisition stage missing")
+			afterCancellation := f.trace[index+1:]
+			require.ErrorIs(t, err, context.Canceled)
+			require.Equal(t, closed, afterCancellation)
 		})
 	}
 }
@@ -331,18 +320,15 @@ func TestOneOffUsesOneGroupAndDeletesOnlyOnSuccess(t *testing.T) {
 			err := newEngine(f, f, f, engineLogger(), nil).Run(context.Background(), p, config.Config{}, noopShutdown{})
 
 			// Then
-			if (err != nil) != (fail != "") {
-				t.Fatal("incorrect completion result", err)
-			}
+			require.Equal(t, (fail != ""), (err != nil))
+			require.NotEmpty(t, f.groups)
 			for _, group := range f.groups {
-				if group != f.groups[0] || !strings.HasPrefix(group, "kaferry-") || group == p.Group {
-					t.Fatal("inconsistent generated group", f.groups)
-				}
+				require.Equal(t, f.groups[0], group)
+				require.Regexp(t, `^kaferry-[0-9a-f]{32}$`, group)
+				require.NotEqual(t, p.Group, group)
 			}
-			deleted := strings.Contains(strings.Join(f.trace, ","), "delete-checkpoint")
-			if deleted != (fail != "run") {
-				t.Fatal("checkpoint cleanup happened at wrong stage", f.trace)
-			}
+			deleted := slices.Contains(f.trace, "delete-checkpoint")
+			require.Equal(t, (fail != "run"), deleted)
 		})
 	}
 }
@@ -355,13 +341,11 @@ func TestDestinationProgressRequiresConsistentFileIdentity(t *testing.T) {
 	progress, err := destinationProgress(saved)
 
 	// Then
-	if err != nil || progress != (file.DestinationProgress{ID: "archive", Extent: 200, Exists: true}) {
-		t.Fatal("durable extent was lost", progress, err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, (file.DestinationProgress{ID: "archive", Extent: 200, Exists: true}), progress)
 	saved[1] = kafkaport.Progress{FileID: "other", Extent: 200}
-	if _, err := destinationProgress(saved); err == nil {
-		t.Fatal("inconsistent destination identity accepted")
-	}
+	_, err = destinationProgress(saved)
+	require.Error(t, err)
 }
 
 func TestCleanupFailurePreservesTheFirstExitCode(t *testing.T) {
@@ -382,9 +366,13 @@ func TestCleanupFailurePreservesTheFirstExitCode(t *testing.T) {
 			err := core.CleanupResult(tc.primary, "close Kafka input", cleanup)
 			// Then both causes remain available and cleanup cannot replace the primary exit code.
 			var coded interface{ ExitCode() int }
-			if !errors.As(err, &coded) || coded.ExitCode() != tc.want || !errors.Is(err, cleanup) || tc.primary != nil && !errors.Is(err, tc.primary) || !strings.Contains(err.Error(), "close Kafka input") {
-				t.Fatal("cleanup changed outcome or hid its cause", err)
+			require.ErrorAs(t, err, &coded)
+			require.Equal(t, tc.want, coded.ExitCode())
+			require.ErrorIs(t, err, cleanup)
+			if tc.primary != nil {
+				require.ErrorIs(t, err, tc.primary)
 			}
+			require.Contains(t, err.Error(), "close Kafka input")
 		})
 	}
 }

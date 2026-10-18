@@ -7,7 +7,33 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/stretchr/testify/require"
 )
+
+func TestRecordDecoderRejectsForbiddenCBORForms(t *testing.T) {
+	// Given raw CBOR records that differ only in their encoding form.
+	valid := "\xa5\x63key\xf6\x65value\xf6\x67headers\x80\x6ctimestamp_ms\xf6\x6etimestamp_type\x67unknown"
+	for _, tc := range []struct {
+		name, payload string
+		valid         bool
+	}{
+		{"definite map", valid, true},
+		{"duplicate key", "\xa6" + valid[1:] + "\x63key\xf6", false},
+		{"indefinite map", "\xbf" + valid[1:] + "\xff", false},
+		{"tagged timestamp", strings.Replace(valid, "\x6ctimestamp_ms\xf6", "\x6ctimestamp_ms\xc1\x00", 1), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// When decoding without canonical re-encoding of the fixture.
+			_, err := codec(t).DecodeRecord([]byte(tc.payload))
+			// Then only the definite, untagged record with unique keys is valid.
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "invalid record CBOR")
+			}
+		})
+	}
+}
 
 func TestRecordDecoderRejectsMalformedFields(t *testing.T) {
 	for _, tc := range []struct {
@@ -38,9 +64,7 @@ func TestRecordDecoderRejectsMalformedFields(t *testing.T) {
 				delete(fields, tc.field)
 			}
 			payload, err := c.encoder.Marshal(fields)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 
 			// When decoding an archive record.
 			_, err = c.DecodeRecord(payload)
@@ -75,9 +99,7 @@ func TestArchiveHeaderRejectsInvalidSchema(t *testing.T) {
 			if tc.fields != nil {
 				var err error
 				payload, err = c.encoder.Marshal(tc.fields)
-				if err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, err)
 			}
 			data := append(append([]byte{}, magic...), frame(payload)...)
 
@@ -100,9 +122,7 @@ func TestArchiveHeaderRejectsInvalidSchema(t *testing.T) {
 func TestCodecRejectsOversizedDataAndRemainsUsable(t *testing.T) {
 	// Given a codec whose record limit is smaller than the submitted value.
 	c, err := NewCodec(128)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// When encoding oversized record and header data.
 	_, recordErr := c.EncodeRecord(core.Record{Value: make([]byte, 129), TimestampType: "unknown"})

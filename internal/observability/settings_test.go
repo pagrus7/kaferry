@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 type environment struct {
@@ -57,9 +59,7 @@ func TestMetricsSettingsUseSignalSpecificPrecedence(t *testing.T) {
 		"OTEL_EXPORTER_OTLP_METRICS_HEADERS": "Authorization=Bearer%20token",
 	}}
 	// When validating, then effective metric settings take precedence.
-	if err := validate(env); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, validate(env))
 }
 
 func TestInsecureSettingMustMatchEndpointScheme(t *testing.T) {
@@ -82,9 +82,7 @@ func TestInsecureSettingMustMatchEndpointScheme(t *testing.T) {
 			// When validating, then conflicting flags fail and signal-specific matching flags pass.
 			err := validate(env)
 			if tc.invalid == "" {
-				if err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, err)
 			} else if err == nil || err.Error() != "metrics: invalid or missing "+tc.invalid {
 				t.Fatal("incorrect transport diagnostic", err)
 			}
@@ -95,18 +93,12 @@ func TestInsecureSettingMustMatchEndpointScheme(t *testing.T) {
 func certPair(t *testing.T) ([]byte, []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	template := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, DNSNames: []string{"localhost"}}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	priv, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: priv})
 }
 func TestTLSSettingsValidateTrustAndKeyPair(t *testing.T) {
