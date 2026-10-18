@@ -47,7 +47,7 @@ def sum_blocks(profiles):
 def changed_lines(base, head, paths):
     result = {}
     for path in paths:
-        patch = git('diff', '--no-ext-diff', '--unified=0', '--no-renames', base, head, '--', path)
+        patch = git('diff', '--no-ext-diff', '--no-textconv', '--unified=0', '--no-renames', base, head, '--', path)
         lines = set()
         for start, count in re.findall(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', patch, re.M):
             lines.update(range(int(start), int(start) + int(count or 1)))
@@ -87,7 +87,9 @@ def collect(base, head, repository, destination):
         raise ValueError('base must be the merge base')
     paths = git('diff', '--no-ext-diff', '--name-only', '--no-renames', base, head).splitlines()
     production = [p for p in paths if p.startswith(('cmd/', 'internal/')) and p.endswith('.go') and not p.endswith('_test.go')]
-    destination.mkdir(parents=True, exist_ok=False)
+    if (destination / 'manifest.json').exists():
+        raise ValueError('completed evidence already exists; choose a new evidence directory')
+    destination.mkdir(parents=True, exist_ok=True)
     record = {'base': base, 'head': head, 'changed_files': paths, 'patch_coverage': 'N/A', 'gaps': []}
     if not production:
         (destination / 'manifest.json').write_text(json.dumps(record, indent=2) + '\n')
@@ -103,16 +105,20 @@ def collect(base, head, repository, destination):
     profiles = []
     tree = github(f'repos/{repository}/git/commits/{head}')['tree']['sha']
     for name, label in [('checks-fast', 'unit'), ('checks-kafka', 'integration')]:
-        artifact = next(a for a in artifacts if a['name'] == name and not a['expired'])
+        artifact = next((a for a in artifacts if a['name'] == name and not a['expired']), None)
+        if artifact is None:
+            raise ValueError(f'coverage artifact unavailable: {name}')
         archive = subprocess.check_output(['gh', 'api', f'repos/{repository}/actions/artifacts/{artifact["id"]}/zip'])
         if artifact.get('digest') != 'sha256:' + hashlib.sha256(archive).hexdigest():
             raise ValueError('artifact digest mismatch')
         target = destination / name
-        target.mkdir()
+        target.mkdir(exist_ok=True)
         with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
             for filename in ['coverage.out', f'{label}.environment.json']:
                 (target / filename).write_bytes(zipped.read(filename))
         environment = json.loads((target / f'{label}.environment.json').read_text())
+        if not re.fullmatch('[a-f0-9]{40}', environment['commit']):
+            raise ValueError('tested commit must be a full SHA')
         tested = github(f'repos/{repository}/git/commits/{environment["commit"]}')
         if environment['working_tree_dirty'] or tested['tree']['sha'] != tree:
             raise ValueError('tested source tree differs from reviewed commit')
@@ -150,5 +156,5 @@ if __name__ == '__main__':
     parser.add_argument('head', help='full reviewed SHA')
     args = parser.parse_args()
     repo = json.loads(subprocess.check_output(['gh', 'repo', 'view', '--json', 'nameWithOwner'], text=True))['nameWithOwner']
-    output = Path('.cache/reviews') / args.head / 'collected'
+    output = Path('.cache/reviews') / args.head / args.base / 'collected'
     print(json.dumps(collect(args.base, args.head, repo, output), indent=2))

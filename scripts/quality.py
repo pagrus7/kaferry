@@ -9,30 +9,17 @@ import subprocess
 import sys
 import tempfile
 
+from review_coverage import sum_blocks
+
 
 def coverage(text):
-    lines = text.splitlines()
-    if not lines or lines[0] not in {"mode: set", "mode: count", "mode: atomic"}:
-        raise ValueError("missing or invalid coverage mode")
-    blocks = {}
-    for line in lines[1:]:
-        match = re.fullmatch(r"(.+):(\d+\.\d+,\d+\.\d+) (\d+) (\d+)", line)
-        if not match:
-            raise ValueError("invalid coverage block")
-        name, position, statements, hits = match.groups()
-        key, value = (name, position), (int(statements), int(hits) > 0)
-        if key in blocks:
-            count, covered = blocks[key]
-            if count != value[0]:
-                raise ValueError("inconsistent duplicate coverage block")
-            value = count, covered or value[1]
-        blocks[key] = value
+    blocks = sum_blocks([text])
     packages = {}
-    for (name, _), (statements, covered) in blocks.items():
+    for (name, _, _, _, _), (statements, hits) in blocks.items():
         package = name.rsplit("/", 1)[0]
         counts = packages.setdefault(package, {"covered": 0, "statements": 0})
         counts["statements"] += statements
-        counts["covered"] += statements if covered else 0
+        counts["covered"] += statements if hits > 0 else 0
     total = sum(p["statements"] for p in packages.values())
     if not total:
         raise ValueError("coverage profile contains no statements")

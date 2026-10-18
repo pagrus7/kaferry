@@ -50,8 +50,6 @@ jobs:
       - run: make build
         env:
           CGO_ENABLED: "0"
-      - name: File-copy binary smoke test
-        run: KAFERRY_TEST_BINARY="$PWD/bin/kaferry" go test -count=1 -tags=integration,load -run '^TestLoadObservability$/^round-0$/^disabled$' -v ./tests/compat
       - name: Validate release license notices
         env:
           CGO_ENABLED: "0"

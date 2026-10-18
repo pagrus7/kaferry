@@ -21,10 +21,13 @@ def summary(runs):
             groups.setdefault(run['head_sha'], {})[run['name']] = run
     complete = [g for g in groups.values() if set(g) == WORKFLOWS and
                 all(r['status'] == 'completed' for r in g.values())]
+    rerun = [g for g in complete if any(r.get('run_attempt', 1) > 1 for r in g.values())]
+    clean = [g for g in complete if g not in rerun]
     durations = sorted(seconds(min(r['created_at'] for r in g.values()),
-                               max(r['updated_at'] for r in g.values())) for g in complete)
+                               max(r['updated_at'] for r in g.values())) for g in clean)
     return {'samples': len(durations), 'completed_heads': sorted({r['head_sha'] for g in complete for r in g.values()}),
             'failed_heads': sum(any(r['conclusion'] != 'success' for r in g.values()) for g in complete),
+            'rerun_heads': len(rerun),
             'p50_seconds': durations[math.ceil(len(durations) * .5) - 1] if len(durations) >= 20 else None,
             'p95_seconds': durations[math.ceil(len(durations) * .95) - 1] if len(durations) >= 20 else None}
 
@@ -46,7 +49,7 @@ if __name__ == '__main__':
     minutes = 0
     for run in unique.values():
         if run['head_sha'] in result['completed_heads'] and run['name'] in WORKFLOWS:
-            jobs = json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/actions/runs/{run["id"]}/jobs?per_page=100'], text=True))['jobs']
+            jobs = json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/actions/runs/{run["id"]}/jobs?filter=all&per_page=100'], text=True))['jobs']
             minutes += sum(seconds(j['started_at'], j['completed_at']) / 60 for j in jobs if j.get('started_at') and j.get('completed_at'))
     result.update(runner_minutes=round(minutes, 1), scope='first retained checks/quality/integrity invocation per head; queue included; excludes PR-description and local review timing')
     print(json.dumps(result, indent=2))
