@@ -2,13 +2,13 @@ package inspect
 
 import (
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
+	"github.com/stretchr/testify/require"
 )
 
 func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
@@ -53,14 +53,20 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 			// When observing without joining, consuming, positioning or committing.
 			r, err := s.Status(t.Context(), p, config.Defaults("home").Worker, core.NoopStopObserver{})
 			// Then identity conflicts win, activity prevents stopped, and only every durable stop yields 0.
-			if err != nil || r.Verdict != tc.verdict || r.ExitCode() != tc.code || source.closed != 1 || f.connections["output"].closed != 1 || len(source.queries) > 0 {
-				t.Fatal(r, err, source)
+			require.NoError(t, err)
+			require.Equal(t, tc.verdict, r.Verdict)
+			require.Equal(t, tc.code, r.ExitCode())
+			require.EqualValues(t, 1, source.closed)
+			require.EqualValues(t, 1, f.connections["output"].closed)
+			require.Empty(t, source.queries)
+			if tc.name != "identity conflict while active" {
+				require.Equal(t, []string{"describe", "members", "saved", "members", "describe"}, source.observations)
 			}
-			if tc.name != "identity conflict while active" && !reflect.DeepEqual(source.observations, []string{"describe", "members", "saved", "members", "describe"}) {
-				t.Fatal(source.observations)
-			}
-			if tc.name == "stopped" && (len(r.Partitions) != 2 || r.Partitions[0].ID != 0 || r.Partitions[1].Position == nil || *r.Partitions[1].Position != 1) {
-				t.Fatal(r)
+			if tc.name == "stopped" {
+				require.Len(t, r.Partitions, 2)
+				require.Zero(t, r.Partitions[0].ID)
+				require.NotNil(t, r.Partitions[1].Position)
+				require.Equal(t, int64(1), *r.Partitions[1].Position)
 			}
 		})
 	}
@@ -80,11 +86,11 @@ func TestStatusPreservesOperationalFailuresAndRejectsOneOff(t *testing.T) {
 			// Then unavailable state is not reported as successful absence, and ONE_OFF opens nothing.
 			if stage == "ONE_OFF" {
 				var code interface{ ExitCode() int }
-				if !errors.As(err, &code) || code.ExitCode() != 2 || f.opened != 0 {
-					t.Fatal(err, f.opened)
-				}
-			} else if !errors.Is(err, source.failure) {
-				t.Fatal(err)
+				require.ErrorAs(t, err, &code)
+				require.EqualValues(t, 2, code.ExitCode())
+				require.Zero(t, f.opened)
+			} else {
+				require.ErrorIs(t, err, source.failure)
 			}
 		})
 	}
@@ -107,9 +113,54 @@ func TestFileStatusUsesOpeningSizeNotEOFPosition(t *testing.T) {
 			// When checking the saved stop against the current file size.
 			r, err := s.Status(t.Context(), p, config.Worker{}, core.NoopStopObserver{})
 			// Then only growth after opening invalidates that saved stop.
-			if err != nil || r.Verdict != tc.verdict || r.Activity != "not checked for files" || r.Source.File.SizeBytes != tc.size {
-				t.Fatal(r, err)
+			require.NoError(t, err)
+			require.Equal(t, tc.verdict, r.Verdict)
+			require.Equal(t, "not checked for files", r.Activity)
+			require.Equal(t, tc.size, r.Source.File.SizeBytes)
+		})
+	}
+}
+
+func TestStatusRejectsStaleStopsAfterFinalObservationFailure(t *testing.T) {
+	for _, failure := range []string{"second membership", "final description", "changed topic identity"} {
+		t.Run(failure, func(t *testing.T) {
+			// Given stopped progress that must still be checked against current membership and topic identity.
+			service, p, factory, _ := fixture()
+			source, destination := factory.connections["input"], factory.connections["output"]
+			for _, id := range source.info.Partitions {
+				source.positions[id] = int64(id)
+				source.metadata[id] = kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: int64(id)}}
 			}
+			source.afterSaved = func() {
+				switch failure {
+				case "second membership":
+					source.fail = "members"
+				case "final description":
+					source.fail = "describe"
+				case "changed topic identity":
+					source.info.TopicID = "replacement-topic"
+				}
+			}
+			// When the observation after reading saved stops fails.
+			report, err := service.Status(t.Context(), p, config.Worker{}, core.NoopStopObserver{})
+			// Then stale progress never yields stopped, causes survive, and both connections close once.
+			if failure == "changed topic identity" {
+				require.NoError(t, err)
+				require.Equal(t, "unknown", report.Verdict)
+				require.Equal(t, "saved progress does not match this query or source", report.Reason)
+				require.Equal(t, 5, report.ExitCode())
+			} else {
+				require.ErrorIs(t, err, source.failure)
+				require.Empty(t, report.Verdict)
+			}
+			require.Empty(t, report.Partitions)
+			want := []string{"describe", "members", "saved", "members"}
+			if failure != "second membership" {
+				want = append(want, "describe")
+			}
+			require.Equal(t, want, source.observations)
+			require.Equal(t, 1, source.closed)
+			require.Equal(t, 1, destination.closed)
 		})
 	}
 }
