@@ -191,7 +191,7 @@ func (w *warnings) Handle(error) {
 	}
 	go func() {
 		defer w.busy.Store(false)
-		w.log.Warn("metrics export failed; copying continues; check collector settings")
+		w.log.Warn("metrics reported an error; check collector settings")
 	}()
 }
 

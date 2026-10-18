@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/pagrus7/kaferry/internal/copy"
 	sdk "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 )
@@ -57,10 +61,50 @@ func TestWarningsAreRedactedAndRateLimited(t *testing.T) {
 	}
 	// Then only one fixed warning appears, without the underlying error's contents.
 	text := output.text()
-	if strings.Count(text, "metrics export failed") != 1 || strings.Contains(text, "password") || strings.Contains(text, "secret-token") || strings.Contains(text, "Authorization") {
+	if strings.Count(text, "metrics reported an error") != 1 || strings.Contains(text, "password") || strings.Contains(text, "secret-token") || strings.Contains(text, "Authorization") {
 		t.Fatal(text)
 	}
 }
+
+func TestSDKDiagnosticsAreRedactedWithoutPreventingExport(t *testing.T) {
+	// Given an invalid generic timeout overridden by a valid metrics timeout.
+	requests := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		select {
+		case requests <- struct{}{}:
+		default:
+		}
+	}))
+	defer server.Close()
+	metricEnv(t, server.URL+"/v1/metrics")
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "fixture-secret-invalid-timeout")
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_TIMEOUT", "1000")
+	output := &warningOutput{}
+	// When the real SDK logs the generic parse failure and exports using the override.
+	session, err := NewFactory(systemEnvironment{}, slog.New(slog.NewJSONHandler(output, nil)), "test").Open("group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.Publish(copy.Snapshot{Confirmed: 1})
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	session.Close(ctx)
+	warningIdle(t, session.(*runtime).warnings)
+	// Then export succeeds and the installed SDK logger emits only a fixed, redacted warning.
+	select {
+	case <-requests:
+	case <-ctx.Done():
+		t.Fatal("SDK diagnostic prevented export")
+	}
+	text := output.text()
+	if strings.Count(text, "metrics reported an error") != 1 || strings.Contains(text, "fixture-secret") || strings.Contains(text, "parse duration") {
+		t.Fatal(text)
+	}
+}
+
 func TestBlockedWarningCannotHoldMetricsCleanup(t *testing.T) {
 	// Given a diagnostic writer which blocks after it starts handling a failure.
 	output := &warningOutput{entered: make(chan struct{}), release: make(chan struct{})}

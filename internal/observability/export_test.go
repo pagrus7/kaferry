@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -138,6 +139,49 @@ func TestExporterRejectsHTTPSDowngradeBeforeSendingCredentials(t *testing.T) {
 			}
 			if err == nil || err.Error() != "metrics: invalid or missing OTEL_EXPORTER_OTLP_INSECURE" || requests.Load() != 0 {
 				t.Fatal("HTTPS downgrade was not rejected before export", err, requests.Load())
+			}
+		})
+	}
+}
+
+func TestFactoryRejectsInvalidSDKConfiguration(t *testing.T) {
+	cert, _ := certPair(t)
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "fixture-secret-certificate.pem")
+	if err := os.WriteFile(certPath, cert, 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"malformed resource", map[string]string{"OTEL_RESOURCE_ATTRIBUTES": "fixture-secret-attribute"}, "metrics: invalid OTEL_RESOURCE_ATTRIBUTES"},
+		{"TLS configuration with HTTP", map[string]string{"OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE": certPath}, "metrics: cannot configure HTTP exporter"},
+		{"unreadable client key", map[string]string{
+			"OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE": certPath,
+			"OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY":         filepath.Join(dir, "fixture-secret-missing-key.pem"),
+		}, "metrics: invalid or missing OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given a realistic SDK configuration error, including sensitive input or paths.
+			metricEnv(t, server.URL+"/v1/metrics")
+			t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+			for name, value := range tc.env {
+				t.Setenv(name, value)
+			}
+			// When the real factory opens the exporter.
+			session, err := NewFactory(systemEnvironment{}, slog.New(slog.NewJSONHandler(io.Discard, nil)), "test").Open("group")
+			if session != nil {
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				defer cancel()
+				session.Close(ctx)
+			}
+			// Then setup fails without a session or input values in the diagnostic.
+			if session != nil || err == nil || err.Error() != tc.want {
+				t.Fatal("incorrect configuration failure", err)
 			}
 		})
 	}
