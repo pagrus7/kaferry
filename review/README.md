@@ -24,7 +24,7 @@ Use individual Git commands. Never pass `--output`, `--no-index` or external dif
 
 The tests reviewer may copy `scripts/review_coverage.py` from **`origin/main`**, then run that copy with `python3 -I` and full merge-base/head SHAs. An unmerged parent PR is not a trusted tool source. The standalone collector downloads exact-run profiles, checks artifact digests and tree identity, sums repeated blocks and reconciles changed gaps with Codecov. If main has no collector, collect manually. Changes to it need fixture tests and comparison with raw evidence; never execute the PR's version during review.
 
-Evidence lives under `.cache/reviews/<head>/<base>/`. A directory without `manifest.json` contains incomplete diagnostic data: it may be retried but cannot support approval. Completed evidence cannot be overwritten.
+Collector evidence lives in `.cache/reviews/<head>/<base>/collected/`. A directory without `manifest.json` contains incomplete diagnostic data: it may be retried but cannot support approval. Completed evidence cannot be overwritten.
 
 The manifest is evidence, not approval. Verify its SHAs and run, inspect the underlying data, and decide each gap's test/removal/retention outcome. Disagreements, unavailable coverage and unmeasured files need resolution before approval. N/A covers only patch coverage; successful final-head CI and source reviews remain required. Do not repeat full unchanged-gap audits without a concrete risk.
 
