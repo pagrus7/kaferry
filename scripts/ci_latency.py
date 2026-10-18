@@ -22,11 +22,13 @@ def summary(runs):
     complete = [g for g in groups.values() if set(g) == WORKFLOWS and
                 all(r['status'] == 'completed' for r in g.values())]
     rerun = [g for g in complete if any(r.get('run_attempt', 1) > 1 for r in g.values())]
-    clean = [g for g in complete if g not in rerun]
+    cancelled = [g for g in complete if any(r['conclusion'] == 'cancelled' for r in g.values())]
+    clean = [g for g in complete if g not in rerun and g not in cancelled]
     durations = sorted(seconds(min(r['created_at'] for r in g.values()),
                                max(r['updated_at'] for r in g.values())) for g in clean)
     return {'samples': len(durations), 'completed_heads': sorted({r['head_sha'] for g in complete for r in g.values()}),
-            'failed_heads': sum(any(r['conclusion'] != 'success' for r in g.values()) for g in complete),
+            'failed_heads': sum(any(r['conclusion'] != 'success' for r in g.values()) for g in complete if g not in cancelled),
+            'cancelled_heads': len(cancelled),
             'rerun_heads': len(rerun),
             'p50_seconds': durations[math.ceil(len(durations) * .5) - 1] if len(durations) >= 20 else None,
             'p95_seconds': durations[math.ceil(len(durations) * .95) - 1] if len(durations) >= 20 else None}

@@ -24,3 +24,7 @@ class LatencyTest(unittest.TestCase):
         result = summary(runs)
         self.assertEqual((result['samples'], result['rerun_heads'], result['failed_heads']), (19, 1, 1))
         self.assertIsNone(result['p95_seconds'])
+        # Given a superseded head, when summarized, then cancellation is neither latency nor failure.
+        runs[3]['conclusion'] = 'cancelled'
+        result = summary(runs)
+        self.assertEqual((result['samples'], result['cancelled_heads'], result['failed_heads']), (18, 1, 1))
