@@ -193,9 +193,6 @@ func (r *Runner) accept(event Event) error {
 }
 
 func (r *Runner) input(input Input) error {
-	if r.limitReached() {
-		return nil
-	}
 	p := r.partitions[input.Cursor.Partition]
 	if p == nil || p.stop != nil {
 		return nil
