@@ -24,6 +24,8 @@ require (
 	google.golang.org/protobuf v1.36.12
 )
 
+require go.yaml.in/yaml/v3 v3.0.5 // indirect
+
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
