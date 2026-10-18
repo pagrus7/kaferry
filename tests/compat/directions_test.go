@@ -136,15 +136,5 @@ func TestAllFileDirectionsAndResume(t *testing.T) {
 		require.Zero(t, n, "file→topic changed null/empty bytes")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	for _, part := range parts {
-		result, err := a.ListOffsets(ctx, map[k.TopicPartition]k.OffsetSpec{part: k.LatestOffsetSpec})
-		require.NoError(t, err)
-		for _, v := range result.ResultInfos {
-			require.Equal(t, k.ErrNoError, v.Error.Code())
-			counts["total"] += int(v.Offset)
-		}
-	}
-	require.Equal(t, 24, counts["total"], "resumed file→topic produced extra records")
+	require.Equal(t, int64(24), topicRecordCount(t, a, dst, 3), "resumed file→topic produced extra records")
 }

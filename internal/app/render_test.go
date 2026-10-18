@@ -142,7 +142,8 @@ func TestTextExplanationFileProgressAndOpeningSize(t *testing.T) {
 					require.Contains(t, output, want)
 				}
 			} else {
-				require.Contains(t, output, "each run starts fresh", "Resume an unfinished run with its logged generated group name")
+				require.Contains(t, output, "each run starts fresh")
+				require.Contains(t, output, "Resume an unfinished run with its logged generated group name")
 				require.Contains(t, output, "no saved checkpoint")
 			}
 			require.NotContains(t, output, "Stop threshold")

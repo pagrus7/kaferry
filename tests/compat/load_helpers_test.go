@@ -82,8 +82,11 @@ func (s *streamRecords) verify(t *testing.T, record *k.Message) {
 	if !bytes.Equal(record.Key, key) || (record.Key == nil) != (key == nil) || len(record.Value) != 1024+id%4096 || !record.Timestamp.Equal(s.stamp) || !reflect.DeepEqual(record.Headers, s.headers) {
 		t.Fatal("logical record changed", id)
 	}
-	for _, b := range record.Value[4:] {
-		require.Equal(t, byte(id%251), b, "payload bytes changed")
+	wantByte := byte(id % 251)
+	for offset, b := range record.Value[4:] {
+		if b != wantByte {
+			t.Fatalf("record %d payload byte %d: got %d, want %d", id, offset+4, b, wantByte)
+		}
 	}
 	pair := [2]int32{int32(id % 4), record.TopicPartition.Partition}
 	if prior, exists := s.order[pair]; exists && id <= prior {
