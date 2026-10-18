@@ -444,9 +444,10 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 	src, dst := topic(t, a, 1), topic(t, a, 1)
 	group := src + "-running-retention"
 	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", broker(t), dst, src, group)
+	binary := testBinary(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement)
+	process := startCLI(t, ctx, binary, "", "run", "-e", statement)
 	committedPartitions(t, a, group, src, 1)
 	// When retention deletes records while the consumer is stopped.
 	if err := process.signal(syscall.SIGSTOP); err != nil {
@@ -478,7 +479,7 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 	}
 	// Restart the same query and group; cancel only after retained output is durable.
 	// When restarting the same query after retention has removed its saved position.
-	process = startCLI(t, ctx, testBinary(t), "", "run", "-e", statement)
+	process = startCLI(t, ctx, binary, "", "run", "-e", statement)
 	waitEnd(t, a, dst, 5)
 	if err := process.signal(os.Interrupt); err != nil {
 		t.Fatal(err)
