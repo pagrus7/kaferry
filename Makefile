@@ -9,7 +9,8 @@ KAFERRY_TEST_OUTPUT ?= -v
 SOAK_TEST_TIMEOUT ?= 1h
 ifeq ($(KAFERRY_TEST_BINARY),)
 TEST_BINARY_PREREQUISITE = build
-load soak qualification: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/kaferry
+# A leading "load " is a GNU Make plugin directive.
+qualification load soak: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/kaferry
 endif
 export KAFERRY_TEST_OUTPUT
 
