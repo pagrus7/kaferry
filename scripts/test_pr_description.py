@@ -61,13 +61,14 @@ class PRDescriptionTest(unittest.TestCase):
             result = subprocess.run([sys.executable, str(script)], env=dict(os.environ, GITHUB_EVENT_PATH=str(event)), capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_concise_results_and_failure_reasons_are_valid(self):
-        # Given a concise description with successful or failed reviews.
-        for result in ("Passed", "Failed: review incomplete; provider limit"):
+    def test_only_passed_reviews_can_mark_a_pr_ready(self):
+        # Given a draft with source or coverage review still outstanding.
+        for result in ("Passed", "Pending", "Failed: review incomplete; provider limit"):
             with self.subTest(result=result):
                 body = VALID.replace("Passed", result)
-                # When linting, then either explicit outcome has valid format.
-                self.assertEqual(validate(body), [])
+                # When marked ready, then unfinished reviews block the description check.
+                self.assertEqual(validate(body, draft=True), [])
+                self.assertEqual(not validate(body), result == "Passed")
 
     def test_length_limit_counts_the_entire_unicode_body(self):
         # Given a description exactly at the limit, including a hidden comment.

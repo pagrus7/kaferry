@@ -4,6 +4,7 @@ package compat
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,6 +22,7 @@ func testBinary(t *testing.T) string {
 	t.Helper()
 	path := os.Getenv("KAFERRY_TEST_BINARY")
 	if path != "" {
+		require.NoError(t, verifyBinary(path, os.Getenv("KAFERRY_EXPECT_BINARY_SHA256")))
 		return path
 	}
 	path = filepath.Join(t.TempDir(), "kaferry")
@@ -29,7 +31,35 @@ func testBinary(t *testing.T) string {
 	if data, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, data)
 	}
+	require.NoError(t, verifyBinary(path, os.Getenv("KAFERRY_EXPECT_BINARY_SHA256")))
 	return path
+}
+
+func verifyBinary(path, expected string) error {
+	if expected == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if fmt.Sprintf("%x", sha256.Sum256(data)) != expected {
+		return fmt.Errorf("test binary SHA-256 does not match the release artifact")
+	}
+	return nil
+}
+
+func TestExpectedBinaryHashRejectsSubstitution(t *testing.T) {
+	// Given a test binary whose expected digest was recorded after archive extraction.
+	path := filepath.Join(t.TempDir(), "binary")
+	data := []byte("release binary")
+	require.NoError(t, os.WriteFile(path, data, 0600))
+	expected := fmt.Sprintf("%x", sha256.Sum256(data))
+	require.NoError(t, verifyBinary(path, expected))
+	// When the path is replaced, then the artifact tests reject the substitute.
+	require.NoError(t, os.WriteFile(path, []byte("rebuilt binary"), 0600))
+	require.ErrorContains(t, verifyBinary(path, expected), "does not match")
+	require.Error(t, verifyBinary(path+"-missing", expected), "missing artifact must fail")
 }
 func waitEnd(t *testing.T, a *kadm.Client, topic string, end int64) {
 	t.Helper()

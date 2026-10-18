@@ -26,6 +26,11 @@ func execute(t *testing.T, statement, config string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if os.Getenv("KAFERRY_TEST_BINARY") != "" {
+		result := binaryWorker(t, ctx, statement, config)
+		require.Zero(t, result.code, result.detail)
+		return
+	}
 	var output bytes.Buffer
 	code := app.Execute(ctx, []string{"run", "--sql", statement, "--config", config}, nil, io.Discard, &output)
 	require.NoError(t, ctx.Err(), "copy must finish before its timeout: %s", output.String())

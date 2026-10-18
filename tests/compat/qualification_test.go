@@ -177,7 +177,7 @@ func TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 	defer cancel()
 
 	// When
-	result := loggedWorker(ctx, statement, secureConfig(t, secureProperties(t, "copier", "fixture-copy-secret")))
+	result := binaryWorker(t, ctx, statement, secureConfig(t, secureProperties(t, "copier", "fixture-copy-secret")))
 
 	// Then
 	if result.code != 0 || !strings.Contains(result.detail, "topic configuration unreadable; dependent preflight checks disabled") || strings.Contains(result.detail, "fixture-copy-secret") {
@@ -201,7 +201,7 @@ func TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			start := time.Now()
-			result := loggedWorker(ctx, strings.Replace(statement, "CUTOFF=INTERVAL '0' SECOND", "CUTOFF=INTERVAL '0' SECOND,ON_ERROR=SKIP", 1), secureConfig(t, cfg))
+			result := binaryWorker(t, ctx, strings.Replace(statement, "CUTOFF=INTERVAL '0' SECOND", "CUTOFF=INTERVAL '0' SECOND,ON_ERROR=SKIP", 1), secureConfig(t, cfg))
 			if result.code == 0 || time.Since(start) > 14*time.Second || strings.Contains(result.detail, fmt.Sprint(cfg["sasl.password"])) {
 				t.Fatal("security failure was skipped, retried indefinitely or exposed credential", result)
 			}
@@ -224,7 +224,7 @@ func TestSaslTlsScramMechanisms(t *testing.T) {
 			defer cancel()
 
 			// When the CLI copies with that mechanism.
-			result := loggedWorker(ctx, statement, secureConfig(t, cfg))
+			result := binaryWorker(t, ctx, statement, secureConfig(t, cfg))
 
 			// Then the destination contains the original bytes and timestamp.
 			if result.code != 0 || strings.Contains(result.detail, "fixture-copy-secret") {
@@ -237,7 +237,7 @@ func TestSaslTlsScramMechanisms(t *testing.T) {
 
 			// Given an incorrect password, when retried with SKIP, then authentication still fails.
 			cfg["sasl.password"] = "unique-wrong-scram-secret"
-			result = loggedWorker(ctx, strings.Replace(statement, "CUTOFF=", "ON_ERROR=SKIP,CUTOFF=", 1), secureConfig(t, cfg))
+			result = binaryWorker(t, ctx, strings.Replace(statement, "CUTOFF=", "ON_ERROR=SKIP,CUTOFF=", 1), secureConfig(t, cfg))
 			if result.code == 0 || strings.Contains(result.detail, "unique-wrong-scram-secret") {
 				t.Fatal("SCRAM authentication failure was skipped or exposed credentials", result)
 			}

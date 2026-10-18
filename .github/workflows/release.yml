@@ -11,6 +11,10 @@ on:
         required: true
 permissions:
   contents: read
+  actions: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 env:
   CGO_ENABLED: "0"
   RELEASE_TAG: ${{ (github.event_name == 'push' || inputs.publish) && github.ref_name || format('validation-{0}', github.sha) }}
@@ -100,6 +104,18 @@ jobs:
         run: |
           python3 scripts/notices.py bin/kaferry bin/THIRD_PARTY_NOTICES.txt
           COPYFILE_DISABLE=1 tar -czf "release/kaferry-$RELEASE_TAG-$PLATFORM.tar.gz" -C bin kaferry THIRD_PARTY_NOTICES.txt -C "$GITHUB_WORKSPACE" LICENSE
+      - name: Test the packaged binary
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p .cache/release-smoke
+          tar -xzf "release/kaferry-$RELEASE_TAG-$PLATFORM.tar.gz" -C .cache/release-smoke
+          test -s .cache/release-smoke/LICENSE
+          test -s .cache/release-smoke/THIRD_PARTY_NOTICES.txt
+          version=$(.cache/release-smoke/kaferry --version)
+          [[ "$version" == "kaferry $RELEASE_TAG (commit $SOURCE_SHA; "* ]]
+          KAFERRY_TEST_BINARY="$PWD/.cache/release-smoke/kaferry" KAFERRY_EXPECT_BINARY_SHA256="$(shasum -a 256 .cache/release-smoke/kaferry | cut -d ' ' -f 1)" go test -count=1 -tags=integration,load -run '^TestLoadObservability$/^round-0$/^disabled$' -v ./tests/compat
       - name: Attest archive provenance
         id: provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -124,9 +140,16 @@ jobs:
           name: release-${{ matrix.platform }}
           path: release/
           retention-days: 30
+  linux-validation:
+    needs: build
+    uses: ./.github/workflows/suites.yml
+    with:
+      suites: '["integration","load","fault","qualification","soak"]'
+      artifact: release-linux-amd64
+      soak_duration: 30m
   publish:
     if: github.event_name == 'push' || inputs.publish
-    needs: build
+    needs: [build, linux-validation]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

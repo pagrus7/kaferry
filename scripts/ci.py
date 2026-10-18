@@ -23,7 +23,7 @@ def capture(command):
 def run(label, command, directory):
     directory.mkdir(parents=True, exist_ok=True)
     os.environ["KAFERRY_REPORT_DIR"] = str(directory.resolve())
-    binary = Path("bin/kaferry")
+    binary = Path(os.environ.get("KAFERRY_TEST_BINARY", "bin/kaferry"))
     environment = {
         "commit": capture(["git", "rev-parse", "HEAD"]),
         "started_at": datetime.now(timezone.utc).isoformat(),

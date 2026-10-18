@@ -112,6 +112,8 @@ python3 scripts/ci.py soak make soak
 
 [CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. Bounded Kafka-copy and file-copy observability load results appear in the run summary and `checks-kafka` artifact, including throughput, sampled RSS, work caps and logs. [Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) run weekly and on manual dispatch. Artifacts retain logs and measurements for 30 days.
 
+PRs also run quality/security checks and [additional integrity suites](../.github/workflows/risk.yml). Only the prose allowlist skips fault and security/failover tests; unknown paths run both. The ordinary PR suites always run. Strict branch protection applies to admins; CodeQL errors and High/Critical security findings block merging.
+
 ### Quality indicators
 
 | Indicator | Where / meaning |
@@ -172,7 +174,7 @@ The command waits for all three reports. In an existing Claude Code session, use
 
 Release archives contain the binary, MIT license and notices for linked Go modules, subpackage licenses and the Go runtime. `--version` reports the build version, commit, Go and franz-go version. Production builds use `CGO_ENABLED=0`; broker fixtures also use franz-go; Linux race checks require CGO and a C compiler.
 
-The workflow builds Linux AMD64/ARM64 static binaries and macOS AMD64/ARM64 binaries, then produces per-platform SPDX SBOMs, archive provenance and binary SBOM attestations. [Notices generation](../scripts/notices.py) inspects actual linked packages and fails if required licenses cannot be found.
+The workflow builds Linux AMD64/ARM64 static binaries and macOS AMD64/ARM64 binaries, then produces per-platform SPDX SBOMs, archive provenance and binary SBOM attestations. Each extracted archive passes version and file-copy tests. Linux Kafka, fault, load, security/failover and a 30-minute soak must pass before publishing; binary digests reject accidental source rebuilds. Tests that inject application dependencies still run in-process. [Notices generation](../scripts/notices.py) inspects actual linked packages and fails if required licenses cannot be found.
 
 For downloads with attestation bundles, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document/v2.3`. Attestations establish build origin. Downloads without these bundles can be checked against `SHA256SUMS` for file integrity.
 
