@@ -31,16 +31,22 @@ def summary(runs):
 
 if __name__ == '__main__':
     repo = json.loads(subprocess.check_output(['gh', 'repo', 'view', '--json', 'nameWithOwner'], text=True))['nameWithOwner']
-    runs = json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/actions/runs?event=pull_request&per_page=100'], text=True))['workflow_runs']
-    # API returns newest first; keep only the latest run of each workflow/head.
+    runs = []
+    for page in range(1, 4):
+        batch = json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/actions/runs?event=pull_request&per_page=100&page={page}'], text=True))['workflow_runs']
+        runs.extend(batch)
+        if len(batch) < 100:
+            break
+    # API returns newest first; preserve the first retained invocation per head,
+    # so later description edits do not add review idle time to the CI duration.
     unique = {}
     for run in runs:
-        unique.setdefault((run['head_sha'], run['name']), run)
+        unique[(run['head_sha'], run['name'])] = run
     result = summary(list(unique.values()))
     minutes = 0
     for run in unique.values():
         if run['head_sha'] in result['completed_heads'] and run['name'] in WORKFLOWS:
             jobs = json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/actions/runs/{run["id"]}/jobs?per_page=100'], text=True))['jobs']
             minutes += sum(seconds(j['started_at'], j['completed_at']) / 60 for j in jobs if j.get('started_at') and j.get('completed_at'))
-    result.update(runner_minutes=round(minutes, 1), scope='checks, quality and integrity; queue included; excludes local reviews and PR-description')
+    result.update(runner_minutes=round(minutes, 1), scope='first retained checks/quality/integrity invocation per head; queue included; excludes PR-description and local review timing')
     print(json.dumps(result, indent=2))
