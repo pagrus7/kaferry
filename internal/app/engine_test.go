@@ -62,7 +62,7 @@ func (f *engineFixture) OpenOutput(p plan.Plan, _ string, progress file.Destinat
 	f.input.progress = progress
 	return f.output, f.stage("file-output")
 }
-func (f *engineFixture) New(source core.Source, sink core.Sink, store core.ProgressStore, p plan.Plan, _ config.Worker, _ core.StopObserver) Execution {
+func (f *engineFixture) New(source core.Source, sink core.Sink, store core.ProgressStore, p plan.Plan, _ config.Worker, _ core.StopObserver, _ core.Observer) Execution {
 	f.groups = append(f.groups, p.Group)
 	if source == nil || sink == nil || store == nil {
 		panic("missing copy dependency")
@@ -159,7 +159,7 @@ func TestRuntimeCompositionAcceptsReplacementFactories(t *testing.T) {
 			}
 
 			// When
-			runErr := engine.Run(context.Background(), enginePlan(kinds[0], kinds[1]), config.Worker{}, core.NoopStopObserver{})
+			runErr := engine.Run(context.Background(), enginePlan(kinds[0], kinds[1]), config.Config{}, noopShutdown{})
 
 			// Then
 			if runErr != nil {
@@ -219,10 +219,10 @@ func TestEngineClosesOnlyAcquiredResourcesOnFailure(t *testing.T) {
 		t.Run(test.source+"-"+test.destination+"-"+test.fail, func(t *testing.T) {
 			f := newEngineFixture()
 			f.fail, f.store = test.fail, f.input
-			engine := newEngine(f, f, f, engineLogger())
+			engine := newEngine(f, f, f, engineLogger(), nil)
 
 			// When
-			runErr := engine.Run(context.Background(), enginePlan(test.source, test.destination), config.Worker{}, core.NoopStopObserver{})
+			runErr := engine.Run(context.Background(), enginePlan(test.source, test.destination), config.Config{}, noopShutdown{})
 
 			// Then
 			if !errors.Is(runErr, f.failure) {
@@ -247,9 +247,9 @@ func TestEngineReportsCleanupFailureAfterSuccessfulCopy(t *testing.T) {
 			// Given a completed copy whose source or endpoint cleanup fails.
 			fixture := newEngineFixture()
 			fixture.fail, fixture.store = stage, fixture.input
-			engine := newEngine(fixture, fixture, fixture, engineLogger())
+			engine := newEngine(fixture, fixture, fixture, engineLogger(), nil)
 			// When all acquired resources are closed after the copy.
-			err := engine.Run(context.Background(), enginePlan("TOPIC", "TOPIC"), config.Worker{}, core.NoopStopObserver{})
+			err := engine.Run(context.Background(), enginePlan("TOPIC", "TOPIC"), config.Config{}, noopShutdown{})
 			// Then the failure is reported and each remaining resource is still closed once.
 			if !errors.Is(err, fixture.failure) {
 				t.Fatal("cleanup failure was hidden", err)
@@ -275,7 +275,7 @@ func TestEngineSkipsAcquisitionWhenStartupIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	// When preparing Kafka input and file output.
-	err := newEngine(f, f, f, engineLogger()).Run(ctx, enginePlan("TOPIC", "FILE"), config.Worker{}, core.NoopStopObserver{})
+	err := newEngine(f, f, f, engineLogger(), nil).Run(ctx, enginePlan("TOPIC", "FILE"), config.Config{}, noopShutdown{})
 	// Then no connection, file or saved progress is created.
 	if !errors.Is(err, context.Canceled) || len(f.trace) != 0 {
 		t.Fatal("cancelled startup acquired resources", err, f.trace)
@@ -301,7 +301,7 @@ func TestStartupCancellationClosesInputWithoutCreatingOutput(t *testing.T) {
 			}
 
 			// When starting a copy into a file.
-			err := newEngine(f, f, f, engineLogger()).Run(ctx, enginePlan(kind, "FILE"), config.Worker{}, core.NoopStopObserver{})
+			err := newEngine(f, f, f, engineLogger(), nil).Run(ctx, enginePlan(kind, "FILE"), config.Config{}, noopShutdown{})
 
 			// Then cancellation preserves its cause, closes acquired input, and creates no output.
 			var afterCancellation []string
@@ -328,7 +328,7 @@ func TestOneOffUsesOneGroupAndDeletesOnlyOnSuccess(t *testing.T) {
 			p.OneOff = true
 
 			// When
-			err := newEngine(f, f, f, engineLogger()).Run(context.Background(), p, config.Worker{}, core.NoopStopObserver{})
+			err := newEngine(f, f, f, engineLogger(), nil).Run(context.Background(), p, config.Config{}, noopShutdown{})
 
 			// Then
 			if (err != nil) != (fail != "") {

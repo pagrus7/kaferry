@@ -12,6 +12,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/franz"
 	"github.com/pagrus7/kaferry/internal/inspect"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
+	"github.com/pagrus7/kaferry/internal/observability"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/pagrus7/kaferry/internal/sql"
 	"go.uber.org/fx"
@@ -48,10 +49,13 @@ var CheckpointModule = fx.Module("checkpoint", fx.Provide(func() file.AtomicWrit
 var PublicationModule = fx.Module("publication", fx.Provide(file.NewPublisher))
 var FileModule = fx.Module("file", fx.Provide(fx.Annotate(file.NewFactory, fx.As(new(FileFactory)))))
 var RunnerModule = fx.Module("runner", fx.Provide(newRunnerFactory))
+var ObservabilityModule = fx.Module("observability", fx.Provide(func(env *system, log *slog.Logger) MetricsFactory {
+	return observability.NewFactory(env, log, version)
+}))
 var EngineModule = fx.Module("engine", fx.Provide(newEngine))
 var FileInspectionModule = fx.Module("file-inspection", fx.Provide(fx.Annotate(file.NewInspector, fx.As(new(inspect.Files)))))
 var InspectionModule = fx.Module("inspection", fx.Provide(inspect.NewExplainer, func(s *inspect.Service) inspect.Explainer { return s }, func(s *inspect.Service) inspect.StatusReader { return s }))
 var CommandModule = fx.Module("command", fx.Provide(newCommand))
 var ClockModule = fx.Module("clock", fx.Provide(func() copy.Clock { return copy.RealClock{} }))
 var LoggingModule = fx.Module("logging", fx.Provide(func() *slog.Logger { return slog.New(slog.NewJSONHandler(os.Stderr, nil)) }))
-var RuntimeModules = fx.Options(PlanningModules, ProgressModule, KafkaClientModule, PositioningModule, CommitMetadataModule, KafkaModule, CheckpointModule, PublicationModule, FileModule, RunnerModule, EngineModule, FileInspectionModule, InspectionModule, CommandModule, ClockModule, LoggingModule)
+var RuntimeModules = fx.Options(PlanningModules, ProgressModule, KafkaClientModule, PositioningModule, CommitMetadataModule, KafkaModule, CheckpointModule, PublicationModule, FileModule, RunnerModule, ObservabilityModule, EngineModule, FileInspectionModule, InspectionModule, CommandModule, ClockModule, LoggingModule)

@@ -2,7 +2,7 @@
 
 ## Configuration
 
-Pass `-c connections.toml` to load TOML; it is not loaded otherwise. SQL overrides TOML; topics without `@alias` use `default`. [Connection setup](../README.md#connections) · [Worker settings](../design/decisions.md#configuration-and-cli).
+Load TOML with `-c connections.toml`. SQL overrides TOML; topics without `@alias` use `default`. [Connection setup](../README.md#connections) · [Worker settings](../design/decisions.md#configuration-and-cli).
 
 ## Permissions
 
@@ -15,11 +15,11 @@ kaferry explain -c connections.toml -f copy.sql
 kaferry explain -c connections.toml -f copy.sql --json
 ```
 
-Shows endpoints, progress, windows and policies without joining, writing or locking. JSON includes every partition. Records, bytes, duration and write access are not checked. Fresh `NOW()` resolves again when run. [Output contract](../design/decisions.md#inspection).
+Shows endpoints, progress, windows and policies without joining, writing or locking. JSON lists every partition. Records, bytes, duration and write access are not checked. Fresh `NOW()` resolves again when run. [Output contract](../design/decisions.md#inspection).
 
 ## Run a copy
 
-Pass SQL with `-f file`, `-f -` (stdin) or `-e "SQL"`. All commands accept `-h`.
+Pass SQL with `-f file`, `-f -` (stdin) or `-e "SQL"`.
 
 **Archive retained records, then follow new ones.** Create the output directory:
 
@@ -32,7 +32,7 @@ OPTIONS (GROUP = 'orders-archive', START = EARLIEST);
 SQL
 ```
 
-Press Ctrl+C to stop archiving before restoring. For a new file-input job, create the checkpoint directory (default shown):
+Press Ctrl+C to stop archiving before restoring. Before file input, create its checkpoint directory:
 
 ```sh
 mkdir -p ~/.kaferry/checkpoints
@@ -44,7 +44,7 @@ Kafka input needs `WHERE` or `START`: `EARLIEST` for retained records or `LATEST
 
 ## Stop and check results
 
-SIGINT/SIGTERM stop reading, allow ten seconds for writes, then save confirmed progress. A second signal forces termination. At `worker.shutdown_timeout` (default 30 s), the CLI exits `1`; unsaved work may replay. Check `copy summary` on stderr for write/filter/skip counts. Check saved stops with:
+SIGINT/SIGTERM stop reading, drain writes for up to 10 s, then save progress. A second signal forces termination. At `worker.shutdown_timeout` (default 30 s), the CLI exits `1`; unsaved work may replay. Read counts in `copy summary` on stderr; check saved stops with:
 
 ```sh
 kaferry status -c connections.toml -f copy.sql --json
@@ -65,3 +65,19 @@ Errors stop the copy by default. `ON_ERROR = SKIP` drops identified records reje
 ## Workers
 
 For topic-to-topic copies, run identical SQL and a dedicated `GROUP` on each machine. Use fixed timestamps; `NOW()` can differ. Stop workers before upgrading. File queries use one process. Rerun unassigned workers to pick up unfinished work.
+
+## Monitoring
+
+With an OTLP/HTTP receiver, append to `connections.toml`:
+
+```toml
+[metrics]
+enabled = true
+```
+
+```sh
+export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT='https://collector.example/v1/metrics'
+kaferry run -c connections.toml -f copy.sql
+```
+
+Progress logs default to 30 s; `worker.progress_interval='0'` disables them. [Metric meanings and settings](../design/decisions.md#observability).

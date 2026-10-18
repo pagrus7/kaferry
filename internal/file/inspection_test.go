@@ -115,7 +115,7 @@ func TestFileInspectionReadsSavedProgressWhileItsLockIsHeld(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer source.Close()
-	if err := source.Start(&lifecycle{}); err != nil {
+	if err := source.Start(&lifecycle{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	event, err := source.Poll(0)

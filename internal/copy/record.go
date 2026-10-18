@@ -87,7 +87,7 @@ type Lifecycle interface {
 	Revoke(partitions []int32, lost bool) error
 }
 type Source interface {
-	Start(Lifecycle) error
+	Start(Lifecycle, Observer) error
 	Poll(time.Duration) (Event, error)
 	Pause(int32, bool) error
 	HighWatermark(int32) (int64, error)

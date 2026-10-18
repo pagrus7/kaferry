@@ -8,7 +8,7 @@ func TestReassignedPartitionResumesWithFreshRunnerState(t *testing.T) {
 	// Given a partition paused by its uncommitted record cap.
 	r, source, sink, _, _ := fixture(t)
 	r.limits.RecordCap, r.limits.PartitionRecordCap = 1, 1
-	if err := source.Start(r); err != nil {
+	if err := source.Start(r, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.input(incoming(0, 0, 1)); err != nil {

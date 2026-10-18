@@ -60,7 +60,7 @@ func TestShutdownDeadlineStopsBlockedCleanup(t *testing.T) {
 		f.store = f.input
 		f.source.beforeClose = func() { select {} }
 		budget := newShutdownBudget(context.Background(), 40*time.Millisecond, forceShutdown)
-		_ = newEngine(f, f, f, engineLogger()).Run(context.Background(), enginePlan("TOPIC", "FILE"), config.Worker{}, budget)
+		_ = newEngine(f, f, f, engineLogger(), nil).Run(context.Background(), enginePlan("TOPIC", "FILE"), config.Config{}, budget)
 		t.Fatal("blocked cleanup returned")
 	}
 	// Given a close operation that never returns, when normal completion starts cleanup,
@@ -90,13 +90,15 @@ func TestShutdownDeadlineCoversFinalErrorPrinting(t *testing.T) {
 
 type failedStartupSource struct{ core.Source }
 
-func (failedStartupSource) Start(core.Lifecycle) error { return errors.New("checkpoint write failed") }
+func (failedStartupSource) Start(core.Lifecycle, core.Observer) error {
+	return errors.New("checkpoint write failed")
+}
 
 func TestShutdownDeadlineCoversSummaryAfterStartupFailure(t *testing.T) {
 	if os.Getenv("KAFERRY_SHUTDOWN_HELPER") == "summary" {
 		budget := newShutdownBudget(context.Background(), 40*time.Millisecond, forceShutdown)
 		logger := slog.New(slog.NewTextHandler(blockingErrorOutput{}, nil))
-		runner := core.NewRunner(failedStartupSource{}, nil, nil, core.RealClock{}, logger, plan.Plan{}, config.Worker{}, nil, budget)
+		runner := core.NewRunner(failedStartupSource{}, nil, nil, core.RealClock{}, logger, plan.Plan{}, config.Worker{}, nil, budget, nil)
 		_ = runner.Run(context.Background())
 		t.Fatal("blocked summary writer returned")
 	}
@@ -116,7 +118,7 @@ func TestShutdownDeadlineNamesBlockedCheckpointDeletion(t *testing.T) {
 		p := enginePlan("FILE", "FILE")
 		p.OneOff = true
 		budget := newShutdownBudget(context.Background(), 40*time.Millisecond, forceShutdown)
-		_ = newEngine(fixture, fixture, fixture, engineLogger()).Run(context.Background(), p, config.Worker{}, budget)
+		_ = newEngine(fixture, fixture, fixture, engineLogger(), nil).Run(context.Background(), p, config.Config{}, budget)
 		t.Fatal("blocked checkpoint deletion returned")
 	}
 	// Given a completed one-off copy, when checkpoint deletion blocks,

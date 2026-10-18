@@ -132,7 +132,8 @@ func TestCorePositioningPrecedesClientOffsetAdjustment(t *testing.T) {
 	}
 	defer input.Close()
 	life := &lifecycleMock{}
-	if err = input.Start(life); err != nil {
+	observer := &saveObserver{}
+	if err = input.Start(life, observer); err != nil {
 		t.Fatal(err)
 	}
 	ctx := componentContext(t)
@@ -152,6 +153,9 @@ func TestCorePositioningPrecedesClientOffsetAdjustment(t *testing.T) {
 	saved, err := kadm.NewClient(producer).FetchOffsetsForTopics(ctx, p.Group, "input")
 	if err != nil || saved["input"][0].At != 2 {
 		t.Fatal("initial member commit lost", saved, err)
+	}
+	if len(observer.saves) != 1 || observer.saves[0].Outcome != "success" {
+		t.Fatal("initial save was not observed", observer.saves)
 	}
 	text := saved["input"][0].Metadata
 	if _, err := kafkaport.DecodeProgress(commitmeta.NewCodec(), &text, "fp", input.(*Source).topicID, false); err != nil {
@@ -194,7 +198,7 @@ func TestProductionAdaptersPreserveRawRecordsAndZeroNegativeTimestamps(t *testin
 	}
 	defer sink.Close()
 	// When the actual Source/Committer/Sink run through the shared copy engine.
-	runner := core.NewRunner(source, sink, store, core.RealClock{}, quietLogger(), p, limits, core.NewTracker(), core.NoopStopObserver{})
+	runner := core.NewRunner(source, sink, store, core.RealClock{}, quietLogger(), p, limits, core.NewTracker(), core.NoopStopObserver{}, nil)
 	if err := runner.Run(componentContext(t)); err != nil {
 		t.Fatal(err)
 	}
@@ -218,3 +222,8 @@ func TestProductionAdaptersPreserveRawRecordsAndZeroNegativeTimestamps(t *testin
 		}
 	}
 }
+
+type saveObserver struct{ saves []core.SaveResult }
+
+func (*saveObserver) Publish(core.Snapshot)          {}
+func (o *saveObserver) Saved(result core.SaveResult) { o.saves = append(o.saves, result) }

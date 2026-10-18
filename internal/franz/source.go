@@ -30,6 +30,7 @@ type Source struct {
 	query, ctx           context.Context
 	cancel, clientCancel context.CancelFunc
 	life                 core.Lifecycle
+	observer             core.Observer
 	positions            map[int32]int64
 	paused               map[int32]bool
 	held                 map[int32]*kgo.Record
@@ -43,7 +44,7 @@ type Source struct {
 	log                  *slog.Logger
 }
 
-func (s *Source) Start(life core.Lifecycle) error {
+func (s *Source) Start(life core.Lifecycle, observer core.Observer) error {
 	if s.pump != nil {
 		return fmt.Errorf("source already started")
 	}
@@ -51,6 +52,7 @@ func (s *Source) Start(life core.Lifecycle) error {
 		return err
 	}
 	s.life = life
+	s.observer = observer
 	s.client.AddConsumeTopics(s.plan.Source.Name)
 	s.pump = newFetchPump(s.ctx, s.client)
 	go s.pump.run()

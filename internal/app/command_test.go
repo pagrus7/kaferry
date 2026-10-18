@@ -50,8 +50,8 @@ func (m *commandMocks) Build(ast sql.Statement, profiles plan.Profiles) (plan.Pl
 	}
 	return m.plan, m.stage("build")
 }
-func (m *commandMocks) Run(ctx context.Context, p plan.Plan, worker config.Worker, _ core.StopObserver) error {
-	if ctx != m.ctx || !reflect.DeepEqual(p, m.plan) || worker != m.cfg.Worker {
+func (m *commandMocks) Run(ctx context.Context, p plan.Plan, cfg config.Config, _ Shutdown) error {
+	if ctx != m.ctx || !reflect.DeepEqual(p, m.plan) || !reflect.DeepEqual(cfg, m.cfg) {
 		m.t.Fatal("execution input changed")
 	}
 	return m.stage("execute")
@@ -157,7 +157,7 @@ type assignmentSource struct {
 	failure error
 }
 
-func (s assignmentSource) Start(lifecycle core.Lifecycle) error {
+func (s assignmentSource) Start(lifecycle core.Lifecycle, _ core.Observer) error {
 	if err := lifecycle.Assign([]core.Assignment{{Cursor: core.Cursor{Partition: 0}}}); err != nil {
 		return err
 	}
@@ -169,8 +169,8 @@ func TestRunnerFactoryInjectsFreshProgressPerExecution(t *testing.T) {
 	factory := newRunnerFactory(core.RealClock{}, engineLogger(), progress)
 	stop := errors.New("stop after assignment")
 	source := assignmentSource{failure: stop}
-	first := factory.New(source, nil, nil, enginePlan("FILE", "FILE"), config.Worker{}, core.NoopStopObserver{})
-	second := factory.New(source, nil, nil, enginePlan("FILE", "FILE"), config.Worker{}, core.NoopStopObserver{})
+	first := factory.New(source, nil, nil, enginePlan("FILE", "FILE"), config.Worker{}, core.NoopStopObserver{}, nil)
+	second := factory.New(source, nil, nil, enginePlan("FILE", "FILE"), config.Worker{}, core.NoopStopObserver{}, nil)
 	if len(progress.made) != 2 || progress.made[0] == progress.made[1] {
 		t.Fatal("progress state shared between executions")
 	}
@@ -196,3 +196,5 @@ func TestRunnerFactoryInjectsFreshProgressPerExecution(t *testing.T) {
 type noopShutdown struct{ core.NoopStopObserver }
 
 func (noopShutdown) Configure(time.Duration) {}
+
+func (noopShutdown) Deadline() time.Time { return time.Now().Add(time.Hour) }

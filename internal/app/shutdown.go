@@ -13,6 +13,13 @@ import (
 type Shutdown interface {
 	core.StopObserver
 	Configure(time.Duration)
+	Deadline() time.Time
+}
+
+func (b *shutdownBudget) Deadline() time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.started.Add(b.timeout)
 }
 
 type shutdownBudget struct {

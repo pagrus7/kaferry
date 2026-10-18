@@ -40,7 +40,7 @@ func TestSourceCheckpointDetectsChangedLastFrameAndShortenedSource(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := source.Start(&lifecycle{}); err != nil {
+			if err := source.Start(&lifecycle{}, nil); err != nil {
 				t.Fatal(err)
 			}
 			event, err := source.Poll(0)

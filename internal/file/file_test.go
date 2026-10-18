@@ -201,7 +201,7 @@ func TestCheckpointAndSourceSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	l := &lifecycle{}
-	if err = source.Start(l); err != nil {
+	if err = source.Start(l, nil); err != nil {
 		t.Fatal(err)
 	}
 	// Appends after open belong to the next run.
@@ -244,7 +244,7 @@ func TestCheckpointAndSourceSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer source.Close()
-	if err = source.Start(&lifecycle{}); err != nil {
+	if err = source.Start(&lifecycle{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	event, err = source.Poll(0)
@@ -277,7 +277,7 @@ func TestSourceReplacementFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = source.Start(&lifecycle{}); err != nil {
+	if err = source.Start(&lifecycle{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	source.Close()

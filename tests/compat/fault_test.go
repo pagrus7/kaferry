@@ -34,7 +34,7 @@ func TestBlockingCommitAcrossBrokerOutage(t *testing.T) {
 	name := topic(t, admin, 1)
 	source, store := probeSourceProgress(t, name, name+"-fault")
 	ownership := &probeOwnership{owned: make(map[int32]bool)}
-	if err := source.Start(ownership); err != nil {
+	if err := source.Start(ownership, nil); err != nil {
 		t.Fatal(err)
 	}
 	pollOwnership(t, []*adapter.Source{source}, func() bool { return len(ownership.owned) == 1 })
