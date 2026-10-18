@@ -51,11 +51,7 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 		return ctx.Err()
 	}
 	if p.OneOff {
-		var err error
-		p.Group, err = oneOffGroup()
-		if err != nil {
-			return err
-		}
+		p.Group = oneOffGroup()
 		e.log.Info("one-off group generated", "group", p.Group)
 	}
 	var observer copy.Observer
@@ -157,12 +153,10 @@ func minTime(a, b time.Time) time.Time {
 	return b
 }
 
-func oneOffGroup() (string, error) {
+func oneOffGroup() string {
 	var id [16]byte
-	if _, err := rand.Read(id[:]); err != nil {
-		return "", err
-	}
-	return "kaferry-" + hex.EncodeToString(id[:]), nil
+	rand.Read(id[:])
+	return "kaferry-" + hex.EncodeToString(id[:])
 }
 
 type inspectedEndpoint struct {

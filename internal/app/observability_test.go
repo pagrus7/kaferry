@@ -3,8 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
-	"google.golang.org/protobuf/proto"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +14,9 @@ import (
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/observability"
+	"github.com/stretchr/testify/require"
+	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 type metricsMock struct {
@@ -73,21 +74,27 @@ func TestEngineOwnsMetricsOnlyDuringEnabledExecution(t *testing.T) {
 			// Then disabled metrics acquire nothing, invalid settings prevent endpoint I/O,
 			// and enabled cleanup uses its own bounded context after copy resources close.
 			if mode == "disabled" {
-				if m.opens != 0 || m.closed || err != nil {
-					t.Fatal(m, err)
-				}
+				require.Zero(t, m.opens)
+				require.False(t, m.closed)
+				require.NoError(t, err)
 				return
 			}
 			if mode == "invalid" {
 				var exit *core.Exit
-				if !errors.As(err, &exit) || exit.Code != 2 || len(f.trace) != 0 || m.closed {
-					t.Fatal(m, err, f.trace)
-				}
+				require.ErrorAs(t, err, &exit)
+				require.EqualValues(t, 2, exit.Code)
+				require.Len(t, f.trace, 0)
+				require.False(t, m.closed)
 				return
 			}
-			if err != nil || m.opens != 1 || m.group != "group" || !m.closed || m.closeErr != nil || m.allowance <= 0 || m.allowance > time.Second || f.trace[len(f.trace)-1] != "close-metrics" {
-				t.Fatal(m, err, f.trace)
-			}
+			require.NoError(t, err)
+			require.EqualValues(t, 1, m.opens)
+			require.Equal(t, "group", m.group)
+			require.True(t, m.closed)
+			require.NoError(t, m.closeErr)
+			require.Positive(t, m.allowance)
+			require.LessOrEqual(t, m.allowance, time.Second)
+			require.Equal(t, "close-metrics", f.trace[len(f.trace)-1])
 		})
 	}
 }
@@ -101,9 +108,8 @@ func TestMetricsCleanupUsesRemainingProcessBudget(t *testing.T) {
 	budget.Begin()
 	// When telemetry is closed, then it receives an expired context rather than a new allowance.
 	closeMetrics(m, budget)
-	if m.closeErr == nil || m.allowance > 0 {
-		t.Fatal(m)
-	}
+	require.Error(t, m.closeErr)
+	require.LessOrEqual(t, m.allowance, time.Duration(0))
 }
 
 func TestExplainIgnoresMetricTransportAndRunValidatesBeforeOutput(t *testing.T) {
@@ -112,12 +118,9 @@ func TestExplainIgnoresMetricTransportAndRunValidatesBeforeOutput(t *testing.T) 
 			// Given enabled export with an invalid endpoint and a valid file query.
 			fixture := filePreview(t)
 			f, err := os.OpenFile(fixture.config, os.O_APPEND|os.O_WRONLY, 0600)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err = f.WriteString("\n[metrics]\nenabled=true\n"); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
+			_, err = f.WriteString("\n[metrics]\nenabled=true\n")
+			require.NoError(t, err)
 			_ = f.Close()
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "secret-invalid")
 			t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")
@@ -126,14 +129,15 @@ func TestExplainIgnoresMetricTransportAndRunValidatesBeforeOutput(t *testing.T) 
 			code := Execute(t.Context(), []string{command, "-c", fixture.config, "-e", fixture.query}, nil, &out, &out)
 			// Then explain starts no transport, while run fails before creating output.
 			if command == "explain" {
-				if code != 0 {
-					t.Fatal(code, out.String())
-				}
-			} else if code != 2 || !strings.Contains(out.String(), "OTEL_EXPORTER_OTLP_ENDPOINT") || strings.Contains(out.String(), "secret-invalid") {
-				t.Fatal(code, out.String())
+				require.Zero(t, code)
+			} else {
+				require.EqualValues(t, 2, code)
+				require.Contains(t, out.String(), "OTEL_EXPORTER_OTLP_ENDPOINT")
+				require.NotContains(t, out.String(), "secret-invalid")
 			}
-			if _, err := os.Stat(fixture.destination); !os.IsNotExist(err) {
-				t.Fatal("output created", err)
+			{
+				_, err := os.Stat(fixture.destination)
+				require.True(t, os.IsNotExist(err))
 			}
 		})
 	}
@@ -147,6 +151,7 @@ func TestFileCopyExportsInitialAndFinalSaves(t *testing.T) {
 		data, _ := io.ReadAll(r.Body)
 		request := &collectormetrics.ExportMetricsServiceRequest{}
 		if err := proto.Unmarshal(data, request); err != nil {
+			// The HTTP handler runs outside the test goroutine.
 			t.Error(err)
 			w.WriteHeader(400)
 			return
@@ -158,20 +163,14 @@ func TestFileCopyExportsInitialAndFinalSaves(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", server.URL+"/v1/metrics")
 	t.Setenv("OTEL_METRIC_EXPORT_INTERVAL", "60000")
 	f, err := os.OpenFile(fixture.config, os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	_, err = f.WriteString("\n[metrics]\nenabled=true\n")
 	_ = f.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	// When running through the composed CLI, sources, stores and exporter.
 	code := Execute(t.Context(), []string{"run", "-c", fixture.config, "-e", fixture.query}, nil, io.Discard, io.Discard)
 	// Then both initialization and final EOF saves are counted, with no copied records invented.
-	if code != 0 {
-		t.Fatal(code)
-	}
+	require.Zero(t, code)
 	select {
 	case request := <-received:
 		var saves int64
@@ -196,9 +195,8 @@ func TestFileCopyExportsInitialAndFinalSaves(t *testing.T) {
 				}
 			}
 		}
-		if saves != 2 || !eof {
-			t.Fatal("missing startup or EOF save", saves, eof)
-		}
+		require.EqualValues(t, 2, saves)
+		require.True(t, eof)
 	case <-time.After(2 * time.Second):
 		t.Fatal("no metrics received")
 	}

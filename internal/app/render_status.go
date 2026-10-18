@@ -50,9 +50,6 @@ func renderStatus(output io.Writer, r inspect.StatusReport, asJSON bool) error {
 		}
 		fmt.Fprintf(&b, "\n%s\nActivity: %s.\n", r.Meaning, r.Activity)
 	}
-	n, err := output.Write(b.Bytes())
-	if err == nil && n != b.Len() {
-		return io.ErrShortWrite
-	}
+	_, err := b.WriteTo(output)
 	return err
 }

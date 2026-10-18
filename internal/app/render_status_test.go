@@ -11,6 +11,7 @@ import (
 
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/inspect"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStatusTextIsBoundedAndJSONRetainsAllPartitions(t *testing.T) {
@@ -29,16 +30,13 @@ func TestStatusTextIsBoundedAndJSONRetainsAllPartitions(t *testing.T) {
 	}
 	var text, data bytes.Buffer
 	// When rendering text and JSON.
-	if err := renderStatus(&text, r, false); err != nil {
-		t.Fatal(err)
-	}
-	if err := renderStatus(&data, r, true); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, renderStatus(&text, r, false))
+	require.NoError(t, renderStatus(&data, r, true))
 	// Then text is bounded, user names are quoted and zero is retained in JSON.
-	if strings.Count(text.String(), "  Partition ") != 8 || !strings.Contains(text.String(), "4 more partitions") || !strings.Contains(text.String(), "offset 0") || strings.Contains(text.String(), "group\nforged") {
-		t.Fatal(text.String())
-	}
+	require.EqualValues(t, 8, strings.Count(text.String(), "  Partition "))
+	require.Contains(t, text.String(), "4 more partitions")
+	require.Contains(t, text.String(), "offset 0")
+	require.NotContains(t, text.String(), "group\nforged")
 	var decoded struct {
 		Version    int    `json:"version"`
 		Verdict    string `json:"verdict"`
@@ -51,9 +49,14 @@ func TestStatusTextIsBoundedAndJSONRetainsAllPartitions(t *testing.T) {
 			} `json:"stop"`
 		} `json:"partitions"`
 	}
-	if err := json.Unmarshal(data.Bytes(), &decoded); err != nil || decoded.Version != 1 || decoded.Verdict != "incomplete" || len(decoded.Partitions) != 12 || decoded.Partitions[0].Position != nil || decoded.Partitions[1].Position == nil || *decoded.Partitions[1].Position != 0 || decoded.Partitions[11].Stop.Reason != "tip" {
-		t.Fatal(data.String(), err)
-	}
+	require.NoError(t, json.Unmarshal(data.Bytes(), &decoded))
+	require.EqualValues(t, 1, decoded.Version)
+	require.Equal(t, "incomplete", decoded.Verdict)
+	require.Len(t, decoded.Partitions, 12)
+	require.Nil(t, decoded.Partitions[0].Position)
+	require.NotNil(t, decoded.Partitions[1].Position)
+	require.Zero(t, *decoded.Partitions[1].Position)
+	require.Equal(t, "tip", decoded.Partitions[11].Stop.Reason)
 }
 
 type statusWriter struct{ err error }
@@ -64,12 +67,21 @@ func TestStatusOutputFailuresRemainErrors(t *testing.T) {
 		t.Run(fmt.Sprint(asJSON), func(t *testing.T) {
 			// Given a failed or short stdout write, when rendering a status, then the caller gets an error.
 			failed := errors.New("stdout failed")
-			if err := renderStatus(statusWriter{failed}, inspect.StatusReport{}, asJSON); !errors.Is(err, failed) {
-				t.Fatal(err)
-			}
-			if err := renderStatus(statusWriter{}, inspect.StatusReport{}, asJSON); !errors.Is(err, io.ErrShortWrite) {
-				t.Fatal(err)
-			}
+			require.ErrorIs(t, renderStatus(statusWriter{failed}, inspect.StatusReport{}, asJSON), failed)
+			require.ErrorIs(t, renderStatus(statusWriter{}, inspect.StatusReport{}, asJSON), io.ErrShortWrite)
 		})
 	}
+}
+
+func TestFileStatusTextReportsBytePositionStopAndCurrentSize(t *testing.T) {
+	// Given saved EOF progress and the current source archive size.
+	position := int64(120)
+	report := inspect.StatusReport{Verdict: "stopped", Group: "restore", Source: inspect.Endpoint{Kind: "FILE", Name: "in.cbor", File: &inspect.FileSummary{SizeBytes: 150}}, Destination: inspect.Endpoint{Kind: "FILE", Name: "out.cbor"}, Partitions: []inspect.SavedPartition{{ID: 0, Position: &position, Stop: &core.Stop{Reason: "eof", At: 120}}}}
+	var output bytes.Buffer
+	// When rendering status as text.
+	err := renderStatus(&output, report, false)
+	// Then file cursor and stop are explicit and source size uses bytes.
+	require.NoError(t, err)
+	require.Contains(t, output.String(), "Partition 0: byte position 120; stopped by eof at 120")
+	require.Contains(t, output.String(), "Current source size: 150 bytes")
 }

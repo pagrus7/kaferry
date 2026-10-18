@@ -122,7 +122,8 @@ func renderStop(output io.Writer, source string, window plan.Window, cutoff int6
 			return err
 		}
 		fmt.Fprintf(output, "  Stop threshold: %s (window end + %d ms cutoff).\n", formatBound(&threshold), cutoff)
-		fmt.Fprintln(output, "    Per assigned partition: record timestamp exceeds the threshold, or catch up with the clock past it.")
+		fmt.Fprintln(output, "    Per assigned partition: stop when a record timestamp exceeds the threshold, or the clock passes it and reading reaches a sampled log end.")
+		fmt.Fprintln(output, "    Open transactions can delay reading that end; worker.tip_wait bounds the wait.")
 	}
 	return nil
 }
