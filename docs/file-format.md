@@ -1,6 +1,8 @@
 # CBOR archive v1
 
-Wire format and durability reference. One binary file, in submission order, without compression or segmentation. Version 1 is frozen.
+File input and output are planned for redesign, which may break backward compatibility.
+
+One binary file, in submission order, without compression or segmentation.
 
 ## Frames
 
