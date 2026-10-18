@@ -42,6 +42,8 @@ func TestExporterUsesConfiguredTrustAndClientIdentity(t *testing.T) {
 			server.StartTLS()
 			defer server.Close()
 			metricEnv(t, server.URL+"/v1/metrics")
+			t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
+			t.Setenv("OTEL_EXPORTER_OTLP_METRICS_INSECURE", "false")
 			dir := t.TempDir()
 			files := map[string][]byte{"ca": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), "cert": cert, "key": key}
 			for name, data := range files {

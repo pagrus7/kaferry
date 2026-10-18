@@ -61,6 +61,35 @@ func TestMetricsSettingsUseSignalSpecificPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestInsecureSettingMustMatchEndpointScheme(t *testing.T) {
+	for _, tc := range []struct{ scheme, generic, specific, invalid string }{
+		{"https", "true", "", "OTEL_EXPORTER_OTLP_INSECURE"},
+		{"http", "false", "", "OTEL_EXPORTER_OTLP_INSECURE"},
+		{"https", "", "true", "OTEL_EXPORTER_OTLP_METRICS_INSECURE"},
+		{"http", "", "false", "OTEL_EXPORTER_OTLP_METRICS_INSECURE"},
+		{"https", "true", "false", ""},
+		{"http", "false", "true", ""},
+	} {
+		t.Run(tc.scheme+"/"+tc.generic+"/"+tc.specific, func(t *testing.T) {
+			// Given an endpoint and generic or metric-specific transport flags.
+			env := environment{values: map[string]string{
+				"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": tc.scheme + "://localhost:4318/v1/metrics",
+				"OTEL_EXPORTER_OTLP_INSECURE":         tc.generic, "OTEL_EXPORTER_OTLP_METRICS_INSECURE": tc.specific,
+			}}
+			// When validating, then conflicting flags fail and signal-specific matching flags pass.
+			err := validate(env)
+			if tc.invalid == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || err.Error() != "metrics: invalid or missing "+tc.invalid {
+				t.Fatal("incorrect transport diagnostic", err)
+			}
+		})
+	}
+}
+
 func certPair(t *testing.T) ([]byte, []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

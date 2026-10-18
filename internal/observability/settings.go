@@ -37,6 +37,14 @@ func validateEndpoint(env Environment) error {
 	if name, value := setting(env, "PROTOCOL"); value != "" && value != "http/protobuf" {
 		return invalid(name)
 	}
+	if name, value := setting(env, "INSECURE"); value != "" {
+		if !strings.EqualFold(value, "true") && !strings.EqualFold(value, "false") {
+			return invalid(name)
+		}
+		if strings.EqualFold(value, "true") != (u.Scheme == "http") {
+			return invalid(name)
+		}
+	}
 	return nil
 }
 
@@ -69,11 +77,6 @@ func validateHeaders(env Environment) error {
 }
 
 func validateTLS(env Environment) error {
-	if name, value := setting(env, "INSECURE"); value != "" {
-		if !strings.EqualFold(value, "true") && !strings.EqualFold(value, "false") {
-			return invalid(name)
-		}
-	}
 	name, path := setting(env, "CERTIFICATE")
 	if path != "" {
 		data, err := env.ReadFile(path)

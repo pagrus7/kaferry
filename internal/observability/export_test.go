@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -59,6 +60,8 @@ func TestOTLPExportPreservesMetricAndResourceContract(t *testing.T) {
 				t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", server.URL+"/prefix")
 			}
 			t.Setenv("OTEL_EXPORTER_OTLP_METRICS_HEADERS", "Authorization=Bearer%20token")
+			t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "false")
+			t.Setenv("OTEL_EXPORTER_OTLP_METRICS_INSECURE", "true")
 			t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment.name=test,service.instance.id=not-unique")
 			f := NewFactory(systemEnvironment{}, slog.New(slog.NewJSONHandler(io.Discard, nil)), "test-version")
 			session, err := f.Open("test-group")
@@ -108,6 +111,32 @@ func TestOTLPExportPreservesMetricAndResourceContract(t *testing.T) {
 		})
 	}
 }
+
+func TestExporterRejectsHTTPSDowngradeBeforeSendingCredentials(t *testing.T) {
+	// Given an HTTPS endpoint, credentials and an inherited plaintext transport flag.
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/x-protobuf")
+	}))
+	defer server.Close()
+	metricEnv(t, strings.Replace(server.URL, "http:", "https:", 1)+"/v1/metrics")
+	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_HEADERS", "Authorization=Bearer%20fixture-token")
+	// When opening the exporter, then it rejects the flag without making an HTTP request.
+	session, err := NewFactory(systemEnvironment{}, slog.New(slog.NewJSONHandler(io.Discard, nil)), "test").Open("group")
+	if session != nil {
+		session.Publish(copy.Snapshot{Confirmed: 1})
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		session.Close(ctx)
+	}
+	if err == nil || err.Error() != "metrics: invalid or missing OTEL_EXPORTER_OTLP_INSECURE" || requests.Load() != 0 {
+		t.Fatal("HTTPS downgrade was not rejected before export", err, requests.Load())
+	}
+}
+
 func TestReceiverFailuresDoNotDelayShutdownOrRetry(t *testing.T) {
 	for _, hang := range []bool{false, true} {
 		t.Run(map[bool]string{false: "503", true: "no response"}[hang], func(t *testing.T) {
