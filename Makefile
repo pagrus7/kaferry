@@ -10,11 +10,11 @@ SOAK_TEST_TIMEOUT ?= 1h
 ifeq ($(KAFERRY_TEST_BINARY),)
 TEST_BINARY_PREREQUISITE = build
 # A leading "load " is a GNU Make plugin directive.
-qualification load soak: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/kaferry
+qualification load soak smoke: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/kaferry
 endif
 export KAFERRY_TEST_OUTPUT
 
-.PHONY: build test check fast integration fault load soak qualification fuzz benchmark metrics broker broker-down
+.PHONY: build test check fast smoke integration fault load soak qualification fuzz benchmark metrics broker broker-down
 build:
 	mkdir -p bin
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags='-s -w -buildid= -X github.com/pagrus7/kaferry/internal/app.version=$(KAFERRY_VERSION) -X github.com/pagrus7/kaferry/internal/app.revision=$(KAFERRY_REVISION)' -o bin/kaferry ./cmd/kaferry
@@ -31,7 +31,10 @@ fast: check
 	$(GO) test -run '^$$' -tags=integration,load,fault,qualification,migration ./tests/compat
 	$(MAKE) build
 	python3 scripts/notices.py bin/kaferry bin/THIRD_PARTY_NOTICES.txt
-	KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry $(GO) test -count=1 -tags=integration,load -run '^TestLoadObservability$$/^round-0$$/^disabled$$' ./tests/compat
+	$(MAKE) smoke KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry
+smoke: $(TEST_BINARY_PREREQUISITE)
+	python3 scripts/ci.py smoke $(GO) test -count=1 -json -tags=integration,load -run '^TestLoadObservability$$/^round-0$$/^disabled$$' ./tests/compat
+	python3 scripts/ci.py verify-tests smoke 'TestLoadObservability/round-0/disabled'
 broker:
 	docker compose -p kaferry-compat --profile cross-cluster up -d --wait --wait-timeout 60
 	# Listening sockets precede cold group-coordinator readiness.

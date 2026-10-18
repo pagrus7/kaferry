@@ -3,6 +3,7 @@ package plan
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,27 @@ func TestDocumentedExamples(t *testing.T) {
 				require.NoError(t, err)
 			})
 		}
+	}
+}
+
+func TestUsageCommandSQL(t *testing.T) {
+	// Given SQL inside the usage guide's heredoc and quoted command argument.
+	data, err := os.ReadFile("../../docs/usage.md")
+	require.NoError(t, err)
+	input := string(data)
+	heredoc := regexp.MustCompile("(?s)<<'SQL'\\n(.*?)\\nSQL").FindAllStringSubmatch(input, -1)
+	argument := regexp.MustCompile(`(?s)-e "(INSERT.*?)"`).FindAllStringSubmatch(input, -1)
+	examples := append(heredoc, argument...)
+	require.Len(t, examples, 2, "both runnable copy examples must be checked")
+	for index, example := range examples {
+		t.Run(fmt.Sprint(index), func(t *testing.T) {
+			// When parsed and planned without opening files or brokers.
+			statement, err := sql.NewParser().Parse(example[1])
+			require.NoError(t, err)
+			_, err = NewPlanner(environment{}).Build(statement, Profiles{"prod": {"bootstrap.servers": "prod:9092"}, "backup": {"bootstrap.servers": "backup:9092"}})
+			// Then invalid embedded SQL fails the ordinary unit suite.
+			require.NoError(t, err)
+		})
 	}
 }
 

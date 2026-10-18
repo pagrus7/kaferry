@@ -30,7 +30,10 @@ def verify_tests(log, expected):
 
 
 def capture(command):
-    result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+    except FileNotFoundError:
+        return ""
     return result.stdout.strip()
 
 

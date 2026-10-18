@@ -9,10 +9,16 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from ci import summarize
+from ci import capture, summarize
 
 
 class CISummaryTest(unittest.TestCase):
+    def test_missing_optional_metadata_tool_does_not_stop_the_command(self):
+        # Given a developer machine without the optional Docker CLI.
+        with patch('ci.subprocess.run', side_effect=FileNotFoundError):
+            # When reading metadata, then unavailable data stays empty.
+            self.assertEqual(capture(['docker', 'version']), '')
+
     def test_slowest_tests_use_completed_json_events(self):
         # Given mixed command output and Go test events.
         with tempfile.TemporaryDirectory() as name:

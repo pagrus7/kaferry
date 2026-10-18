@@ -1,14 +1,70 @@
 """Coverage evidence must preserve repeated hits and expose all changed-line gaps."""
 
 from pathlib import Path
+import hashlib
+import io
+import json
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 from review_coverage import collect, gap_ledger, sum_blocks, verified_run
 
 
 class ReviewCoverageTest(unittest.TestCase):
+    def test_production_collection_accepts_matching_evidence_and_rejects_substitutes(self):
+        # Given actual ZIP/profile shapes and the API responses for their reviewed source.
+        base, head, tested = 'a' * 40, 'b' * 40, 'c' * 40
+        for fault in (None, 'digest', 'tree', 'dirty', 'identity', 'patch'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                artifacts, archives = [], {}
+                for index, (name, label, hits) in enumerate([('checks-fast', 'unit', 3), ('checks-kafka', 'integration', 0)]):
+                    data = io.BytesIO()
+                    with zipfile.ZipFile(data, 'w') as zipped:
+                        zipped.writestr('coverage.out', f'mode: atomic\nm/internal/a.go:10.1,11.1 1 {hits}\nm/internal/a.go:12.1,13.1 2 0\n')
+                        zipped.writestr(f'{label}.environment.json', json.dumps({'commit': '--invalid' if fault == 'identity' else tested, 'working_tree_dirty': fault == 'dirty'}))
+                    archives[index] = data.getvalue()
+                    digest = hashlib.sha256(data.getvalue()).hexdigest()
+                    artifacts.append({'id': index, 'name': name, 'expired': False, 'digest': 'sha256:' + ('bad' if fault == 'digest' else digest)})
+
+                def api(endpoint):
+                    if '/workflows/' in endpoint:
+                        return {'workflow_runs': [{'id': 12, 'head_sha': head, 'status': 'completed', 'conclusion': 'success'}]}
+                    if endpoint.endswith('/artifacts'):
+                        return {'artifacts': artifacts}
+                    return {'tree': {'sha': 'different' if fault == 'tree' and endpoint.endswith(tested) else 'source-tree'}}
+
+                def git(*args):
+                    if args[0] == 'merge-base':
+                        return base
+                    if args[0] == 'show':
+                        return 'module m\n'
+                    if '--name-only' in args:
+                        return 'internal/a.go'
+                    return '@@ -10,3 +10,3 @@\n'
+
+                codecov = {'commitid': head, 'state': 'complete', 'totals': {'sessions': 2},
+                           'report': {'files': [{'name': 'internal/a.go', 'line_coverage': [[10, 0], [12, 1]]}]}}
+                comparison = {'base_commit': base, 'head_commit': head,
+                              'totals': {'patch': {'misses': 0 if fault == 'patch' else 1, 'partials': 0}}}
+                responses = [io.BytesIO(json.dumps(value).encode()) for value in (codecov, comparison)]
+                with patch('review_coverage.git', side_effect=git), patch('review_coverage.github', side_effect=api), \
+                        patch('review_coverage.subprocess.check_output', side_effect=lambda command: archives[int(command[-1].split('/')[-2])]), \
+                        patch('review_coverage.urlopen', side_effect=responses):
+                    # When the entire evidence boundary runs, then a substituted artifact,
+                    # source tree or patch report cannot produce a completed manifest.
+                    destination = Path(directory) / 'evidence'
+                    if fault:
+                        with self.assertRaises(ValueError):
+                            collect(base, head, 'owner/repo', destination)
+                        self.assertFalse((destination / 'manifest.json').exists())
+                    else:
+                        result = collect(base, head, 'owner/repo', destination)
+                        self.assertEqual(result['run_id'], 12)
+                        self.assertEqual(result['gaps'], [{'file': 'internal/a.go', 'line': 12, 'go': 'miss', 'codecov': 'miss', 'agreement': True, 'decision': None}])
+                        self.assertTrue((destination / 'manifest.json').exists())
+
     def test_duplicate_blocks_sum_and_zero_cannot_erase_a_hit(self):
         # Given repeated blocks from both unit and integration instrumentation.
         profiles = ['mode: atomic\nm/internal/a.go:10.1,12.2 2 3\nm/internal/a.go:12.3,13.1 1 0\n',

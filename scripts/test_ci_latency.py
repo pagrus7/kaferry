@@ -19,3 +19,8 @@ class LatencyTest(unittest.TestCase):
         self.assertEqual((result['samples'], result['failed_heads']), (20, 1))
         self.assertEqual((result['p50_seconds'], result['p95_seconds']), (600, 1140))
         self.assertIsNone(summary(runs[:3])['p95_seconds'])
+        # Given a rerun to green, when summarized, then its human wait cannot skew latency.
+        runs[0]['run_attempt'] = 2
+        result = summary(runs)
+        self.assertEqual((result['samples'], result['rerun_heads'], result['failed_heads']), (19, 1, 1))
+        self.assertIsNone(result['p95_seconds'])
