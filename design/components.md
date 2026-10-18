@@ -64,18 +64,19 @@ Most tests exercise pure functions or individual components with handwritten moc
 
 Run from the repository root. [Makefile](../Makefile) defines these targets; Kafka fixtures need Docker and Compose.
 
-| Command | Scope / prerequisite |
-| --- | --- |
-| `make check` | Vet and race-enabled unit/mock/component tests, including kfake protocol tests and shutdown subprocesses; no external broker |
-| `make broker` | Start disposable source/destination Kafka clusters |
-| `make integration` | Broker/CLI paths, fidelity, resume and rebalances; run `make broker` first |
-| `make fault` | Outages and ownership loss; run `make broker` first |
-| `make load` | Bounded Kafka-copy throughput/caps and file-copy metric export overhead; run `make broker` first |
-| `make soak` | Streaming fidelity, lag, memory and shutdown; run `make broker` first |
-| `make qualification` | Security/ACLs and replicated failover; starts its own TLS/SASL fixture |
-| `make fuzz` | SQL parser, frames and record decoding; default 100,000 iterations per target |
-| `make benchmark` | CBOR framing CPU/allocation measurements |
-| `make broker-down` | Stop the disposable source/destination clusters |
+| Command | Scope / prerequisite | CI owner |
+| --- | --- | --- |
+| `make check` | Vet and race-enabled unit/mock/component tests, kfake and shutdown subprocesses; no broker | Every PR/main; all release platforms |
+| `make fast` | Local fast checks: formatting, check, script/docs checks, build/licenses and file-copy smoke | Optional before push; CI runs these entrypoints |
+| `make broker` | Start disposable source/destination Kafka clusters | Fixture setup |
+| `make integration` | Broker/CLI paths, fidelity, resume and rebalances; start brokers first | Every PR/main; release |
+| `make fault` | Outages and ownership loss; start brokers first | Code PRs, nightly, weekly, release |
+| `make load` | Bounded Kafka-copy caps/fidelity and file-copy metric overhead; start brokers first | Every PR/main, weekly, release |
+| `make soak` | Streaming fidelity, lag, memory and shutdown; start brokers first | Weekly and release, 30 minutes |
+| `make qualification` | Security/ACLs and replicated failover; starts TLS/SASL fixture | Code PRs, nightly, weekly, release |
+| `make fuzz` | SQL parser, frames and decoder; 100,000 iterations per target | Nightly; weekly |
+| `make benchmark` | CBOR framing CPU/allocations | Nightly; weekly |
+| `make broker-down` | Stop disposable clusters | Fixture cleanup |
 
 Time-window arithmetic, boundaries and overflow use deterministic unit tests in `make check`. Set `FUZZ_ITERATIONS` to change the per-target fuzz budget; failures remain fatal.
 
@@ -110,9 +111,13 @@ KAFERRY_SOAK_DURATION=30m \
 python3 scripts/ci.py soak make soak
 ```
 
-[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. Bounded Kafka-copy and file-copy observability load results appear in the run summary and `checks-kafka` artifact, including throughput, sampled RSS, work caps and logs. [Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) run weekly and on manual dispatch. Artifacts retain logs and measurements for 30 days.
+[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. Bounded load measurements appear in the summary and `checks-kafka` artifact: throughput, sampled RSS, work caps and logs. Summaries list the slowest tests. [Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) run nightly unless a successful scheduled run already tested the same main commit; the weekly full run always includes a 30-minute soak. Manual dispatch runs all suites with a configurable soak duration (keep it below the 40-minute test timeout). Artifacts retain evidence for 30 days; each test invocation runs once and failures stay visible in Actions.
 
 PRs also run quality/security checks and [additional integrity suites](../.github/workflows/risk.yml). Only the prose allowlist skips fault and security/failover tests; unknown paths run both. The ordinary PR suites always run. Strict branch protection applies to admins; CodeQL errors and High/Critical security findings block merging.
+
+Use targeted package tests during local edits; full local suites are optional when CI will repeat them. Keep real-Kafka tests for broker behavior; move tests only after comparing executed names and the combined coverage on the same revision.
+
+`python3 scripts/ci_latency.py` reports recent CI wall time (including queues, excluding local review/description updates) and runner minutes. Percentiles need 20 complete heads without reruns or cancellations; both are counted separately. A six-minute PR p95 is a target, not a gate. Track reruns, escaped regressions and local review time when investigating delays; tighten checks around actual failures before adding broad suites.
 
 After retargeting a PR to a different base branch, push a new commit so CI compares the new base and head.
 

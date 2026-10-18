@@ -9,8 +9,15 @@ on:
         description: 'Release archive artifact; empty builds source'
         type: string
         default: ''
+      soak_duration:
+        type: string
+        default: '30m'
+      history:
+        type: boolean
+        default: false
 permissions:
   contents: read
+  actions: read
 env:
   CGO_ENABLED: "0"
 jobs:
@@ -25,7 +32,7 @@ jobs:
       KAFKA_TEST_BROKERS: 127.0.0.1:39092
       KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
       KAFKA_FAULT_CONTAINER: kaferry-compat-kafka-1
-      KAFERRY_SOAK_DURATION: 30m
+      KAFERRY_SOAK_DURATION: ${{ inputs.soak_duration }}
       KAFERRY_SOAK_DEST_STALL_CONTAINER: kaferry-compat-kafka-dr-1
       SUITE: ${{ matrix.suite }}
     steps:
@@ -50,7 +57,7 @@ jobs:
           echo "KAFERRY_EXPECT_BINARY_SHA256=$(sha256sum .cache/release-test/kaferry | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
           sha256sum "$1" >> "$GITHUB_STEP_SUMMARY"
       - name: Build source binary
-        if: inputs.artifact == ''
+        if: inputs.artifact == '' && matrix.suite != 'fuzz' && matrix.suite != 'benchmark'
         run: |
           python3 scripts/ci.py build make build
           echo "KAFERRY_TEST_BINARY=$PWD/bin/kaferry" >> "$GITHUB_ENV"
@@ -80,8 +87,14 @@ jobs:
               python3 scripts/ci.py fault make fault KAFERRY_TEST_OUTPUT=-json
               python3 scripts/ci.py verify-tests fault 'TestBlockingCommitAcrossBrokerOutage' 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits'
               ;;
+            fuzz|benchmark) python3 scripts/ci.py "$SUITE" make "$SUITE" ;;
             *) echo 'Unknown extended test suite' >&2; exit 1 ;;
           esac
+      - name: Previous successful measurements
+        if: always() && inputs.history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/history.py "$SUITE"
       - name: Reject source rebuilds in archive tests
         if: always() && inputs.artifact != ''
         run: test ! -e bin/kaferry

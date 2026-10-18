@@ -16,7 +16,7 @@ def fetch(suite):
     shutil.rmtree(destination, ignore_errors=True)
     runs = json.loads(subprocess.check_output([
         "gh", "run", "list", "--workflow", "qualification.yml", "--branch", "main",
-        "--status", "success", "--limit", "5", "--json", "databaseId,headSha,url"], text=True))
+        "--status", "success", "--limit", "20", "--json", "databaseId,headSha,url"], text=True))
     destination.mkdir(parents=True, exist_ok=True)
     for run in runs:
         with tempfile.TemporaryDirectory() as name:
@@ -54,11 +54,15 @@ def comparison(directory, baseline=Path(".cache/previous")):
     if suite in {"load", "soak", "fault"} and not current["broker_images"]:
         return rows + ["Broker image identities unavailable; no numeric comparison.", ""]
     old = {r["test"]: r for p in baseline.glob("*.metrics.json") for r in [json.loads(p.read_text())]}
+    current_records = [json.loads(p.read_text()) for p in sorted(directory.glob('*.metrics.json'))]
+    before = sorted({r.get('client', 'unknown') for r in old.values()})
+    after = sorted({r.get('client', 'unknown') for r in current_records})
+    if before != after:
+        rows += [f'Client versions: previous {", ".join(before)}; current {", ".join(after)}.', '']
     rows += ["| Test / measure | Previous | Current |", "| --- | ---: | ---: |"]
-    settings = ("platform", "client", "worker_record_cap", "worker_byte_cap", "source_partitions", "destination_partitions", "worker_stop_after_records", "measurement_method", "fixture_client")
+    settings = ("platform", "worker_record_cap", "worker_byte_cap", "source_partitions", "destination_partitions", "worker_stop_after_records", "measurement_method", "fixture_client")
     measures = ("records_per_second", "sampled_peak_rss_bytes", "shutdown_seconds")
-    for filename in sorted(directory.glob("*.metrics.json")):
-        r = json.loads(filename.read_text())
+    for r in current_records:
         p = old.get(r["test"])
         if not p or not p["passed"] or p["skipped"] or not r["passed"] or r["skipped"]:
             continue
