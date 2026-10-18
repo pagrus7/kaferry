@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	copy "github.com/pagrus7/kaferry/internal/copy"
@@ -54,10 +55,7 @@ func (p *positioner) Locate(ctx context.Context, parts []int32, saved map[int32]
 	if len(parts) == 0 {
 		return Positioning{}, nil
 	}
-	ids := make([]int32, len(parts))
-	for n, part := range parts {
-		ids[n] = part
-	}
+	ids := slices.Clone(parts)
 	if err := p.watermarks(ctx, ids); err != nil {
 		return Positioning{}, err
 	}
