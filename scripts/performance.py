@@ -42,8 +42,8 @@ def previous(repository):
             archive = subprocess.check_output(['gh', 'api', f'repos/{repository}/actions/artifacts/{artifact["id"]}/zip'])
             with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
                 report = json.loads(zipped.read('performance.json'))
-            if report.get('compatible') and report.get('head') == item['headSha']:
-                return report
+            if report.get('head') == item['headSha']:
+                return report if report.get('compatible') else None
     return None
 
 
@@ -58,7 +58,7 @@ def plan():
     if requested:
         base = resolve(requested)
     elif mode == 'comparison' and event == 'pull_request':
-        base = resolve(os.environ['PR_BASE'])
+        base = command('git', 'merge-base', resolve(os.environ['PR_BASE']), head)
     elif mode == 'comparison':
         baseline = previous(os.environ['GITHUB_REPOSITORY'])
         base = baseline['head'] if baseline else head
@@ -136,14 +136,14 @@ def execute(base, head, pairs, counts):
                     measure(harness, binaries[head if side == 'head' else base], case, measurements / f'{case}-warmup-{side}', counts)
                 except ValueError:
                     if side == 'base' and base != head:
-                        report['unavailable'] = 'The baseline did not pass the current workload; no comparison or baseline update.'
+                        report['unavailable'] = 'The baseline failed the current workload (incompatibility or a transient failure); see logs. The next scheduled run recalibrates.'
                         report['workloads'] = {}
                         return report
                     raise
             samples = []
             for index in range(pairs):
-                pair = {}
                 order = ('base', 'head') if index % 2 == 0 else ('head', 'base')
+                pair = {'first': order[0]}
                 for side in order:
                     pair[side] = measure(harness, binaries[head if side == 'head' else base], case,
                                          measurements / f'{case}-{index}-{side}', counts)
@@ -151,11 +151,10 @@ def execute(base, head, pairs, counts):
             report['workloads'][case] = {'samples': samples, **pair_summary(samples)}
         report['compatible'] = True
         return report
-    except (ValueError, subprocess.CalledProcessError):
-        report['unavailable'] = 'A workload failed; measurements are incomplete and do not update the baseline.'
-        report['workloads'] = {}
-        raise
     finally:
+        if not report['compatible']:
+            report.setdefault('unavailable', 'Measurements are incomplete and do not update the baseline.')
+            report['workloads'] = {}
         (directory / 'performance.json').write_text(json.dumps(report, indent=2) + '\n')
         rows = ['## Paired performance', '', f'Base `{base}` · Head `{head}` · {report["phase"]}', '',
                 report.get('unavailable', 'Same-runner measurements; ratios above 1 mean higher throughput. No regression gate.'), '',
@@ -174,7 +173,7 @@ if __name__ == '__main__':
     measure_parser = sub.add_parser('run')
     measure_parser.add_argument('base')
     measure_parser.add_argument('head')
-    measure_parser.add_argument('--pairs', type=int, choices=range(1, 11), default=5)
+    measure_parser.add_argument('--pairs', type=int, choices=range(2, 11, 2), default=6)
     args = parser.parse_args()
     if args.command == 'plan':
         plan()

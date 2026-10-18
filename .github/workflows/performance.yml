@@ -9,22 +9,22 @@ on:
         type: string
         default: ''
       pairs:
-        description: 'Pairs per workload (1–10)'
+        description: 'Pairs per workload (2, 4, 6, 8 or 10)'
         type: number
-        default: 5
+        default: 6
   pull_request:
     types: [opened, synchronize, labeled]
 permissions:
   contents: read
   actions: read
-concurrency:
-  group: performance-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   CGO_ENABLED: "0"
 jobs:
   paired:
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:performance')
+    if: github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci:performance') && (github.event.action != 'labeled' || github.event.label.name == 'ci:performance'))
+    concurrency:
+      group: performance-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -53,7 +53,7 @@ jobs:
         env:
           PERF_BASE: ${{ steps.plan.outputs.base }}
           PERF_HEAD: ${{ steps.plan.outputs.head }}
-          PERF_PAIRS: ${{ inputs.pairs || 5 }}
+          PERF_PAIRS: ${{ inputs.pairs || 6 }}
           KAFKA_TEST_BROKERS: 127.0.0.1:39092
         run: python3 scripts/performance.py run "$PERF_BASE" "$PERF_HEAD" --pairs "$PERF_PAIRS"
       - if: always() && steps.plan.outputs.run == 'true'

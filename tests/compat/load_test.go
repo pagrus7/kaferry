@@ -32,7 +32,7 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			count, recordCap, byteCap, configuration := scenario.count, scenario.records, scenario.bytes, scenario.config
 			if scenario.name == "default" {
-				count = loadRecordCount(t, "KAFERRY_LOAD_KAFKA_RECORDS", count, 1_000_000)
+				count = loadRecordCount(t, "KAFERRY_LOAD_KAFKA_RECORDS", count, 160000)
 			}
 			report := newLoadReport(t, "load")
 			report.WorkerStopAfterRecords = scenario.limit

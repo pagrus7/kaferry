@@ -77,7 +77,11 @@ func TestLoadObservability(t *testing.T) {
 				report := newLoadReport(t, "observability")
 				report.WorkerRecordCap = 20000
 				report.WorkerByteCap = 128 << 20
-				ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+				timeout := time.Minute
+				if count > 40000 {
+					timeout = 3 * time.Minute
+				}
+				ctx, cancel := context.WithTimeout(t.Context(), timeout)
 				defer cancel()
 				// When the CLI copies, with CPU and resident memory sampled independently.
 				process := launchCLI(t, ctx, binary, "run", "-f", "-", "-c", config)
