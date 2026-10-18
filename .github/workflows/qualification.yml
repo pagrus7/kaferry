@@ -1,6 +1,7 @@
 name: qualification
 on:
   schedule:
+    - cron: '17 9 * * 0,2-6'
     - cron: '17 9 * * 1'
   workflow_dispatch:
     inputs:
@@ -14,44 +15,36 @@ permissions:
 env:
   CGO_ENABLED: "0"
 jobs:
-  qualification:
+  plan:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: [load, soak, fault, qualification, fuzz, benchmark]
-    env:
-      KAFKA_TEST_BROKERS: 127.0.0.1:39092
-      KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
-      KAFERRY_SOAK_DURATION: ${{ inputs.soak_duration || '30m' }}
-      KAFERRY_SOAK_DEST_STALL_CONTAINER: kaferry-compat-kafka-dr-1
+    timeout-minutes: 2
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      suites: ${{ steps.plan.outputs.suites }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.26.9'
-          cache: true
-      - if: matrix.suite == 'load' || matrix.suite == 'soak' || matrix.suite == 'fault'
-        run: python3 scripts/ci.py broker make broker
-      - run: python3 scripts/ci.py build make build
-      - run: python3 scripts/ci.py '${{ matrix.suite }}' make '${{ matrix.suite }}'
-      - name: Previous successful measurements
-        if: success() || failure()
+      - name: Choose nightly checks or the weekly full run
+        id: plan
         env:
           GH_TOKEN: ${{ github.token }}
-          SUITE: ${{ matrix.suite }}
-        run: python3 scripts/history.py "$SUITE"
-      - if: always()
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
         run: |
-          mkdir -p build-results
-          docker compose -p kaferry-compat --profile cross-cluster logs --no-color > build-results/brokers.log
-          make broker-down
-      - if: always()
-        run: python3 scripts/ci.py summary
-      - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: qualification-${{ matrix.suite }}
-          path: build-results/
-          retention-days: 30
+          suites='["fault","qualification","fuzz","benchmark"]'
+          run=true
+          if [ "$EVENT" = workflow_dispatch ] || [ "$SCHEDULE" = "17 9 * * 1" ]; then
+            suites='["load","soak","fault","qualification","fuzz","benchmark"]'
+          else
+            previous=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow qualification.yml --branch main --event schedule --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
+            if [ "$previous" = "$GITHUB_SHA" ]; then run=false; fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "suites=$suites" >> "$GITHUB_OUTPUT"
+          echo "Extended tests: run=$run, suites=$suites. Nightly checks skip an unchanged main; weekly checks always run." >> "$GITHUB_STEP_SUMMARY"
+  qualification:
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    uses: ./.github/workflows/suites.yml
+    with:
+      suites: ${{ needs.plan.outputs.suites }}
+      soak_duration: ${{ inputs.soak_duration || '30m' }}
+      history: true

@@ -12,6 +12,9 @@ on:
       soak_duration:
         type: string
         default: '30m'
+      history:
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -71,6 +74,11 @@ jobs:
             fault|fuzz|benchmark) python3 scripts/ci.py "$SUITE" make "$SUITE" ;;
             *) echo 'Unknown extended test suite' >&2; exit 1 ;;
           esac
+      - name: Previous successful measurements
+        if: always() && inputs.history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/history.py "$SUITE"
       - if: always() && contains(fromJSON('["integration","load","soak","fault"]'), matrix.suite)
         run: |
           mkdir -p build-results

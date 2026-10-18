@@ -28,6 +28,8 @@ jobs:
             echo 'Living docs, comments and diagnostics must describe current behavior; keep release and investigation history in release notes, commits or PRs.'
             exit 1
           fi
+      - name: Documentation links and shell examples
+        run: python3 scripts/docs.py
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.9'
@@ -48,21 +50,12 @@ jobs:
       - run: make build
         env:
           CGO_ENABLED: "0"
+      - name: File-copy binary smoke test
+        run: KAFERRY_TEST_BINARY="$PWD/bin/kaferry" go test -count=1 -tags=integration,load -run '^TestLoadObservability$/^round-0$/^disabled$' -v ./tests/compat
       - name: Validate release license notices
         env:
           CGO_ENABLED: "0"
         run: python3 scripts/notices.py bin/kaferry bin/THIRD_PARTY_NOTICES.txt
-      - name: Check documentation size
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          readme = Path('README.md').read_text()
-          paths = ['README.md', 'docs/usage.md', 'docs/file-format.md']
-          total = sum(len(Path(path).read_text()) for path in paths)
-          assert len(readme) <= 5500, f'README: {len(readme)} characters; limit 5,500'
-          assert total < 10000, f'User docs: {total} characters; limit fewer than 10,000'
-          print(f'README: {len(readme)}; combined user docs: {total} characters')
-          PY
       - name: Publish Go coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:

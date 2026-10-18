@@ -27,20 +27,27 @@ func build(t *testing.T, input string) Plan {
 }
 
 func TestDocumentedExamples(t *testing.T) {
-	// Given
-	data, err := os.ReadFile("../../design/grammar.md")
-	require.NoError(t, err)
-	examples := strings.Split(string(data), "```sql\n")[1:]
-	require.NotEmpty(t, examples, "no documented SQL examples found")
-	for _, part := range examples {
-		statement, err := sql.NewParser().Parse(strings.SplitN(part, "```", 2)[0])
+	// Given published SQL examples and placeholder connection profiles.
+	connections := Profiles{"default": {"bootstrap.servers": "local:9092"}, "prod": {"bootstrap.servers": "prod:9092"}, "backup": {"bootstrap.servers": "backup:9092"}, "staging": {"bootstrap.servers": "staging:9092"}, "analytics": {"bootstrap.servers": "analytics:9092"}}
+	for _, name := range []string{"../../design/grammar.md", "../../README.md"} {
+		data, err := os.ReadFile(name)
 		require.NoError(t, err)
-
-		// When planning a documented example with its connection profiles.
-		_, err = NewPlanner(environment{"DR_PASSWORD": "secret"}).Build(statement, profiles)
-
-		// Then the example is valid under the documented rules.
-		require.NoError(t, err)
+		examples := strings.Split(string(data), "```sql\n")[1:]
+		require.NotEmpty(t, examples, "no SQL examples in %s", name)
+		for index, part := range examples {
+			t.Run(fmt.Sprintf("%s/%d", name, index), func(t *testing.T) {
+				input := strings.SplitN(part, "```", 2)[0]
+				if !strings.Contains(input, "INSERT INTO") {
+					input += " INSERT INTO TOPIC 'b@prod' SELECT * FROM TOPIC 'a@prod' OPTIONS(GROUP='example',START=EARLIEST);"
+				}
+				// When parsing and planning without opening endpoints.
+				statement, err := sql.NewParser().Parse(input)
+				require.NoError(t, err)
+				_, err = NewPlanner(environment{"DR_PASSWORD": "secret", "PROD_PASSWORD": "secret"}).Build(statement, connections)
+				// Then each example is valid with the actual parser and planner.
+				require.NoError(t, err)
+			})
+		}
 	}
 }
 

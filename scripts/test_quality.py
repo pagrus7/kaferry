@@ -59,7 +59,7 @@ class CoverageTest(unittest.TestCase):
                            "worker_stop_after_records": 10, "records_per_second": 100,
                            "measurement_method": "sql_release_to_exit", "fixture_client": "franz-go"}
             (previous / "load.metrics.json").write_text(json.dumps(measurement))
-            for changes in ({"worker_stop_after_records": 20}, {}, {"measurement_method": None}, {"fixture_client": None}):
+            for changes in ({"worker_stop_after_records": 20}, {}, {"client": "new-version"}, {"measurement_method": None}, {"fixture_client": None}):
                 with self.subTest(changes=changes):
                     actual = {key: value for key, value in {**measurement, **changes}.items()
                               if value is not None}
@@ -67,8 +67,11 @@ class CoverageTest(unittest.TestCase):
                     # When comparing matching settings, a changed cap, timing method or fixture client.
                     result = "\n".join(comparison(current, previous))
                     # Then only matching settings allow numeric comparison.
-                    self.assertEqual("Settings differ" in result, bool(changes))
-                    self.assertEqual("records_per_second" in result, not changes)
+                    settings_changed = bool(changes.keys() - {'client'})
+                    self.assertEqual("Settings differ" in result, settings_changed)
+                    self.assertEqual("records_per_second" in result, not settings_changed)
+                    if 'client' in changes:
+                        self.assertIn('Client versions: previous unknown; current new-version', result)
 
 
 if __name__ == "__main__":

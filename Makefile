@@ -6,7 +6,7 @@ FUZZ_ITERATIONS ?= 100000
 KAFKA_TEST_BROKERS ?= 127.0.0.1:39092
 KAFKA_TEST_DEST_BROKERS ?= 127.0.0.1:40092
 
-.PHONY: build test check integration fault load soak qualification fuzz benchmark metrics broker broker-down
+.PHONY: build test check fast integration fault load soak qualification fuzz benchmark metrics broker broker-down
 build:
 	mkdir -p bin
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags='-s -w -buildid= -X github.com/pagrus7/kaferry/internal/app.version=$(KAFERRY_VERSION) -X github.com/pagrus7/kaferry/internal/app.revision=$(KAFERRY_REVISION)' -o bin/kaferry ./cmd/kaferry
@@ -16,6 +16,14 @@ test:
 check:
 	$(GO) vet ./...
 	CGO_ENABLED=1 $(GO) test -race ./...
+fast: check
+	test -z "$$(gofmt -l cmd internal tests)"
+	python3 -m unittest discover -s scripts -p 'test_*.py'
+	python3 scripts/docs.py
+	$(GO) test -run '^$$' -tags=integration,load,fault,qualification,migration ./tests/compat
+	$(MAKE) build
+	python3 scripts/notices.py bin/kaferry bin/THIRD_PARTY_NOTICES.txt
+	KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry $(GO) test -count=1 -tags=integration,load -run '^TestLoadObservability$$/^round-0$$/^disabled$$' ./tests/compat
 broker:
 	docker compose -p kaferry-compat --profile cross-cluster up -d --wait --wait-timeout 60
 	# Listening sockets precede cold group-coordinator readiness.
