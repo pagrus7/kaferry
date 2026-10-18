@@ -3,7 +3,6 @@ module github.com/pagrus7/kaferry
 go 1.26.0
 
 require (
-	github.com/confluentinc/confluent-kafka-go/v2 v2.16.0
 	github.com/fxamacker/cbor/v2 v2.9.6
 	github.com/go-logr/logr v1.4.4
 	github.com/pelletier/go-toml/v2 v2.4.3

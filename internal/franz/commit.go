@@ -64,7 +64,7 @@ func classifyCommit(err error) error {
 			return &core.Recoverable{Err: err}
 		}
 	}
-	if kgo.IsRetryableBrokerErr(err) {
+	if brokerUnreachable(err) || kgo.IsRetryableBrokerErr(err) {
 		return &core.Recoverable{Err: err}
 	}
 	return err

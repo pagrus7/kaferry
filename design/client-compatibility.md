@@ -11,7 +11,7 @@ When Kaferry reads Kafka, franz-go v1.22.2 misreads record timestamps outside ±
 | Area | Tested configuration |
 | --- | --- |
 | Broker | Apache Kafka 3.9.0, KRaft; single-broker and three-broker clusters. Kafka 4.1.2: file paths, resume, cooperative ownership and transactions |
-| Runtime client | `franz-go v1.22.2`, pure Go; Confluent is an independent test-fixture client only |
+| Runtime client | `franz-go v1.22.2`, pure Go |
 | Broker integration | Linux AMD64 (CI) and macOS ARM64 |
 | Release builds and unit tests | Linux AMD64/ARM64 and macOS AMD64/ARM64 |
 | Client authentication | SASL/PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512 over TLS; mTLS handshakes in component tests |

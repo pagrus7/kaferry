@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing.T) {
@@ -31,7 +32,7 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 	stopA := start()
 	defer stopA()
 	waitMembers(t, a, group, 1, 2, results)
-	p := producer(t, nil)
+	p := producer(t)
 	for cycle := range 3 {
 
 		// When a second worker joins, records flow, and that worker leaves again.
@@ -40,7 +41,7 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 		waitMembers(t, a, group, 2, 2, results)
 		for i := range 96 {
 			id := cycle*96 + i
-			publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: int32(id % 2)}, Key: []byte(fmt.Sprint(id % 7)), Value: []byte(fmt.Sprint(id)), Timestamp: time.Now()})
+			publish(t, p, &kgo.Record{Topic: src, Partition: int32(id % 2), Key: []byte(fmt.Sprint(id % 7)), Value: []byte(fmt.Sprint(id)), Timestamp: time.Now()})
 		}
 		waitTopicCount(t, a, dst, 2, int64((cycle+1)*96))
 		stopB()
@@ -64,10 +65,10 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 
 	// Then all consumed offsets are committed despite repeated ownership changes.
 	for _, part := range committedPartitions(t, a, group, src, 2) {
-		require.Equal(t, k.Offset(144), part.Offset, "churn lost source progress")
+		require.Equal(t, int64(144), part.At, "churn lost source progress")
 	}
-	reader := consumer(t, dst+"-verify")
-	require.NoError(t, reader.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}, {Topic: &dst, Partition: 1, Offset: 0}}))
+	reader := consumer(t)
+	assign(t, reader, dst, 2)
 	seen := make(map[string]bool)
 	for len(seen) < 288 {
 		seen[string(read(t, reader).Value)] = true
@@ -79,20 +80,17 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 	}
 }
 
-func waitTopicCount(t *testing.T, a *k.AdminClient, topic string, partitions int, count int64) {
+func waitTopicCount(t *testing.T, a *kadm.Client, topic string, partitions int, count int64) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	request := make(map[k.TopicPartition]k.OffsetSpec)
-	for id := range partitions {
-		request[k.TopicPartition{Topic: &topic, Partition: int32(id)}] = k.LatestOffsetSpec
-	}
+
 	for {
-		result, err := a.ListOffsets(ctx, request)
+		result, err := a.ListEndOffsets(ctx, topic)
 		total := int64(0)
-		if err == nil && len(result.ResultInfos) == partitions {
-			for _, info := range result.ResultInfos {
-				require.Equal(t, k.ErrNoError, info.Error.Code())
+		if err == nil && len(result[topic]) == partitions {
+			for _, info := range result[topic] {
+				require.NoError(t, info.Err)
 				total += int64(info.Offset)
 			}
 			if total >= count {

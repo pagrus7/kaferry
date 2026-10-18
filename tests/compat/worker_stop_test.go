@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/app"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/inspect"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func executeWithWorkerStop(t *testing.T, statement, config string, stopAfter int) {
@@ -42,7 +42,7 @@ func TestWorkerStopAcrossEndpointDirections(t *testing.T) {
 	// Given a retained topic with seven full logical records in one partition.
 	a := admin(t)
 	source := topic(t, a, 1)
-	producer := producer(t, nil)
+	producer := producer(t)
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	ms := stamp.UnixMilli()
 	var expected []core.Record
@@ -53,8 +53,8 @@ func TestWorkerStopAcrossEndpointDirections(t *testing.T) {
 		} else if i == 1 {
 			value = []byte{}
 		}
-		headers := []k.Header{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}
-		publish(t, producer, &k.Message{TopicPartition: k.TopicPartition{Topic: &source, Partition: 0}, Key: key, Value: value, Headers: headers, Timestamp: stamp})
+		headers := []kgo.RecordHeader{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}
+		publish(t, producer, &kgo.Record{Topic: source, Partition: 0, Key: key, Value: value, Headers: headers, Timestamp: stamp})
 		expected = append(expected, core.Record{Key: key, Value: value, Headers: []core.Header{{Name: "dup", Value: nil}, {Name: "dup", Value: []byte{}}}, TimestampMS: &ms, TimestampType: "create_time", Source: &core.Provenance{Topic: source, Partition: 0, Offset: int64(i)}})
 	}
 	config := configuration(t)

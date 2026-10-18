@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func tipSamples(samples chan<- int64) func(slog.Record) {
@@ -38,13 +38,12 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 		t.Run(map[bool]string{false: "commit", true: "abort"}[abort], func(t *testing.T) {
 			a := admin(t)
 			src := topic(t, a, 1)
-			p := producer(t, k.ConfigMap{"transactional.id": src + "-open"})
+			p := producer(t, kgo.TransactionalID(src+"-open"))
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			require.NoError(t, p.InitTransactions(ctx))
 			require.NoError(t, p.BeginTransaction())
 			stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
-			publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: []byte("transactional"), Timestamp: stamp})
+			publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte("transactional"), Timestamp: stamp})
 			path := filepath.Join(t.TempDir(), "out.cbor")
 			group := src + "-copy"
 			cfg := configuration(t)
@@ -71,8 +70,8 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 					t.Fatalf("copy ended before transaction resolution: %d %s", r.code, r.detail)
 				default:
 				}
-				positions, err := a.ListConsumerGroupOffsets(ctx, []k.ConsumerGroupTopicPartitions{{Group: group, Partitions: []k.TopicPartition{{Topic: &src, Partition: 0}}}})
-				if err == nil && len(positions.ConsumerGroupsTopicPartitions) == 1 && len(positions.ConsumerGroupsTopicPartitions[0].Partitions) == 1 && positions.ConsumerGroupsTopicPartitions[0].Partitions[0].Offset == 0 {
+				positions, err := a.FetchOffsets(ctx, group)
+				if err == nil && positions.Error() == nil && len(positions[src]) == 1 && positions[src][0].At == 0 {
 					initialized = true
 					break
 				}
@@ -99,9 +98,9 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 				t.Fatal("open transaction was not included in the tip sample")
 			}
 			if abort {
-				require.NoError(t, p.AbortTransaction(ctx))
+				require.NoError(t, p.EndTransaction(ctx, kgo.TryAbort))
 			} else {
-				require.NoError(t, p.CommitTransaction(ctx))
+				require.NoError(t, p.EndTransaction(ctx, kgo.TryCommit))
 			}
 			select {
 			case r := <-result:
@@ -129,18 +128,17 @@ func TestOpenTransactionReachesTipWaitInsteadOfSuccessfulCompletion(t *testing.T
 	// Given an in-window record in a transaction that stays open past tip_wait.
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
-	p := producer(t, k.ConfigMap{"transactional.id": src + "-open"})
+	p := producer(t, kgo.TransactionalID(src+"-open"))
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
-	require.NoError(t, p.InitTransactions(ctx))
 	require.NoError(t, p.BeginTransaction())
 	defer func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		_ = p.AbortTransaction(cleanup)
+		_ = p.EndTransaction(cleanup, kgo.TryAbort)
 	}()
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
-	publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: []byte("transactional"), Timestamp: stamp})
+	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte("transactional"), Timestamp: stamp})
 	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", dst, src, stamp.Add(-time.Second).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano), src+"-wait")
 	cfg := configuration(t, "tip_wait='100ms'\n")
 

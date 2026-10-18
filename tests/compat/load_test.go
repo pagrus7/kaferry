@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestLoadBoundedKafkaCopy(t *testing.T) {
@@ -38,25 +38,26 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			// Given seeded topics, a compiled CLI and worker limits.
 			a := admin(t)
 			src, dst := topic(t, a, 4), topic(t, a, 5)
-			p := producer(t, nil)
-			reports := make(chan k.Event, count)
+			p := producer(t)
+			reports := make(chan kgo.ProduceResult, count)
+			seedCtx, seedCancel := context.WithTimeout(t.Context(), 15*time.Second)
+			defer seedCancel()
 			stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 			records := newStreamRecords(src, stamp)
-			records.publish(t, p, reports, count)
+			records.publish(t, seedCtx, p, reports, count)
 			for range count {
 				select {
 				case e := <-reports:
-					if r, ok := e.(*k.Message); !ok || r.TopicPartition.Error != nil {
+					if e.Err != nil {
 						t.Fatal("fixture publish failed", e)
 					}
-				case <-time.After(15 * time.Second):
+				case <-seedCtx.Done():
 					t.Fatal("fixture delivery timed out")
 				}
 			}
+			seedCancel()
 			binaryPath := testBinary(t)
 			statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", broker(t), dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), src+"-load")
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
 			args := []string{"run", "--file", "-"}
 			if configuration != "" {
 				path := filepath.Join(t.TempDir(), "worker.toml")
@@ -70,6 +71,8 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 				want = min(count, scenario.limit)
 			}
 			// When executing the bounded copy and sampling its memory.
+			ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+			defer cancel()
 			process := launchCLI(t, ctx, binaryPath, args...)
 			report.cli = process
 			report.MeasurementMethod = "sql_release_to_exit"
@@ -94,12 +97,8 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			require.Equal(t, want, summary.Confirmed, "confirmed records")
 			require.LessOrEqual(t, summary.PeakRecords, recordCap, "uncommitted records")
 			require.LessOrEqual(t, summary.PeakBytes, byteCap, "uncommitted bytes")
-			c := consumer(t, dst+"-reader")
-			var parts []k.TopicPartition
-			for i := range 5 {
-				parts = append(parts, k.TopicPartition{Topic: &dst, Partition: int32(i), Offset: 0})
-			}
-			require.NoError(t, c.Assign(parts))
+			c := consumer(t)
+			assign(t, c, dst, 5)
 			for range want {
 				records.verify(t, read(t, c))
 			}

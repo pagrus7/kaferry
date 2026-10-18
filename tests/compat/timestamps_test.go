@@ -3,7 +3,6 @@
 package compat
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,22 +11,18 @@ import (
 	"testing"
 	"time"
 
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestLogAppendTimeDestinationRestampsUnpreservableValues(t *testing.T) {
 	// Given
 	a := admin(t)
 	dst := topic(t, a, 1)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	result, err := a.AlterConfigs(ctx, []k.ConfigResource{{Type: k.ResourceTopic, Name: dst, Config: []k.ConfigEntry{{Name: "message.timestamp.type", Value: "LogAppendTime"}}}})
-	if err != nil || result[0].Error.Code() != k.ErrNoError {
-		t.Fatal(err, result)
-	}
+	alterTopicConfig(t, a, dst, map[string]string{"message.timestamp.type": "LogAppendTime"})
+
 	path := filepath.Join(t.TempDir(), "source.cbor")
 	codec, _ := file.NewCodec(1 << 20)
 	o, err := file.NewOutput(file.NewPublisher(), path, "fixture", "fixture", "", 0, codec, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -41,13 +36,13 @@ func TestLogAppendTimeDestinationRestampsUnpreservableValues(t *testing.T) {
 
 	// When
 	execute(t, fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='%s-restore')", dst, path, dst), configuration(t))
-	c := consumer(t, dst+"-reader")
+	c := consumer(t)
 
 	// Then
-	require.NoError(t, c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}))
+	assign(t, c, dst, 1)
 	for i := range 3 {
 		r := read(t, c)
-		if string(r.Value) != fmt.Sprint(i) || r.TimestampType != k.TimestampLogAppendTime || r.Timestamp.Before(before) || r.Timestamp.After(time.Now().Add(time.Second)) {
+		if string(r.Value) != fmt.Sprint(i) || r.Attrs.TimestampType() != 1 || r.Timestamp.Before(before) || r.Timestamp.After(time.Now().Add(time.Second)) {
 			t.Fatal("LogAppendTime did not restamp while preserving data")
 		}
 	}
@@ -57,13 +52,9 @@ func TestTimestampLookupAcrossSegmentsAndPreEpochBound(t *testing.T) {
 	// Given
 	a := admin(t)
 	src := topic(t, a, 1)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	result, err := a.AlterConfigs(ctx, []k.ConfigResource{{Type: k.ResourceTopic, Name: src, Config: []k.ConfigEntry{{Name: "segment.bytes", Value: "4096"}, {Name: "index.interval.bytes", Value: "1024"}}}})
-	if err != nil || result[0].Error.Code() != k.ErrNoError {
-		t.Fatal(err, result)
-	}
-	p := producer(t, nil)
+	alterTopicConfig(t, a, src, map[string]string{"segment.bytes": "4096", "index.interval.bytes": "1024"})
+
+	p := producer(t)
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	for i := range 40 {
 		ts := stamp
@@ -72,7 +63,7 @@ func TestTimestampLookupAcrossSegmentsAndPreEpochBound(t *testing.T) {
 		}
 		value := make([]byte, 1024)
 		value[0] = byte(i)
-		publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: value, Timestamp: ts})
+		publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: value, Timestamp: ts})
 	}
 	cfg := configuration(t)
 	for _, test := range []struct {

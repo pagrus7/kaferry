@@ -2,10 +2,13 @@ package franz
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
+	"net"
+	"syscall"
 	"testing"
 	"time"
 
@@ -183,6 +186,12 @@ func TestGapProbeErrorsRetryOnlyWhenRecoverable(t *testing.T) {
 		stops   bool
 	}{
 		{kerr.FencedLeaderEpoch, false}, {context.DeadlineExceeded, false}, {io.EOF, false},
+		{fmt.Errorf("unable to dial: %w", &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}), false},
+		{x509.UnknownAuthorityError{}, true}, {kerr.SaslAuthenticationFailed, true}, {context.Canceled, true},
+		{&net.OpError{Op: "remote error", Err: errors.New("tls handshake failure")}, true},
+		{&net.OpError{Op: "dial", Err: context.Canceled}, true},
+		{&net.OpError{Op: "dial", Err: &net.DNSError{IsNotFound: true}}, true},
+		{&net.OpError{Op: "dial", Err: syscall.EACCES}, true},
 		{kerr.UnknownTopicOrPartition, true}, {errors.New("corrupt batch"), true},
 	} {
 		t.Run(scenario.failure.Error(), func(t *testing.T) {

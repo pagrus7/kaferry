@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -16,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 type copySummary struct {
@@ -43,16 +44,16 @@ func summaryFrom(t *testing.T, output string) copySummary {
 type streamRecords struct {
 	topic                  string
 	stamp                  time.Time
-	headers                []k.Header
+	headers                []kgo.RecordHeader
 	seen                   []bool
 	order                  map[[2]int32]int
 	verified, acknowledged int
 }
 
 func newStreamRecords(topic string, stamp time.Time) *streamRecords {
-	return &streamRecords{topic: topic, stamp: stamp, headers: []k.Header{{Key: "trace", Value: []byte{0, 255}}, {Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, order: make(map[[2]int32]int)}
+	return &streamRecords{topic: topic, stamp: stamp, headers: []kgo.RecordHeader{{Key: "trace", Value: []byte{0, 255}}, {Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, order: make(map[[2]int32]int)}
 }
-func (s *streamRecords) publish(t *testing.T, producer *k.Producer, reports chan k.Event, count int) {
+func (s *streamRecords) publish(t *testing.T, ctx context.Context, producer *kgo.Client, reports chan kgo.ProduceResult, count int) {
 	t.Helper()
 	for range count {
 		id := len(s.seen)
@@ -62,14 +63,14 @@ func (s *streamRecords) publish(t *testing.T, producer *k.Producer, reports chan
 		if id%7 == 0 {
 			key = nil
 		}
-		message := &k.Message{TopicPartition: k.TopicPartition{Topic: &s.topic, Partition: int32(id % 4)}, Key: key, Value: payload, Timestamp: s.stamp, Headers: s.headers}
-		require.NoError(t, producer.Produce(message, reports))
+		message := &kgo.Record{Topic: s.topic, Partition: int32(id % 4), Key: key, Value: payload, Timestamp: s.stamp, Headers: s.headers}
+		producer.Produce(ctx, message, deliveryReporter(ctx, reports))
 		s.seen = append(s.seen, false)
 	}
 }
-func (s *streamRecords) verify(t *testing.T, record *k.Message) {
+func (s *streamRecords) verify(t *testing.T, record *kgo.Record) {
 	t.Helper()
-	if record.TopicPartition.Error != nil || len(record.Value) < 4 {
+	if len(record.Value) < 4 {
 		t.Fatal("invalid output", record)
 	}
 	id := int(binary.BigEndian.Uint32(record.Value))
@@ -90,7 +91,7 @@ func (s *streamRecords) verify(t *testing.T, record *k.Message) {
 			t.Fatalf("record %d payload byte %d: got %d, want %d", id, offset+4, b, wantByte)
 		}
 	}
-	pair := [2]int32{int32(id % 4), record.TopicPartition.Partition}
+	pair := [2]int32{int32(id % 4), record.Partition}
 	if prior, exists := s.order[pair]; exists && id <= prior {
 		t.Fatal("source/destination partition order changed", pair, prior, id)
 	}
@@ -98,13 +99,12 @@ func (s *streamRecords) verify(t *testing.T, record *k.Message) {
 	s.seen[id] = true
 	s.verified++
 }
-func (s *streamRecords) drainReports(t *testing.T, reports <-chan k.Event) {
+func (s *streamRecords) drainReports(t *testing.T, reports <-chan kgo.ProduceResult) {
 	t.Helper()
 	for {
 		select {
 		case event := <-reports:
-			message, ok := event.(*k.Message)
-			if !ok || message.TopicPartition.Error != nil {
+			if event.Err != nil {
 				t.Fatal("fixture publish failed", event)
 			}
 			s.acknowledged++
@@ -113,16 +113,20 @@ func (s *streamRecords) drainReports(t *testing.T, reports <-chan k.Event) {
 		}
 	}
 }
-func (s *streamRecords) catchUp(t *testing.T, consumer *k.Consumer, reports <-chan k.Event) {
+func (s *streamRecords) catchUp(t *testing.T, consumer *kgo.Client, reports <-chan kgo.ProduceResult) {
 	t.Helper()
-	switch event := consumer.Poll(5).(type) {
-	case *k.Message:
-		s.verify(t, event)
-	case k.Error:
-		if event.IsFatal() || (event.Code() != k.ErrTransport && event.Code() != k.ErrAllBrokersDown && event.Code() != k.ErrTimedOut && event.Code() != k.ErrResolve) {
-			t.Fatal(event)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Millisecond)
+	defer cancel()
+	fetches := consumer.PollRecords(ctx, 1)
+	for _, failure := range fetches.Errors() {
+		if !errors.Is(failure.Err, context.DeadlineExceeded) {
+			t.Fatal(failure)
 		}
 	}
+	for _, record := range fetches.Records() {
+		s.verify(t, record)
+	}
+
 	s.drainReports(t, reports)
 }
 func rssSample(pid int) (int64, error) {

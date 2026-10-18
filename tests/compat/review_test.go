@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/commitmeta"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
@@ -23,25 +22,26 @@ import (
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/pagrus7/kaferry/internal/sql"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestCopyDestinationAcceptableRecordAboveProducerDefault(t *testing.T) {
 	// Given a source record above the default producer limit but within Kafka's topic limit.
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
-	p := producer(t, k.ConfigMap{"message.max.bytes": 2000000})
+	p := producer(t, kgo.ProducerBatchMaxBytes(2000000))
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	payload := bytes.Repeat([]byte{0, 255}, 505000)
-	headers := []k.Header{{Key: "duplicate", Value: nil}, {Key: "duplicate", Value: []byte{}}}
-	publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Key: []byte("large"), Value: payload, Headers: headers, Timestamp: stamp})
+	headers := []kgo.RecordHeader{{Key: "duplicate", Value: nil}, {Key: "duplicate", Value: []byte{}}}
+	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Key: []byte("large"), Value: payload, Headers: headers, Timestamp: stamp})
 	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s-large',CUTOFF=INTERVAL '0' SECOND)", dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), src)
 
 	// When copying with no explicit producer size setting.
 	execute(t, statement, configuration(t))
 
 	// Then the whole logical record reaches the destination unchanged.
-	c := consumer(t, dst+"-verify")
-	require.NoError(t, c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}))
+	c := consumer(t)
+	assign(t, c, dst, 1)
 	got := read(t, c)
 	if !bytes.Equal(got.Value, payload) || string(got.Key) != "large" || !got.Timestamp.Equal(stamp) || !reflect.DeepEqual(got.Headers, headers) {
 		t.Fatal("large record was rejected or changed")
@@ -52,13 +52,7 @@ func TestLegacyTimestampLimitSkipsOnlyRejectedRecord(t *testing.T) {
 	// Given Kafka 3.9 directional defaults and only the legacy acceptance limit set.
 	a := admin(t)
 	dst := topic(t, a, 1)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	results, err := a.IncrementalAlterConfigs(ctx, []k.ConfigResource{{Type: k.ResourceTopic, Name: dst, Config: []k.ConfigEntry{{Name: "message.timestamp.difference.max.ms", Value: "3600000", IncrementalOperation: k.AlterConfigOpTypeSet}}}})
-	if err != nil || len(results) != 1 || results[0].Error.Code() != k.ErrNoError {
-		t.Fatal("configure legacy timestamp limit", results, err)
-	}
-	waitTopicConfig(t, a, dst, "message.timestamp.difference.max.ms", "3600000")
+	alterTopicConfig(t, a, dst, map[string]string{"message.timestamp.difference.max.ms": "3600000"})
 	path := filepath.Join(t.TempDir(), "legacy.cbor")
 	c, err := file.NewCodec(1 << 20)
 	require.NoError(t, err)
@@ -77,8 +71,8 @@ func TestLegacyTimestampLimitSkipsOnlyRejectedRecord(t *testing.T) {
 	execute(t, statement, configuration(t))
 
 	// Then only the too-old record is skipped and both innocent records are delivered.
-	reader := consumer(t, dst+"-verify")
-	require.NoError(t, reader.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}))
+	reader := consumer(t)
+	assign(t, reader, dst, 1)
 	for _, want := range []string{"0", "2"} {
 		got := read(t, reader)
 		if string(got.Value) != want || !got.Timestamp.Equal(stamp) {
@@ -172,9 +166,9 @@ func TestCooperativeReassignmentResumesOnlyNewPartitions(t *testing.T) {
 	// When B exits and A reacquires its previously application-paused partition.
 	require.NoError(t, second.Close())
 	pollOwnership(t, []*adapter.Source{first}, func() bool { return len(ownershipA.owned) == 2 })
-	p := producer(t, nil)
+	p := producer(t)
 	for id := range 2 {
-		publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &name, Partition: int32(id)}, Value: []byte("resume"), Timestamp: time.Now()})
+		publish(t, p, &kgo.Record{Topic: name, Partition: int32(id), Value: []byte("resume"), Timestamp: time.Now()})
 	}
 
 	// Then the reacquired partition fetches while the retained partition stays paused.
