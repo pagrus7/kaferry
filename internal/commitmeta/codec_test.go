@@ -1,14 +1,13 @@
 package commitmeta
 
 import (
-	"errors"
 	"math"
-	"reflect"
 	"strings"
 	"testing"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCodecContract(t *testing.T) {
@@ -26,14 +25,12 @@ func TestCodecContract(t *testing.T) {
 			codec := NewCodec()
 			// When encoding and decoding it.
 			encoded, err := codec.Encode(tc.progress)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			decoded, err := codec.Decode(encoded)
 			// Then the documented bytes and all null/zero distinctions survive.
-			if err != nil || encoded != tc.golden || !reflect.DeepEqual(decoded, tc.progress) {
-				t.Fatal(encoded, decoded, err)
-			}
+			require.NoError(t, err)
+			require.Equal(t, tc.golden, encoded)
+			require.Equal(t, tc.progress, decoded)
 		})
 	}
 }
@@ -44,9 +41,12 @@ func TestCodecAcceptsJSONWhitespaceAndFieldOrder(t *testing.T) {
 	// When decoding without requiring canonical JSON bytes.
 	p, err := NewCodec().Decode(text)
 	// Then integer milliseconds remain exact and absence stays absent.
-	if err != nil || p.Window == nil || p.Window.Lower == nil || *p.Window.Lower != math.MinInt64 || p.Window.Upper != nil || p.Stop != nil {
-		t.Fatal(p, err)
-	}
+	require.NoError(t, err)
+	require.NotNil(t, p.Window)
+	require.NotNil(t, p.Window.Lower)
+	require.Equal(t, int64(math.MinInt64), *p.Window.Lower)
+	require.Nil(t, p.Window.Upper)
+	require.Nil(t, p.Stop)
 }
 
 func TestCodecRejectsMalformedOrUnsupportedData(t *testing.T) {
@@ -89,9 +89,8 @@ func TestCodecRejectsMalformedOrUnsupportedData(t *testing.T) {
 			_, err := NewCodec().Decode(tc.text)
 			// Then callers can distinguish foreign, unsupported and invalid data without echoing it.
 			var problem *Error
-			if !errors.As(err, &problem) || problem.Kind != tc.kind {
-				t.Fatal(err)
-			}
+			require.ErrorAs(t, err, &problem)
+			require.Equal(t, tc.kind, problem.Kind)
 		})
 	}
 }
@@ -104,20 +103,18 @@ func TestCodecValidatesWritesAndSizeLimit(t *testing.T) {
 		{Fingerprint: "\xff", TopicID: "id"},
 	} {
 		// Given invalid logical progress, when encoding it, then no bytes are returned.
-		if text, err := NewCodec().Encode(p); err == nil || text != "" {
-			t.Fatal(text, err)
-		}
+		text, err := NewCodec().Encode(p)
+		require.Error(t, err)
+		require.Empty(t, text)
 	}
 	// Given a minimal envelope whose payload fills exactly the byte budget.
 	base, _ := NewCodec().Encode(Progress{Fingerprint: "fp", TopicID: "id"})
 	p := Progress{Fingerprint: strings.Repeat("a", MaxBytes-len(base)+2), TopicID: "id"}
 	// When encoding and reading the maximum supported metadata size.
 	text, err := NewCodec().Encode(p)
-	if err != nil || len(text) != MaxBytes {
-		t.Fatal(len(text), err)
-	}
+	require.NoError(t, err)
+	require.Len(t, text, MaxBytes)
 	// Then the reader accepts that exact limit.
-	if _, err := NewCodec().Decode(text); err != nil {
-		t.Fatal(err)
-	}
+	_, err = NewCodec().Decode(text)
+	require.NoError(t, err)
 }

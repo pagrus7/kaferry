@@ -1,6 +1,10 @@
 package copy
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestConfirmedPrefixIncludesNumericGaps(t *testing.T) {
 	// Given
@@ -8,67 +12,65 @@ func TestConfirmedPrefixIncludesNumericGaps(t *testing.T) {
 	tk.Assign(Cursor{Partition: 0, Position: 100})
 
 	// When
-	a, _ := tk.Observe(Cursor{Partition: 0, Position: 100}, 101, 10)
-	b, _ := tk.Observe(Cursor{Partition: 0, Position: 105}, 106, 20)
-	tk.Settle(b, true)
+	a, err := tk.Observe(Cursor{Partition: 0, Position: 100}, 101, 10)
+	require.NoError(t, err)
+	b, err := tk.Observe(Cursor{Partition: 0, Position: 105}, 106, 20)
+	require.NoError(t, err)
+	require.True(t, tk.Settle(b, true))
 
 	// Then
-	if tk.Confirmed(0).Position != 100 {
-		t.Fatal("committed past unresolved record")
-	}
+	require.Equal(t, int64(100), tk.Confirmed(0).Position, "unresolved record blocks progress")
 
 	// When the missing earlier delivery succeeds.
-	tk.Settle(a, true)
+	require.True(t, tk.Settle(a, true))
 
 	// Then the consumed prefix includes numeric offset gaps.
-	if tk.Confirmed(0).Position != 106 {
-		t.Fatal("numeric offset gaps blocked consumed prefix")
-	}
-	if records, bytes := tk.Total(); records != 2 || bytes != 30 {
-		t.Fatal("confirmed work was released before commit")
-	}
+	require.Equal(t, int64(106), tk.Confirmed(0).Position)
+	records, bytes := tk.Total()
+	require.Equal(t, 2, records, "confirmed work counts until commit")
+	require.Equal(t, int64(30), bytes)
 
 	// When only the first confirmed position is committed.
 	tk.Committed(Cursor{Partition: 0, Position: 101})
 
 	// Then later confirmed work still counts against the caps.
-	if records, bytes := tk.Total(); records != 1 || bytes != 20 {
-		t.Fatal("partial commit released the wrong work")
-	}
+	records, bytes = tk.Total()
+	require.Equal(t, 1, records)
+	require.Equal(t, int64(20), bytes)
 
 	// When the remaining confirmed position is committed.
 	tk.Committed(Cursor{Partition: 0, Position: 106})
 
 	// Then its work is released.
-	if records, bytes := tk.Total(); records != 0 || bytes != 0 {
-		t.Fatal("committed work retained")
-	}
+	records, bytes = tk.Total()
+	require.Zero(t, records)
+	require.Zero(t, bytes)
 }
 
 func TestOldGenerationDeliveryCannotAdvanceNewOwner(t *testing.T) {
 	// Given a new assignment after the previous generation was revoked.
 	tk := NewTracker()
 	tk.Assign(Cursor{Partition: 0, Position: 0})
-	old, _ := tk.Observe(Cursor{Partition: 0, Position: 0}, 1, 1)
+	old, err := tk.Observe(Cursor{Partition: 0, Position: 0}, 1, 1)
+	require.NoError(t, err)
 	tk.Revoke(0)
 	tk.Assign(Cursor{Partition: 0, Position: 0})
-	current, _ := tk.Observe(Cursor{Partition: 0, Position: 0}, 1, 1)
+	current, err := tk.Observe(Cursor{Partition: 0, Position: 0}, 1, 1)
+	require.NoError(t, err)
 
 	// When an old delivery arrives late.
 	resolved := tk.Settle(old, true)
 
 	// Then it cannot advance the new owner's confirmed prefix.
-	if resolved || tk.Confirmed(0).Position != 0 {
-		t.Fatal("late delivery advanced new assignment")
-	}
+	require.False(t, resolved)
+	require.Zero(t, tk.Confirmed(0).Position)
 
 	// When the current generation's delivery arrives.
 	resolved = tk.Settle(current, true)
 
 	// Then its progress is confirmed.
-	if !resolved || tk.Confirmed(0).Position != 1 {
-		t.Fatal("current delivery not confirmed")
-	}
+	require.True(t, resolved)
+	require.Equal(t, int64(1), tk.Confirmed(0).Position)
 }
 
 func TestControlRecordCursorAndTimestampStop(t *testing.T) {
@@ -76,28 +78,37 @@ func TestControlRecordCursorAndTimestampStop(t *testing.T) {
 	tk := NewTracker()
 	tk.Assign(Cursor{Partition: 0, Position: 0})
 
-	// When
-	err := tk.Advance(Cursor{Partition: 0, Position: 2})
+	// When a control cursor advances progress without a record payload.
+	require.NoError(t, tk.Advance(Cursor{Partition: 0, Position: 2}))
 
-	// Then
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tk.Confirmed(0).Position != 2 {
-		t.Fatal("control cursor did not advance")
-	}
+	// Then one resolved entry occupies both budgets until saved.
+	require.Equal(t, int64(2), tk.Confirmed(0).Position)
+	records, bytes := tk.Total()
+	require.Equal(t, 1, records)
+	require.Zero(t, bytes)
+	partitionRecords, partitionBytes := tk.Work(0)
+	require.Equal(t, 1, partitionRecords)
+	require.Zero(t, partitionBytes)
 
 	// When an unchanged position marker follows the control cursor.
-	err = tk.Advance(Cursor{Partition: 0, Position: 2})
+	require.NoError(t, tk.Advance(Cursor{Partition: 0, Position: 2}))
 
-	// Then it adds no unresolved work.
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Then it retains exactly one entry, without adding work to either budget.
+	records, bytes = tk.Total()
+	require.Equal(t, 1, records)
+	require.Zero(t, bytes)
+	partitionRecords, partitionBytes = tk.Work(0)
+	require.Equal(t, 1, partitionRecords)
+	require.Zero(t, partitionBytes)
+
+	// When the marker is committed, then both budgets clear.
 	tk.Committed(Cursor{Partition: 0, Position: 2})
-	if records, _ := tk.Total(); records != 0 {
-		t.Fatal("trigger marker retained")
-	}
+	records, bytes = tk.Total()
+	require.Zero(t, records)
+	require.Zero(t, bytes)
+	partitionRecords, partitionBytes = tk.Work(0)
+	require.Zero(t, partitionRecords)
+	require.Zero(t, partitionBytes)
 }
 
 func TestBackwardsSourceCursorCannotChangeProgressOrWork(t *testing.T) {
@@ -105,20 +116,20 @@ func TestBackwardsSourceCursorCannotChangeProgressOrWork(t *testing.T) {
 	tracker := NewTracker()
 	tracker.Assign(Cursor{Partition: 0, Position: 10})
 	first, err := tracker.Observe(Cursor{Partition: 0, Position: 10}, 11, 7)
-	if err != nil || !tracker.Settle(first, true) {
-		t.Fatal("initial progress failed", err)
-	}
+	require.NoError(t, err)
+	require.True(t, tracker.Settle(first, true))
 	tracker.Committed(Cursor{Partition: 0, Position: 11})
 	// When a source redelivers below the saved position with no outstanding work.
 	_, err = tracker.Observe(Cursor{Partition: 0, Position: 10}, 11, 1)
 	// Then rejection keeps the durable cursor and budget unchanged.
-	if records, bytes := tracker.Total(); err == nil || records != 0 || bytes != 0 || tracker.Saved(0) != 11 || tracker.Confirmed(0).Position != 11 {
-		t.Fatal("backwards record changed saved progress", err, records, bytes)
-	}
+	require.Error(t, err)
+	records, bytes := tracker.Total()
+	require.Zero(t, records)
+	require.Zero(t, bytes)
+	require.Equal(t, int64(11), tracker.Saved(0))
+	require.Equal(t, int64(11), tracker.Confirmed(0).Position)
 	pending, err := tracker.Observe(Cursor{Partition: 0, Position: 11}, 12, 9)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// When a source supplies a backwards record, next position, or EOF cursor.
 	for _, operation := range []func() error{
@@ -129,17 +140,20 @@ func TestBackwardsSourceCursorCannotChangeProgressOrWork(t *testing.T) {
 		err := operation()
 
 		// Then rejection leaves both saved progress and the outstanding work unchanged.
-		if records, bytes := tracker.Total(); err == nil || records != 1 || bytes != 9 || tracker.Saved(0) != 11 || tracker.Confirmed(0).Position != 11 {
-			t.Fatal("invalid cursor changed progress or work", err, records, bytes)
-		}
+		require.Error(t, err)
+		records, bytes := tracker.Total()
+		require.Equal(t, 1, records)
+		require.Equal(t, int64(9), bytes)
+		require.Equal(t, int64(11), tracker.Saved(0))
+		require.Equal(t, int64(11), tracker.Confirmed(0).Position)
 	}
 
 	// When the legitimate outstanding write succeeds, then it still advances normally.
-	if !tracker.Settle(pending, true) || tracker.Confirmed(0).Position != 12 {
-		t.Fatal("cursor rejection damaged pending delivery")
-	}
+	require.True(t, tracker.Settle(pending, true))
+	require.Equal(t, int64(12), tracker.Confirmed(0).Position)
 	tracker.Committed(Cursor{Partition: 0, Position: 12})
-	if records, bytes := tracker.Total(); records != 0 || bytes != 0 || tracker.Saved(0) != 12 {
-		t.Fatal("legitimate work could not be committed")
-	}
+	records, bytes = tracker.Total()
+	require.Zero(t, records)
+	require.Zero(t, bytes)
+	require.Equal(t, int64(12), tracker.Saved(0))
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRecordPoliciesCommitSkippedInputsOnly(t *testing.T) {
@@ -136,15 +137,9 @@ func TestDeferredRecordRetainsFollowingEOFUntilBudgetIsReleased(t *testing.T) {
 	// Given one uncommitted record and a second record held by the byte cap.
 	r, _, sink, store, _ := fixture(t)
 	r.limits.ByteCap, r.limits.PartitionByteCap = 150, 150
-	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.input(incoming(0, 0, 30)); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.input(incoming(0, 1, 200)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
+	require.NoError(t, r.input(incoming(0, 0, 30)))
+	require.NoError(t, r.input(incoming(0, 1, 200)))
 
 	// When an already queued EOF arrives behind the held record.
 	err := r.eof(Cursor{Partition: 0, Position: 2})
@@ -156,12 +151,8 @@ func TestDeferredRecordRetainsFollowingEOFUntilBudgetIsReleased(t *testing.T) {
 
 	// When the first record becomes durable and the held record can be admitted.
 	sink.reports <- Delivery{Token: sink.writes[0]}
-	if err := r.deliveries(); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.commit(r.ids()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.deliveries())
+	require.NoError(t, r.commit(r.ids()))
 	err = r.admitDeferred()
 
 	// Then both input and EOF are consumed in order, with the second delivery still pending.
@@ -171,9 +162,7 @@ func TestDeferredRecordRetainsFollowingEOFUntilBudgetIsReleased(t *testing.T) {
 
 	// When the final submission succeeds.
 	sink.reports <- Delivery{Token: sink.writes[1]}
-	if err := r.deliveries(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.deliveries())
 	err = r.commit(r.ids())
 
 	// Then completion and saved progress include the whole source.

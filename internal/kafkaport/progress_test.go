@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/pagrus7/kaferry/internal/commitmeta"
+	"github.com/stretchr/testify/require"
 )
 
 func TestProgressPreservesIdentity(t *testing.T) {
@@ -14,9 +15,8 @@ func TestProgressPreservesIdentity(t *testing.T) {
 	progress, err := DecodeProgress(commitmeta.NewCodec(), &metadata, "fp", "topic-id", false)
 
 	// Then the persisted identity and wire format remain unchanged.
-	if err != nil || encodeMetadata(progress) != metadata {
-		t.Fatal("Kafka progress changed", progress, err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, metadata, encodeMetadata(progress))
 }
 
 func TestInvalidProgressNeverBecomesAStartFallback(t *testing.T) {
@@ -27,15 +27,11 @@ func TestInvalidProgressNeverBecomesAStartFallback(t *testing.T) {
 	_, decodeProgressErr := DecodeProgress(commitmeta.NewCodec(), &valid, "fingerprint", "topic", false)
 
 	// Then
-	if decodeProgressErr != nil {
-		t.Fatal(decodeProgressErr)
-	}
+	require.NoError(t, decodeProgressErr)
 	for _, text := range []string{"", "foreign", valid + "{}", `kaferry:1;{"fp":"fingerprint","tid":"topic","unknown":1}`, encodeMetadata(Progress{Fingerprint: "other", TopicID: "topic"}), encodeMetadata(Progress{Fingerprint: "fingerprint", TopicID: "recreated"}), `kaferry:1;{"fp":"fingerprint","tid":"topic","fid":"file","extent":-1}`} {
-		if _, err := DecodeProgress(commitmeta.NewCodec(), &text, "fingerprint", "topic", false); err == nil {
-			t.Fatalf("accepted invalid progress: %s", text)
-		}
+		_, err := DecodeProgress(commitmeta.NewCodec(), &text, "fingerprint", "topic", false)
+		require.Error(t, err, "accepted invalid progress: %s", text)
 	}
-	if _, err := DecodeProgress(commitmeta.NewCodec(), &valid, "fingerprint", "topic", true); err == nil {
-		t.Fatal("relative query accepted missing window")
-	}
+	_, err := DecodeProgress(commitmeta.NewCodec(), &valid, "fingerprint", "topic", true)
+	require.Error(t, err, "relative query accepted missing window")
 }

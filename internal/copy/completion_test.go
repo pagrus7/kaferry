@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRunnerThresholdEqualityDoesNotStopUntilWallTimePasses(t *testing.T) {
@@ -21,22 +22,14 @@ func TestRunnerThresholdEqualityDoesNotStopUntilWallTimePasses(t *testing.T) {
 	source.high = 1
 	query := &watermarkSource{testSource: source}
 	r.source = query
-	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}))
 	input := incoming(0, 0, 1)
 	input.Record.TimestampMS = &stamp
-	if err := r.input(input); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.eof(Cursor{Partition: 0, Position: 1}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.input(input))
+	require.NoError(t, r.eof(Cursor{Partition: 0, Position: 1}))
 
 	// When checking completion without advancing wall time.
-	if err := r.tips(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.tips())
 
 	// Then equality filters the record without stopping or sampling the log end.
 	if query.calls != 0 || r.partitions[0].stop != nil || r.timestampStops != 0 || r.filtered != 1 || len(sink.writes) != 0 {
@@ -45,12 +38,8 @@ func TestRunnerThresholdEqualityDoesNotStopUntilWallTimePasses(t *testing.T) {
 
 	// When wall time passes the threshold and the already-consumed tip is sampled.
 	clock.Sleep(time.Millisecond)
-	if err := r.tips(); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.commit(r.ids()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.tips())
+	require.NoError(t, r.commit(r.ids()))
 
 	// Then the tip rule stops and saves the next position, not a timestamp trigger.
 	if query.calls != 1 || !r.readyToExit() || r.tipStops != 1 || r.timestampStops != 0 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1, Stop: &Stop{Reason: "tip", At: 1}}}}) {
@@ -68,32 +57,18 @@ func TestRunnerFixedTipWaitsForAcknowledgementAndDoesNotCopyLaterRecords(t *test
 	r.source = query
 	var logs bytes.Buffer
 	r.log = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.eof(Cursor{Partition: 0, Position: 0}); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.tips(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}))
+	require.NoError(t, r.eof(Cursor{Partition: 0, Position: 0}))
+	require.NoError(t, r.tips())
 	first, later := incoming(0, 0, 1), incoming(0, 5, 1)
 	first.Record.TimestampMS, later.Record.TimestampMS = &stamp, &stamp
-	if err := r.input(first); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.input(first))
 
 	// When new data beyond the sampled end proves the intervening cursor gap.
 	source.high = 100
-	if err := r.input(later); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.tips(); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.commit(r.ids()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.input(later))
+	require.NoError(t, r.tips())
+	require.NoError(t, r.commit(r.ids()))
 
 	// Then only the first record was submitted and unresolved work prevents saving.
 	if query.calls != 1 || len(sink.writes) != 1 || r.readyToExit() || len(store.saves) != 0 || r.tracker.Confirmed(0).Position != 0 {
@@ -102,12 +77,8 @@ func TestRunnerFixedTipWaitsForAcknowledgementAndDoesNotCopyLaterRecords(t *test
 
 	// When the first write is acknowledged.
 	sink.reports <- Delivery{Token: sink.writes[0]}
-	if err := r.deliveries(); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.commit(r.ids()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.deliveries())
+	require.NoError(t, r.commit(r.ids()))
 
 	// Then completion saves exactly the original end and preserves diagnostic order.
 	if !r.readyToExit() || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 3, Stop: &Stop{Reason: "tip", At: 3}}}}) {
@@ -116,17 +87,9 @@ func TestRunnerFixedTipWaitsForAcknowledgementAndDoesNotCopyLaterRecords(t *test
 	var messages []string
 	var details []map[string]any
 	for _, line := range bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte{'\n'}) {
-		var event struct {
-			Message string `json:"msg"`
-		}
-		if err := json.Unmarshal(line, &event); err != nil {
-			t.Fatal(err)
-		}
-		messages = append(messages, event.Message)
 		var attributes map[string]any
-		if err := json.Unmarshal(line, &attributes); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, json.Unmarshal(line, &attributes))
+		messages = append(messages, attributes["msg"].(string))
 		details = append(details, attributes)
 	}
 	if !reflect.DeepEqual(messages, []string{"partition assigned", "tip watermark sampled", "partition stopped", "progress committed"}) {

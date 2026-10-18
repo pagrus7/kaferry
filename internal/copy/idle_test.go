@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func TestUnassignedTimeoutHasDistinctOutcomeBeforeAndAfterIntake(t *testing.T) {
@@ -40,12 +41,8 @@ func TestUnassignedTimeoutHasDistinctOutcomeBeforeAndAfterIntake(t *testing.T) {
 			revoked := false
 			clock.tick = func() {
 				if afterIntake && !revoked && len(sink.writes) > 0 {
-					if err := r.Revoke([]int32{0}, false); err != nil {
-						t.Fatal(err)
-					}
-					if err := r.Assign(nil); err != nil {
-						t.Fatal(err)
-					}
+					require.NoError(t, r.Revoke([]int32{0}, false))
+					require.NoError(t, r.Assign(nil))
 					revoked = true
 				}
 				if !clock.Now().Before(deadline) {
@@ -88,9 +85,7 @@ func TestAssignmentBeforeIdleDeadlineCompletesNormally(t *testing.T) {
 	defer cancel()
 	clock.tick = func() {
 		if !assigned && clock.Now().Sub(started) >= 500*time.Millisecond {
-			if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}))
 			input := incoming(0, 0, 1)
 			input.Record.TimestampMS = &stamp
 			source.events = []Event{{Input: &input}}
@@ -128,20 +123,14 @@ func TestDelayedHandoffDistinguishesPartitionCompletionFromIdleExit(t *testing.T
 	}
 	trigger := incoming(0, 0, 1)
 	trigger.Record.TimestampMS = &stamp
-	if err := a.input(trigger); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, a.input(trigger))
 	if a.partitions[1].stop != nil {
 		t.Fatal("fixture completed the partition intended for handoff")
 	}
 
 	// When P1 is revoked from A and its assignment to B is delayed past idle_exit.
-	if err := a.Revoke([]int32{1}, false); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.Assign(nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, a.Revoke([]int32{1}, false))
+	require.NoError(t, b.Assign(nil))
 	doneA, errA := a.step(t.Context())
 	clockB.Sleep(2 * time.Second)
 	doneB, errB := b.step(t.Context())

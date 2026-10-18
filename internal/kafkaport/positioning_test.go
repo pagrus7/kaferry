@@ -10,6 +10,7 @@ import (
 
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -89,9 +90,16 @@ func TestPositioningBatchesTimeLookupsAndUsesCommittedEndForNoMatch(t *testing.T
 	// When resolving both starts through client-neutral mocked ports.
 	result, err := positioner.Locate(ctx, []int32{2, 0}, nil, nil)
 	// Then the unmatched partition starts at its stable end, and all calls retain the caller context.
-	if err != nil || len(result.Assignments) != 2 || result.Assignments[0].Cursor.Position != 80 || result.Assignments[1].Cursor.Position != 55 || offsets.ctx != ctx || times.ctx != ctx || !reflect.DeepEqual(times.requests, map[int32]int64{0: 10, 2: 10}) || !reflect.DeepEqual(offsets.calls, []offsetCall{{EarliestOffset, false}, {LatestOffset, false}, {LatestOffset, true}}) {
-		t.Fatal("start lookup used physical end, lost context, or made per-partition calls", result, err, offsets.calls, times.requests)
-	}
+	require.NoError(t, err)
+	require.Len(t, result.Assignments, 2)
+	require.Equal(t, int32(2), result.Assignments[0].Cursor.Partition)
+	require.Equal(t, int64(80), result.Assignments[0].Cursor.Position, "no time match uses committed end")
+	require.Equal(t, int32(0), result.Assignments[1].Cursor.Partition)
+	require.Equal(t, int64(55), result.Assignments[1].Cursor.Position)
+	require.Same(t, ctx, offsets.ctx)
+	require.Same(t, ctx, times.ctx)
+	require.Equal(t, map[int32]int64{0: 10, 2: 10}, times.requests)
+	require.Equal(t, []offsetCall{{EarliestOffset, false}, {LatestOffset, false}, {LatestOffset, true}}, offsets.calls)
 }
 
 func TestReusedPositionerDoesNotRepeatAnEarlierEndLookup(t *testing.T) {

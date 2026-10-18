@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFatalDeliveryFailsDespiteSkipPolicies(t *testing.T) {
@@ -92,25 +93,19 @@ func TestRevokeDiscardsHeldWorkBeforeReassignment(t *testing.T) {
 			t.Run(held+map[bool]string{false: "/revoked", true: "/lost"}[lost], func(t *testing.T) {
 				// Given held work for a partition that is about to change owners.
 				r, _, sink, _, _ := fixture(t)
-				if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 				if held == "queue-full submission" {
 					sink.submit = func(Record, Token) error { return &Busy{} }
 				} else {
 					r.limits.RecordCap = 1
 				}
-				if err := r.input(incoming(0, 0, 1)); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, r.input(incoming(0, 0, 1)))
 				var old Token
 				if r.pending != nil {
 					old = r.pending.token
 				} else {
 					old = sink.writes[0]
-					if err := r.accept(Event{Input: ptrInput(incoming(0, 1, 1)), EOF: &Cursor{Partition: 0, Position: 2}}); err != nil {
-						t.Fatal(err)
-					}
+					require.NoError(t, r.accept(Event{Input: ptrInput(incoming(0, 1, 1)), EOF: &Cursor{Partition: 0, Position: 2}}))
 					if r.deferred == nil || r.deferredEOF == nil {
 						t.Fatal("fixture did not hold input and EOF")
 					}
@@ -118,24 +113,16 @@ func TestRevokeDiscardsHeldWorkBeforeReassignment(t *testing.T) {
 				before := len(sink.writes)
 
 				// When ownership is revoked and the partition is reassigned for replay.
-				if err := r.Revoke([]int32{0}, lost); err != nil {
-					t.Fatal(err)
-				}
-				if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, r.Revoke([]int32{0}, lost))
+				require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 				sink.submit = nil
-				if err := r.advance(); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, r.advance())
 
 				// Then held work and EOF cannot leak into the new assignment.
 				if r.pending != nil || r.deferred != nil || r.deferredEOF != nil || len(sink.writes) != before || r.partitions[0].stop != nil {
 					t.Fatal("revoked work survived reassignment")
 				}
-				if err := r.input(incoming(0, 0, 1)); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, r.input(incoming(0, 0, 1)))
 				if len(sink.writes) != before+1 || sink.writes[before].Generation == old.Generation {
 					t.Fatal("replay did not receive a fresh generation")
 				}
@@ -150,23 +137,13 @@ func TestRevokePreservesHeldWorkForRemainingPartition(t *testing.T) {
 	// Given one partition filling the cap and another with deferred input and EOF.
 	r, _, sink, _, _ := fixture(t)
 	r.limits.RecordCap = 1
-	if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}, {Cursor: Cursor{Partition: 1, Position: 0}}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.input(incoming(0, 0, 1)); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.accept(Event{Input: ptrInput(incoming(1, 0, 1)), EOF: &Cursor{Partition: 1, Position: 1}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}, {Cursor: Cursor{Partition: 1, Position: 0}}}))
+	require.NoError(t, r.input(incoming(0, 0, 1)))
+	require.NoError(t, r.accept(Event{Input: ptrInput(incoming(1, 0, 1)), EOF: &Cursor{Partition: 1, Position: 1}}))
 
 	// When only the partition using the cap loses ownership.
-	if err := r.Revoke([]int32{0}, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.advance(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Revoke([]int32{0}, true))
+	require.NoError(t, r.advance())
 
 	// Then the remaining partition's held record and EOF are processed normally.
 	if len(sink.writes) != 2 || sink.writes[1].Partition != 1 || r.partitions[1].stop == nil || r.partitions[1].position != 1 {
@@ -179,9 +156,7 @@ func TestHalfCapFlushesAndCommitsBeforePeriodicDeadline(t *testing.T) {
 		t.Run(cap, func(t *testing.T) {
 			// Given one record below half the selected cap and no periodic commit due.
 			r, _, sink, store, clock := fixture(t)
-			if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 			r.lastCommit = clock.Now()
 			switch cap {
 			case "total records":
@@ -201,17 +176,13 @@ func TestHalfCapFlushesAndCommitsBeforePeriodicDeadline(t *testing.T) {
 				}
 				return nil
 			}
-			if err := r.input(incoming(0, 0, 1)); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, r.input(incoming(0, 0, 1)))
 			if err := r.checkpoint(); err != nil || flushes != 0 || len(store.saves) != 0 {
 				t.Fatal("committed before half the cap", err)
 			}
 
 			// When a second record reaches half the cap without advancing time.
-			if err := r.input(incoming(0, 1, 1)); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, r.input(incoming(0, 1, 1)))
 			err := r.checkpoint()
 
 			// Then the sink flush precedes a confirmed commit and releases accounting.

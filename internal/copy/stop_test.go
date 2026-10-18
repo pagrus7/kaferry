@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStopSavedOnlyAfterEarlierWritesResolve(t *testing.T) {
@@ -14,29 +15,21 @@ func TestStopSavedOnlyAfterEarlierWritesResolve(t *testing.T) {
 			r, _, sink, store, _ := fixture(t)
 			r.plan.Source.Kind = "TOPIC"
 			upper := int64(100)
-			if err := r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}))
 			first := incoming(0, 0, 1)
 			stamp := int64(1)
 			first.Record.TimestampMS = &stamp
-			if err := r.input(first); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, r.input(first))
 			trigger := incoming(0, 1, 1)
 			future := int64(101)
 			trigger.Record.TimestampMS = &future
-			if err := r.input(trigger); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, r.input(trigger))
 			if err := r.commit(r.ids()); err != nil || len(store.saves) != 0 {
 				t.Fatal("unconfirmed stop saved", err, store.saves)
 			}
 			// When the earlier write succeeds, then periodic/revoke commits can carry the stop; ownership loss cannot.
 			sink.reports <- Delivery{Token: sink.writes[0]}
-			if err := r.deliveries(); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, r.deliveries())
 			var err error
 			switch release {
 			case "periodic":
@@ -46,9 +39,7 @@ func TestStopSavedOnlyAfterEarlierWritesResolve(t *testing.T) {
 			case "lost":
 				err = r.Revoke([]int32{0}, true)
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			if release == "lost" {
 				if len(store.saves) != 0 {
 					t.Fatal(store.saves)
@@ -69,12 +60,8 @@ func TestStopSavedOnlyAfterEarlierWritesResolve(t *testing.T) {
 func TestFailedStopCommitCanBeRetriedAtSamePosition(t *testing.T) {
 	// Given an empty file partition whose stop does not advance its cursor.
 	r, _, _, store, _ := fixture(t)
-	if err := r.Assign([]Assignment{{Cursor: Cursor{Position: 10}}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.eof(Cursor{Position: 10}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Position: 10}}}))
+	require.NoError(t, r.eof(Cursor{Position: 10}))
 	failed := errors.New("disk failed")
 	store.fail = map[int32]error{0: failed}
 	// When the first metadata-only save fails and the store recovers.
@@ -85,9 +72,7 @@ func TestFailedStopCommitCanBeRetriedAtSamePosition(t *testing.T) {
 		t.Fatal("failed stop treated as durable")
 	}
 	delete(store.fail, 0)
-	if err := r.commit(r.ids()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.commit(r.ids()))
 	// Then the same position is retried and carries an EOF stop.
 	if len(store.saves) != 2 || store.saves[1][0].Position != 10 || store.saves[1][0].Stop.Reason != "eof" {
 		t.Fatal(store.saves)

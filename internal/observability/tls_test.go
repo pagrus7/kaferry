@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/copy"
+	"github.com/stretchr/testify/require"
 )
 
 func TestExporterUsesConfiguredTrustAndClientIdentity(t *testing.T) {
@@ -47,9 +48,7 @@ func TestExporterUsesConfiguredTrustAndClientIdentity(t *testing.T) {
 			dir := t.TempDir()
 			files := map[string][]byte{"ca": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), "cert": cert, "key": key}
 			for name, data := range files {
-				if err := os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0600))
 			}
 			t.Setenv("OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE", filepath.Join(dir, "ca"))
 			if clientAuth {
@@ -57,9 +56,7 @@ func TestExporterUsesConfiguredTrustAndClientIdentity(t *testing.T) {
 				t.Setenv("OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY", filepath.Join(dir, "key"))
 			}
 			session, err := NewFactory(systemEnvironment{}, slog.New(slog.NewJSONHandler(io.Discard, nil)), "test").Open("group")
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			session.Publish(copy.Snapshot{Confirmed: 1})
 			// When exporting through the composed SDK and environment configuration.
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)

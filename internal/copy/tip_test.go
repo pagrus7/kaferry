@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 	"log/slog"
 	"strings"
 	"testing"
@@ -27,9 +28,7 @@ func TestTipSamplingRetriesWithoutStartingWaitOrBlockingOtherPartitions(t *testi
 	r.plan.Source.Kind = "TOPIC"
 	hi := clock.Now().Add(-time.Minute).UnixMilli()
 	assignments := []Assignment{{Cursor: Cursor{Partition: 0}, Window: plan.Window{Upper: &hi}}, {Cursor: Cursor{Partition: 1}, Window: plan.Window{Upper: &hi}}}
-	if err := r.Assign(assignments); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign(assignments))
 	for _, p := range r.partitions {
 		p.atTip = true
 	}
@@ -38,9 +37,7 @@ func TestTipSamplingRetriesWithoutStartingWaitOrBlockingOtherPartitions(t *testi
 
 	// When sampling during the outage and checking again before the retry delay.
 	err := r.tips()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if query.calls != 1 {
 		t.Fatal("watermark queries were not interleaved with polling", query.calls)
 	}
@@ -60,9 +57,7 @@ func TestTipSamplingRetriesWithoutStartingWaitOrBlockingOtherPartitions(t *testi
 	clock.Sleep(time.Second)
 	query.failure = nil
 	err = r.tips()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	err = r.tips()
 
 	// Then each partition completes and its successful sample starts the wait clock.
@@ -81,9 +76,7 @@ func TestTipSamplingPermanentFailuresStopImmediately(t *testing.T) {
 	r, source, _, _, clock := fixture(t)
 	r.plan.Source.Kind = "TOPIC"
 	hi := clock.Now().Add(-time.Minute).UnixMilli()
-	if err := r.Assign([]Assignment{{Cursor: Cursor{}, Window: plan.Window{Upper: &hi}}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{}, Window: plan.Window{Upper: &hi}}}))
 	r.partitions[0].atTip = true
 	failure := errors.New("authorization")
 	r.source = &watermarkSource{testSource: source, failure: failure}
@@ -102,9 +95,7 @@ func TestTipSamplingBackoffCapsResetsAndLimitsLogs(t *testing.T) {
 	r, source, _, _, clock := fixture(t)
 	r.plan.Source.Kind = "TOPIC"
 	hi := clock.Now().Add(-time.Minute).UnixMilli()
-	if err := r.Assign([]Assignment{{Cursor: Cursor{}, Window: plan.Window{Upper: &hi}}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{}, Window: plan.Window{Upper: &hi}}}))
 	p := r.partitions[0]
 	p.atTip = true
 	query := &watermarkSource{testSource: source, failure: &Recoverable{Err: errors.New("leader unavailable")}}

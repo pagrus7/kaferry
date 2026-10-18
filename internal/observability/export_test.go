@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/copy"
+	"github.com/stretchr/testify/require"
 	collector "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -67,9 +68,7 @@ func TestOTLPExportPreservesMetricAndResourceContract(t *testing.T) {
 			t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment.name=test,service.instance.id=not-unique")
 			f := NewFactory(systemEnvironment{}, slog.New(slog.NewJSONHandler(io.Discard, nil)), "test-version")
 			session, err := f.Open("test-group")
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			session.Publish(copy.Snapshot{Submitted: 2, Confirmed: 1, Partitions: 1})
 			// When a short run performs its final best-effort export.
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
@@ -148,9 +147,7 @@ func TestFactoryRejectsInvalidSDKConfiguration(t *testing.T) {
 	cert, _ := certPair(t)
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "fixture-secret-certificate.pem")
-	if err := os.WriteFile(certPath, cert, 0600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(certPath, cert, 0600))
 	server := httptest.NewServer(http.NotFoundHandler())
 	defer server.Close()
 	for _, tc := range []struct {
@@ -203,14 +200,20 @@ func TestReceiverFailuresDoNotDelayShutdownOrRetry(t *testing.T) {
 			defer server.Close()
 			defer close(release)
 			metricEnv(t, server.URL+"/v1/metrics")
+			// Keep the 503 export alive longer than the SDK's first retry backoff.
+			// A fast shutdown must come from disabled retries rather than a timeout.
+			t.Setenv("OTEL_METRIC_EXPORT_TIMEOUT", "10000")
+			t.Setenv("OTEL_EXPORTER_OTLP_METRICS_TIMEOUT", "10000")
 			session, err := NewFactory(systemEnvironment{}, slog.New(slog.NewJSONHandler(io.Discard, nil)), "test").Open("group")
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			session.Publish(copy.Snapshot{Confirmed: 3})
-			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+			budget := 10 * time.Second
+			if hang {
+				budget = 100 * time.Millisecond
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), budget)
 			defer cancel()
-			// When the exporter closes, then receiver failure cannot hold the caller past its context.
+			// When the exporter closes, then a 503 returns promptly and a stalled request respects its context.
 			done := make(chan struct{})
 			go func() { session.Close(ctx); close(done) }()
 			select {
@@ -218,8 +221,9 @@ func TestReceiverFailuresDoNotDelayShutdownOrRetry(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("shutdown blocked")
 			}
-			if requests.Load() != 1 {
-				t.Fatal("export retried or missing", requests.Load())
+			require.Equal(t, int64(1), requests.Load(), "one best-effort export")
+			if !hang {
+				require.NoError(t, ctx.Err(), "503 shutdown must finish without waiting for a deadline")
 			}
 		})
 	}
