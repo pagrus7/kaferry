@@ -5,11 +5,12 @@ package compat
 import (
 	"context"
 	"fmt"
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"os"
 	"strings"
 	"testing"
 	"time"
+
+	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing.T) {
@@ -17,16 +18,7 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 	a := admin(t)
 	src, dst := topic(t, a, 2), topic(t, a, 2)
 	group := src + "-churn"
-	path := configuration(t)
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = file.WriteString("record_cap=32\npartition_record_cap=8\n")
-	file.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
+	path := configuration(t, "record_cap=32\npartition_record_cap=8\n")
 	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", dst, src, group)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -56,9 +48,7 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 		case result := <-results:
 
 			// Then this measured run exits cleanly and the survivor reacquires ownership.
-			if result.code != 0 {
-				t.Fatalf("churn worker failed: %s", result.detail)
-			}
+			require.Zero(t, result.code, "churn worker failed: %s", result.detail)
 		case <-ctx.Done():
 			t.Fatal("churn worker shutdown timed out")
 		}
@@ -67,23 +57,17 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 	stopA()
 	select {
 	case result := <-results:
-		if result.code != 0 {
-			t.Fatal("committing worker failed", strings.TrimSpace(result.detail))
-		}
+		require.Zero(t, result.code, "committing worker failed: %s", strings.TrimSpace(result.detail))
 	case <-ctx.Done():
 		t.Fatal("final churn shutdown timed out")
 	}
 
 	// Then all consumed offsets are committed despite repeated ownership changes.
 	for _, part := range committedPartitions(t, a, group, src, 2) {
-		if part.Offset != 144 {
-			t.Fatal("churn lost source progress", part)
-		}
+		require.Equal(t, k.Offset(144), part.Offset, "churn lost source progress")
 	}
 	reader := consumer(t, dst+"-verify")
-	if err := reader.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}, {Topic: &dst, Partition: 1, Offset: 0}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, reader.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}, {Topic: &dst, Partition: 1, Offset: 0}}))
 	seen := make(map[string]bool)
 	for len(seen) < 288 {
 		seen[string(read(t, reader).Value)] = true
@@ -108,9 +92,7 @@ func waitTopicCount(t *testing.T, a *k.AdminClient, topic string, partitions int
 		total := int64(0)
 		if err == nil && len(result.ResultInfos) == partitions {
 			for _, info := range result.ResultInfos {
-				if info.Error.Code() != k.ErrNoError {
-					t.Fatal(info.Error)
-				}
+				require.Equal(t, k.ErrNoError, info.Error.Code())
 				total += int64(info.Offset)
 			}
 			if total >= count {

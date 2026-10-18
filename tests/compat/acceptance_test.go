@@ -25,6 +25,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/file"
 	adapter "github.com/pagrus7/kaferry/internal/franz"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/fx"
 )
@@ -164,16 +165,7 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 	group := src + "-excess-workers"
 	end := time.Now().Add(time.Hour).Truncate(time.Millisecond)
 	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", broker(t), dst, src, end.Format(time.RFC3339Nano), group)
-	cfg := configuration(t)
-	f, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = f.WriteString("idle_exit='5s'\n")
-	f.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := configuration(t, "idle_exit='5s'\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 	results := make(chan workerResult, 3)
@@ -210,28 +202,23 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 	}
 	waitMembers(t, a, group, 0, 0, nil)
 	c := consumer(t, dst+"-check")
-	if err := c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}))
 	if got := read(t, c); string(got.Value) != "work" {
 		t.Fatal("work lost or trigger published", got)
 	}
+	require.Equal(t, int64(1), topicRecordCount(t, a, dst, 1), "stop trigger escaped the timestamp filter")
 }
 
 func relativeWindows(t *testing.T, parts []k.TopicPartition) map[int32]plan.Window {
 	t.Helper()
 	result := make(map[int32]plan.Window)
 	for _, part := range parts {
-		if part.Metadata == nil {
-			t.Fatal("missing commit metadata", part)
-		}
+		require.NotNil(t, part.Metadata, "missing commit metadata")
 		progress, err := commitmeta.NewCodec().Decode(*part.Metadata)
 		if err != nil || progress.Window == nil || progress.Window.Lower == nil || progress.Window.Upper == nil {
 			t.Fatal("relative progress has no concrete window", part, err)
 		}
-		if *progress.Window.Upper-*progress.Window.Lower != int64(2*time.Hour/time.Millisecond) {
-			t.Fatal("window bounds used different NOW instants", progress)
-		}
+		require.Equal(t, int64(2*time.Hour/time.Millisecond), *progress.Window.Upper-*progress.Window.Lower, "window bounds used different NOW instants")
 		result[part.Partition] = *progress.Window
 	}
 	return result
@@ -274,9 +261,7 @@ func TestConcurrentNowWindowsPersistAcrossWorkersAndRestart(t *testing.T) {
 	}
 	execute(t, statement, "")
 	after := relativeWindows(t, committedPartitions(t, a, group, src, 2))
-	if !reflect.DeepEqual(before, after) {
-		t.Fatal("restart changed saved per-partition windows", before, after)
-	}
+	require.Equal(t, after, before, "restart changed saved per-partition windows")
 	end, err := a.ListOffsets(ctx, map[k.TopicPartition]k.OffsetSpec{{Topic: &dst, Partition: 0}: k.LatestOffsetSpec})
 	info, ok := testOffset(end, dst, 0)
 	if err != nil || !ok || info.Offset != 2 {
@@ -304,19 +289,11 @@ func TestMissingTimestampWithoutFilterUsesProducerClockAndCountsIt(t *testing.T)
 	dst := topic(t, a, 1)
 	path := filepath.Join(t.TempDir(), "source.cbor")
 	codec, err := file.NewCodec(1 << 20)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	out, err := file.NewOutput(file.NewPublisher(), path, "fixture", "fixture", "", 0, codec, 10, slog.New(slog.NewJSONHandler(os.Stderr, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := out.Submit(core.Record{Key: nil, Value: []byte{}, TimestampType: "unknown"}, core.Token{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := out.Flush(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, out.Submit(core.Record{Key: nil, Value: []byte{}, TimestampType: "unknown"}, core.Token{}))
+	require.NoError(t, out.Flush())
 	out.Close()
 	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='unstamped')", dst, path)
 	before := time.Now().UnixMilli()
@@ -329,9 +306,7 @@ func TestMissingTimestampWithoutFilterUsesProducerClockAndCountsIt(t *testing.T)
 		t.Fatal("producer timestamp was not counted and warned about", result)
 	}
 	c := consumer(t, dst+"-verify")
-	if err := c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}))
 	record := read(t, c)
 	if record.Key != nil || record.Value == nil || record.Timestamp.UnixMilli() < before || record.Timestamp.UnixMilli() > time.Now().UnixMilli() || record.TimestampType != k.TimestampCreateTime {
 		t.Fatal("producer clock or null/empty fidelity failed", record)
@@ -368,13 +343,9 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 		graph := fx.New(fx.NopLogger, app.RuntimeModules, fx.Decorate(func(clients adapter.Clients) adapter.Clients {
 			return crashingClients{clients}
 		}), fx.Populate(&command))
-		if graph.Err() != nil {
-			t.Fatal(graph.Err())
-		}
+		require.NoError(t, graph.Err())
 		args := os.Args[len(os.Args)-2:]
-		if err := command.Run(context.Background(), args[0], args[1], testShutdown{}); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, command.Run(context.Background(), args[0], args[1], testShutdown{}))
 		t.Fatal("crash hook not reached")
 	}
 	a := admin(t)
@@ -386,16 +357,7 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 		publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Key: []byte("stable"), Value: []byte(fmt.Sprint(i)), Timestamp: stamp})
 	}
 	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000'), CONNECTION slow AS ('bootstrap.servers'='%s','linger.ms'='100') INSERT INTO TOPIC '%s@slow' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", broker(t), broker(t), dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), group)
-	cfg := configuration(t)
-	f, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = f.WriteString("record_cap=16\npartition_record_cap=16\n")
-	f.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := configuration(t, "record_cap=16\npartition_record_cap=16\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss$", "--", statement, cfg)
@@ -409,9 +371,7 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 		t.Fatalf("crash helper: %v %s", err, data)
 	}
 	parts := committedPartitions(t, a, group, src, 1)
-	if parts[0].Offset != 0 {
-		t.Fatal("unprocessed delivery advanced the group", parts)
-	}
+	require.Zero(t, parts[0].Offset, "unprocessed delivery advanced the group")
 	waitMembers(t, a, group, 0, 0, nil)
 	execute(t, statement, cfg)
 	end, err := a.ListOffsets(ctx, map[k.TopicPartition]k.OffsetSpec{{Topic: &dst, Partition: 0}: k.LatestOffsetSpec})
@@ -420,9 +380,7 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 		t.Fatal("crash duplicate exposure exceeded the partition cap", end, err)
 	}
 	c := consumer(t, dst+"-verify")
-	if err := c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}))
 	counts := make(map[string]int)
 	for range int(info.Offset) {
 		record := read(t, c)
@@ -450,9 +408,7 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 	process := startCLI(t, ctx, binary, "", "run", "-e", statement)
 	committedPartitions(t, a, group, src, 1)
 	// When retention deletes records while the consumer is stopped.
-	if err := process.signal(syscall.SIGSTOP); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, process.signal(syscall.SIGSTOP))
 	p := producer(t, nil)
 	for i := range 10 {
 		publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: []byte(fmt.Sprint(i)), Timestamp: time.Now()})
@@ -461,9 +417,7 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 	if err != nil || len(deleted.DeleteRecordsResults) != 1 || deleted.DeleteRecordsResults[0].TopicPartition.Error != nil {
 		t.Fatal("delete unread records", deleted, err)
 	}
-	if err := process.signal(syscall.SIGCONT); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, process.signal(syscall.SIGCONT))
 	// Then the running consumer fails instead of silently resetting its offset.
 	select {
 	case <-process.done:
@@ -481,9 +435,7 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 	// When restarting the same query after retention has removed its saved position.
 	process = startCLI(t, ctx, binary, "", "run", "-e", statement)
 	waitEnd(t, a, dst, 5)
-	if err := process.signal(os.Interrupt); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, process.signal(os.Interrupt))
 	if err := process.wait(); err != nil {
 		t.Fatalf("retention restart: %v %s", err, process.logs())
 	}

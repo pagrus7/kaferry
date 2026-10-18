@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // cliProcess owns one Wait call; completion publishes its output and exit status.
@@ -25,9 +27,8 @@ func startCLI(t *testing.T, ctx context.Context, binary, input string, args ...s
 	p := &cliProcess{command: exec.CommandContext(ctx, binary, args...), done: make(chan struct{})}
 	p.command.Stdin = strings.NewReader(input)
 	p.command.Stderr = &p.output
-	if err := p.command.Start(); err != nil {
-		t.Fatal(err)
-	}
+	p.command.Stdout = &p.output
+	require.NoError(t, p.command.Start())
 	go func() { p.err = p.command.Wait(); close(p.done) }()
 	t.Cleanup(func() {
 		if !p.finished() {
@@ -35,7 +36,7 @@ func startCLI(t *testing.T, ctx context.Context, binary, input string, args ...s
 		}
 		_ = p.wait()
 		if t.Failed() {
-			t.Logf("copy process stderr: %s", p.output.String())
+			t.Logf("copy process output: %s", p.output.String())
 		}
 	})
 	return p

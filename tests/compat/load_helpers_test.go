@@ -16,6 +16,7 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/stretchr/testify/require"
 )
 
 type copySummary struct {
@@ -61,9 +62,7 @@ func (s *streamRecords) publish(t *testing.T, producer *k.Producer, reports chan
 			key = nil
 		}
 		message := &k.Message{TopicPartition: k.TopicPartition{Topic: &s.topic, Partition: int32(id % 4)}, Key: key, Value: payload, Timestamp: s.stamp, Headers: s.headers}
-		if err := producer.Produce(message, reports); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, producer.Produce(message, reports))
 		s.seen = append(s.seen, false)
 	}
 }
@@ -84,9 +83,7 @@ func (s *streamRecords) verify(t *testing.T, record *k.Message) {
 		t.Fatal("logical record changed", id)
 	}
 	for _, b := range record.Value[4:] {
-		if b != byte(id%251) {
-			t.Fatal("payload bytes changed", id)
-		}
+		require.Equal(t, byte(id%251), b, "payload bytes changed")
 	}
 	pair := [2]int32{int32(id % 4), record.TopicPartition.Partition}
 	if prior, exists := s.order[pair]; exists && id <= prior {

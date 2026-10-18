@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/app"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/stretchr/testify/require"
 )
 
 func execute(t *testing.T, statement, config string) {
@@ -29,30 +31,22 @@ func execute(t *testing.T, statement, config string) {
 		t.Fatalf("exit=%d: %s", code, output.String())
 	}
 }
-func configuration(t *testing.T) string {
+func configuration(t *testing.T, workerSettings ...string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	text := fmt.Sprintf("[connections.default]\n'bootstrap.servers' = %q\n[worker]\ncheckpoint_dir = %q\n", broker(t), t.TempDir())
-	if err := os.WriteFile(path, []byte(text), 0600); err != nil {
-		t.Fatal(err)
-	}
+	text := fmt.Sprintf("[connections.default]\n'bootstrap.servers' = %q\n[worker]\ncheckpoint_dir = %q\n", broker(t), t.TempDir()) + strings.Join(workerSettings, "\n")
+	require.NoError(t, os.WriteFile(path, []byte(text), 0600))
 	return path
 }
 func archiveRecords(t *testing.T, path string) []core.Record {
 	t.Helper()
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	codec, err := file.NewCodec(64 << 20)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	_, pos, err := codec.Header(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var records []core.Record
 	for pos < int64(len(data)) {
 		if pos+4 > int64(len(data)) {
@@ -63,9 +57,7 @@ func archiveRecords(t *testing.T, path string) []core.Record {
 			t.Fatal("partial record")
 		}
 		r, err := codec.DecodeRecord(data[pos+4 : pos+4+n])
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		records = append(records, r)
 		pos += 8 + n
 	}
@@ -111,9 +103,7 @@ func TestAllFileDirectionsAndResume(t *testing.T) {
 		t.Fatalf("topic→file changed records\nactual=%+v\nexpected=%+v", actual, expected)
 	}
 	execute(t, statement, cfg)
-	if len(archiveRecords(t, archive)) != 24 {
-		t.Fatal("completed archive was recopied")
-	}
+	require.Len(t, archiveRecords(t, archive), 24, "completed archive was recopied")
 	statement = fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='clone')", clone, archive)
 	execute(t, statement, cfg)
 	execute(t, statement, cfg)
@@ -128,9 +118,7 @@ func TestAllFileDirectionsAndResume(t *testing.T) {
 	for i := range 3 {
 		parts = append(parts, k.TopicPartition{Topic: &dst, Partition: int32(i), Offset: 0})
 	}
-	if err := c.Assign(parts); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.Assign(parts))
 	counts := make(map[string]int)
 	for range 24 {
 		r := read(t, c)
@@ -145,35 +133,18 @@ func TestAllFileDirectionsAndResume(t *testing.T) {
 		counts[signature]--
 	}
 	for _, n := range counts {
-		if n != 0 {
-			t.Fatal("file→topic changed null/empty bytes")
-		}
+		require.Zero(t, n, "file→topic changed null/empty bytes")
 	}
-	for i := range 3 {
-		low, high, err := c.QueryWatermarkOffsets(dst, int32(i), 5000)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = low
-		if high < 0 {
-			t.Fatal("invalid high watermark")
-		}
-	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for _, part := range parts {
 		result, err := a.ListOffsets(ctx, map[k.TopicPartition]k.OffsetSpec{part: k.LatestOffsetSpec})
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		for _, v := range result.ResultInfos {
-			if v.Error.Code() != k.ErrNoError {
-				t.Fatal(v.Error)
-			}
+			require.Equal(t, k.ErrNoError, v.Error.Code())
 			counts["total"] += int(v.Offset)
 		}
 	}
-	if counts["total"] != 24 {
-		t.Fatal("resumed file→topic produced extra records")
-	}
+	require.Equal(t, 24, counts["total"], "resumed file→topic produced extra records")
 }

@@ -13,11 +13,13 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	// Given
 	report := newLoadReport(t, "soak")
+	report.SourcePartitions, report.DestinationPartitions = 4, 5
 	report.WorkerRecordCap, report.WorkerByteCap = 1024, 128<<20
 	duration := 2 * time.Minute
 	if value := os.Getenv("KAFERRY_SOAK_DURATION"); value != "" {
@@ -39,9 +41,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		}
 		var err error
 		destinationAdmin, err = k.NewAdminClient(&k.ConfigMap{"bootstrap.servers": destinationBrokers})
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		t.Cleanup(func() { closeAdmin(t, destinationAdmin) })
 	}
 	src, dst := topic(t, a, 4), topic(t, destinationAdmin, 5)
@@ -49,22 +49,16 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	p := producer(t, nil)
 	reports := make(chan k.Event, 4096)
 	c, err := k.NewConsumer(&k.ConfigMap{"bootstrap.servers": destinationBrokers, "group.id": dst + "-verify", "enable.auto.commit": false, "enable.auto.offset.store": false, "isolation.level": "read_committed"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 	parts := make([]k.TopicPartition, 5)
 	for i := range parts {
 		parts[i] = k.TopicPartition{Topic: &dst, Partition: int32(i), Offset: 0}
 	}
-	if err := c.Assign(parts); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.Assign(parts))
 	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'), CONNECTION destination AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s@destination' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", broker(t), destinationBrokers, dst, src, group)
 	configPath := filepath.Join(t.TempDir(), "soak.toml")
-	if err := os.WriteFile(configPath, []byte("[worker]\nrecord_cap=1024\npartition_record_cap=256\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(configPath, []byte("[worker]\nrecord_cap=1024\npartition_record_cap=256\n"), 0600))
 	ctx, cancel := context.WithTimeout(context.Background(), duration+45*time.Second)
 	defer cancel()
 	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", configPath)
@@ -107,9 +101,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 
 	// When stopping intake after every fixture record is verified.
 	shutdown := time.Now()
-	if err := process.signal(os.Interrupt); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, process.signal(os.Interrupt))
 	select {
 	case <-process.done:
 		if err := process.wait(); err != nil {
@@ -132,9 +124,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	for _, part := range committedPartitions(t, a, group, src, 4) {
 		committed += int(part.Offset)
 	}
-	if committed != len(records.seen) {
-		t.Fatal("shutdown did not commit all verified records", committed, len(records.seen))
-	}
+	require.Equal(t, len(records.seen), committed, "shutdown did not commit all verified records")
 	summary := summaryFrom(t, process.logs())
 	report.PeakUncommittedRecords, report.PeakUncommittedBytes = summary.PeakRecords, summary.PeakBytes
 	if summary.Submitted != len(records.seen) || summary.Confirmed != len(records.seen) || summary.PeakRecords > 1024 || summary.PeakBytes > 128<<20 {
@@ -198,9 +188,7 @@ func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *k.Admi
 		return
 	}
 	rss, err := rssSample(pid)
-	if err != nil {
-		t.Fatal("RSS sampling failed", err)
-	}
+	require.NoError(t, err, "RSS sampling failed")
 	m.rss = append(m.rss, rss)
 	committed := 0
 	for _, part := range committedPartitions(t, admin, group, source, 4) {

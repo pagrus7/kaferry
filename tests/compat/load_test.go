@@ -11,6 +11,7 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLoadBoundedKafkaCopy(t *testing.T) {
@@ -28,6 +29,7 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			count, recordCap, byteCap, configuration := scenario.count, scenario.records, scenario.bytes, scenario.config
 			report := newLoadReport(t, "load")
+			report.SourcePartitions, report.DestinationPartitions = 4, 5
 			report.WorkerRecordCap, report.WorkerByteCap = recordCap, byteCap
 			// Given seeded topics, a compiled CLI and worker limits.
 			a := admin(t)
@@ -54,9 +56,7 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			args := []string{"run", "--file", "-"}
 			if configuration != "" {
 				path := filepath.Join(t.TempDir(), "worker.toml")
-				if err := os.WriteFile(path, []byte(configuration), 0600); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, os.WriteFile(path, []byte(configuration), 0600))
 				args = append(args, "--config", path)
 				statement = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'), CONNECTION slow AS ('bootstrap.servers'='%s','linger.ms'='100') INSERT INTO TOPIC '%s@slow' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", broker(t), broker(t), dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), src+"-load")
 			}
@@ -71,12 +71,8 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			report.ElapsedSeconds = elapsed.Seconds()
 			report.ChildCPUSeconds = process.cpu().Seconds()
 			report.SampledPeakRSSBytes = memory.peak * 1024
-			if err != nil {
-				t.Fatalf("load copy: %v %s", err, process.logs())
-			}
-			if memory.samples == 0 {
-				t.Fatalf("no RSS samples; failures=%d", memory.failures)
-			}
+			require.NoError(t, err, "load copy: %v %s", err, process.logs())
+			require.NotZero(t, memory.samples, "no RSS samples; failures=%d", memory.failures)
 			summary := summaryFrom(t, process.logs())
 			report.Records = summary.Confirmed
 			report.RecordsPerSecond = float64(report.Records) / elapsed.Seconds()
@@ -91,9 +87,7 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			for i := range 5 {
 				parts = append(parts, k.TopicPartition{Topic: &dst, Partition: int32(i), Offset: 0})
 			}
-			if err := c.Assign(parts); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, c.Assign(parts))
 			for range count {
 				records.verify(t, read(t, c))
 			}

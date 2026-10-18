@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestConsumerConfigurationFailureDoesNotCreateArchiveOrBlockRetry(t *testing.T) {
@@ -32,16 +34,12 @@ func TestConsumerConfigurationFailureDoesNotCreateArchiveOrBlockRetry(t *testing
 			first := loggedWorker(ctx, query(setting.properties), "")
 
 			// Then the output was never created and the corrected query can succeed.
-			if first.code != 2 {
-				t.Fatalf("configuration exit=%d: %s", first.code, first.detail)
-			}
+			require.Equal(t, 2, first.code, "configuration exit=%d: %s", first.code, first.detail)
 			if _, err := os.Stat(path); !os.IsNotExist(err) {
 				t.Fatal("invalid source configuration created an archive", err)
 			}
 			corrected := loggedWorker(ctx, query(""), "")
-			if corrected.code != 0 {
-				t.Fatalf("corrected query blocked: %d %s", corrected.code, corrected.detail)
-			}
+			require.Zero(t, corrected.code, "corrected query blocked: %d %s", corrected.code, corrected.detail)
 			if records := archiveRecords(t, path); len(records) != 0 {
 				t.Fatal("empty source produced records", records)
 			}

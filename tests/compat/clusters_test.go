@@ -12,6 +12,7 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCrossClusterOpaqueSchemaBytes(t *testing.T) {
@@ -23,16 +24,12 @@ func TestCrossClusterOpaqueSchemaBytes(t *testing.T) {
 	a := admin(t)
 	name := topic(t, a, 2)
 	destination, err := k.NewAdminClient(&k.ConfigMap{"bootstrap.servers": dr})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { closeAdmin(t, destination) })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	sourceID, err := a.ClusterID(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	destinationID, err := destination.ClusterID(ctx)
 	if err != nil || sourceID == destinationID {
 		t.Fatal("cross-cluster fixture requires different cluster IDs", err)
@@ -62,17 +59,13 @@ func TestCrossClusterOpaqueSchemaBytes(t *testing.T) {
 	c, err := k.NewConsumer(&k.ConfigMap{"bootstrap.servers": dr, "group.id": name + "-reader", "enable.auto.commit": false, "isolation.level": "read_committed"})
 
 	// Then
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer c.Close()
 	var parts []k.TopicPartition
 	for i := range 3 {
 		parts = append(parts, k.TopicPartition{Topic: &name, Partition: int32(i), Offset: 0})
 	}
-	if err := c.Assign(parts); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.Assign(parts))
 	for range 12 {
 		r := read(t, c)
 		if !bytes.Equal(r.Key, key) || !bytes.Equal(r.Value, value) || !reflect.DeepEqual(r.Headers, headers) || !r.Timestamp.Equal(stamp) {

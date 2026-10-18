@@ -6,13 +6,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/stretchr/testify/require"
 )
 
 func tipSamples(samples chan<- int64) func(slog.Record) {
@@ -41,12 +41,8 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 			p := producer(t, k.ConfigMap{"transactional.id": src + "-open"})
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			if err := p.InitTransactions(ctx); err != nil {
-				t.Fatal(err)
-			}
-			if err := p.BeginTransaction(); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, p.InitTransactions(ctx))
+			require.NoError(t, p.BeginTransaction())
 			stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 			publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: []byte("transactional"), Timestamp: stamp})
 			path := filepath.Join(t.TempDir(), "out.cbor")
@@ -95,9 +91,7 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 			select {
 			case high := <-samples:
 				// Then H includes the unread transaction, rather than the stable offset 0.
-				if high != 1 {
-					t.Fatalf("sampled high watermark=%d, want 1", high)
-				}
+				require.Equal(t, int64(1), high, "sampled high watermark=%d, want 1", high)
 			case r := <-result:
 				finished = true
 				t.Fatalf("copy ended before sampling the open transaction: %d %s", r.code, r.detail)
@@ -105,20 +99,14 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 				t.Fatal("open transaction was not included in the tip sample")
 			}
 			if abort {
-				if err := p.AbortTransaction(ctx); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, p.AbortTransaction(ctx))
 			} else {
-				if err := p.CommitTransaction(ctx); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, p.CommitTransaction(ctx))
 			}
 			select {
 			case r := <-result:
 				finished = true
-				if r.code != 0 {
-					t.Fatalf("transaction tail exit=%d: %s", r.code, r.detail)
-				}
+				require.Zero(t, r.code, "transaction tail exit=%d: %s", r.code, r.detail)
 			case <-ctx.Done():
 				t.Fatal("control marker did not complete tip")
 			}
@@ -144,12 +132,8 @@ func TestOpenTransactionReachesTipWaitInsteadOfSuccessfulCompletion(t *testing.T
 	p := producer(t, k.ConfigMap{"transactional.id": src + "-open"})
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
-	if err := p.InitTransactions(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.BeginTransaction(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, p.InitTransactions(ctx))
+	require.NoError(t, p.BeginTransaction())
 	defer func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
@@ -158,16 +142,7 @@ func TestOpenTransactionReachesTipWaitInsteadOfSuccessfulCompletion(t *testing.T
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: []byte("transactional"), Timestamp: stamp})
 	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", dst, src, stamp.Add(-time.Second).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano), src+"-wait")
-	cfg := configuration(t)
-	f, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = f.WriteString("tip_wait='100ms'\n")
-	_ = f.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := configuration(t, "tip_wait='100ms'\n")
 
 	// When the worker drains toward the sampled log end without a transaction commit.
 	r := loggedWorker(ctx, statement, cfg)

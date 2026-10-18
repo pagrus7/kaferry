@@ -14,6 +14,7 @@ import (
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/app"
 	"github.com/pagrus7/kaferry/internal/commitmeta"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTimeBoundariesOutOfOrderAndTriggerReplay(t *testing.T) {
@@ -41,13 +42,9 @@ func TestTimeBoundariesOutOfOrderAndTriggerReplay(t *testing.T) {
 			records := archiveRecords(t, path)
 
 			// Then
-			if len(records) != len(test.want) {
-				t.Fatalf("records=%d want=%d", len(records), len(test.want))
-			}
+			require.Len(t, records, len(test.want), "records=%d want=%d", len(records), len(test.want))
 			for i, r := range records {
-				if string(r.Value) != test.want[i] {
-					t.Fatalf("value=%s want=%s", r.Value, test.want[i])
-				}
+				require.Equal(t, test.want[i], string(r.Value), "value=%s want=%s", r.Value, test.want[i])
 			}
 		})
 	}
@@ -72,16 +69,10 @@ func TestForeignProgressAndSelfCopyFailBeforeJoining(t *testing.T) {
 	executeCode := app.Execute(ctx, []string{"run", "-e", statement}, nil, io.Discard, &out)
 
 	// Then
-	if executeCode != 2 {
-		t.Fatalf("foreign progress exit=%d: %s", executeCode, out.String())
-	}
+	require.Equal(t, 2, executeCode, "foreign progress exit=%d: %s", executeCode, out.String())
 	description, err := a.DescribeConsumerGroups(ctx, []string{group})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(description.ConsumerGroupDescriptions[0].Members) != 0 {
-		t.Fatal("foreign group joined before validation")
-	}
+	require.NoError(t, err)
+	require.Len(t, description.ConsumerGroupDescriptions[0].Members, 0, "foreign group joined before validation")
 	statement = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s-self',START=EARLIEST)", broker(t), src, src, src)
 	if code := app.Execute(ctx, []string{"run", "-e", statement}, nil, io.Discard, &out); code != 2 {
 		t.Fatal("Kafka self-copy permitted")
@@ -109,26 +100,18 @@ func TestExpiredAndAboveEndCommits(t *testing.T) {
 	positions, err := a.ListConsumerGroupOffsets(ctx, []k.ConsumerGroupTopicPartitions{{Group: group, Partitions: []k.TopicPartition{{Topic: &src, Partition: 0}}}})
 
 	// Then
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	part := positions.ConsumerGroupsTopicPartitions[0].Partitions[0]
 	if _, err := a.DeleteRecords(ctx, []k.TopicPartition{{Topic: &src, Partition: 0, Offset: 3}}); err != nil {
 		t.Fatal(err)
 	}
 	// Rewinding an offset also clears the saved stop that referred to its old position.
-	if part.Metadata == nil {
-		t.Fatal("missing metadata")
-	}
+	require.NotNil(t, part.Metadata, "missing metadata")
 	saved, err := commitmeta.NewCodec().Decode(*part.Metadata)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	saved.Stop = nil
 	text, err := commitmeta.NewCodec().Encode(saved)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	part.Metadata = &text
 	part.Offset = 1
 	if _, err := a.AlterConsumerGroupOffsets(ctx, []k.ConsumerGroupTopicPartitions{{Group: group, Partitions: []k.TopicPartition{part}}}); err != nil {

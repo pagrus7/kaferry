@@ -16,6 +16,7 @@ import (
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/inspect"
+	"github.com/stretchr/testify/require"
 )
 
 func TestExplainBinaryResumesWithoutChangingKafkaOrCreatingFiles(t *testing.T) {
@@ -34,9 +35,7 @@ func TestExplainBinaryResumesWithoutChangingKafkaOrCreatingFiles(t *testing.T) {
 	reader := consumer(t, group)
 	parts := []k.TopicPartition{{Topic: &source, Partition: 0}, {Topic: &source, Partition: 1}}
 	before, err := reader.Committed(parts, 10000)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	binary := testBinary(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()

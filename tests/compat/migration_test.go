@@ -5,6 +5,7 @@ package compat
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,17 +16,20 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/pagrus7/kaferry/internal/commitmeta"
+	"github.com/pelletier/go-toml/v2"
+	"github.com/stretchr/testify/require"
 )
 
 // Supply binaries built from the previous and candidate revisions.
 func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 	previous := os.Getenv("KAFERRY_PREVIOUS_BINARY")
-	if previous == "" {
-		t.Fatal("set KAFERRY_PREVIOUS_BINARY for migration checks")
-	}
+	require.NotEqual(t, "", previous, "set KAFERRY_PREVIOUS_BINARY for migration checks")
 	candidate := testBinary(t)
+	// Compatibility is declared from wire identifiers, independently of candidate decoding.
+	const candidateFormat = "kaferry:1"
+	const candidateCheckpointVersion = 2
 	previousFormat := ""
+	previousCheckpointVersion := 0
 	for _, direction := range []struct{ name, first, second string }{
 		{"previous to candidate", previous, candidate}, {"candidate to previous", candidate, previous},
 	} {
@@ -46,33 +50,65 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 				t.Fatal("invalid archive fixture", before)
 			}
 			progress := committedPartitions(t, admin, source+"-migration", source, 1)[0]
-			if progress.Offset != 1 {
-				t.Fatal("first binary did not save progress", progress)
-			}
-			if progress.Metadata == nil {
-				t.Fatal("missing metadata")
-			}
+			require.Equal(t, k.Offset(1), progress.Offset, "first binary did not save progress")
+			require.NotNil(t, progress.Metadata, "missing metadata")
 			format := strings.SplitN(*progress.Metadata, ";", 2)[0]
-			want := 0
 			if direction.first == previous {
 				previousFormat = format
-				if _, err := commitmeta.NewCodec().Decode(*progress.Metadata); err != nil {
-					want = 2
-				}
-			} else if format != previousFormat {
+			} else {
+				require.Equal(t, candidateFormat, format)
+			}
+			want := 0
+			if previousFormat != candidateFormat {
 				want = 2
 			}
-			// When another format resumes this group, then it rejects the save before changing output.
-			runMigrationExpect(t, direction.second, sql, config, want)
+			// When the other binary resumes, then equal metadata versions must resume successfully.
+			diagnostic := ""
+			if want == 2 && direction.second == candidate {
+				diagnostic = "unsupported version of commit metadata"
+			}
+			runMigrationExpect(t, direction.second, sql, config, want, diagnostic)
 			if got := archiveRecords(t, archive); !reflect.DeepEqual(got, before) {
 				t.Fatal("Kafka progress/archive resume changed records", got)
 			}
 			cloneSQL := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='file-migration')", clone, archive)
 			runMigrationBinary(t, direction.first, cloneSQL, config)
-			runMigrationExpect(t, direction.second, cloneSQL, config, want)
+			checkpointVersion := migrationCheckpointVersion(t, config)
+			if direction.first == previous {
+				previousCheckpointVersion = checkpointVersion
+			} else {
+				require.Equal(t, candidateCheckpointVersion, checkpointVersion)
+			}
+			fileWant := 0
+			if previousCheckpointVersion != candidateCheckpointVersion {
+				fileWant = 2
+			}
+			diagnostic = ""
+			if fileWant == 2 && direction.second == candidate {
+				diagnostic = "invalid checkpoint"
+			}
+			runMigrationExpect(t, direction.second, cloneSQL, config, fileWant, diagnostic)
 			// Then matching formats resume, incompatible formats fail closed, and neither duplicates output.
 			if got := archiveRecords(t, clone); !reflect.DeepEqual(got, before) {
 				t.Fatal("file checkpoint/archive compatibility failed", got)
+			}
+			if direction.first == candidate {
+				// Given independently known unsupported Kafka metadata versions with otherwise valid fields.
+				supportedMetadata := *progress.Metadata
+				for _, unsupported := range []string{"kaferry:0", "kaferry:2"} {
+					text := strings.Replace(supportedMetadata, candidateFormat+";", unsupported+";", 1)
+					progress.Metadata = &text
+					ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+					result, err := admin.AlterConsumerGroupOffsets(ctx, []k.ConsumerGroupTopicPartitions{{Group: source + "-migration", Partitions: []k.TopicPartition{progress}}})
+					cancel()
+					require.NoError(t, err)
+					require.Len(t, result.ConsumerGroupsTopicPartitions, 1)
+					require.Len(t, result.ConsumerGroupsTopicPartitions[0].Partitions, 1)
+					require.NoError(t, result.ConsumerGroupsTopicPartitions[0].Partitions[0].Error)
+					// When the candidate resumes, then it rejects the version specifically before output changes.
+					runMigrationExpect(t, candidate, sql, config, 2, "unsupported version of commit metadata")
+					require.Equal(t, before, archiveRecords(t, archive))
+				}
 			}
 			// When using a fresh group/output, then the other binary can still read the unchanged archive format.
 			freshClone := filepath.Join(t.TempDir(), "read.cbor")
@@ -88,7 +124,7 @@ func runMigrationBinary(t *testing.T, binary, statement, config string) {
 	t.Helper()
 	runMigrationExpect(t, binary, statement, config, 0)
 }
-func runMigrationExpect(t *testing.T, binary, statement, config string, want int) {
+func runMigrationExpect(t *testing.T, binary, statement, config string, want int, diagnostic ...string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
@@ -102,7 +138,33 @@ func runMigrationExpect(t *testing.T, binary, statement, config string, want int
 			t.Fatal(err)
 		}
 	}
-	if code != want {
-		t.Fatalf("migration exit=%d want=%d: %s", code, want, process.logs())
+	require.Equal(t, want, code, "migration: %s", process.logs())
+	for _, text := range diagnostic {
+		if text != "" {
+			require.Contains(t, process.logs(), text)
+		}
 	}
+}
+
+func migrationCheckpointVersion(t *testing.T, configuration string) int {
+	t.Helper()
+	data, err := os.ReadFile(configuration)
+	require.NoError(t, err)
+	var config struct {
+		Worker struct {
+			CheckpointDir string `toml:"checkpoint_dir"`
+		}
+	}
+	require.NoError(t, toml.Unmarshal(data, &config))
+	paths, err := filepath.Glob(filepath.Join(config.Worker.CheckpointDir, "*.json"))
+	require.NoError(t, err)
+	require.Len(t, paths, 1)
+	data, err = os.ReadFile(paths[0])
+	require.NoError(t, err)
+	var checkpoint struct {
+		Version int `json:"version"`
+	}
+	require.NoError(t, json.Unmarshal(data, &checkpoint))
+	require.Positive(t, checkpoint.Version)
+	return checkpoint.Version
 }

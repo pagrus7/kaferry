@@ -13,6 +13,7 @@ import (
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/app"
 	"github.com/pagrus7/kaferry/internal/inspect"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSavedStopsDescribeEveryCurrentKafkaPartition(t *testing.T) {
@@ -68,9 +69,7 @@ func TestSavedStopsDescribeEveryCurrentKafkaPartition(t *testing.T) {
 	}
 	// Then no status observation produced more destination records.
 	consumer := consumer(t, destination+"-verify")
-	if err := consumer.Assign([]k.TopicPartition{{Topic: &destination, Partition: 0, Offset: 0}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, consumer.Assign([]k.TopicPartition{{Topic: &destination, Partition: 0, Offset: 0}}))
 	for range 2 {
 		if got := read(t, consumer); string(got.Value) != "included" {
 			t.Fatal(got)

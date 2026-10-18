@@ -15,6 +15,7 @@ import (
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLogAppendTimeDestinationRestampsUnpreservableValues(t *testing.T) {
@@ -30,17 +31,11 @@ func TestLogAppendTimeDestinationRestampsUnpreservableValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "source.cbor")
 	codec, _ := file.NewCodec(1 << 20)
 	o, err := file.NewOutput(file.NewPublisher(), path, "fixture", "fixture", "", 0, codec, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for i, stamp := range []int64{0, -1, math.MaxInt64} {
-		if err := o.Submit(core.Record{Value: []byte(fmt.Sprint(i)), TimestampMS: &stamp, TimestampType: "create_time"}, core.Token{}); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, o.Submit(core.Record{Value: []byte(fmt.Sprint(i)), TimestampMS: &stamp, TimestampType: "create_time"}, core.Token{}))
 	}
-	if err := o.Flush(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, o.Flush())
 	o.Close()
 	before := time.Now().Add(-time.Second)
 
@@ -49,9 +44,7 @@ func TestLogAppendTimeDestinationRestampsUnpreservableValues(t *testing.T) {
 	c := consumer(t, dst+"-reader")
 
 	// Then
-	if err := c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}))
 	for i := range 3 {
 		r := read(t, c)
 		if string(r.Value) != fmt.Sprint(i) || r.TimestampType != k.TimestampLogAppendTime || r.Timestamp.Before(before) || r.Timestamp.After(time.Now().Add(time.Second)) {
@@ -95,9 +88,7 @@ func TestTimestampLookupAcrossSegmentsAndPreEpochBound(t *testing.T) {
 			records := archiveRecords(t, path)
 
 			// Then
-			if len(records) != test.count {
-				t.Fatalf("timestamp lookup omitted matching records: got %d want %d", len(records), test.count)
-			}
+			require.Len(t, records, test.count, "timestamp lookup omitted matching records: got %d want %d", len(records), test.count)
 			for i, r := range records {
 				want := i
 				if test.name == "equal" {

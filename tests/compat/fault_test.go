@@ -13,6 +13,7 @@ import (
 
 	core "github.com/pagrus7/kaferry/internal/copy"
 	adapter "github.com/pagrus7/kaferry/internal/franz"
+	"github.com/stretchr/testify/require"
 )
 
 func ownedContainer(t *testing.T) string {
@@ -34,9 +35,7 @@ func TestBlockingCommitAcrossBrokerOutage(t *testing.T) {
 	name := topic(t, admin, 1)
 	source, store := probeSourceProgress(t, name, name+"-fault")
 	ownership := &probeOwnership{owned: make(map[int32]bool)}
-	if err := source.Start(ownership, nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, source.Start(ownership, nil))
 	pollOwnership(t, []*adapter.Source{source}, func() bool { return len(ownership.owned) == 1 })
 	if data, err := exec.Command("docker", "pause", container).CombinedOutput(); err != nil {
 		t.Fatalf("pause: %v %s", err, data)
