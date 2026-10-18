@@ -23,6 +23,7 @@ type loadReport struct {
 	Skipped                bool    `json:"skipped"`
 	Platform               string  `json:"platform"`
 	Client                 string  `json:"client"`
+	FixtureClient          string  `json:"fixture_client"`
 	BinarySHA256           string  `json:"binary_sha256,omitempty"`
 	Records                int     `json:"records"`
 	WorkerStopAfterRecords int     `json:"worker_stop_after_records,omitempty"`
@@ -80,6 +81,7 @@ func TestLoadReportIdentifiesExecutedBinary(t *testing.T) {
 	require.NoError(t, err)
 	var report loadReport
 	require.NoError(t, json.Unmarshal(encoded, &report))
+	require.Equal(t, "franz-go", report.FixtureClient)
 	require.Zero(t, report.SourcePartitions)
 	require.Zero(t, report.DestinationPartitions)
 	require.Equal(t, "github.com/twmb/franz-go "+clientVersion, report.Client)
@@ -90,7 +92,7 @@ func TestLoadReportIdentifiesExecutedBinary(t *testing.T) {
 
 func newLoadReport(t *testing.T, kind string) *loadReport {
 	t.Helper()
-	r := &loadReport{Test: t.Name(), Kind: kind, Platform: runtime.GOOS + "/" + runtime.GOARCH}
+	r := &loadReport{Test: t.Name(), Kind: kind, Platform: runtime.GOOS + "/" + runtime.GOARCH, FixtureClient: "franz-go"}
 	if directory := os.Getenv("KAFERRY_REPORT_DIR"); directory != "" {
 		t.Cleanup(func() {
 			if r.cli != nil {
@@ -100,7 +102,7 @@ func newLoadReport(t *testing.T, kind string) *loadReport {
 					t.Error("read tested binary build information:", err)
 				} else {
 					for _, dep := range info.Deps {
-						if dep.Path == "github.com/twmb/franz-go" || dep.Path == "github.com/confluentinc/confluent-kafka-go/v2" {
+						if dep.Path == "github.com/twmb/franz-go" {
 							r.Client = dep.Path + " " + dep.Version
 						}
 					}

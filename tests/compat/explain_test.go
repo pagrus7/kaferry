@@ -14,28 +14,28 @@ import (
 	"testing"
 	"time"
 
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/inspect"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestExplainBinaryResumesWithoutChangingKafkaOrCreatingFiles(t *testing.T) {
-	// Given a completed copy and native-client observations of its saved progress.
+	// Given a completed copy and broker observations of its saved progress.
 	a := admin(t)
 	source, destination := topic(t, a, 2), topic(t, a, 3)
-	producer := producer(t, nil)
+	producer := producer(t)
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	for partition := range int32(2) {
-		publish(t, producer, &k.Message{TopicPartition: k.TopicPartition{Topic: &source, Partition: partition}, Timestamp: stamp, Value: []byte("record")})
+		publish(t, producer, &kgo.Record{Topic: source, Partition: partition, Timestamp: stamp, Value: []byte("record")})
 	}
 	group := source + "-explain"
 	query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", destination, source, stamp.Add(time.Minute).Format(time.RFC3339Nano), group)
 	config := configuration(t)
 	execute(t, query, config)
-	reader := consumer(t, group)
-	parts := []k.TopicPartition{{Topic: &source, Partition: 0}, {Topic: &source, Partition: 1}}
-	before, err := reader.Committed(parts, 10000)
+	before, err := a.FetchOffsets(t.Context(), group)
 	require.NoError(t, err)
+	require.NoError(t, before.Error())
+	require.Len(t, before[source], 2)
 	binary := testBinary(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
@@ -52,12 +52,12 @@ func TestExplainBinaryResumesWithoutChangingKafkaOrCreatingFiles(t *testing.T) {
 		t.Fatal(err, stdout.String())
 	}
 	for n, part := range report.Partitions {
-		if part.ID != int32(n) || !part.Saved || part.Start != int64(before[n].Offset) {
+		if part.ID != int32(n) || !part.Saved || part.Start != before[source][int32(n)].At {
 			t.Fatal("preview differs from committed progress", report, before)
 		}
 	}
-	after, err := reader.Committed(parts, 10000)
-	if err != nil || !reflect.DeepEqual(before, after) {
+	after, err := a.FetchOffsets(t.Context(), group)
+	if err != nil || after.Error() != nil || !reflect.DeepEqual(before, after) {
 		t.Fatal("inspection changed saved progress", before, after, err)
 	}
 

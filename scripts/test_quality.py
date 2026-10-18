@@ -57,15 +57,14 @@ class CoverageTest(unittest.TestCase):
             (previous / "baseline.json").write_text(json.dumps({"suite": "load", "url": "run", "headSha": "abc"}))
             measurement = {"test": "limited copy", "passed": True, "skipped": False,
                            "worker_stop_after_records": 10, "records_per_second": 100,
-                           "measurement_method": "sql_release_to_exit"}
+                           "measurement_method": "sql_release_to_exit", "fixture_client": "franz-go"}
             (previous / "load.metrics.json").write_text(json.dumps(measurement))
-            for changes in ({"worker_stop_after_records": 20}, {}, {"measurement_method": None}):
+            for changes in ({"worker_stop_after_records": 20}, {}, {"measurement_method": None}, {"fixture_client": None}):
                 with self.subTest(changes=changes):
-                    actual = {**measurement, **changes}
-                    if actual["measurement_method"] is None:
-                        del actual["measurement_method"]  # Legacy reports have no timing method.
+                    actual = {key: value for key, value in {**measurement, **changes}.items()
+                              if value is not None}
                     (current / "load.metrics.json").write_text(json.dumps(actual))
-                    # When comparing matching settings, a changed cap or legacy timing.
+                    # When comparing matching settings, a changed cap, timing method or fixture client.
                     result = "\n".join(comparison(current, previous))
                     # Then only matching settings allow numeric comparison.
                     self.assertEqual("Settings differ" in result, bool(changes))

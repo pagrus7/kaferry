@@ -81,7 +81,7 @@ Time-window arithmetic, boundaries and overflow use deterministic unit tests in 
 
 ### Coverage limits
 
-- Broker fixtures wait for a ready group coordinator: plaintext fixtures use the Java CLI; TLS fixtures use consumer `Committed`. Broker tests therefore do not cover cold coordinator startup.
+- Broker tests start after their group coordinator is ready; they do not cover cold coordinator startup.
 - Component tests in `make check` withhold coordinator, join, offset, commit and fetch replies and check cleanup.
 
 See [client limits](client-compatibility.md#operational-limits) for deployment constraints.
@@ -170,7 +170,7 @@ The command waits for all three reports. In an existing Claude Code session, use
 
 ### Release evidence
 
-Release archives contain the binary, MIT license and notices for linked Go modules, subpackage licenses and the Go runtime. `--version` reports the build version, commit, Go and franz-go version. Production builds use `CGO_ENABLED=0`; Confluent is linked only into broker test fixtures.
+Release archives contain the binary, MIT license and notices for linked Go modules, subpackage licenses and the Go runtime. `--version` reports the build version, commit, Go and franz-go version. Production builds use `CGO_ENABLED=0`; broker fixtures also use franz-go; Linux race checks require CGO and a C compiler.
 
 The workflow builds Linux AMD64/ARM64 static binaries and macOS AMD64/ARM64 binaries, then produces per-platform SPDX SBOMs, archive provenance and binary SBOM attestations. [Notices generation](../scripts/notices.py) inspects actual linked packages and fails if required licenses cannot be found.
 

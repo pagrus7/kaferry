@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/app"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func execute(t *testing.T, statement, config string) {
@@ -65,18 +65,14 @@ func archiveRecords(t *testing.T, path string) []core.Record {
 }
 func assertTopicRecords(t *testing.T, name string, partitions int, expected []core.Record) {
 	t.Helper()
-	reader := consumer(t, name+"-verify")
-	var assignments []k.TopicPartition
-	for id := range partitions {
-		assignments = append(assignments, k.TopicPartition{Topic: &name, Partition: int32(id), Offset: 0})
-	}
-	require.NoError(t, reader.Assign(assignments))
+	reader := consumer(t)
+	assign(t, reader, name, partitions)
 	var actual, wanted []core.Record
 	for _, record := range expected {
 		record.Source = nil // Kafka output does not publish source provenance.
 		wanted = append(wanted, record)
 		message := read(t, reader)
-		require.Equal(t, k.TimestampCreateTime, message.TimestampType, "destination timestamp type")
+		require.Equal(t, int8(0), message.Attrs.TimestampType(), "destination timestamp type")
 		stamp := message.Timestamp.UnixMilli()
 		got := core.Record{Key: message.Key, Value: message.Value, TimestampMS: &stamp, TimestampType: "create_time"}
 		for _, header := range message.Headers {
@@ -92,7 +88,7 @@ func TestAllFileDirectionsAndResume(t *testing.T) {
 	a := admin(t)
 	src := topic(t, a, 1)
 	dst := topic(t, a, 3)
-	p := producer(t, nil)
+	p := producer(t)
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	var expected []core.Record
 	for i := range 24 {
@@ -109,8 +105,8 @@ func TestAllFileDirectionsAndResume(t *testing.T) {
 		if i%4 == 1 {
 			value = []byte{}
 		}
-		headers := []k.Header{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}, {Key: "binary", Value: []byte{0, 255}}}
-		publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Key: key, Value: value, Headers: headers, Timestamp: stamp})
+		headers := []kgo.RecordHeader{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}, {Key: "binary", Value: []byte{0, 255}}}
+		publish(t, p, &kgo.Record{Topic: src, Partition: 0, Key: key, Value: value, Headers: headers, Timestamp: stamp})
 		ms := stamp.UnixMilli()
 		expected = append(expected, core.Record{Key: key, Value: value, Headers: []core.Header{{Name: "dup", Value: nil}, {Name: "dup", Value: []byte{}}, {Name: "binary", Value: []byte{0, 255}}}, TimestampMS: &ms, TimestampType: "create_time", Source: &core.Provenance{Topic: src, Partition: 0, Offset: int64(i)}})
 	}

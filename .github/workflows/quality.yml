@@ -8,6 +8,8 @@ on:
     - cron: '37 8 * * 1'
 permissions:
   contents: read
+env:
+  CGO_ENABLED: "0"
 jobs:
   go:
     runs-on: ubuntu-24.04

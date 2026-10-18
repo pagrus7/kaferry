@@ -10,17 +10,16 @@ import (
 	"testing"
 	"time"
 
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/app"
 	"github.com/pagrus7/kaferry/internal/inspect"
-	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestSavedStopsDescribeEveryCurrentKafkaPartition(t *testing.T) {
 	// Given two partitions: one reaches the timestamp rule, the other stops at the tip.
 	a := admin(t)
 	source, destination := topic(t, a, 2), topic(t, a, 1)
-	producer := producer(t, nil)
+	producer := producer(t)
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	end := stamp.Add(time.Minute)
 	for _, record := range []struct {
@@ -28,7 +27,7 @@ func TestSavedStopsDescribeEveryCurrentKafkaPartition(t *testing.T) {
 		time      time.Time
 		value     string
 	}{{0, stamp, "included"}, {0, end.Add(time.Second), "stop"}, {1, stamp, "included"}} {
-		publish(t, producer, &k.Message{TopicPartition: k.TopicPartition{Topic: &source, Partition: record.partition}, Timestamp: record.time, Value: []byte(record.value)})
+		publish(t, producer, &kgo.Record{Topic: source, Partition: record.partition, Timestamp: record.time, Value: []byte(record.value)})
 	}
 	group := source + "-status"
 	config := configuration(t)
@@ -49,15 +48,15 @@ func TestSavedStopsDescribeEveryCurrentKafkaPartition(t *testing.T) {
 	}
 	after := committedPartitions(t, a, group, source, 2)
 	for n := range before {
-		if before[n].Offset != after[n].Offset || before[n].Metadata == nil || after[n].Metadata == nil || *before[n].Metadata != *after[n].Metadata {
+		if before[n].At != after[n].At || before[n].Metadata == "" || after[n].Metadata == "" || before[n].Metadata != after[n].Metadata {
 			t.Fatal("status changed progress", before, after)
 		}
 	}
 	// When a current partition has no saved progress, then the same query is incomplete.
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
-	result, err := a.CreatePartitions(ctx, []k.PartitionsSpecification{{Topic: source, IncreaseTo: 3}})
-	if err != nil || len(result) != 1 || result[0].Error.Code() != k.ErrNoError {
+	result, err := a.UpdatePartitions(ctx, 3, source)
+	if err != nil || len(result) != 1 || result[source].Err != nil {
 		t.Fatal(result, err)
 	}
 	waitTopicReady(t, a, source, 3)
@@ -68,8 +67,8 @@ func TestSavedStopsDescribeEveryCurrentKafkaPartition(t *testing.T) {
 		t.Fatal(code, out.String(), errout.String(), err)
 	}
 	// Then no status observation produced more destination records.
-	consumer := consumer(t, destination+"-verify")
-	require.NoError(t, consumer.Assign([]k.TopicPartition{{Topic: &destination, Partition: 0, Offset: 0}}))
+	consumer := consumer(t)
+	assign(t, consumer, destination, 1)
 	for range 2 {
 		if got := read(t, consumer); string(got.Value) != "included" {
 			t.Fatal(got)

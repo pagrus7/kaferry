@@ -1,4 +1,5 @@
 GO ?= go
+export CGO_ENABLED := 0
 KAFERRY_VERSION ?= dev
 KAFERRY_REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || printf unknown)$(if $(shell git status --porcelain --untracked-files=no 2>/dev/null),-dirty)
 FUZZ_ITERATIONS ?= 100000
@@ -11,9 +12,10 @@ build:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags='-s -w -buildid= -X github.com/pagrus7/kaferry/internal/app.version=$(KAFERRY_VERSION) -X github.com/pagrus7/kaferry/internal/app.revision=$(KAFERRY_REVISION)' -o bin/kaferry ./cmd/kaferry
 test:
 	$(GO) test ./...
+# Only race-instrumented tests enable CGO.
 check:
 	$(GO) vet ./...
-	$(GO) test -race ./...
+	CGO_ENABLED=1 $(GO) test -race ./...
 broker:
 	docker compose -p kaferry-compat --profile cross-cluster up -d --wait --wait-timeout 60
 	# Listening sockets precede cold group-coordinator readiness.
@@ -22,7 +24,7 @@ broker:
 broker-down:
 	docker compose -p kaferry-compat --profile cross-cluster down
 integration:
-	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_TEST_DEST_BROKERS=$(KAFKA_TEST_DEST_BROKERS) $(GO) test -count=1 -race -tags=integration ./...
+	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_TEST_DEST_BROKERS=$(KAFKA_TEST_DEST_BROKERS) CGO_ENABLED=1 $(GO) test -count=1 -race -tags=integration ./...
 fault:
 	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_FAULT_CONTAINER=kaferry-compat-kafka-1 $(GO) test -count=1 -tags=integration,fault -run 'TestBlockingCommit|TestRebalanceChurn' -v ./tests/compat
 load: build

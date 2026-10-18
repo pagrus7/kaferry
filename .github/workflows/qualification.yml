@@ -11,6 +11,8 @@ on:
 permissions:
   contents: read
   actions: read
+env:
+  CGO_ENABLED: "0"
 jobs:
   qualification:
     runs-on: ubuntu-24.04

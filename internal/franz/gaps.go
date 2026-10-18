@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"syscall"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -94,10 +95,15 @@ func transientFailure(err error) error {
 	if errors.Is(err, kerr.UnknownTopicOrPartition) || errors.Is(err, kerr.UnknownTopicID) {
 		return err // The source identity was already established before consumption.
 	}
-	if errors.Is(err, context.DeadlineExceeded) || kerr.IsRetriable(err) || kgo.IsRetryableBrokerErr(err) {
+	if brokerUnreachable(err) || errors.Is(err, context.DeadlineExceeded) || kerr.IsRetriable(err) || kgo.IsRetryableBrokerErr(err) {
 		return &core.Recoverable{Err: err}
 	}
 	return err
+}
+
+// An established source may still have the old leader or coordinator address.
+func brokerUnreachable(err error) bool {
+	return errors.Is(err, syscall.ECONNREFUSED)
 }
 
 func emptyBatchEnd(position int64, topic string, p *kmsg.FetchResponseTopicPartition) (int64, error) {

@@ -12,8 +12,9 @@ import (
 	"testing"
 	"time"
 
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
@@ -39,23 +40,14 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		if destinationBrokers == "" || destinationBrokers == broker(t) {
 			t.Fatal("destination stalls require a separate KAFKA_TEST_DEST_BROKERS cluster")
 		}
-		var err error
-		destinationAdmin, err = k.NewAdminClient(&k.ConfigMap{"bootstrap.servers": destinationBrokers})
-		require.NoError(t, err)
-		t.Cleanup(func() { closeAdmin(t, destinationAdmin) })
+		destinationAdmin = kadm.NewClient(fixtureClient(t, destinationBrokers))
 	}
 	src, dst := topic(t, a, 4), topic(t, destinationAdmin, 5)
 	group := src + "-soak"
-	p := producer(t, nil)
-	reports := make(chan k.Event, 4096)
-	c, err := k.NewConsumer(&k.ConfigMap{"bootstrap.servers": destinationBrokers, "group.id": dst + "-verify", "enable.auto.commit": false, "enable.auto.offset.store": false, "isolation.level": "read_committed"})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
-	parts := make([]k.TopicPartition, 5)
-	for i := range parts {
-		parts[i] = k.TopicPartition{Topic: &dst, Partition: int32(i), Offset: 0}
-	}
-	require.NoError(t, c.Assign(parts))
+	p := producer(t)
+	reports := make(chan kgo.ProduceResult, 4096)
+	c := fixtureClient(t, destinationBrokers, kgo.FetchIsolationLevel(kgo.ReadCommitted()))
+	assign(t, c, dst, 5)
 	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'), CONNECTION destination AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s@destination' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", broker(t), destinationBrokers, dst, src, group)
 	configPath := filepath.Join(t.TempDir(), "soak.toml")
 	require.NoError(t, os.WriteFile(configPath, []byte("[worker]\nrecord_cap=1024\npartition_record_cap=256\n"), 0600))
@@ -92,7 +84,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 				bursts++
 				nextBurst = now.Add(time.Minute)
 			}
-			records.publish(t, p, reports, batch)
+			records.publish(t, ctx, p, reports, batch)
 			nextPublish = now.Add(20 * time.Millisecond)
 		}
 		records.catchUp(t, c, reports)
@@ -122,7 +114,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	// Then shutdown saves all progress, preserves fidelity and stays within work/RSS caps.
 	committed := 0
 	for _, part := range committedPartitions(t, a, group, src, 4) {
-		committed += int(part.Offset)
+		committed += int(part.At)
 	}
 	require.Equal(t, len(records.seen), committed, "shutdown did not commit all verified records")
 	summary := summaryFrom(t, process.logs())
@@ -182,7 +174,7 @@ type soakMonitor struct {
 	maxLag int
 }
 
-func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *k.AdminClient, group, source string, published int) {
+func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *kadm.Client, group, source string, published int) {
 	t.Helper()
 	if now.Before(m.next) {
 		return
@@ -192,7 +184,7 @@ func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *k.Admi
 	m.rss = append(m.rss, rss)
 	committed := 0
 	for _, part := range committedPartitions(t, admin, group, source, 4) {
-		committed += int(part.Offset)
+		committed += int(part.At)
 	}
 	lag := published - committed
 	if lag < 0 {

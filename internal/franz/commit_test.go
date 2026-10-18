@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"os"
+	"syscall"
 	"testing"
 
 	"github.com/pagrus7/kaferry/internal/commitmeta"
@@ -63,6 +66,30 @@ func TestCommitterPreservesPartitionErrorsAndRejectsUnownedPositions(t *testing.
 		if _, err := c.Save(context.Background(), []core.Cursor{cursor}); err == nil || client.committed != nil {
 			t.Fatal("unsafe cursor reached broker", cursor, err)
 		}
+	}
+}
+
+func TestCommitterClassifiesUnreachableCoordinatorAndSecurityFailures(t *testing.T) {
+	for _, scenario := range []struct {
+		failure error
+		retry   bool
+	}{
+		{fmt.Errorf("unable to dial: %w", &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}), true},
+		{kerr.GroupAuthorizationFailed, false}, {kerr.SaslAuthenticationFailed, false},
+		{&net.OpError{Op: "dial", Err: context.Canceled}, false},
+	} {
+		t.Run(scenario.failure.Error(), func(t *testing.T) {
+			// Given an owned position and a coordinator request that fails.
+			client := &consumerMock{commitErr: scenario.failure, commitResponse: &kmsg.OffsetCommitResponse{}}
+			c := &Committer{codec: commitmeta.NewCodec(), client: client, topic: "input", metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: "id"}}}
+			// When saving confirmed progress.
+			results, err := c.Save(t.Context(), []core.Cursor{{Partition: 0, Position: 2}})
+			// Then only the unavailable coordinator is recoverable; nothing is confirmed.
+			require.ErrorIs(t, err, scenario.failure)
+			var retry *core.Recoverable
+			require.Equal(t, scenario.retry, errors.As(err, &retry), "commit failure classification")
+			require.Empty(t, results)
+		})
 	}
 }
 func TestCommittedOffsetsMatchTopicIDsWithoutNames(t *testing.T) {

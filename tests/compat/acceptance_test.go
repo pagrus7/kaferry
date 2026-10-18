@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pagrus7/kaferry/internal/app"
 	"github.com/pagrus7/kaferry/internal/commitmeta"
 	core "github.com/pagrus7/kaferry/internal/copy"
@@ -26,6 +25,7 @@ import (
 	adapter "github.com/pagrus7/kaferry/internal/franz"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/fx"
 )
@@ -69,31 +69,26 @@ func loggedWorker(ctx context.Context, statement, cfg string, observers ...func(
 	return workerResult{code, output.String()}
 }
 
-func committedPartitions(t *testing.T, a *k.AdminClient, group, topic string, count int) []k.TopicPartition {
+func committedPartitions(t *testing.T, a *kadm.Client, group, topic string, count int) []kadm.Offset {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		parts := make([]k.TopicPartition, count)
-		for i := range parts {
-			parts[i] = k.TopicPartition{Topic: &topic, Partition: int32(i)}
-		}
-		result, err := a.ListConsumerGroupOffsets(ctx, []k.ConsumerGroupTopicPartitions{{Group: group, Partitions: parts}})
-		if err == nil && len(result.ConsumerGroupsTopicPartitions) == 1 {
-			parts = result.ConsumerGroupsTopicPartitions[0].Partitions
-			valid := len(parts) == count
-			for _, part := range parts {
-				valid = valid && part.Error == nil && part.Offset >= 0 && part.Metadata != nil
+		result, err := a.FetchOffsets(ctx, group)
+		if err == nil && result.Error() == nil && len(result[topic]) == count {
+			valid := true
+			for _, p := range result[topic] {
+				valid = valid && p.At >= 0 && p.Metadata != ""
 			}
 			if valid {
-				return parts
+				return kadm.OffsetResponses{topic: result[topic]}.Offsets().Sorted()
 			}
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatal("initial progress not committed", err)
+			t.Fatalf("initial progress not committed: %v %+v", err, result)
 		case <-tick.C:
 		}
 	}
@@ -103,24 +98,24 @@ func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
 	// Given
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
-	p := producer(t, nil)
+	p := producer(t)
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
-	publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: []byte("original"), Timestamp: stamp})
+	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte("original"), Timestamp: stamp})
 	group := src + "-recreated"
 	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", broker(t), dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), group)
 	execute(t, statement, "")
 	old := committedPartitions(t, a, group, src, 1)[0]
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	deleted, err := a.DeleteTopics(ctx, []string{src})
-	if err != nil || len(deleted) != 1 || deleted[0].Error.Code() != k.ErrNoError {
+	deleted, err := a.DeleteTopics(ctx, src)
+	if err != nil || len(deleted) != 1 || deleted[src].Err != nil {
 		t.Fatal("delete fixture topic", deleted, err)
 	}
 	// Kafka may remove offsets on deletion. Restore the old identity metadata so
 	// the guard is exercised, with an offset inside the replacement topic's log.
 	for {
-		created, err := a.CreateTopics(ctx, []k.TopicSpecification{{Topic: src, NumPartitions: 1, ReplicationFactor: 1}})
-		if err == nil && len(created) == 1 && created[0].Error.Code() == k.ErrNoError {
+		created, err := a.CreateTopic(ctx, 1, 1, nil, src)
+		if err == nil {
 			break
 		}
 		select {
@@ -130,12 +125,12 @@ func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
 		}
 	}
 	waitTopicReady(t, a, src, 1)
-	replacement := producer(t, nil)
+	replacement := producer(t)
 	for range 2 {
-		publish(t, replacement, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: []byte("replacement"), Timestamp: time.Now()})
+		publish(t, replacement, &kgo.Record{Topic: src, Partition: 0, Value: []byte("replacement"), Timestamp: time.Now()})
 	}
-	result, err := a.AlterConsumerGroupOffsets(ctx, []k.ConsumerGroupTopicPartitions{{Group: group, Partitions: []k.TopicPartition{old}}})
-	if err != nil || len(result.ConsumerGroupsTopicPartitions) != 1 || result.ConsumerGroupsTopicPartitions[0].Partitions[0].Error != nil {
+	result, err := a.CommitOffsets(ctx, group, kadm.Offsets{src: {0: old}})
+	if err != nil || result.Error() != nil {
 		t.Fatal("restore old progress", result, err)
 	}
 	var output bytes.Buffer
@@ -147,12 +142,12 @@ func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
 	if executeCode != 2 || !strings.Contains(output.String(), "source topic identity mismatch") {
 		t.Fatalf("recreation was not rejected before intake: exit=%d %s", executeCode, output.String())
 	}
-	description, err := a.DescribeConsumerGroups(ctx, []string{group})
-	if err != nil || len(description.ConsumerGroupDescriptions) != 1 || len(description.ConsumerGroupDescriptions[0].Members) != 0 {
+	description, err := a.DescribeGroups(ctx, group)
+	if err != nil || len(description) != 1 || description.Error() != nil || len(description[group].Members) != 0 {
 		t.Fatal("recreated source joined the group", description, err)
 	}
-	end, err := a.ListOffsets(ctx, map[k.TopicPartition]k.OffsetSpec{{Topic: &dst, Partition: 0}: k.LatestOffsetSpec})
-	info, ok := testOffset(end, dst, 0)
+	end, err := a.ListEndOffsets(ctx, dst)
+	info, ok := end.Lookup(dst, 0)
 	if err != nil || !ok || info.Offset != 1 {
 		t.Fatal("recreated source wrote output", end, err)
 	}
@@ -189,9 +184,9 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 			t.Fatal("excess workers failed to leave independently")
 		}
 	}
-	p := producer(t, nil)
-	publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: []byte("work"), Timestamp: time.Now()})
-	publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: []byte("trigger"), Timestamp: end.Add(time.Second)})
+	p := producer(t)
+	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte("work"), Timestamp: time.Now()})
+	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte("trigger"), Timestamp: end.Add(time.Second)})
 	select {
 	case result := <-results:
 		if result.code != 0 || strings.Contains(result.detail, "local idle exit") {
@@ -201,20 +196,20 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 		t.Fatal("assigned worker waited for exited standbys")
 	}
 	waitMembers(t, a, group, 0, 0, nil)
-	c := consumer(t, dst+"-check")
-	require.NoError(t, c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}))
+	c := consumer(t)
+	assign(t, c, dst, 1)
 	if got := read(t, c); string(got.Value) != "work" {
 		t.Fatal("work lost or trigger published", got)
 	}
 	require.Equal(t, int64(1), topicRecordCount(t, a, dst, 1), "stop trigger escaped the timestamp filter")
 }
 
-func relativeWindows(t *testing.T, parts []k.TopicPartition) map[int32]plan.Window {
+func relativeWindows(t *testing.T, parts []kadm.Offset) map[int32]plan.Window {
 	t.Helper()
 	result := make(map[int32]plan.Window)
 	for _, part := range parts {
-		require.NotNil(t, part.Metadata, "missing commit metadata")
-		progress, err := commitmeta.NewCodec().Decode(*part.Metadata)
+		require.NotEmpty(t, part.Metadata, "missing commit metadata")
+		progress, err := commitmeta.NewCodec().Decode(part.Metadata)
 		if err != nil || progress.Window == nil || progress.Window.Lower == nil || progress.Window.Upper == nil {
 			t.Fatal("relative progress has no concrete window", part, err)
 		}
@@ -242,10 +237,10 @@ func TestConcurrentNowWindowsPersistAcrossWorkersAndRestart(t *testing.T) {
 	}
 	waitMembers(t, a, group, 2, 2, results)
 	before := relativeWindows(t, committedPartitions(t, a, group, src, 2))
-	p := producer(t, nil)
+	p := producer(t)
 	for id := range 2 {
-		publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: int32(id)}, Value: []byte(fmt.Sprintf("work-%d", id)), Timestamp: time.Now()})
-		publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: int32(id)}, Value: []byte("trigger"), Timestamp: time.Now().Add(3 * time.Hour)})
+		publish(t, p, &kgo.Record{Topic: src, Partition: int32(id), Value: []byte(fmt.Sprintf("work-%d", id)), Timestamp: time.Now()})
+		publish(t, p, &kgo.Record{Topic: src, Partition: int32(id), Value: []byte("trigger"), Timestamp: time.Now().Add(3 * time.Hour)})
 	}
 	for range 2 {
 		select {
@@ -262,14 +257,14 @@ func TestConcurrentNowWindowsPersistAcrossWorkersAndRestart(t *testing.T) {
 	execute(t, statement, "")
 	after := relativeWindows(t, committedPartitions(t, a, group, src, 2))
 	require.Equal(t, after, before, "restart changed saved per-partition windows")
-	end, err := a.ListOffsets(ctx, map[k.TopicPartition]k.OffsetSpec{{Topic: &dst, Partition: 0}: k.LatestOffsetSpec})
-	info, ok := testOffset(end, dst, 0)
+	end, err := a.ListEndOffsets(ctx, dst)
+	info, ok := end.Lookup(dst, 0)
 	if err != nil || !ok || info.Offset != 2 {
 		t.Fatal("relative restart lost or recopied records", end, err)
 	}
 	waitMembers(t, a, group, 0, 0, nil)
-	deleted, err := a.DeleteConsumerGroups(ctx, []string{group})
-	if err != nil || len(deleted.ConsumerGroupResults) != 1 || deleted.ConsumerGroupResults[0].Error.Code() != k.ErrNoError {
+	deleted, err := a.DeleteGroups(ctx, group)
+	if err != nil || len(deleted) != 1 || deleted[group].Err != nil {
 		t.Fatal("clear all fixture progress", deleted, err)
 	}
 	// Clearing all progress has the same startup semantics as offset retention expiry.
@@ -305,10 +300,10 @@ func TestMissingTimestampWithoutFilterUsesProducerClockAndCountsIt(t *testing.T)
 	if result.code != 0 || !strings.Contains(result.detail, `"msg":"records received producer timestamps","count":1`) {
 		t.Fatal("producer timestamp was not counted and warned about", result)
 	}
-	c := consumer(t, dst+"-verify")
-	require.NoError(t, c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}))
+	c := consumer(t)
+	assign(t, c, dst, 1)
 	record := read(t, c)
-	if record.Key != nil || record.Value == nil || record.Timestamp.UnixMilli() < before || record.Timestamp.UnixMilli() > time.Now().UnixMilli() || record.TimestampType != k.TimestampCreateTime {
+	if record.Key != nil || record.Value == nil || record.Timestamp.UnixMilli() < before || record.Timestamp.UnixMilli() > time.Now().UnixMilli() || record.Attrs.TimestampType() != 0 {
 		t.Fatal("producer clock or null/empty fidelity failed", record)
 	}
 }
@@ -351,10 +346,10 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
 	group := src + "-crash"
-	p := producer(t, nil)
+	p := producer(t)
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	for i := range 32 {
-		publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Key: []byte("stable"), Value: []byte(fmt.Sprint(i)), Timestamp: stamp})
+		publish(t, p, &kgo.Record{Topic: src, Partition: 0, Key: []byte("stable"), Value: []byte(fmt.Sprint(i)), Timestamp: stamp})
 	}
 	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000'), CONNECTION slow AS ('bootstrap.servers'='%s','linger.ms'='100') INSERT INTO TOPIC '%s@slow' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", broker(t), broker(t), dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), group)
 	cfg := configuration(t, "record_cap=16\npartition_record_cap=16\n")
@@ -371,16 +366,16 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 		t.Fatalf("crash helper: %v %s", err, data)
 	}
 	parts := committedPartitions(t, a, group, src, 1)
-	require.Zero(t, parts[0].Offset, "unprocessed delivery advanced the group")
+	require.Zero(t, parts[0].At, "unprocessed delivery advanced the group")
 	waitMembers(t, a, group, 0, 0, nil)
 	execute(t, statement, cfg)
-	end, err := a.ListOffsets(ctx, map[k.TopicPartition]k.OffsetSpec{{Topic: &dst, Partition: 0}: k.LatestOffsetSpec})
-	info, ok := testOffset(end, dst, 0)
+	end, err := a.ListEndOffsets(ctx, dst)
+	info, ok := end.Lookup(dst, 0)
 	if err != nil || !ok || info.Offset <= 32 || info.Offset > 48 {
 		t.Fatal("crash duplicate exposure exceeded the partition cap", end, err)
 	}
-	c := consumer(t, dst+"-verify")
-	require.NoError(t, c.Assign([]k.TopicPartition{{Topic: &dst, Partition: 0, Offset: 0}}))
+	c := consumer(t)
+	assign(t, c, dst, 1)
 	counts := make(map[string]int)
 	for range int(info.Offset) {
 		record := read(t, c)
@@ -409,12 +404,12 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 	committedPartitions(t, a, group, src, 1)
 	// When retention deletes records while the consumer is stopped.
 	require.NoError(t, process.signal(syscall.SIGSTOP))
-	p := producer(t, nil)
+	p := producer(t)
 	for i := range 10 {
-		publish(t, p, &k.Message{TopicPartition: k.TopicPartition{Topic: &src, Partition: 0}, Value: []byte(fmt.Sprint(i)), Timestamp: time.Now()})
+		publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte(fmt.Sprint(i)), Timestamp: time.Now()})
 	}
-	deleted, err := a.DeleteRecords(ctx, []k.TopicPartition{{Topic: &src, Partition: 0, Offset: 5}})
-	if err != nil || len(deleted.DeleteRecordsResults) != 1 || deleted.DeleteRecordsResults[0].TopicPartition.Error != nil {
+	deleted, err := a.DeleteRecords(ctx, kadm.Offsets{src: {0: {Topic: src, Partition: 0, At: 5}}})
+	if err != nil || deleted.Error() != nil {
 		t.Fatal("delete unread records", deleted, err)
 	}
 	require.NoError(t, process.signal(syscall.SIGCONT))

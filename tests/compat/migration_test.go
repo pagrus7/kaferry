@@ -15,9 +15,10 @@ import (
 	"testing"
 	"time"
 
-	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 // Supply binaries built from the previous and candidate revisions.
@@ -37,9 +38,9 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			// Given an archive and committed Kafka progress created by one binary.
 			admin := admin(t)
 			source := topic(t, admin, 1)
-			producer := producer(t, nil)
+			producer := producer(t)
 			stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
-			publish(t, producer, &k.Message{TopicPartition: k.TopicPartition{Topic: &source, Partition: 0}, Key: []byte{0, 255}, Value: []byte{}, Headers: []k.Header{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, Timestamp: stamp})
+			publish(t, producer, &kgo.Record{Topic: source, Partition: 0, Key: []byte{0, 255}, Value: []byte{}, Headers: []kgo.RecordHeader{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, Timestamp: stamp})
 			archive := filepath.Join(t.TempDir(), "archive.cbor")
 			clone := filepath.Join(t.TempDir(), "clone.cbor")
 			config := configuration(t)
@@ -50,9 +51,9 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 				t.Fatal("invalid archive fixture", before)
 			}
 			progress := committedPartitions(t, admin, source+"-migration", source, 1)[0]
-			require.Equal(t, k.Offset(1), progress.Offset, "first binary did not save progress")
-			require.NotNil(t, progress.Metadata, "missing metadata")
-			format := strings.SplitN(*progress.Metadata, ";", 2)[0]
+			require.Equal(t, int64(1), progress.At, "first binary did not save progress")
+			require.NotEmpty(t, progress.Metadata, "missing metadata")
+			format := strings.SplitN(progress.Metadata, ";", 2)[0]
 			if direction.first == previous {
 				previousFormat = format
 			} else {
@@ -94,17 +95,16 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			}
 			if direction.first == candidate {
 				// Given independently known unsupported Kafka metadata versions with otherwise valid fields.
-				supportedMetadata := *progress.Metadata
+				supportedMetadata := progress.Metadata
 				for _, unsupported := range []string{"kaferry:1", "kaferry:3"} {
 					text := strings.Replace(supportedMetadata, candidateFormat+";", unsupported+";", 1)
-					progress.Metadata = &text
+					progress.Metadata = text
 					ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-					result, err := admin.AlterConsumerGroupOffsets(ctx, []k.ConsumerGroupTopicPartitions{{Group: source + "-migration", Partitions: []k.TopicPartition{progress}}})
+					result, err := admin.CommitOffsets(ctx, source+"-migration", kadm.Offsets{source: {0: progress}})
 					cancel()
 					require.NoError(t, err)
-					require.Len(t, result.ConsumerGroupsTopicPartitions, 1)
-					require.Len(t, result.ConsumerGroupsTopicPartitions[0].Partitions, 1)
-					require.NoError(t, result.ConsumerGroupsTopicPartitions[0].Partitions[0].Error)
+					require.Len(t, result[source], 1)
+					require.NoError(t, result.Error())
 					// When the candidate resumes, then it rejects the version specifically before output changes.
 					runMigrationExpect(t, candidate, sql, config, 2, "unsupported version of commit metadata")
 					require.Equal(t, before, archiveRecords(t, archive))

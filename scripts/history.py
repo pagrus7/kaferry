@@ -55,7 +55,7 @@ def comparison(directory, baseline=Path(".cache/previous")):
         return rows + ["Broker image identities unavailable; no numeric comparison.", ""]
     old = {r["test"]: r for p in baseline.glob("*.metrics.json") for r in [json.loads(p.read_text())]}
     rows += ["| Test / measure | Previous | Current |", "| --- | ---: | ---: |"]
-    settings = ("platform", "client", "librdkafka", "worker_record_cap", "worker_byte_cap", "source_partitions", "destination_partitions", "worker_stop_after_records", "measurement_method")
+    settings = ("platform", "client", "worker_record_cap", "worker_byte_cap", "source_partitions", "destination_partitions", "worker_stop_after_records", "measurement_method", "fixture_client")
     measures = ("records_per_second", "sampled_peak_rss_bytes", "shutdown_seconds")
     for filename in sorted(directory.glob("*.metrics.json")):
         r = json.loads(filename.read_text())
