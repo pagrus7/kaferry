@@ -1,11 +1,13 @@
 package config
 
 import (
-	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestConfiguration(t *testing.T) {
@@ -13,20 +15,20 @@ func TestConfiguration(t *testing.T) {
 	input := "[connections.prod]\n'bootstrap.servers'='prod:9092'\n'sasl.password'='secret'\n[worker]\npartition_record_cap=100\nidle_exit='5s'\n"
 
 	// When
-	c, err := Decode(strings.NewReader(input), "/home/test")
+	c, err := NewLoader(&readerMock{data: []byte(input)}, "/home/test").Load("config.toml")
 
 	// Then
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Connections["prod"]["bootstrap.servers"] != "prod:9092" || c.Worker.PartitionRecordCap != 100 || c.Worker.PartitionByteCap != 16<<20 || c.Worker.IdleExit != "5s" || c.Worker.CheckpointDir == nil || *c.Worker.CheckpointDir != filepath.Join("/home/test", ".kaferry", "checkpoints") {
-		t.Fatalf("incorrect config defaults or overrides: %+v", c.Worker)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "prod:9092", c.Connections["prod"]["bootstrap.servers"])
+	require.EqualValues(t, 100, c.Worker.PartitionRecordCap)
+	require.Equal(t, int64(16<<20), c.Worker.PartitionByteCap)
+	require.Equal(t, "5s", c.Worker.IdleExit)
+	require.NotNil(t, c.Worker.CheckpointDir)
+	require.Equal(t, filepath.Join("/home/test", ".kaferry", "checkpoints"), *c.Worker.CheckpointDir)
 	for _, input := range []string{"unknown=1", "[worker]\nrecord_cap=0", "[worker]\nidle_exit='0s'", "[worker]\ncheckpoint_dir=''", "[worker]\nunknown=3", "[connections.prod]\n'sasl.password'= 'unique-secret' trailing", "[connections.prod]\n'bootstrap.servers'=123"} {
-		_, err := Decode(strings.NewReader(input), "/home/test")
-		if err == nil || strings.Contains(err.Error(), "unique-secret") {
-			t.Errorf("invalid or unsafe diagnostic: %v", err)
-		}
+		_, err := NewLoader(&readerMock{data: []byte(input)}, "/home/test").Load("config.toml")
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), "unique-secret")
 	}
 }
 
@@ -49,17 +51,16 @@ func TestLoaderUsesInjectedReaderAndAvoidsReadsForDefaults(t *testing.T) {
 	_, loadErr := loader.Load("")
 
 	// Then
-	if loadErr != nil || len(files.paths) != 0 {
-		t.Fatal("defaults unexpectedly read a file", loadErr)
-	}
+	require.NoError(t, loadErr)
+	require.Len(t, files.paths, 0)
 	cfg, err := loader.Load("chosen.toml")
-	if err != nil || cfg.Worker.RecordCap != 17 || len(files.paths) != 1 || files.paths[0] != "chosen.toml" {
-		t.Fatal("reader boundary failed", cfg.Worker, files.paths, err)
-	}
+	require.NoError(t, err)
+	require.EqualValues(t, 17, cfg.Worker.RecordCap)
+	require.Len(t, files.paths, 1)
+	require.Equal(t, "chosen.toml", files.paths[0])
 	files.err = io.ErrUnexpectedEOF
-	if _, err := loader.Load("chosen.toml"); !errors.Is(err, files.err) {
-		t.Fatal("read failure lost", err)
-	}
+	_, err = loader.Load("chosen.toml")
+	require.ErrorIs(t, err, files.err)
 }
 
 func TestDeliveryTimeoutFitsNativeMillisecondRange(t *testing.T) {
@@ -79,9 +80,7 @@ func TestDeliveryTimeoutFitsNativeMillisecondRange(t *testing.T) {
 			err := worker.Validate()
 
 			// Then positive sub-millisecond and overflowing deadlines fail.
-			if (err == nil) != scenario.valid {
-				t.Fatal("incorrect timeout validation", err)
-			}
+			require.Equal(t, scenario.valid, (err == nil))
 		})
 	}
 }
@@ -97,20 +96,16 @@ func TestLoaderDefersDefaultCheckpointDirectoryWithoutHome(t *testing.T) {
 
 			// Then omitted defaults stay unresolved; explicit empty settings fail.
 			if strings.Contains(input, "checkpoint_dir=''") {
-				if err == nil || !strings.Contains(err.Error(), "worker.checkpoint_dir must not be empty") {
-					t.Fatal("explicit empty directory accepted", err)
-				}
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "worker.checkpoint_dir must not be empty")
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			if strings.Contains(input, "checkpoint_dir") {
-				if cfg.Worker.CheckpointDir == nil || *cfg.Worker.CheckpointDir != "/chosen/checkpoints" {
-					t.Fatal("explicit directory lost")
-				}
-			} else if cfg.Worker.CheckpointDir != nil {
-				t.Fatalf("default resolved prematurely: %q", *cfg.Worker.CheckpointDir)
+				require.NotNil(t, cfg.Worker.CheckpointDir)
+				require.Equal(t, "/chosen/checkpoints", *cfg.Worker.CheckpointDir)
+			} else {
+				require.Nil(t, cfg.Worker.CheckpointDir)
 			}
 		})
 	}
@@ -130,14 +125,76 @@ func TestObservabilityDefaultsAndOverrides(t *testing.T) {
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			// Given TOML controlling metrics independently from progress logs.
-			cfg, err := Decode(strings.NewReader(tc.input), "home")
+			cfg, err := NewLoader(&readerMock{data: []byte(tc.input)}, "home").Load("config.toml")
 			// When loading, then defaults are safe and unsupported or negative settings fail.
-			if (err == nil) != tc.valid {
-				t.Fatal(cfg, err)
-			}
-			if tc.valid && (cfg.Metrics.Enabled != tc.enabled || cfg.Worker.ProgressInterval != tc.interval) {
-				t.Fatal(cfg)
+			require.Equal(t, tc.valid, (err == nil))
+			if tc.valid {
+				require.Equal(t, tc.enabled, cfg.Metrics.Enabled)
+				require.Equal(t, tc.interval, cfg.Worker.ProgressInterval)
 			}
 		})
+	}
+}
+
+func TestLoaderEnforcesConfigurationSizeAtTheReadBoundary(t *testing.T) {
+	for _, size := range []int{1 << 20, (1 << 20) + 1} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			// Given valid TOML padded with a comment to the file size limit.
+			content := "[worker]\nrecord_cap=17\n#"
+			files := &readerMock{data: []byte(content + strings.Repeat("x", size-len(content)))}
+			// When loading through the injected file boundary.
+			cfg, err := NewLoader(files, "home").Load("config.toml")
+			// Then exactly 1 MiB is accepted and one extra byte is rejected.
+			require.Equal(t, []string{"config.toml"}, files.paths)
+			if size > 1<<20 {
+				require.EqualError(t, err, "configuration exceeds 1 MiB")
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 17, cfg.Worker.RecordCap)
+			}
+		})
+	}
+}
+
+func TestWorkerFrameSizeBoundaries(t *testing.T) {
+	for _, size := range []int64{0, 1, 4294967295, 4294967296} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			// Given a frame size at each representable boundary.
+			worker := Defaults("home").Worker
+			worker.MaxFrameBytes = size
+			// When validating the worker.
+			err := worker.Validate()
+			// Then only positive values that fit the frame length are accepted.
+			if size == 0 || size > 4294967295 {
+				require.EqualError(t, err, "worker.max_frame_bytes must be between 1 and 4294967295 bytes")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestWorkerCapsMustEachBePositive(t *testing.T) {
+	for _, setting := range []string{"partition_record_cap", "partition_byte_cap", "record_cap", "byte_cap"} {
+		for _, value := range []int64{0, -1} {
+			t.Run(fmt.Sprintf("%s=%d", setting, value), func(t *testing.T) {
+				// Given one invalid cap and valid defaults for all other settings.
+				worker := Defaults("home").Worker
+				switch setting {
+				case "partition_record_cap":
+					worker.PartitionRecordCap = int(value)
+				case "partition_byte_cap":
+					worker.PartitionByteCap = value
+				case "record_cap":
+					worker.RecordCap = int(value)
+				case "byte_cap":
+					worker.ByteCap = value
+				}
+				// When validating the worker.
+				err := worker.Validate()
+				// Then each cap is independently required to be positive.
+				require.EqualError(t, err, "worker record and byte caps must be positive")
+			})
+		}
 	}
 }
