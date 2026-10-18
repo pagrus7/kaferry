@@ -16,7 +16,7 @@ class ReviewCoverageTest(unittest.TestCase):
     def test_production_collection_accepts_matching_evidence_and_rejects_substitutes(self):
         # Given actual ZIP/profile shapes and the API responses for their reviewed source.
         base, head, tested = 'a' * 40, 'b' * 40, 'c' * 40
-        for fault in (None, 'digest', 'tree', 'dirty', 'identity', 'patch'):
+        for fault in (None, 'digest', 'tree', 'dirty', 'identity', 'patch', 'codecov', 'sessions', 'compare'):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
                 artifacts, archives = [], {}
                 for index, (name, label, hits) in enumerate([('checks-fast', 'unit', 3), ('checks-kafka', 'integration', 0)]):
@@ -44,9 +44,9 @@ class ReviewCoverageTest(unittest.TestCase):
                         return 'internal/a.go'
                     return '@@ -10,3 +10,3 @@\n'
 
-                codecov = {'commitid': head, 'state': 'complete', 'totals': {'sessions': 2},
+                codecov = {'commitid': head, 'state': 'pending' if fault == 'codecov' else 'complete', 'totals': {'sessions': 1 if fault == 'sessions' else 2},
                            'report': {'files': [{'name': 'internal/a.go', 'line_coverage': [[10, 0], [12, 1]]}]}}
-                comparison = {'base_commit': base, 'head_commit': head,
+                comparison = {'base_commit': 'wrong' if fault == 'compare' else base, 'head_commit': head,
                               'totals': {'patch': {'misses': 0 if fault == 'patch' else 1, 'partials': 0}}}
                 responses = [io.BytesIO(json.dumps(value).encode()) for value in (codecov, comparison)]
                 with patch('review_coverage.git', side_effect=git), patch('review_coverage.github', side_effect=api), \
