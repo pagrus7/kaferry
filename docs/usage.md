@@ -32,7 +32,7 @@ OPTIONS (GROUP = 'orders-archive', START = EARLIEST);
 SQL
 ```
 
-Press Ctrl+C to stop archiving before restoring. Before file input, create its checkpoint directory:
+Press Ctrl+C to stop archiving before restoring. File input needs a checkpoint directory:
 
 ```sh
 mkdir -p ~/.kaferry/checkpoints
@@ -80,4 +80,4 @@ export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT='https://collector.example/v1/metrics
 kaferry run -c connections.toml -f copy.sql
 ```
 
-Progress logs run every 30 s; `worker.progress_interval='0'` disables them. [Metric meanings and settings](../design/decisions.md#observability).
+Progress logs default to 30 s; `worker.progress_interval='0'` disables them. [Metric meanings and settings](../design/decisions.md#observability).
