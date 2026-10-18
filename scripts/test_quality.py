@@ -45,6 +45,28 @@ class CoverageTest(unittest.TestCase):
             # When comparing results, then no numeric comparison is offered.
             self.assertIn("differ; no numeric comparison", "\n".join(comparison(current, previous)))
 
+    def test_history_compares_only_equal_record_limits(self):
+        # Given otherwise identical load measurements with different record limits.
+        with tempfile.TemporaryDirectory() as name:
+            current, previous = Path(name) / "current", Path(name) / "previous"
+            environment = {"go": "go1.26.9", "system": "Linux", "machine": "x86_64",
+                           "broker_images": [{"ID": "same"}]}
+            for root in (current, previous):
+                root.mkdir()
+                (root / "load.environment.json").write_text(json.dumps(environment))
+            (previous / "baseline.json").write_text(json.dumps({"suite": "load", "url": "run", "headSha": "abc"}))
+            measurement = {"test": "limited copy", "passed": True, "skipped": False,
+                           "record_limit": 10, "records_per_second": 100}
+            (previous / "load.metrics.json").write_text(json.dumps(measurement))
+            for limit in (20, 10):
+                with self.subTest(limit=limit):
+                    (current / "load.metrics.json").write_text(json.dumps({**measurement, "record_limit": limit}))
+                    # When comparing the same scenario with a changed or matching cap.
+                    result = "\n".join(comparison(current, previous))
+                    # Then suppress numbers only when the workload's cap differs.
+                    self.assertEqual("Settings differ" in result, limit != 10)
+                    self.assertEqual("records_per_second" in result, limit == 10)
+
 
 if __name__ == "__main__":
     unittest.main()

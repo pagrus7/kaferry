@@ -32,13 +32,15 @@ func (r *Runner) interrupted() error {
 	if err != nil {
 		return err
 	}
-	if r.bounded() {
+	if r.bounded() && !r.limitReached() {
 		return fmt.Errorf("bounded copy interrupted before completion")
 	}
 	return nil
 }
 
-func (r *Runner) bounded() bool { return r.plan.Source.Kind == "FILE" || r.plan.Window.Upper != nil }
+func (r *Runner) bounded() bool {
+	return r.plan.Limit > 0 || r.plan.Source.Kind == "FILE" || r.plan.Window.Upper != nil
+}
 
 func (r *Runner) readyToExit() bool {
 	if r.deferred != nil || r.pending != nil {

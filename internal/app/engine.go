@@ -130,7 +130,7 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 	if err := e.runner.New(source, sink, store, p, limits, stop, observer).Run(ctx); err != nil {
 		return err
 	}
-	if p.OneOff && input != nil {
+	if p.OneOff && input != nil && p.Limit == 0 {
 		stop.Begin()
 		stop.Stage("deleting one-off checkpoint")
 		return input.DeleteCheckpoint()

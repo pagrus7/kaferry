@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"strconv"
 
 	"github.com/pagrus7/kaferry/internal/sql"
 )
@@ -57,6 +58,7 @@ type Plan struct {
 	Start       string
 	Window      WindowSpec
 	CutoffMS    int64
+	Limit       uint64
 	Policies    Policies
 }
 
@@ -77,6 +79,12 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 	plan.Window, err = normalize(statement.Bounds)
 	if err != nil {
 		return Plan{}, sql.At(statement.WherePosition, err)
+	}
+	if statement.Limit != "" {
+		plan.Limit, err = strconv.ParseUint(statement.Limit, 10, 64)
+		if err != nil || plan.Limit == 0 || plan.Limit > 1<<53 {
+			return Plan{}, sql.At(statement.LimitPosition, fmt.Errorf("LIMIT must be an integer from 1 to 9007199254740992"))
+		}
 	}
 	if err = plan.options(statement.Options, statement.OptionsPosition); err != nil {
 		return Plan{}, err

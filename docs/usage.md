@@ -2,7 +2,7 @@
 
 ## Configuration
 
-Load TOML with `-c connections.toml`. SQL overrides TOML; topics without `@alias` use `default`. [Connection setup](../README.md#connections) · [Worker settings](../design/decisions.md#configuration-and-cli).
+Use `-c connections.toml`; SQL overrides TOML. [Connections](../README.md#connections) · [Settings](../design/decisions.md#configuration-and-cli).
 
 ## Permissions
 
@@ -15,7 +15,7 @@ kaferry explain -c connections.toml -f copy.sql
 kaferry explain -c connections.toml -f copy.sql --json
 ```
 
-Shows endpoints, progress, windows and policies without joining, writing or locking. JSON lists every partition. Records, bytes, duration and write access are not checked. Fresh `NOW()` resolves again when run. [Output contract](../design/decisions.md#inspection).
+Shows endpoints, progress, windows and policies without joining, writing or locking. Records, bytes, duration and write access are not checked. [Output contract](../design/decisions.md#inspection).
 
 ## Run a copy
 
@@ -32,7 +32,7 @@ OPTIONS (GROUP = 'orders-archive', START = EARLIEST);
 SQL
 ```
 
-Press Ctrl+C to stop archiving before restoring. File input needs a checkpoint directory:
+Stop archiving with Ctrl+C before restoring. Create the checkpoint directory:
 
 ```sh
 mkdir -p ~/.kaferry/checkpoints
@@ -40,7 +40,9 @@ kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM FILE cbor('archive/orders.cbor') OPTIONS (GROUP = 'orders-restore');"
 ```
 
-Kafka input needs `WHERE` or `START`: `EARLIEST` for retained records or `LATEST` for new ones. Saved progress takes precedence. File input reads up to its opening size. [Examples](../design/grammar.md#valid-examples).
+Kafka needs `WHERE` or `START`: `EARLIEST` for retained records, `LATEST` for new ones. Saved progress takes precedence. Files read to their opening size. [Examples](../design/grammar.md#valid-examples).
+
+`LIMIT 100` before `OPTIONS` sends at most 100 records per worker run. Filtered and skipped records do not count; reruns get a fresh cap. [Details](../design/decisions.md#record-limit).
 
 ## Stop and check results
 
@@ -60,7 +62,7 @@ Keep output, checkpoints and locks; losing them requires a new group/output. [Re
 
 ## Errors
 
-Errors stop the copy by default. `ON_ERROR = SKIP` drops identified records rejected before sending; broker rejections cannot be skipped. Add it and rerun for skippable errors; skips appear in `copy summary`. [Policies](../design/decisions.md#errors) · [SQL errors](../design/grammar.md#invalid-examples).
+Errors stop the copy. `ON_ERROR = SKIP` drops identified records rejected before sending; broker rejections cannot be skipped. Counts appear in `copy summary`. [Policies](../design/decisions.md#errors) · [SQL errors](../design/grammar.md#invalid-examples).
 
 ## Workers
 

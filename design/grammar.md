@@ -12,7 +12,7 @@ Syntax reference. See [copy behavior](decisions.md) for completion and restart r
 ## EBNF
 
 ```ebnf
-statement   = [ connections ] insert select [ where ] options [ ";" ] ;
+statement   = [ connections ] insert select [ where ] [ limit ] options [ ";" ] ;
 
 connections = "WITH" connection { "," connection } ;
 connection  = "CONNECTION" alias "AS" "(" property { "," property } ")" ;
@@ -32,6 +32,7 @@ time        = instant { ( "+" | "-" ) interval } ;
 instant     = "TIMESTAMP" string | "NOW" "(" ")" ;
 interval    = "INTERVAL" string unit ;             (* non-negative integer; DAY = 86,400 s *)
 unit        = "SECOND" | "MINUTE" | "HOUR" | "DAY" ;
+limit       = "LIMIT" integer ;                    (* unquoted positive decimal integer *)
 
 options     = "OPTIONS" "(" option { "," option } ")" ;
 option      = "GROUP" "=" ( string | "ONE_OFF" )
@@ -49,6 +50,7 @@ Planning or startup enforces:
 - `GROUP` is required and must not be blank. Options, inline connection aliases and a connection's properties cannot repeat. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name; unquoted `ONE_OFF` generates one.
 - A topic source needs exactly one of `WHERE` and `START`; a file source takes no `START`.
 - `ON_ERROR` cannot be combined with any specific error policy.
+- `LIMIT` is from 1 to 9,007,199,254,740,992; it caps accepted writes per worker per invocation, not records read or a shared group total.
 - `CUTOFF` requires a topic source with an upper bound. `ON_REJECTED_TIMESTAMP` requires a topic destination; `ON_MISSING_TIMESTAMP` a `WHERE` clause.
 - At most one lower and one upper bound. Timestamps are RFC 3339 with `Z` or an explicit offset and at most millisecond precision. The normalized `[lo, hi)` must be non-empty.
 - Reject a destination that is the source: the same file (including path aliases), or, at startup, the same Kafka cluster ID and topic.
@@ -110,6 +112,15 @@ SELECT * FROM TOPIC 'clicks@prod'
 WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR
   AND RECORD_TIMESTAMP <  NOW()
 OPTIONS (GROUP = 'clicks-backfill-1', CUTOFF = INTERVAL '5' MINUTE, ON_ERROR = SKIP);
+```
+
+Topic→topic, sample at most 100 records with a fresh group:
+
+```sql
+INSERT INTO TOPIC 'orders@staging'
+SELECT * FROM TOPIC 'orders@prod'
+LIMIT 100
+OPTIONS (GROUP = ONE_OFF, START = EARLIEST);
 ```
 
 ## Invalid examples

@@ -134,6 +134,10 @@ func (p *parser) statement() Statement {
 		p.next()
 		s.Bounds = p.bounds()
 	}
+	if p.take("LIMIT") {
+		s.LimitPosition = p.current.Position
+		s.Limit = p.text("integer")
+	}
 	s.OptionsPosition = p.current.Position
 	p.expect("OPTIONS")
 	p.expect("(")

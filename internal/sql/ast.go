@@ -54,10 +54,12 @@ type Option struct {
 type Statement struct {
 	OptionsPosition Position `json:"-"`
 	WherePosition   Position `json:"-"`
+	LimitPosition   Position `json:"-"`
 	Connections     []Connection
 	Source          Endpoint
 	Destination     Endpoint
 	Bounds          []Bound
+	Limit           string
 	Options         []Option
 }
 

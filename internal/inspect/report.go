@@ -9,6 +9,7 @@ type Report struct {
 	Group        string        `json:"group"`
 	OneOff       bool          `json:"one_off"`
 	CutoffMS     int64         `json:"cutoff_ms"`
+	Limit        uint64        `json:"limit,omitempty"`
 	Source       Endpoint      `json:"source"`
 	Destination  Endpoint      `json:"destination"`
 	Partitions   []Partition   `json:"partitions"`

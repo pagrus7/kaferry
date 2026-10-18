@@ -23,6 +23,32 @@ import (
 
 type filePreviewFixture struct{ query, config, directory, destination string }
 
+func TestExplainShowsPerInvocationLimit(t *testing.T) {
+	// Given a limited file copy with no output or checkpoint.
+	fixture := filePreview(t)
+	query := strings.Replace(fixture.query, "OPTIONS", "LIMIT 5 OPTIONS", 1)
+	for _, asJSON := range []bool{false, true} {
+		args := []string{"explain", "-e", query, "-c", fixture.config}
+		if asJSON {
+			args = append(args, "--json")
+		}
+		var stdout, stderr bytes.Buffer
+		// When previewing the statement.
+		code := Execute(t.Context(), args, nil, &stdout, &stderr)
+		// Then both formats show a cap, without estimating the number of source records.
+		require.Zero(t, code, stderr.String())
+		if asJSON {
+			var report inspect.Report
+			require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
+			require.EqualValues(t, 5, report.Limit)
+		} else {
+			require.Contains(t, stdout.String(), "Limit: at most 5 records per worker this run. Resuming gets a fresh limit.")
+		}
+		_, err := os.Stat(fixture.destination)
+		require.ErrorIs(t, err, os.ErrNotExist, "preview must not create the output")
+	}
+}
+
 func filePreview(t *testing.T) filePreviewFixture {
 	t.Helper()
 	dir := t.TempDir()

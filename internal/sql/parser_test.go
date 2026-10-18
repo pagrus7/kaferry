@@ -47,7 +47,7 @@ func TestInvalidStatements(t *testing.T) {
 }
 
 func FuzzParse(f *testing.F) {
-	for _, seed := range []string{"", "INSERT INTO FILE cbor('b') SELECT * FROM FILE cbor('a') OPTIONS(GROUP=ONE_OFF)", "/*", "'", "NOW()"} {
+	for _, seed := range []string{"", "INSERT INTO FILE cbor('b') SELECT * FROM FILE cbor('a') OPTIONS(GROUP=ONE_OFF)", "/*", "'", "NOW()", "INSERT INTO FILE cbor('b') SELECT * FROM FILE cbor('a') LIMIT 5 OPTIONS(GROUP=ONE_OFF)"} {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, input string) {

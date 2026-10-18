@@ -95,6 +95,14 @@ func (l *lexer) next() (token, error) {
 		}
 		return token{}, At(t.Position, fmt.Errorf("unterminated string literal; close it with a single quote"))
 	}
+	if r >= '0' && r <= '9' {
+		start := l.index - 1
+		for l.index < len(l.input) && l.input[l.index] >= '0' && l.input[l.index] <= '9' {
+			l.advance()
+		}
+		t.kind, t.text = "integer", l.input[start:l.index]
+		return t, nil
+	}
 	if identifierStart(r) {
 		start := l.index - 1
 		for l.index < len(l.input) {
@@ -126,8 +134,6 @@ func characterHint(r rune, position Position) string {
 		return "double quotes are not supported; use ASCII single quotes for strings"
 	case r == '\u2018' || r == '\u2019' || r == '\u201C' || r == '\u201D':
 		return "typographic quotes are not supported; use ASCII single quotes"
-	case r >= '0' && r <= '9':
-		return "numbers must be single-quoted, for example INTERVAL '7' DAY"
 	case !unicode.IsPrint(r):
 		return "unexpected invisible or control character; remove it"
 	default:

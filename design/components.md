@@ -110,7 +110,7 @@ KAFERRY_SOAK_DURATION=30m \
 python3 scripts/ci.py soak make soak
 ```
 
-[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. [Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) run weekly and on manual dispatch. Artifacts retain logs and measurements for 30 days.
+[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. Bounded Kafka-copy and file-copy observability load results appear in the run summary and `checks-kafka` artifact, including throughput, sampled RSS, work caps and logs. [Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) run weekly and on manual dispatch. Artifacts retain logs and measurements for 30 days.
 
 ### Quality indicators
 

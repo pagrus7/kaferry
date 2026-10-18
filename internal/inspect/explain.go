@@ -35,7 +35,7 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 	if err := ctx.Err(); err != nil {
 		return report, err
 	}
-	report = Report{Version: 1, Group: p.Group, OneOff: p.OneOff, CutoffMS: p.CutoffMS, StartRule: p.Start, RecordErrors: ErrorPolicies{p.Policies.MissingTimestamp, p.Policies.RejectedTimestamp, p.Policies.OtherRecord}, Partitions: []Partition{}, Warnings: []string{}}
+	report = Report{Version: 1, Group: p.Group, OneOff: p.OneOff, CutoffMS: p.CutoffMS, Limit: p.Limit, StartRule: p.Start, RecordErrors: ErrorPolicies{p.Policies.MissingTimestamp, p.Policies.RejectedTimestamp, p.Policies.OtherRecord}, Partitions: []Partition{}, Warnings: []string{}}
 	if p.OneOff {
 		report.Group = "ONE_OFF"
 	}
