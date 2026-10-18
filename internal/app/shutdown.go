@@ -28,21 +28,15 @@ type shutdownBudget struct {
 	started   time.Time
 	stage     string
 	timer     *time.Timer
-	done      chan struct{}
+	stopWatch func() bool
 	closed    bool
 	expired   bool
 	terminate func(string)
 }
 
 func newShutdownBudget(ctx context.Context, timeout time.Duration, terminate func(string)) *shutdownBudget {
-	b := &shutdownBudget{timeout: timeout, stage: "starting query", done: make(chan struct{}), terminate: terminate}
-	go func() {
-		select {
-		case <-ctx.Done():
-			b.Begin()
-		case <-b.done:
-		}
-	}()
+	b := &shutdownBudget{timeout: timeout, stage: "starting query", terminate: terminate}
+	b.stopWatch = context.AfterFunc(ctx, b.Begin)
 	return b
 }
 func (b *shutdownBudget) Configure(timeout time.Duration) {
@@ -83,7 +77,7 @@ func (b *shutdownBudget) Done() {
 	if b.timer != nil {
 		b.timer.Stop()
 	}
-	close(b.done)
+	b.stopWatch()
 }
 func forceShutdown(stage string) {
 	// A full stderr pipe must not prevent the exit. Printing is best effort.
