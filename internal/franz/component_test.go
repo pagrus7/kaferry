@@ -14,6 +14,7 @@ import (
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -31,9 +32,7 @@ func componentConnection(t *testing.T, p plan.Plan) (*Factory, kafkaport.Connect
 	t.Helper()
 	factory := componentFactory()
 	connection, err := factory.Open(t.Context(), p.Source)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = connection.Close(context.Background()) })
 	if _, err := connection.ClusterID(t.Context()); err != nil {
 		t.Fatal(err)
@@ -43,9 +42,7 @@ func componentConnection(t *testing.T, p plan.Plan) (*Factory, kafkaport.Connect
 func componentClient(t *testing.T, cluster *kfake.Cluster, options ...kgo.Opt) *kgo.Client {
 	t.Helper()
 	client, err := kgo.NewClient(append([]kgo.Opt{kgo.SeedBrokers(cluster.ListenAddrs()...)}, options...)...)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(client.CloseAllowingRebalance)
 	return client
 }
@@ -70,18 +67,12 @@ func TestConsumerConstructionDoesNotJoinBeforeStartAndCanClose(t *testing.T) {
 	p := componentPlan(t, cluster)
 	factory := componentFactory()
 	connection, err := factory.Open(t.Context(), p.Source)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer connection.Close(context.Background())
 	input, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	source := input.(*Source)
-	if source.topicID == "" {
-		t.Fatal("source constructed without topic identity")
-	}
+	require.NotEqual(t, "", source.topicID, "source constructed without topic identity")
 	client := source.client.(*kgo.Client)
 	closed := false
 	defer func() {
@@ -101,14 +92,13 @@ func TestConsumerConstructionDoesNotJoinBeforeStartAndCanClose(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- source.Close() }()
 	select {
-	case <-done:
+	case err := <-done:
 		closed = true
+		require.NoError(t, err)
 	case <-time.After(3 * time.Second):
 		t.Fatal("close-before-start blocked")
 	}
-	if joins.Load() != 0 {
-		t.Fatal("consumer joined before the output was ready")
-	}
+	require.Zero(t, joins.Load(), "consumer joined before the output was ready")
 }
 
 func TestCorePositioningPrecedesClientOffsetAdjustment(t *testing.T) {
@@ -118,18 +108,14 @@ func TestCorePositioningPrecedesClientOffsetAdjustment(t *testing.T) {
 	producer := componentClient(t, cluster)
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	for n := range 5 {
-		if err := producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Value: []byte(fmt.Sprint(n)), Timestamp: stamp.Add(time.Duration(n) * time.Millisecond)}).FirstErr(); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Value: []byte(fmt.Sprint(n)), Timestamp: stamp.Add(time.Duration(n) * time.Millisecond)}).FirstErr())
 	}
 	p := componentPlan(t, cluster)
 	p.Start = ""
 	p.Window.Lower = &plan.Expression{LiteralMS: stamp.Add(2 * time.Millisecond).UnixMilli()}
 	_, connection := componentConnection(t, p)
 	input, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer input.Close()
 	life := &lifecycleMock{}
 	observer := &saveObserver{}
@@ -141,9 +127,7 @@ func TestCorePositioningPrecedesClientOffsetAdjustment(t *testing.T) {
 	// When the core resolves the assignment before the client's adjust hook runs.
 	for first == nil && ctx.Err() == nil {
 		event, err := input.Poll(20 * time.Millisecond)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		first = event.Input
 	}
 	// Then both the first delivered record and the member's saved initial position are two.
@@ -170,52 +154,38 @@ func TestProductionAdaptersPreserveRawRecordsAndZeroNegativeTimestamps(t *testin
 	producer := componentClient(t, cluster)
 	want := []*kgo.Record{{Topic: "input", Key: nil, Value: nil, Timestamp: time.UnixMilli(0), Headers: []kgo.RecordHeader{{Key: "a\x00b", Value: []byte{}}, {Key: string([]byte{255}), Value: nil}}}, {Topic: "input", Key: []byte{}, Value: []byte{}, Timestamp: time.UnixMilli(-2), Headers: []kgo.RecordHeader{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}}}
 	for _, record := range want {
-		if err := producer.ProduceSync(componentContext(t), record).FirstErr(); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, producer.ProduceSync(componentContext(t), record).FirstErr())
 	}
 	p := componentPlan(t, cluster)
 	p.Start = ""
 	p.Window.Upper = &plan.Expression{LiteralMS: time.Now().Add(-time.Minute).UnixMilli()}
 	factory, sourceConnection := componentConnection(t, p)
 	destination, err := factory.Open(t.Context(), p.Destination)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer destination.Close(context.Background())
 	if _, err = destination.ClusterID(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	limits := config.Defaults("").Worker
 	source, store, err := sourceConnection.Source(t.Context(), p, "fp", limits)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer source.Close()
 	sink, err := destination.Sink(t.Context(), limits)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer sink.Close()
 	// When the actual Source/Committer/Sink run through the shared copy engine.
 	runner := core.NewRunner(source, sink, store, core.RealClock{}, quietLogger(), p, limits, core.NewTracker(), core.NoopStopObserver{}, nil)
-	if err := runner.Run(componentContext(t)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, runner.Run(componentContext(t)))
 	reader := componentClient(t, cluster, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"output": {0: kgo.NewOffset().AtStart()}}))
 	ctx := componentContext(t)
 	var got []*kgo.Record
 	for len(got) < len(want) && ctx.Err() == nil {
 		fetch := reader.PollRecords(ctx, len(want)-len(got))
-		if err := fetch.Err(); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, fetch.Err())
 		got = append(got, fetch.Records()...)
 	}
 	// Then nil/empty bytes, duplicate/raw header names, and timestamps survive unchanged.
-	if len(got) != len(want) {
-		t.Fatal("missing copied records", len(got))
-	}
+	require.Equal(t, len(want), len(got), "missing copied records")
 	for n, record := range got {
 		if !reflect.DeepEqual(record.Key, want[n].Key) || !reflect.DeepEqual(record.Value, want[n].Value) || !reflect.DeepEqual(record.Headers, want[n].Headers) || record.Timestamp.UnixMilli() != want[n].Timestamp.UnixMilli() {
 			t.Fatal("record changed", n, record)

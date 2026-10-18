@@ -13,6 +13,7 @@ import (
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -45,9 +46,7 @@ func TestMetadataRefreshChecksIdentityAndSharesPartitionChanges(t *testing.T) {
 		return response, nil
 	}}
 	i := &Inspector{codec: commitmeta.NewCodec(), client: m, topic: "input", log: quietLogger()}
-	if err := i.Refresh(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, i.Refresh(t.Context()))
 	// When the broker adds a partition, then the inspector updates its shared state.
 	response.Topics[0].Partitions = append(response.Topics[0].Partitions, kmsg.MetadataResponseTopicPartition{Partition: 3})
 	if err := i.Refresh(t.Context()); err != nil || !reflect.DeepEqual(i.parts, []int32{0, 2, 3}) {
@@ -61,14 +60,39 @@ func TestMetadataRefreshChecksIdentityAndSharesPartitionChanges(t *testing.T) {
 }
 
 func TestMetadataRequestsRespectCallerDeadline(t *testing.T) {
-	// Given a broker transport that never answers.
-	m := &metadataMock{request: func(ctx context.Context, _ kmsg.Request) (kmsg.Response, error) { <-ctx.Done(); return nil, ctx.Err() }}
-	i := &Inspector{codec: commitmeta.NewCodec(), client: m, topic: "input", log: quietLogger()}
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	// Given a caller deadline earlier than the inspector's request budget.
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
-	// When its caller expires before the fixed request budget, then the request returns that deadline.
-	if err := i.Refresh(ctx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal("caller deadline ignored", err)
+	deadline, _ := ctx.Deadline()
+	entered := make(chan time.Time, 1)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	m := &metadataMock{request: func(request context.Context, _ kmsg.Request) (kmsg.Response, error) {
+		got, _ := request.Deadline()
+		entered <- got
+		select {
+		case <-request.Done():
+			return nil, request.Err()
+		case <-release:
+			return nil, context.Canceled
+		}
+	}}
+	i := &Inspector{codec: commitmeta.NewCodec(), client: m, topic: "input", log: quietLogger()}
+	result := make(chan error, 1)
+	// When refreshing metadata against a transport that never answers.
+	go func() { result <- i.Refresh(ctx) }()
+	// Then the request inherits the caller's exact deadline and returns promptly.
+	select {
+	case got := <-entered:
+		require.Equal(t, deadline, got)
+	case <-time.After(time.Second):
+		t.Fatal("metadata request did not start")
+	}
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(time.Second):
+		t.Fatal("caller deadline did not release metadata request")
 	}
 }
 
@@ -113,7 +137,7 @@ func TestOffsetLookupRejectsIncompleteAndFailedPartitions(t *testing.T) {
 }
 
 func TestSavedProgressRequiresEveryPartitionAndExactMetadata(t *testing.T) {
-	for _, mode := range []string{"valid", "absent", "missing result", "foreign metadata", "partition error"} {
+	for _, mode := range []string{"valid", "absent", "missing result", "foreign metadata", "nil metadata", "partition error"} {
 		t.Run(mode, func(t *testing.T) {
 			// Given current source partitions and progress encoded with the shared released format.
 			id := [16]byte{1}
@@ -126,6 +150,8 @@ func TestSavedProgressRequiresEveryPartitionAndExactMetadata(t *testing.T) {
 				delete(parts, 2)
 			case "foreign metadata":
 				metadata = "foreign"
+			case "nil metadata":
+				parts[0] = kmsg.OffsetFetchResponseTopicPartition{Partition: 0, Offset: 42}
 			case "partition error":
 				p := parts[2]
 				p.ErrorCode = kerr.TopicAuthorizationFailed.Code
@@ -135,8 +161,12 @@ func TestSavedProgressRequiresEveryPartitionAndExactMetadata(t *testing.T) {
 			// When decoding the assignment's saved starts, then only absent commits permit a fresh start.
 			positions, progress, err := i.decodeSaved(parts, "fp", plan.WindowSpec{}, 0)
 			valid := mode == "valid" || mode == "absent"
-			if (err == nil) != valid {
-				t.Fatal("invalid saved-position decision", err)
+			require.Equal(t, valid, (err == nil), "invalid saved-position decision")
+			if mode == "nil metadata" {
+				var conflict *kafkaport.Conflict
+				require.ErrorAs(t, err, &conflict)
+				require.Nil(t, positions)
+				require.Nil(t, progress)
 			}
 			if mode == "valid" && (positions[0] != 42 || encodeMetadata(progress[0]) != metadata) {
 				t.Fatal("progress changed", positions, progress)

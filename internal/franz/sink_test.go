@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/commitmeta"
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -51,18 +54,17 @@ func TestProducerHeadroomCoversPromiseBeforeClientUnbuffering(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	optionsClient, err := kgo.NewClient(append(s.settings.producerOptions(), kgo.WithContext(ctx))...)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer optionsClient.Close()
 	p := &delayedUnbufferingProducer{maxRecords: optionsClient.OptValue(kgo.MaxBufferedRecords).(int64), maxBytes: optionsClient.OptValue(kgo.MaxBufferedBytes).(int64)}
 	s.client = p
 	r := core.Record{Value: make([]byte, 512)}
-	if err := s.Submit(r, core.Token{}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.Submit(r, core.Token{}))
 	callback := p.promises[0]
 	promiseReturned, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var released sync.Once
+	releasePromise := func() { released.Do(func() { close(release) }) }
+	t.Cleanup(releasePromise)
 	go func() {
 		callback(nil, nil)
 		close(promiseReturned)
@@ -71,20 +73,15 @@ func TestProducerHeadroomCoversPromiseBeforeClientUnbuffering(t *testing.T) {
 		p.bytes.Add(-512)
 		close(done)
 	}()
-	<-promiseReturned
+	await(t, promiseReturned, "producer promise")
 	// When the core submits in that transition window, then reserved headroom prevents ErrMaxBuffered.
-	if err := s.Submit(r, core.Token{}); err != nil {
-		close(release)
-		t.Fatal(err)
-	}
-	close(release)
-	<-done
-	if len(p.promises) != 2 {
-		t.Fatal("client rejected correctly admitted record")
-	}
+	require.NoError(t, s.Submit(r, core.Token{}))
+	releasePromise()
+	await(t, done, "producer unbuffering")
+	require.Len(t, p.promises, 2, "client rejected correctly admitted record")
 	p.promises[1](nil, nil)
 	for range 2 {
-		if report := <-s.Deliveries(); report.Err != nil {
+		if report := receiveDelivery(t, s); report.Err != nil {
 			t.Fatal("buffer race failed a write", report.Err)
 		}
 	}
@@ -121,9 +118,7 @@ func TestSinkGatesWorkAndUsesSubmissionTimeForDelivery(t *testing.T) {
 	r := core.Record{Key: []byte{}, Value: nil, TimestampMS: &stamp, Headers: []core.Header{{Name: "a\x00b", Value: nil}, {Name: string([]byte{255}), Value: []byte{}}}}
 	token := core.Token{Partition: 2}
 	before := time.Now()
-	if err := s.Submit(r, token); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.Submit(r, token))
 	after := time.Now()
 	// When another record arrives before the first delivery, then it returns Busy without calling the client.
 	var busy *core.Busy
@@ -141,13 +136,11 @@ func TestSinkGatesWorkAndUsesSubmissionTimeForDelivery(t *testing.T) {
 	// When delivery fails, then it settles that token without a global Fatal report or retained capacity.
 	failure := context.DeadlineExceeded
 	client.callbacks[0](got, failure)
-	report := <-s.Deliveries()
+	report := receiveDelivery(t, s)
 	if report.Token != token || !errors.Is(report.Err, failure) || report.Fatal || s.records.Load() != 0 || s.bytes.Load() != 0 {
 		t.Fatal("write failure did not settle its work", report)
 	}
-	if err := s.Submit(r, token); err != nil {
-		t.Fatal("completed work retained producer capacity", err)
-	}
+	require.NoError(t, s.Submit(r, token), "completed work retained producer capacity")
 }
 func TestSinkRejectsOnlyProvenUnsentRecords(t *testing.T) {
 	// Given a producer with a small size bound and known timestamp acceptance limits.
@@ -168,12 +161,8 @@ func TestSinkRejectsOnlyProvenUnsentRecords(t *testing.T) {
 func TestSinkCloseDoesNotWaitForUndrainedDeliveryReports(t *testing.T) {
 	// Given a pending write, a coalesced flush, and a delivery channel the core has not read.
 	s, client := sinkFixture(t)
-	if err := s.Submit(core.Record{}, core.Token{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Flush(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.Submit(core.Record{}, core.Token{}))
+	require.NoError(t, s.Flush())
 	// When closing, then cancellation releases the flush and callback without needing the core to drain reports.
 	done := make(chan struct{})
 	go func() { s.Close(); close(done) }()
@@ -203,9 +192,7 @@ func TestSinkRefreshesRoutingOnIntervalWithoutBlockingOnMetadataFailure(t *testi
 	count, calls := 1, 0
 	var failure error
 	client := &metadataMock{request: func(_ context.Context, r kmsg.Request) (kmsg.Response, error) {
-		if *r.(*kmsg.MetadataRequest).Topics[0].Topic != "output" {
-			t.Fatal("refreshed the wrong topic")
-		}
+		require.Equal(t, "output", *r.(*kmsg.MetadataRequest).Topics[0].Topic, "refreshed the wrong topic")
 		calls++
 		if failure != nil {
 			return nil, failure
@@ -229,9 +216,7 @@ func TestSinkRefreshesRoutingOnIntervalWithoutBlockingOnMetadataFailure(t *testi
 		clock.now = start.Add(time.Duration(step.seconds) * time.Second)
 		count, failure = step.partitions, step.failure
 		// When records arrive before and after each refresh interval, including an outage.
-		if err := s.Submit(core.Record{}, core.Token{}); err != nil {
-			t.Fatal("optional metadata check prevented publishing", err)
-		}
+		require.NoError(t, s.Submit(core.Record{}, core.Token{}), "optional metadata check prevented publishing")
 		n := len(producer.records) - 1
 		producer.callbacks[n](producer.records[n], nil)
 		// Then refreshes stay throttled and remember only successfully read partition counts.
@@ -240,14 +225,93 @@ func TestSinkRefreshesRoutingOnIntervalWithoutBlockingOnMetadataFailure(t *testi
 		}
 		select {
 		case report := <-s.Deliveries():
-			if report.Err != nil {
-				t.Fatal("delivery failed", report.Err)
-			}
+			require.NoError(t, report.Err, "delivery failed")
 		default:
 			t.Fatal("delivery outcome missing")
 		}
 	}
 	if strings.Count(logs.String(), "destination partition count changed;") != 1 || strings.Count(logs.String(), "destination partition count check failed") != 1 {
 		t.Fatal("routing change or metadata failure was not logged once", logs.String())
+	}
+}
+
+func TestSinkByteQueueCapReleasesAfterDelivery(t *testing.T) {
+	// Given room for three records but only one 600-byte value within the byte queue.
+	s, client := sinkFixture(t)
+	s.settings.queueRecords, s.settings.queueBytes = 3, 1024
+	r := core.Record{Value: make([]byte, 600)}
+	require.NoError(t, s.Submit(r, core.Token{}))
+	// When another value exceeds the byte allowance, then admission waits without touching the producer.
+	var busy *core.Busy
+	require.ErrorAs(t, s.Submit(r, core.Token{}), &busy)
+	require.Len(t, client.records, 1)
+	require.Equal(t, int64(1), s.records.Load())
+	require.Equal(t, r.Size(), s.bytes.Load())
+	// When delivery releases the first value, then retry admits the second value.
+	client.callbacks[0](client.records[0], nil)
+	require.NoError(t, receiveDelivery(t, s).Err)
+	require.NoError(t, s.Submit(r, core.Token{}))
+	require.Len(t, client.records, 2)
+	client.callbacks[1](client.records[1], nil)
+	require.NoError(t, receiveDelivery(t, s).Err)
+	require.Zero(t, s.records.Load())
+	require.Zero(t, s.bytes.Load())
+}
+
+func TestSinkRejectsRecordLargerThanQueueWithoutAdmittingWork(t *testing.T) {
+	// Given a message ceiling above the queue allowance and no pending records.
+	s, client := sinkFixture(t)
+	s.settings.queueRecords, s.settings.queueBytes, s.settings.messageBytes = 3, 1024, 2000
+	// When a record fits the message ceiling but cannot fit the empty queue.
+	err := s.Submit(core.Record{Value: make([]byte, 1025)}, core.Token{})
+	// Then the synchronous validation error leaves client and counters untouched.
+	var rejected *core.RecordError
+	require.ErrorAs(t, err, &rejected)
+	require.Equal(t, "validation", rejected.Class)
+	require.EqualError(t, rejected, "record exceeds producer queue byte limit")
+	require.Empty(t, client.records)
+	require.Zero(t, s.records.Load())
+	require.Zero(t, s.bytes.Load())
+}
+
+func TestSinkUnknownTimestampTypeChecksClientSafeBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		stamp    int64
+		accepted bool
+	}{
+		{-9223372036854, true}, {9223372036854, true},
+		{-9223372036855, false}, {9223372036855, false},
+	} {
+		t.Run(fmt.Sprint(tc.stamp), func(t *testing.T) {
+			// Given an unreadable destination timestamp type and a timestamp near the client's range.
+			s, client := sinkFixture(t)
+			// When submitting, then only the exact safe boundaries reach the producer.
+			err := s.Submit(core.Record{TimestampMS: &tc.stamp}, core.Token{})
+			if tc.accepted {
+				require.NoError(t, err)
+				require.Len(t, client.records, 1)
+				require.Equal(t, tc.stamp, client.records[0].Timestamp.UnixMilli())
+				client.callbacks[0](client.records[0], nil)
+				require.NoError(t, receiveDelivery(t, s).Err)
+			} else {
+				var rejected *core.RecordError
+				require.ErrorAs(t, err, &rejected)
+				require.Equal(t, "rejected_timestamp", rejected.Class)
+				require.Empty(t, client.records)
+				require.Zero(t, s.records.Load())
+				require.Zero(t, s.bytes.Load())
+			}
+		})
+	}
+}
+
+func receiveDelivery(t *testing.T, sink *Sink) core.Delivery {
+	t.Helper()
+	select {
+	case report := <-sink.Deliveries():
+		return report
+	case <-time.After(time.Second):
+		t.Fatal("delivery report did not arrive")
+		return core.Delivery{}
 	}
 }

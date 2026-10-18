@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/config"
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl"
 )
@@ -25,60 +26,42 @@ import (
 func testCA(t *testing.T) (*x509.Certificate, ed25519.PrivateKey, []byte) {
 	t.Helper()
 	public, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "fixture CA"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
 	der, err := x509.CreateCertificate(rand.Reader, ca, ca, public, key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	parsed, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return parsed, key, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 func testCertificate(t *testing.T, ca *x509.Certificate, issuer ed25519.PrivateKey, client bool) (tls.Certificate, []byte, []byte) {
 	t.Helper()
 	public, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	usage := x509.ExtKeyUsageServerAuth
 	if client {
 		usage = x509.ExtKeyUsageClientAuth
 	}
 	certificate := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "fixture"}, DNSNames: []string{"localhost"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage}}
 	der, err := x509.CreateCertificate(rand.Reader, certificate, ca, public, issuer)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	encoded, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	certPEM, keyPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded})
 	pair, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return pair, certPEM, keyPEM
 }
 func writeFixture(t *testing.T, directory, name string, data []byte) string {
 	t.Helper()
 	path := filepath.Join(directory, name)
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(path, data, 0600))
 	return path
 }
 func tlsFixture(t *testing.T, certificate tls.Certificate, roots *x509.CertPool) string {
 	t.Helper()
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{certificate}, ClientCAs: roots, ClientAuth: tls.RequireAndVerifyClientCert, MinVersion: tls.VersionTLS12})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	done := make(chan struct{})
 	var workers sync.WaitGroup
 	go func() {
@@ -103,10 +86,18 @@ func tlsFixture(t *testing.T, certificate tls.Certificate, roots *x509.CertPool)
 	return listener.Addr().String()
 }
 func TestTLSHostnameOverrideKeepsTrustAndClientCertificateChecks(t *testing.T) {
-	// Given a local mTLS server and separate trusted/untrusted CAs.
+	// Given an mTLS server with a leaf/intermediate chain trusted by its root, and an unrelated root.
 	ca, key, caPEM := testCA(t)
 	_, _, wrongCA := testCA(t)
-	server, _, _ := testCertificate(t, ca, key, false)
+	public, intermediateKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	intermediate := &x509.Certificate{SerialNumber: big.NewInt(3), Subject: pkix.Name{CommonName: "fixture intermediate"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, intermediate, ca, public, key)
+	require.NoError(t, err)
+	intermediate, err = x509.ParseCertificate(der)
+	require.NoError(t, err)
+	server, _, _ := testCertificate(t, intermediate, intermediateKey, false)
+	server.Certificate = append(server.Certificate, der)
 	_, clientPEM, clientKey := testCertificate(t, ca, key, true)
 	roots := x509.NewCertPool()
 	roots.AddCert(ca)
@@ -135,9 +126,7 @@ func TestTLSHostnameOverrideKeepsTrustAndClientCertificateChecks(t *testing.T) {
 				settings.certificate, settings.key = "", ""
 			}
 			cfg, err := settings.tlsConfig()
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			cfg.ServerName = tc.host
 			// When performing a real handshake and authenticated application read.
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
@@ -150,9 +139,7 @@ func TestTLSHostnameOverrideKeepsTrustAndClientCertificateChecks(t *testing.T) {
 				_, err = connection.Read(b[:])
 			}
 			// Then disabling hostname matching never disables CA or client-certificate verification.
-			if (err == nil) != tc.want {
-				t.Fatal("incorrect TLS protection", err)
-			}
+			require.Equal(t, tc.want, (err == nil), "incorrect TLS protection")
 		})
 	}
 }
@@ -177,20 +164,14 @@ func TestConnectionOptionsApplyTLSAndSelectedSASLMechanism(t *testing.T) {
 				properties["sasl.mechanism"], properties["sasl.username"], properties["sasl.password"] = tc.mechanism, "user", "password"
 			}
 			s, err := parseSettings(testPlan(t, properties).Source.Properties)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			options, err := s.commonOptions()
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
 			// When applying the production options to the real client without connecting.
 			client, err := kgo.NewClient(append(options, kgo.WithContext(ctx))...)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			defer client.Close()
 			// Then TLS trust and the chosen authentication mechanism reach the client.
 			tlsConfig := client.OptValue(kgo.DialTLSConfig).(*tls.Config)
@@ -203,9 +184,7 @@ func TestConnectionOptionsApplyTLSAndSelectedSASLMechanism(t *testing.T) {
 			}
 			mechanisms := client.OptValue(kgo.SASL).([]sasl.Mechanism)
 			if tc.mechanism == "" {
-				if len(mechanisms) != 0 {
-					t.Fatal("unexpected SASL authentication")
-				}
+				require.Len(t, mechanisms, 0, "unexpected SASL authentication")
 			} else if len(mechanisms) != 1 || mechanisms[0].Name() != tc.mechanism {
 				t.Fatal("wrong SASL mechanism applied")
 			} else {

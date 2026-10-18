@@ -3,11 +3,13 @@ package franz
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/pagrus7/kaferry/internal/commitmeta"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -32,9 +34,7 @@ func TestCommitMetadataUsesTheCapturedDurableFileSnapshot(t *testing.T) {
 	output.extent = 500
 	c.metadata[0] = kafkaport.Progress{Fingerprint: "other"}
 	req := &kmsg.OffsetCommitRequest{Group: "group", MemberID: "member", Generation: 3, Topics: []kmsg.OffsetCommitRequestTopic{{TopicID: id, Partitions: []kmsg.OffsetCommitRequestTopicPartition{{Partition: 0, Offset: 42}}}}}
-	if err := hook(req); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, hook(req))
 	// Then the v10 ID-only request carries the original fsync-confirmed extent and identity.
 	got, err := kafkaport.DecodeProgress(commitmeta.NewCodec(), req.Topics[0].Partitions[0].Metadata, "fp", topicID(id), false)
 	if err != nil || got.FileID != "archive" || got.Extent != 200 {
@@ -101,9 +101,7 @@ func TestCommitterUsesInjectedCodecAndClearsPreviousStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Then encoding receives a cleared stop at the same position.
-	if codec.encoded.Stop != nil {
-		t.Fatal(codec.encoded)
-	}
+	require.Nil(t, codec.encoded.Stop)
 	// When encoding fails, then no commit request can leave the component.
 	codec.failure = errors.New("codec failure")
 	if _, err := c.Save(t.Context(), []core.Cursor{{Position: 7}}); !errors.Is(err, codec.failure) || client.committed != nil {
@@ -113,5 +111,41 @@ func TestCommitterUsesInjectedCodecAndClearsPreviousStop(t *testing.T) {
 	codec.encoded = kafkaport.Progress{}
 	if _, _, err := c.snapshot([]core.Cursor{{Position: 7, Stop: &core.Stop{Reason: "tip", At: 8}}}); err == nil || codec.encoded.Fingerprint != "" {
 		t.Fatal(err, codec.encoded)
+	}
+}
+
+func TestCommitterPreservesEachPartitionResultAlongsideRequestFailure(t *testing.T) {
+	for _, requestError := range []error{nil, kerr.NotCoordinator} {
+		t.Run(fmt.Sprint(requestError), func(t *testing.T) {
+			// Given independently successful, recoverable, terminal and omitted partition results.
+			client := &consumerMock{commitErr: requestError, commitResponse: &kmsg.OffsetCommitResponse{Topics: []kmsg.OffsetCommitResponseTopic{
+				{Topic: "other", Partitions: []kmsg.OffsetCommitResponseTopicPartition{{Partition: 99}}},
+				{Topic: "input", Partitions: []kmsg.OffsetCommitResponseTopicPartition{{Partition: 0}, {Partition: 1, ErrorCode: kerr.RebalanceInProgress.Code}, {Partition: 2, ErrorCode: kerr.TopicAuthorizationFailed.Code}}},
+			}}}
+			metadata := map[int32]kafkaport.Progress{}
+			var cursors []core.Cursor
+			for id := range int32(4) {
+				metadata[id] = kafkaport.Progress{Fingerprint: "fp", TopicID: "id"}
+				cursors = append(cursors, core.Cursor{Partition: id, Position: 42})
+			}
+			committer := &Committer{codec: commitmeta.NewCodec(), client: client, topic: "input", metadata: metadata}
+			// When saving the positions, then request classification does not replace individual outcomes.
+			results, err := committer.Save(t.Context(), cursors)
+			require.ErrorIs(t, err, requestError)
+			if requestError != nil {
+				var retry *core.Recoverable
+				require.ErrorAs(t, err, &retry)
+			}
+			require.Len(t, results, 3)
+			require.Contains(t, results, int32(0))
+			require.NoError(t, results[0])
+			require.ErrorIs(t, results[1], kerr.RebalanceInProgress)
+			var retry *core.Recoverable
+			require.ErrorAs(t, results[1], &retry)
+			require.ErrorIs(t, results[2], kerr.TopicAuthorizationFailed)
+			require.False(t, errors.As(results[2], &retry))
+			require.NotContains(t, results, int32(3))
+			require.NotContains(t, results, int32(99))
+		})
 	}
 }
