@@ -17,6 +17,7 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 		code          int
 	}{
 		{"no progress", "unknown", 5}, {"partial progress", "incomplete", 4}, {"no stop", "incomplete", 4}, {"stopped", "stopped", 0},
+		{"worker threshold", "stopped", 0}, {"mixed stops", "stopped", 0}, {"partial worker stops", "incomplete", 4}, {"active after worker stop", "running", 6},
 		{"active", "running", 6}, {"changed empty group state", "running", 6}, {"rebalance without members", "running", 6},
 		{"foreign member", "unknown", 5}, {"identity conflict while active", "unknown", 5},
 	} {
@@ -29,6 +30,18 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 				source.metadata[id] = kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: int64(id)}}
 			}
 			switch tc.name {
+			case "worker threshold", "active after worker stop", "partial worker stops", "mixed stops":
+				source.metadata[0].Stop.Reason = "worker_record_cap"
+				if tc.name == "mixed stops" {
+					source.metadata[1].Stop.Reason = "timestamp"
+				} else if tc.name == "partial worker stops" {
+					source.metadata[1] = kafkaport.Progress{}
+				} else {
+					source.metadata[1].Stop.Reason = "worker_record_cap"
+				}
+				if tc.name == "active after worker stop" {
+					source.memberships = []kafkaport.Membership{{Idle: false}}
+				}
 			case "no progress":
 				clear(source.positions)
 				clear(source.metadata)
@@ -56,6 +69,11 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.verdict, r.Verdict)
 			require.Equal(t, tc.code, r.ExitCode())
+			if tc.name == "worker threshold" {
+				require.Equal(t, "worker record threshold reached", r.Reason)
+			} else if tc.name == "mixed stops" {
+				require.Equal(t, "timestamp cutoff reached; worker record threshold reached", r.Reason)
+			}
 			require.EqualValues(t, 1, source.closed)
 			require.EqualValues(t, 1, f.connections["output"].closed)
 			require.Empty(t, source.queries)
@@ -97,11 +115,12 @@ func TestStatusPreservesOperationalFailuresAndRejectsOneOff(t *testing.T) {
 }
 func TestFileStatusUsesOpeningSizeNotEOFPosition(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		size    int64
-		verdict string
+		name, reason string
+		size         int64
+		verdict      string
 	}{
-		{"preexisting partial final frame", 150, "stopped"}, {"appended bytes", 151, "incomplete"},
+		{"preexisting partial final frame", "eof", 150, "stopped"}, {"appended bytes", "eof", 151, "incomplete"},
+		{"appended after worker threshold", "worker_record_cap", 151, "stopped"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given a saved EOF before a partial final frame that was already present at open.
@@ -109,7 +128,7 @@ func TestFileStatusUsesOpeningSizeNotEOFPosition(t *testing.T) {
 			p.Source.Kind = "FILE"
 			p.Source.Name = "input.cbor"
 			opening := int64(150)
-			files.source = file.SourceInspection{ArchiveInspection: file.ArchiveInspection{Exists: true, ID: "source", Size: tc.size}, Saved: true, Position: 100, OpeningSize: &opening, Stop: &core.Stop{Reason: "eof", At: 100}}
+			files.source = file.SourceInspection{ArchiveInspection: file.ArchiveInspection{Exists: true, ID: "source", Size: tc.size}, Saved: true, Position: 100, OpeningSize: &opening, Stop: &core.Stop{Reason: tc.reason, At: 100}}
 			// When checking the saved stop against the current file size.
 			r, err := s.Status(t.Context(), p, config.Worker{}, core.NoopStopObserver{})
 			// Then only growth after opening invalidates that saved stop.

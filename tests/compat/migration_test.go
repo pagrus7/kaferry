@@ -26,8 +26,8 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 	require.NotEqual(t, "", previous, "set KAFERRY_PREVIOUS_BINARY for migration checks")
 	candidate := testBinary(t)
 	// Compatibility is declared from wire identifiers, independently of candidate decoding.
-	const candidateFormat = "kaferry:1"
-	const candidateCheckpointVersion = 2
+	const candidateFormat = "kaferry:2"
+	const candidateCheckpointVersion = 3
 	previousFormat := ""
 	previousCheckpointVersion := 0
 	for _, direction := range []struct{ name, first, second string }{
@@ -95,7 +95,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			if direction.first == candidate {
 				// Given independently known unsupported Kafka metadata versions with otherwise valid fields.
 				supportedMetadata := *progress.Metadata
-				for _, unsupported := range []string{"kaferry:0", "kaferry:2"} {
+				for _, unsupported := range []string{"kaferry:1", "kaferry:3"} {
 					text := strings.Replace(supportedMetadata, candidateFormat+";", unsupported+";", 1)
 					progress.Metadata = &text
 					ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)

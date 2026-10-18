@@ -59,7 +59,7 @@ func NewSource(path, fp string, window plan.WindowSpec, codec ArchiveDecoder, ch
 		if err != nil {
 			return nil, conflict("%v", err)
 		}
-		checkpoints.Initialize(Checkpoint{Version: 2, OpeningSize: info.Size(), Fingerprint: fp, SourceID: header.ID, Position: start, Window: resolved})
+		checkpoints.Initialize(Checkpoint{Version: 3, OpeningSize: info.Size(), Fingerprint: fp, SourceID: header.ID, Position: start, Window: resolved})
 	}
 	return &Source{file: f, codec: codec, checkpoints: checkpoints, size: info.Size(), position: position, window: resolved}, nil
 }

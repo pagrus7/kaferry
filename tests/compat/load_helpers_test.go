@@ -4,14 +4,15 @@ package compat
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -79,9 +80,10 @@ func (s *streamRecords) verify(t *testing.T, record *k.Message) {
 	if id%7 == 0 {
 		key = nil
 	}
-	if !bytes.Equal(record.Key, key) || (record.Key == nil) != (key == nil) || len(record.Value) != 1024+id%4096 || !record.Timestamp.Equal(s.stamp) || !reflect.DeepEqual(record.Headers, s.headers) {
-		t.Fatal("logical record changed", id)
-	}
+	require.Equal(t, key, record.Key, "record %d key", id)
+	require.Len(t, record.Value, 1024+id%4096, "record %d value length", id)
+	require.True(t, record.Timestamp.Equal(s.stamp), "record %d timestamp: got %v, want %v", id, record.Timestamp, s.stamp)
+	require.Equal(t, s.headers, record.Headers, "record %d headers", id)
 	wantByte := byte(id % 251)
 	for offset, b := range record.Value[4:] {
 		if b != wantByte {
@@ -124,7 +126,9 @@ func (s *streamRecords) catchUp(t *testing.T, consumer *k.Consumer, reports <-ch
 	s.drainReports(t, reports)
 }
 func rssSample(pid int) (int64, error) {
-	data, err := exec.Command("ps", "-o", "rss=", "-p", strconv.Itoa(pid)).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	data, err := exec.CommandContext(ctx, "ps", "-o", "rss=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return 0, err
 	}
@@ -136,10 +140,14 @@ type rssPeak struct {
 	samples, failures int
 }
 
-func watchRSS(process *cliProcess) func() rssPeak {
+func watchRSS(t *testing.T, process *cliProcess) func() rssPeak {
+	t.Helper()
+	first, err := rssSample(process.pid())
+	require.NoError(t, err, "sample CLI memory before releasing SQL input")
+	require.Positive(t, first, "initial CLI RSS")
 	stop, result := make(chan struct{}), make(chan rssPeak, 1)
 	go func() {
-		var stats rssPeak
+		stats := rssPeak{peak: first, samples: 1}
 		tick := time.NewTicker(50 * time.Millisecond)
 		defer tick.Stop()
 		for {
@@ -158,7 +166,9 @@ func watchRSS(process *cliProcess) func() rssPeak {
 			}
 		}
 	}()
-	return func() rssPeak { close(stop); return <-result }
+	finish := sync.OnceValue(func() rssPeak { close(stop); return <-result })
+	t.Cleanup(func() { finish() })
+	return finish
 }
 func medianRSS(samples []int64) int64 {
 	sorted := append([]int64(nil), samples...)

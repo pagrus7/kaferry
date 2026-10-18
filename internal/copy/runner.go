@@ -120,6 +120,9 @@ func (r *Runner) step(ctx context.Context) (bool, error) {
 	if err := r.advance(); err != nil {
 		return false, err
 	}
+	if r.workerStopReached() {
+		return true, r.finishWorkerStop()
+	}
 	if r.readyToExit() {
 		r.stop.Begin()
 		if len(r.partitions) == 0 {
@@ -153,6 +156,9 @@ func (r *Runner) advance() error {
 	}
 	if err := r.submitPending(); err != nil {
 		return err
+	}
+	if r.workerStopReached() {
+		return nil
 	}
 	return r.tips()
 }
@@ -320,6 +326,9 @@ func (r *Runner) deliveries() error {
 	}
 }
 func (r *Runner) eof(cursor Cursor) error {
+	if r.workerStopReached() {
+		return nil
+	}
 	p := r.partitions[cursor.Partition]
 	if p == nil || p.stop != nil {
 		return nil

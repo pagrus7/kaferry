@@ -80,23 +80,26 @@ func TestLoadObservability(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 				defer cancel()
 				// When the CLI copies, with CPU and resident memory sampled independently.
-				start := time.Now()
-				process := startCLI(t, ctx, binary, statement, "run", "-f", "-", "-c", config)
+				process := launchCLI(t, ctx, binary, "run", "-f", "-", "-c", config)
 				report.cli = process
-				stopSampling := watchRSS(process)
+				report.MeasurementMethod = "sql_release_to_exit"
+				stopSampling := watchRSS(t, process)
+				start := time.Now()
+				require.NoError(t, process.send(statement), "release SQL input")
 				err := process.wait()
 				elapsed := time.Since(start)
 				memory := stopSampling()
 				report.ElapsedSeconds = elapsed.Seconds()
 				report.ChildCPUSeconds = process.cpu().Seconds()
 				report.SampledPeakRSSBytes = memory.peak * 1024
+				report.RSSSamples = memory.samples
 				require.NoError(t, err)
 				summary := summaryFrom(t, process.logs())
 				report.Records = summary.Confirmed
 				report.RecordsPerSecond = float64(report.Records) / elapsed.Seconds()
 				report.PeakUncommittedRecords, report.PeakUncommittedBytes = summary.PeakRecords, summary.PeakBytes
 				// Then telemetry availability changes neither counts, caps nor archive record bytes.
-				if summary.Confirmed != count || summary.Submitted != count || memory.samples == 0 || summary.PeakRecords > 20000 || summary.PeakBytes > 128<<20 {
+				if summary.Confirmed != count || summary.Submitted != count || summary.PeakRecords > 20000 || summary.PeakBytes > 128<<20 {
 					t.Fatal(summary, memory)
 				}
 				data, err := os.ReadFile(output)

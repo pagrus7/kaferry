@@ -45,6 +45,32 @@ class CoverageTest(unittest.TestCase):
             # When comparing results, then no numeric comparison is offered.
             self.assertIn("differ; no numeric comparison", "\n".join(comparison(current, previous)))
 
+    def test_history_compares_only_equal_measurement_settings(self):
+        # Given otherwise identical load measurements with declared timing and record limits.
+        with tempfile.TemporaryDirectory() as name:
+            current, previous = Path(name) / "current", Path(name) / "previous"
+            environment = {"go": "go1.26.9", "system": "Linux", "machine": "x86_64",
+                           "broker_images": [{"ID": "same"}]}
+            for root in (current, previous):
+                root.mkdir()
+                (root / "load.environment.json").write_text(json.dumps(environment))
+            (previous / "baseline.json").write_text(json.dumps({"suite": "load", "url": "run", "headSha": "abc"}))
+            measurement = {"test": "limited copy", "passed": True, "skipped": False,
+                           "worker_stop_after_records": 10, "records_per_second": 100,
+                           "measurement_method": "sql_release_to_exit"}
+            (previous / "load.metrics.json").write_text(json.dumps(measurement))
+            for changes in ({"worker_stop_after_records": 20}, {}, {"measurement_method": None}):
+                with self.subTest(changes=changes):
+                    actual = {**measurement, **changes}
+                    if actual["measurement_method"] is None:
+                        del actual["measurement_method"]  # Legacy reports have no timing method.
+                    (current / "load.metrics.json").write_text(json.dumps(actual))
+                    # When comparing matching settings, a changed cap or legacy timing.
+                    result = "\n".join(comparison(current, previous))
+                    # Then only matching settings allow numeric comparison.
+                    self.assertEqual("Settings differ" in result, bool(changes))
+                    self.assertEqual("records_per_second" in result, not changes)
+
 
 if __name__ == "__main__":
     unittest.main()

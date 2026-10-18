@@ -50,14 +50,15 @@ type Policies struct {
 }
 
 type Plan struct {
-	Source      Endpoint
-	Destination Endpoint
-	Group       string
-	OneOff      bool
-	Start       string
-	Window      WindowSpec
-	CutoffMS    int64
-	Policies    Policies
+	Source                 Endpoint
+	Destination            Endpoint
+	Group                  string
+	OneOff                 bool
+	Start                  string
+	Window                 WindowSpec
+	CutoffMS               int64
+	WorkerStopAfterRecords uint64
+	Policies               Policies
 }
 
 func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error) {

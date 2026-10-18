@@ -33,7 +33,7 @@ func TestMetricsDescribeCopyWorkAndFullySuccessfulSaves(t *testing.T) {
 	r, err := newSession(reader, resource.Empty(), quietWarnings())
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	r.Publish(copy.Snapshot{Submitted: 8, Confirmed: 5, Filtered: 3, Skipped: 1, Iterations: 12, PendingEntries: 6, PendingEstimatedBytes: 500, EntryCap: 100, EstimatedByteCap: 1000, Partitions: 9, TimestampStops: 2, TipStops: 3, EOFStops: 4})
+	r.Publish(copy.Snapshot{Submitted: 8, Confirmed: 5, Filtered: 3, Skipped: 1, Iterations: 12, PendingEntries: 6, PendingEstimatedBytes: 500, EntryCap: 100, EstimatedByteCap: 1000, Partitions: 10, TimestampStops: 2, TipStops: 3, EOFStops: 4, WorkerRecordStops: 1})
 	at := time.Unix(123, 0)
 	r.Saved(copy.SaveResult{Outcome: "success", At: at, Duration: 5 * time.Millisecond})
 	r.Saved(copy.SaveResult{Outcome: "partial", At: at.Add(time.Second), Duration: 10 * time.Millisecond})
@@ -50,7 +50,7 @@ func TestMetricsDescribeCopyWorkAndFullySuccessfulSaves(t *testing.T) {
 		require.Len(t, sum.DataPoints, 1, name)
 		require.Equal(t, want, sum.DataPoints[0].Value, name)
 	}
-	for name, want := range map[string]int64{"buffer.entries": 6, "buffer.estimated_size": 500, "buffer.entry_limit": 100, "buffer.estimated_size_limit": 1000, "partitions.held": 9} {
+	for name, want := range map[string]int64{"buffer.entries": 6, "buffer.estimated_size": 500, "buffer.entry_limit": 100, "buffer.estimated_size_limit": 1000, "partitions.held": 10} {
 		g, ok := values["kaferry."+name].Data.(metricdata.Gauge[int64])
 		require.True(t, ok, "%s must be an integer gauge", name)
 		require.Len(t, g.DataPoints, 1, name)
@@ -58,13 +58,13 @@ func TestMetricsDescribeCopyWorkAndFullySuccessfulSaves(t *testing.T) {
 	}
 	stopped := map[string]int64{}
 	stops := values["kaferry.partitions.stopped"].Data.(metricdata.Gauge[int64])
-	require.Len(t, stops.DataPoints, 3)
+	require.Len(t, stops.DataPoints, 4)
 	for _, point := range stops.DataPoints {
 		reason, ok := point.Attributes.Value("reason")
 		require.True(t, ok)
 		stopped[reason.AsString()] = point.Value
 	}
-	require.Equal(t, map[string]int64{"timestamp": 2, "tip": 3, "eof": 4}, stopped)
+	require.Equal(t, map[string]int64{"timestamp": 2, "tip": 3, "eof": 4, "worker_record_cap": 1}, stopped)
 	require.Equal(t, "By", values["kaferry.buffer.estimated_size"].Unit)
 	saves := values["kaferry.progress.saves"].Data.(metricdata.Sum[int64])
 	require.Len(t, saves.DataPoints, 3)

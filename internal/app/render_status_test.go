@@ -82,6 +82,6 @@ func TestFileStatusTextReportsBytePositionStopAndCurrentSize(t *testing.T) {
 	err := renderStatus(&output, report, false)
 	// Then file cursor and stop are explicit and source size uses bytes.
 	require.NoError(t, err)
-	require.Contains(t, output.String(), "Partition 0: byte position 120; stopped by eof at 120")
+	require.Contains(t, output.String(), "Partition 0: byte position 120; file end reached at 120")
 	require.Contains(t, output.String(), "Current source size: 150 bytes")
 }

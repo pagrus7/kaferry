@@ -104,6 +104,8 @@ jobs:
           export KAFERRY_PREVIOUS_BINARY="$previous_binary"
           export KAFERRY_TEST_BINARY="$PWD/bin/kaferry"
           python3 scripts/ci.py migration go test -count=1 -race -tags=integration,migration -run TestPreviousBinary -v ./tests/compat
+      - name: Capture bounded load measurements
+        run: python3 scripts/ci.py load make load
       - name: Coverage reports
         run: |
           python3 scripts/quality.py coverage

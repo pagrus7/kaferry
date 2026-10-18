@@ -118,6 +118,32 @@ func TestTextExplanationFollowingRoutingAndSkipPolicies(t *testing.T) {
 	}
 }
 
+func TestTextExplanationLimitedStopRules(t *testing.T) {
+	for _, source := range []string{"file", "following topic", "time-bounded topic"} {
+		t.Run(source, func(t *testing.T) {
+			// Given a limited copy that can also reach its source's normal stop.
+			report := explanationFixture()
+			report.WorkerStopAfterRecords = 5
+			want := "Stop: worker record threshold or all assigned partitions stopping, whichever comes first."
+			switch source {
+			case "file":
+				position, window := int64(0), plan.Window{}
+				saved := false
+				report.Source = inspect.Endpoint{Kind: "FILE", File: &inspect.FileSummary{StartBytes: &position, Window: &window, CheckpointExists: &saved}}
+				report.Partitions = nil
+				want = "Stop: worker record threshold or end of input as observed when the run opens the file, whichever comes first"
+			case "following topic":
+				report.Partitions[0].Window = plan.Window{}
+				want = "Stop: follow new records until the worker record threshold is reached or interrupted."
+			}
+			// When rendering, then the stop description includes the limit and source completion.
+			output := textExplanation(t, report)
+			require.Contains(t, output, want)
+			require.NotContains(t, output, "follow new records until stopped")
+		})
+	}
+}
+
 func TestTextExplanationFileProgressAndOpeningSize(t *testing.T) {
 	for _, saved := range []bool{false, true} {
 		t.Run(fmt.Sprint(saved), func(t *testing.T) {

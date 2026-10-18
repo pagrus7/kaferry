@@ -9,7 +9,7 @@ import (
 
 func TestProgressPreservesIdentity(t *testing.T) {
 	// Given committed metadata in the documented format.
-	metadata := `kaferry:1;{"fp":"fp","tid":"topic-id"}`
+	metadata := `kaferry:2;{"fp":"fp","tid":"topic-id"}`
 
 	// When Kaferry reads and writes that progress.
 	progress, err := DecodeProgress(commitmeta.NewCodec(), &metadata, "fp", "topic-id", false)
@@ -28,7 +28,7 @@ func TestInvalidProgressNeverBecomesAStartFallback(t *testing.T) {
 
 	// Then
 	require.NoError(t, decodeProgressErr)
-	for _, text := range []string{"", "foreign", valid + "{}", `kaferry:1;{"fp":"fingerprint","tid":"topic","unknown":1}`, encodeMetadata(Progress{Fingerprint: "other", TopicID: "topic"}), encodeMetadata(Progress{Fingerprint: "fingerprint", TopicID: "recreated"}), `kaferry:1;{"fp":"fingerprint","tid":"topic","fid":"file","extent":-1}`} {
+	for _, text := range []string{"", "foreign", valid + "{}", `kaferry:2;{"fp":"fingerprint","tid":"topic","unknown":1}`, encodeMetadata(Progress{Fingerprint: "other", TopicID: "topic"}), encodeMetadata(Progress{Fingerprint: "fingerprint", TopicID: "recreated"}), `kaferry:2;{"fp":"fingerprint","tid":"topic","fid":"file","extent":-1}`} {
 		_, err := DecodeProgress(commitmeta.NewCodec(), &text, "fingerprint", "topic", false)
 		require.Error(t, err, "accepted invalid progress: %s", text)
 	}

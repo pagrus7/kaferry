@@ -257,7 +257,7 @@ func (p *parser) interval() Interval {
 
 func (p *parser) option() Option {
 	o := Option{Position: p.current.Position}
-	if o.Name = p.oneOf("GROUP", "START", "CUTOFF", "ON_ERROR", "ON_MISSING_TIMESTAMP", "ON_REJECTED_TIMESTAMP"); o.Name == "" {
+	if o.Name = p.oneOf("GROUP", "START", "CUTOFF", "WORKER_STOP_AFTER_RECORDS", "ON_ERROR", "ON_MISSING_TIMESTAMP", "ON_REJECTED_TIMESTAMP"); o.Name == "" {
 		return o
 	}
 	p.expect("=")
@@ -277,6 +277,8 @@ func (p *parser) option() Option {
 		}
 	case "START":
 		o.Value = p.oneOf("EARLIEST", "LATEST")
+	case "WORKER_STOP_AFTER_RECORDS":
+		o.Value = p.text("integer")
 	default:
 		o.Value = p.oneOf("FAIL", "SKIP")
 	}

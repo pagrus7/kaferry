@@ -8,7 +8,7 @@ KAFKA_TEST_DEST_BROKERS ?= 127.0.0.1:40092
 .PHONY: build test check integration fault load soak qualification fuzz benchmark metrics broker broker-down
 build:
 	mkdir -p bin
-	$(GO) build -trimpath -ldflags='-s -w -buildid= -X github.com/pagrus7/kaferry/internal/app.version=$(KAFERRY_VERSION) -X github.com/pagrus7/kaferry/internal/app.revision=$(KAFERRY_REVISION)' -o bin/kaferry ./cmd/kaferry
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags='-s -w -buildid= -X github.com/pagrus7/kaferry/internal/app.version=$(KAFERRY_VERSION) -X github.com/pagrus7/kaferry/internal/app.revision=$(KAFERRY_REVISION)' -o bin/kaferry ./cmd/kaferry
 test:
 	$(GO) test ./...
 check:

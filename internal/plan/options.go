@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/pagrus7/kaferry/internal/sql"
@@ -67,10 +68,16 @@ func (p *Plan) applyOption(option sql.Option) error {
 		p.Start = option.Value
 	case "CUTOFF":
 		return p.cutoffOption(option)
+	case "WORKER_STOP_AFTER_RECORDS":
+		value, err := strconv.ParseUint(option.Value, 10, 64)
+		if err != nil || value == 0 || value > 1<<53 {
+			return fmt.Errorf("WORKER_STOP_AFTER_RECORDS must be an integer from 1 to 9007199254740992")
+		}
+		p.WorkerStopAfterRecords = value
 	case "ON_ERROR", "ON_MISSING_TIMESTAMP", "ON_REJECTED_TIMESTAMP":
 		return p.policyOption(option)
 	default:
-		return sql.At(option.Position, fmt.Errorf("unsupported option; use GROUP, START, CUTOFF, ON_ERROR, ON_MISSING_TIMESTAMP, or ON_REJECTED_TIMESTAMP"))
+		return sql.At(option.Position, fmt.Errorf("unsupported option; use GROUP, START, CUTOFF, WORKER_STOP_AFTER_RECORDS, ON_ERROR, ON_MISSING_TIMESTAMP, or ON_REJECTED_TIMESTAMP"))
 	}
 	return nil
 }

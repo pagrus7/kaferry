@@ -5,6 +5,8 @@ package compat
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -17,6 +19,7 @@ import (
 // cliProcess owns one Wait call; completion publishes its output and exit status.
 type cliProcess struct {
 	command *exec.Cmd
+	stdin   io.WriteCloser
 	done    chan struct{}
 	output  bytes.Buffer
 	err     error
@@ -26,6 +29,22 @@ func startCLI(t *testing.T, ctx context.Context, binary, input string, args ...s
 	t.Helper()
 	p := &cliProcess{command: exec.CommandContext(ctx, binary, args...), done: make(chan struct{})}
 	p.command.Stdin = strings.NewReader(input)
+	p.start(t)
+	return p
+}
+
+func launchCLI(t *testing.T, ctx context.Context, binary string, args ...string) *cliProcess {
+	t.Helper()
+	p := &cliProcess{command: exec.CommandContext(ctx, binary, args...), done: make(chan struct{})}
+	var err error
+	p.stdin, err = p.command.StdinPipe()
+	require.NoError(t, err)
+	p.start(t)
+	return p
+}
+
+func (p *cliProcess) start(t *testing.T) {
+	t.Helper()
 	p.command.Stderr = &p.output
 	p.command.Stdout = &p.output
 	require.NoError(t, p.command.Start())
@@ -39,8 +58,12 @@ func startCLI(t *testing.T, ctx context.Context, binary, input string, args ...s
 			t.Logf("copy process output: %s", p.output.String())
 		}
 	})
-	return p
 }
+func (p *cliProcess) send(input string) error {
+	_, err := io.WriteString(p.stdin, input)
+	return errors.Join(err, p.stdin.Close())
+}
+
 func (p *cliProcess) finished() bool {
 	select {
 	case <-p.done:

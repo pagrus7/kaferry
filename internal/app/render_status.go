@@ -36,7 +36,7 @@ func renderStatus(output io.Writer, r inspect.StatusReport, asJSON bool) error {
 			}
 			fmt.Fprintf(&b, "  Partition %d: %s %d", p.ID, unit, *p.Position)
 			if p.Stop != nil {
-				fmt.Fprintf(&b, "; stopped by %s at %d", p.Stop.Reason, p.Stop.At)
+				fmt.Fprintf(&b, "; %s at %d", inspect.StopDescription(p.Stop.Reason), p.Stop.At)
 			} else {
 				fmt.Fprint(&b, "; no saved stop")
 			}

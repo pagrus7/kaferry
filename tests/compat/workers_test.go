@@ -119,3 +119,41 @@ func TestDistributedWorkersFinishIndependently(t *testing.T) {
 		require.NotZero(t, seen[fmt.Sprintf("record-%d", i)], "record lost during worker completion")
 	}
 }
+
+func TestWorkerRecordThresholdAcrossTenPartitionsAndThreeWorkers(t *testing.T) {
+	// Given three workers sharing ten source partitions, each with its own 100-record allowance.
+	a := admin(t)
+	source, destination := topic(t, a, 10), topic(t, a, 3)
+	group := source + "-worker-stop"
+	config := configuration(t)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST,WORKER_STOP_AFTER_RECORDS=100)", destination, source, group)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+	results := make(chan workerResult, 3)
+	for range 3 {
+		go func() {
+			var output bytes.Buffer
+			code := app.Execute(ctx, []string{"run", "-e", statement, "-c", config}, nil, io.Discard, &output)
+			results <- workerResult{code, output.String()}
+		}()
+	}
+	waitMembers(t, a, group, 3, 10, results)
+	producer := producer(t, nil)
+	// When each partition has enough input for every worker to reach its threshold.
+	for i := range 1000 {
+		publish(t, producer, &k.Message{TopicPartition: k.TopicPartition{Topic: &source, Partition: int32(i % 10)}, Value: []byte(fmt.Sprint(i))})
+	}
+	for range 3 {
+		select {
+		case result := <-results:
+			require.Zero(t, result.code, result.detail)
+		case <-ctx.Done():
+			t.Fatal("workers did not stop at their record thresholds")
+		}
+	}
+	// Then the group copies 300 records, saves stops for all partitions and needs no other worker to exit.
+	require.NoError(t, ctx.Err(), "workers must finish before cancellation")
+	require.EqualValues(t, 300, topicRecordCount(t, a, destination, 3))
+	waitMembers(t, a, group, 0, 0, nil)
+	assertSavedWorkerStop(t, statement, config)
+}
