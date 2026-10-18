@@ -75,18 +75,19 @@ class PerformanceTest(unittest.TestCase):
         # Given an expired artifact, a wrong-head report, then the latest usable report.
         for compatible in (True, False):
             with self.subTest(compatible=compatible):
-                reports = [{'head': 'wrong', 'compatible': True}, {'head': 'current', 'compatible': compatible}]
+                reports = [{'head': 'wrong', 'compatible': True}, {'head': 'latest', 'compatible': compatible},
+                           {'head': 'older', 'compatible': True}]
                 archives = []
                 for report in reports:
                     data = io.BytesIO()
                     with zipfile.ZipFile(data, 'w') as zipped:
                         zipped.writestr('performance.json', json.dumps(report))
                     archives.append(data.getvalue())
-                runs = [{'databaseId': index, 'headSha': head} for index, head in enumerate(('expired', 'old', 'current'))]
-                outputs = [json.dumps(runs)] + [json.dumps({'artifacts': [{'id': index, 'name': 'performance', 'expired': index == 0}]}) for index in range(3)]
+                runs = [{'databaseId': index, 'headSha': head} for index, head in enumerate(('expired', 'wrong-head', 'latest', 'older'))]
+                outputs = [json.dumps(runs)] + [json.dumps({'artifacts': [{'id': index, 'name': 'performance', 'expired': index == 0}]}) for index in range(4)]
                 with patch('performance.command', side_effect=outputs), patch('performance.subprocess.check_output', side_effect=archives):
                     # When the matching report rejected its baseline, then older data cannot stall recalibration.
-                    self.assertEqual(previous('owner/repo'), reports[-1] if compatible else None)
+                    self.assertEqual(previous('owner/repo'), reports[1] if compatible else None)
 
     def test_execution_records_complete_pairs_or_an_explicit_unavailable_result(self):
         # Given successful warmups or a baseline/head failure in the head's correctness workload.

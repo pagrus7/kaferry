@@ -137,7 +137,6 @@ def execute(base, head, pairs, counts):
                 except ValueError:
                     if side == 'base' and base != head:
                         report['unavailable'] = 'The baseline failed the current workload (incompatibility or a transient failure); comparison is unavailable. See logs.'
-                        report['workloads'] = {}
                         return report
                     raise
             samples = []
