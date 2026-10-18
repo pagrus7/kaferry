@@ -1,0 +1,69 @@
+name: performance
+on:
+  schedule:
+    - cron: '43 9 * * *'
+  workflow_dispatch:
+    inputs:
+      base:
+        description: 'Optional base revision; use the selected head for A/A calibration'
+        type: string
+        default: ''
+      pairs:
+        description: 'Pairs per workload (1–10)'
+        type: number
+        default: 5
+  pull_request:
+    types: [opened, synchronize, labeled]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: performance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CGO_ENABLED: "0"
+jobs:
+  paired:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:performance')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Choose calibration or comparison
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          BASE_INPUT: ${{ inputs.base }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PERFORMANCE_MODE: ${{ vars.PERFORMANCE_MODE || 'calibration' }}
+        run: python3 scripts/performance.py plan
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.plan.outputs.run == 'true'
+        with:
+          go-version: '1.26.9'
+          cache: true
+      - if: steps.plan.outputs.run == 'true'
+        run: python3 scripts/ci.py broker make broker
+      - name: Interleave base and head
+        if: steps.plan.outputs.run == 'true'
+        env:
+          PERF_BASE: ${{ steps.plan.outputs.base }}
+          PERF_HEAD: ${{ steps.plan.outputs.head }}
+          PERF_PAIRS: ${{ inputs.pairs || 5 }}
+          KAFKA_TEST_BROKERS: 127.0.0.1:39092
+        run: python3 scripts/performance.py run "$PERF_BASE" "$PERF_HEAD" --pairs "$PERF_PAIRS"
+      - if: always() && steps.plan.outputs.run == 'true'
+        run: |
+          mkdir -p build-results
+          docker compose -p kaferry-compat --profile cross-cluster logs --no-color > build-results/brokers.log
+          make broker-down
+      - if: always() && steps.plan.outputs.run == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: performance
+          path: build-results/
+          retention-days: 30

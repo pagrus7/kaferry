@@ -31,6 +31,9 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
 			count, recordCap, byteCap, configuration := scenario.count, scenario.records, scenario.bytes, scenario.config
+			if scenario.name == "default" {
+				count = loadRecordCount(t, "KAFERRY_LOAD_KAFKA_RECORDS", count, 1_000_000)
+			}
 			report := newLoadReport(t, "load")
 			report.WorkerStopAfterRecords = scenario.limit
 			report.SourcePartitions, report.DestinationPartitions = 4, 5
@@ -40,7 +43,11 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			src, dst := topic(t, a, 4), topic(t, a, 5)
 			p := producer(t)
 			reports := make(chan kgo.ProduceResult, count)
-			seedCtx, seedCancel := context.WithTimeout(t.Context(), 15*time.Second)
+			seedTimeout, copyTimeout := 15*time.Second, time.Minute
+			if count > scenario.count {
+				seedTimeout, copyTimeout = 2*time.Minute, 3*time.Minute
+			}
+			seedCtx, seedCancel := context.WithTimeout(t.Context(), seedTimeout)
 			defer seedCancel()
 			stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 			records := newStreamRecords(src, stamp)
@@ -71,7 +78,7 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 				want = min(count, scenario.limit)
 			}
 			// When executing the bounded copy and sampling its memory.
-			ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), copyTimeout)
 			defer cancel()
 			process := launchCLI(t, ctx, binaryPath, args...)
 			report.cli = process

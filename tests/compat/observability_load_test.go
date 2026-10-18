@@ -23,7 +23,7 @@ import (
 
 func TestLoadObservability(t *testing.T) {
 	// Given the same file workload for disabled, healthy and unavailable export.
-	const count = 40000
+	count := loadRecordCount(t, "KAFERRY_LOAD_FILE_RECORDS", 40000, 200000)
 	codec, err := archive.NewCodec(1 << 20)
 	require.NoError(t, err)
 	dir := t.TempDir()
