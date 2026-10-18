@@ -70,7 +70,13 @@ func TestBlockedWarningCannotHoldMetricsCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.Handle(errors.New("secret"))
+	handled := make(chan struct{})
+	go func() { w.Handle(errors.New("secret")); close(handled) }()
+	select {
+	case <-handled:
+	case <-time.After(time.Second):
+		t.Fatal("warning call blocked")
+	}
 	select {
 	case <-output.entered:
 	case <-time.After(time.Second):
