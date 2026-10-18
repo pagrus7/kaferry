@@ -21,10 +21,16 @@ func acknowledgeWritesOnFlush(sink *testSink) {
 	}
 }
 
-func TestLimitCapsBatchedWritesAcrossPartitions(t *testing.T) {
+func workerStopCursor(partition int32, position int64) Cursor {
+	return Cursor{Partition: partition, Position: position, Stop: &Stop{Reason: "worker_record_cap", At: position}}
+}
+
+func TestWorkerStopCapsBatchedWritesAcrossPartitions(t *testing.T) {
 	// Given two partitions and acknowledgements held until the sink flushes.
 	r, source, sink, store, _ := fixture(t)
-	r.plan.Limit = 5
+	r.plan.WorkerStopAfterRecords = 5
+	observer := &recordingObserver{}
+	r.observer = observer
 	source.assignments = []Assignment{{Cursor: Cursor{Partition: 0}}, {Cursor: Cursor{Partition: 1}}}
 	for i := range 8 {
 		input := incoming(int32(i%2), int64(i/2), 1)
@@ -40,14 +46,15 @@ func TestLimitCapsBatchedWritesAcrossPartitions(t *testing.T) {
 	require.Len(t, source.events, 3)
 	require.True(t, source.paused[0])
 	require.True(t, source.paused[1])
-	require.Equal(t, [][]Cursor{{{Partition: 0, Position: 3}, {Partition: 1, Position: 2}}}, store.saves,
-		"save only the confirmed prefix, without source-completion stops")
+	require.EqualValues(t, 2, observer.snapshots[len(observer.snapshots)-1].WorkerRecordStops, "final metrics count both stopped partitions")
+	require.Equal(t, [][]Cursor{{workerStopCursor(0, 3), workerStopCursor(1, 2)}}, store.saves,
+		"save the confirmed prefix and worker stop reason for each owned partition")
 }
 
-func TestLimitCountsAcrossProgressSaves(t *testing.T) {
+func TestWorkerStopCountsAcrossProgressSaves(t *testing.T) {
 	// Given a cap larger than the worker's uncommitted-work allowance.
 	r, source, sink, store, _ := fixture(t)
-	r.plan.Limit = 5
+	r.plan.WorkerStopAfterRecords = 5
 	r.limits.RecordCap, r.limits.PartitionRecordCap = 2, 2
 	for i := range 6 {
 		input := incoming(0, int64(i), 1)
@@ -60,14 +67,31 @@ func TestLimitCountsAcrossProgressSaves(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(store.saves), 1)
 	require.Len(t, sink.writes, 5)
-	require.Equal(t, []Cursor{{Partition: 0, Position: 5}}, store.saves[len(store.saves)-1])
+	require.Equal(t, []Cursor{workerStopCursor(0, 5)}, store.saves[len(store.saves)-1])
 	require.Len(t, source.events, 1)
 }
 
-func TestLimitIgnoresFilteredSkippedAndBusyAttempts(t *testing.T) {
+func TestWorkerStopPreservesSourceStopsAndMarksIdleOwnedPartitions(t *testing.T) {
+	// Given a completed partition, an untouched owned partition and one writable partition.
+	r, source, sink, store, _ := fixture(t)
+	r.plan.Source.Kind, r.plan.WorkerStopAfterRecords = "TOPIC", 1
+	require.NoError(t, source.Start(r, nil))
+	r.partitions[0].stop = &Stop{Reason: "tip", At: 0}
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 1}}, {Cursor: Cursor{Partition: 2}}}))
+	require.NoError(t, r.input(incoming(2, 0, 1)))
+	acknowledgeWritesOnFlush(sink)
+	// When reaching the worker threshold.
+	done, err := r.step(t.Context())
+	// Then preserve source completion and save the worker reason even at an unchanged offset.
+	require.NoError(t, err)
+	require.True(t, done)
+	require.Equal(t, [][]Cursor{{{Partition: 0, Stop: &Stop{Reason: "tip", At: 0}}, workerStopCursor(1, 0), workerStopCursor(2, 1)}}, store.saves)
+}
+
+func TestWorkerStopIgnoresFilteredSkippedAndBusyAttempts(t *testing.T) {
 	// Given filtered, missing-timestamp and synchronously rejected inputs before two writes.
 	r, source, sink, store, _ := fixture(t)
-	r.plan.Limit = 2
+	r.plan.WorkerStopAfterRecords = 2
 	r.plan.Policies = plan.Policies{MissingTimestamp: "SKIP", OtherRecord: "SKIP"}
 	lower, before, within := int64(10), int64(0), int64(20)
 	source.assignments[0].Window.Lower = &lower
@@ -96,28 +120,28 @@ func TestLimitIgnoresFilteredSkippedAndBusyAttempts(t *testing.T) {
 	require.EqualValues(t, 1, r.filtered)
 	require.EqualValues(t, 2, r.skipped)
 	require.False(t, busy, "the final write must retry before the cap can be reached")
-	require.Equal(t, [][]Cursor{{{Partition: 0, Position: 5}}}, store.saves)
+	require.Equal(t, [][]Cursor{{workerStopCursor(0, 5)}}, store.saves)
 	require.Len(t, source.events, 1)
 }
 
-func TestLimitDoesNotConsumeEOFEvidencePastTheCap(t *testing.T) {
+func TestWorkerStopDoesNotConsumeEOFEvidencePastTheCap(t *testing.T) {
 	// Given an input event also carrying a later EOF cursor.
 	r, source, sink, store, _ := fixture(t)
-	r.plan.Limit = 1
+	r.plan.WorkerStopAfterRecords = 1
 	input := incoming(0, 0, 1)
 	source.events = []Event{{Input: &input, EOF: &Cursor{Partition: 0, Position: 9}}}
 	acknowledgeWritesOnFlush(sink)
 	// When the record reaches the cap.
 	err := r.Run(t.Context())
-	// Then save its next position without advancing to the EOF or recording a stop.
+	// Then save its next position with the worker reason, without advancing to the EOF.
 	require.NoError(t, err)
-	require.Equal(t, [][]Cursor{{{Partition: 0, Position: 1}}}, store.saves)
+	require.Equal(t, [][]Cursor{{workerStopCursor(0, 1)}}, store.saves)
 }
 
-func TestLimitAllowsEarlierSourceCompletion(t *testing.T) {
+func TestWorkerStopAllowsEarlierSourceCompletion(t *testing.T) {
 	// Given a file with fewer records than the cap.
 	r, source, sink, store, _ := fixture(t)
-	r.plan.Limit = 5
+	r.plan.WorkerStopAfterRecords = 5
 	input := incoming(0, 0, 1)
 	source.events = []Event{{Input: &input}, {EOF: &Cursor{Partition: 0, Position: 1}}}
 	acknowledgeWritesOnFlush(sink)
@@ -129,10 +153,10 @@ func TestLimitAllowsEarlierSourceCompletion(t *testing.T) {
 	require.Equal(t, &Stop{Reason: "eof", At: 1}, store.saves[len(store.saves)-1][0].Stop)
 }
 
-func TestLimitDiscardsDeferredEOFAfterAdmissionReachesCap(t *testing.T) {
+func TestWorkerStopDiscardsDeferredEOFAfterAdmissionReachesCap(t *testing.T) {
 	// Given a fetched record and EOF waiting for work allowance to become available.
 	r, source, sink, store, _ := fixture(t)
-	r.plan.Limit = 1
+	r.plan.WorkerStopAfterRecords = 1
 	require.NoError(t, source.Start(r, nil))
 	input := incoming(0, 0, 1)
 	r.deferred, r.deferredEOF = &input, &Cursor{Partition: 0, Position: 9}
@@ -142,15 +166,15 @@ func TestLimitDiscardsDeferredEOFAfterAdmissionReachesCap(t *testing.T) {
 	// Then ignore its deferred EOF and save only the accepted record's position.
 	require.NoError(t, err)
 	require.True(t, done)
-	require.Equal(t, [][]Cursor{{{Partition: 0, Position: 1}}}, store.saves)
+	require.Equal(t, [][]Cursor{{workerStopCursor(0, 1)}}, store.saves)
 }
 
-func TestSignalAfterLimitPreservesCompletionAndSaveFailures(t *testing.T) {
+func TestSignalAfterWorkerStopPreservesCompletionAndSaveFailures(t *testing.T) {
 	for _, failSave := range []bool{false, true} {
 		t.Run(map[bool]string{false: "success", true: "save failure"}[failSave], func(t *testing.T) {
 			// Given a signal arriving immediately after the final write is accepted.
 			r, source, sink, store, _ := fixture(t)
-			r.plan.Source.Kind, r.plan.Limit = "TOPIC", 1
+			r.plan.Source.Kind, r.plan.WorkerStopAfterRecords = "TOPIC", 1
 			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 			input := incoming(0, 0, 1)
@@ -169,17 +193,17 @@ func TestSignalAfterLimitPreservesCompletionAndSaveFailures(t *testing.T) {
 				require.NoError(t, err)
 			}
 			require.Len(t, source.events, 1)
-			require.Equal(t, [][]Cursor{{{Partition: 0, Position: 1}}}, store.saves)
+			require.Equal(t, [][]Cursor{{workerStopCursor(0, 1)}}, store.saves)
 		})
 	}
 }
 
-func TestLimitFailuresSaveOnlyConfirmedProgress(t *testing.T) {
+func TestWorkerStopFailuresSaveOnlyConfirmedProgress(t *testing.T) {
 	for _, failure := range []string{"delivery", "timeout", "commit"} {
 		t.Run(failure, func(t *testing.T) {
 			// Given a two-write limit with a failure during completion.
 			r, source, sink, store, _ := fixture(t)
-			r.plan.Limit = 2
+			r.plan.WorkerStopAfterRecords = 2
 			for i := range 3 {
 				input := incoming(0, int64(i), 1)
 				source.events = append(source.events, Event{Input: &input})
@@ -214,20 +238,20 @@ func TestLimitFailuresSaveOnlyConfirmedProgress(t *testing.T) {
 			if failure == "timeout" {
 				require.Empty(t, store.saves)
 			} else {
-				position := int64(1)
+				cursor := Cursor{Partition: 0, Position: 1}
 				if failure == "commit" {
-					position = 2
+					cursor = workerStopCursor(0, 2) // The save was attempted but failed.
 				}
-				require.Equal(t, [][]Cursor{{{Partition: 0, Position: position}}}, store.saves)
+				require.Equal(t, [][]Cursor{{cursor}}, store.saves)
 			}
 		})
 	}
 }
 
-func TestLimitDoesNotRefundAcceptedWritesAfterRevocation(t *testing.T) {
+func TestWorkerStopDoesNotRefundAcceptedWritesAfterRevocation(t *testing.T) {
 	// Given an accepted write whose assignment is lost before its acknowledgement.
 	r, _, sink, store, _ := fixture(t)
-	r.plan.Limit = 2
+	r.plan.WorkerStopAfterRecords = 2
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0}}}))
 	require.NoError(t, r.input(incoming(0, 0, 1)))
 	require.NoError(t, r.Revoke([]int32{0}, true))
@@ -241,15 +265,15 @@ func TestLimitDoesNotRefundAcceptedWritesAfterRevocation(t *testing.T) {
 	require.NoError(t, err, "ownership loss retains the normal rebalance behavior")
 	require.Len(t, sink.writes, 2)
 	require.EqualValues(t, 1, r.confirmed)
-	require.Equal(t, [][]Cursor{{{Partition: 0, Position: 1}}}, store.saves)
+	require.Equal(t, [][]Cursor{{workerStopCursor(0, 1)}}, store.saves)
 }
 
-func TestLimitMakesTopicSignalsAndUnassignedExitBounded(t *testing.T) {
+func TestWorkerStopMakesTopicSignalsAndUnassignedExitBounded(t *testing.T) {
 	for _, assigned := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unassigned", true: "quiet assigned partition"}[assigned], func(t *testing.T) {
 			// Given a limited topic with no new records.
 			r, source, _, _, clock := fixture(t)
-			r.plan.Source.Kind, r.plan.Limit = "TOPIC", 1
+			r.plan.Source.Kind, r.plan.WorkerStopAfterRecords = "TOPIC", 1
 			r.limits.IdleExit = "20ms"
 			ctx := t.Context()
 			if !assigned {

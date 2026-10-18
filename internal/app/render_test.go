@@ -123,18 +123,18 @@ func TestTextExplanationLimitedStopRules(t *testing.T) {
 		t.Run(source, func(t *testing.T) {
 			// Given a limited copy that can also reach its source's normal stop.
 			report := explanationFixture()
-			report.Limit = 5
-			want := "Stop: record limit or all assigned partitions stopping, whichever comes first."
+			report.WorkerStopAfterRecords = 5
+			want := "Stop: worker record threshold or all assigned partitions stopping, whichever comes first."
 			switch source {
 			case "file":
 				position, window := int64(0), plan.Window{}
 				saved := false
 				report.Source = inspect.Endpoint{Kind: "FILE", File: &inspect.FileSummary{StartBytes: &position, Window: &window, CheckpointExists: &saved}}
 				report.Partitions = nil
-				want = "Stop: record limit or end of input as observed when the run opens the file, whichever comes first"
+				want = "Stop: worker record threshold or end of input as observed when the run opens the file, whichever comes first"
 			case "following topic":
 				report.Partitions[0].Window = plan.Window{}
-				want = "Stop: follow new records until the record limit is reached or interrupted."
+				want = "Stop: follow new records until the worker record threshold is reached or interrupted."
 			}
 			// When rendering, then the stop description includes the limit and source completion.
 			output := textExplanation(t, report)

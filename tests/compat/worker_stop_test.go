@@ -3,6 +3,8 @@
 package compat
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -10,16 +12,33 @@ import (
 	"time"
 
 	k "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/pagrus7/kaferry/internal/app"
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/inspect"
 	"github.com/stretchr/testify/require"
 )
 
-func executeWithLimit(t *testing.T, statement, config string, limit int) {
+func executeWithWorkerStop(t *testing.T, statement, config string, stopAfter int) {
 	t.Helper()
-	execute(t, strings.Replace(statement, "OPTIONS", fmt.Sprintf("LIMIT %d OPTIONS", limit), 1), config)
+	execute(t, strings.Replace(statement, "OPTIONS(", fmt.Sprintf("OPTIONS(WORKER_STOP_AFTER_RECORDS=%d,", stopAfter), 1), config)
 }
 
-func TestLimitAcrossEndpointDirections(t *testing.T) {
+func assertSavedWorkerStop(t *testing.T, statement, config string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := app.Execute(t.Context(), []string{"status", "-e", statement, "-c", config, "--json"}, nil, &stdout, &stderr)
+	require.Zero(t, code, "status: %s %s", stdout.String(), stderr.String())
+	var report inspect.StatusReport
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
+	require.Equal(t, "stopped", report.Verdict)
+	require.Equal(t, "worker record threshold reached", report.Reason)
+	for _, partition := range report.Partitions {
+		require.NotNil(t, partition.Stop, "partition %d stop", partition.ID)
+		require.Equal(t, "worker_record_cap", partition.Stop.Reason)
+	}
+}
+
+func TestWorkerStopAcrossEndpointDirections(t *testing.T) {
 	// Given a retained topic with seven full logical records in one partition.
 	a := admin(t)
 	source := topic(t, a, 1)
@@ -43,10 +62,12 @@ func TestLimitAcrossEndpointDirections(t *testing.T) {
 
 	// When a topic-to-file copy resumes with a different cap.
 	statement := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", archive, source, source+"-archive-limit")
-	executeWithLimit(t, statement, config, 3)
+	executeWithWorkerStop(t, statement, config, 3)
 	// Then it saves only that record prefix, with unchanged bytes and metadata.
 	require.Equal(t, expected[:3], archiveRecords(t, archive))
-	executeWithLimit(t, statement, config, 2)
+	waitMembers(t, a, source+"-archive-limit", 0, 0, nil)
+	assertSavedWorkerStop(t, statement, config)
+	executeWithWorkerStop(t, statement, config, 2)
 	require.Equal(t, expected[:5], archiveRecords(t, archive))
 
 	t.Run("topic to topic", func(t *testing.T) {
@@ -54,23 +75,30 @@ func TestLimitAcrossEndpointDirections(t *testing.T) {
 		destination := topic(t, a, 3)
 		statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", destination, source, source+"-topic-limit")
 		// When resuming with a fresh cap.
-		executeWithLimit(t, statement, config, 2)
+		executeWithWorkerStop(t, statement, config, 2)
 		// Then each invocation advances saved progress without copying the rest.
 		require.EqualValues(t, 2, topicRecordCount(t, a, destination, 3))
-		executeWithLimit(t, statement, config, 1)
+		assertTopicRecords(t, destination, 3, expected[:2])
+		waitMembers(t, a, source+"-topic-limit", 0, 0, nil)
+		assertSavedWorkerStop(t, statement, config)
+		executeWithWorkerStop(t, statement, config, 1)
 		require.EqualValues(t, 3, topicRecordCount(t, a, destination, 3))
+		assertTopicRecords(t, destination, 3, expected[:3])
 	})
 	t.Run("file to topic", func(t *testing.T) {
 		// Given the five-record sample and a Kafka destination.
 		destination := topic(t, a, 3)
 		statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='restore-limit')", destination, archive)
 		// When a file checkpoint resumes under a changed cap.
-		executeWithLimit(t, statement, config, 2)
+		executeWithWorkerStop(t, statement, config, 2)
 		// Then progress limits each run, and a later EOF run adds no duplicates.
 		require.EqualValues(t, 2, topicRecordCount(t, a, destination, 3))
-		executeWithLimit(t, statement, config, 3)
+		assertTopicRecords(t, destination, 3, expected[:2])
+		assertSavedWorkerStop(t, statement, config)
+		executeWithWorkerStop(t, statement, config, 3)
 		require.EqualValues(t, 5, topicRecordCount(t, a, destination, 3))
-		executeWithLimit(t, statement, config, 10)
+		assertTopicRecords(t, destination, 3, expected[:5])
+		executeWithWorkerStop(t, statement, config, 10)
 		require.EqualValues(t, 5, topicRecordCount(t, a, destination, 3))
 	})
 	t.Run("file to file", func(t *testing.T) {
@@ -78,10 +106,10 @@ func TestLimitAcrossEndpointDirections(t *testing.T) {
 		clone := filepath.Join(t.TempDir(), "clone.cbor")
 		statement := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='clone-limit')", clone, archive)
 		// When reaching the cap and then EOF in separate runs.
-		executeWithLimit(t, statement, config, 4)
+		executeWithWorkerStop(t, statement, config, 4)
 		// Then preserve order and avoid recopying previously saved records.
 		require.Equal(t, expected[:4], archiveRecords(t, clone))
-		executeWithLimit(t, statement, config, 10)
+		executeWithWorkerStop(t, statement, config, 10)
 		require.Equal(t, expected[:5], archiveRecords(t, clone))
 	})
 }

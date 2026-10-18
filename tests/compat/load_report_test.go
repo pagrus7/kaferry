@@ -25,7 +25,7 @@ type loadReport struct {
 	Client                 string  `json:"client"`
 	BinarySHA256           string  `json:"binary_sha256,omitempty"`
 	Records                int     `json:"records"`
-	RecordLimit            int     `json:"record_limit,omitempty"`
+	WorkerStopAfterRecords int     `json:"worker_stop_after_records,omitempty"`
 	ElapsedSeconds         float64 `json:"elapsed_seconds"`
 	RecordsPerSecond       float64 `json:"records_per_second"`
 	ChildCPUSeconds        float64 `json:"child_cpu_seconds"`

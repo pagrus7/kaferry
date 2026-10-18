@@ -50,30 +50,30 @@ A Kafka partition with an upper bound stops when either:
 
 Sampling and timeout logs include H and the stable/consumed positions. H is local to this worker and is not saved for restart.
 
-A timestamp stop commits at the trigger record, so rerunning stops there again. A tip stop commits the next position, so rerunning may copy later arrivals. Without an upper bound, Kafka sources follow until stopped or `LIMIT` is reached.
+A timestamp stop commits at the trigger record, so rerunning stops there again. A tip stop commits the next position, so rerunning may copy later arrivals. Without an upper bound, Kafka sources follow until stopped or the worker record threshold is reached.
 
 File sources read from their checkpoint or first frame to the size observed at open. A partial final frame ends input; later appends wait for another run. Files do not use `CUTOFF`.
 
-## Record limit
+## Worker record stop
 
-- `LIMIT n` before `OPTIONS` caps records accepted by the destination in this worker invocation. Filtered records, synchronous SKIP rejections and queue-full retries do not count. Writes remain asynchronous and batched.
-- At the cap, the worker stops reading, allows up to 10 seconds for writes from partitions it still owns, saves confirmed progress and exits `0`. Earlier file EOF or Kafka time-window completion also exits `0`. A quiet Kafka follow query can wait indefinitely for enough records. A signal before the cap exits `1`; after the cap it exits `0` if writes and saving succeed.
-- Writes accepted before a partition is revoked still count. Their late outcomes are discarded; the next owner may copy them again. Only progress for currently owned partitions is saved. Delivery, save and shutdown failures fail the run.
-- Each worker has its own cap; records follow consumption order, not a global timestamp order. Rerunning starts at saved progress with a fresh cap, so the total across runs can exceed `n`; unsaved writes can repeat.
-- With ten source partitions and three workers using `LIMIT 100`, workers that each reach the cap accept 300 writes total. Each worker shares its 100 across all assigned partitions; there is no per-partition quota. Rebalances do not reset the count; replays can reduce the number of unique records copied.
-- Reaching the cap does not mark the input finished. Once all workers exit, `status` is `incomplete` while partitions lack saved EOF/time stops; exit `0` means this worker's run succeeded. Another run resumes with a fresh cap. `explain` shows the cap in text and the optional JSON `limit` field, without estimating records.
+- `WORKER_STOP_AFTER_RECORDS = n` in `OPTIONS` caps records accepted for writing in this process invocation. Filtered records, synchronous SKIP rejections and queue-full retries do not count. Writes remain asynchronous and batched.
+- At the threshold, stop reading, allow up to 10 seconds for writes from still-owned partitions, save confirmed progress and exit `0`. Earlier file EOF or Kafka time-window completion also exits `0`. A quiet Kafka follow query can wait indefinitely for enough records. A signal before the threshold exits `1`; at the threshold it succeeds if writes and saving succeed.
+- Accepted writes still count after revocation; their late outcomes are discarded and the next owner may replay them. Rebalances do not reset the count. Only currently owned partitions save progress.
+- Each invocation gets a fresh allowance across all its assigned partitions. Three workers with `WORKER_STOP_AFTER_RECORDS = 100` can accept 300 writes total, across any number of source partitions. Reruns add another allowance; unsaved writes can repeat.
+- A successful drain saves `worker_record_cap` at each owned partition's confirmed position, preserving existing source stops. Write/drain failures save confirmed progress without a new worker stop; save and shutdown failures fail the run. Stop reasons clear when processing resumes. They describe saved partition progress, not worker history.
+- With no active Kafka members and a saved stop on every current partition, `status` is `stopped`, even if more input remains. Mixed reasons are listed. `explain` shows the allowance in text and optional JSON `worker_stop_after_records`, without estimating records.
 
 ## Groups and workers
 
 ### Group names
 
-- `GROUP` identifies a Kafka consumer group or a file-source checkpoint. `GROUP = ONE_OFF` generates and logs `kaferry-<hex>` for a single worker. Successful file-source ONE_OFF runs without `LIMIT` delete the checkpoint but retain its lock. Limited runs keep the checkpoint, even at EOF, so the logged group can resume. Kafka progress expires under broker offset retention.
+- `GROUP` identifies a Kafka consumer group or a file-source checkpoint. `GROUP = ONE_OFF` generates and logs `kaferry-<hex>` for a single worker. Successful file-source ONE_OFF runs without `WORKER_STOP_AFTER_RECORDS` delete the checkpoint but retain its lock. Runs with a worker threshold keep the checkpoint, even at EOF, so the logged group can resume. Kafka progress expires under broker offset retention.
 - Topic→topic workers share a named group and progress independently using classic `cooperative-sticky` assignment. There is no group-wide done marker or external coordinator.
 
 ### When a worker exits
 
-- A worker exits `0` after every partition it still holds stops or its record limit is reached, outstanding writes are acknowledged and progress is committed. Partitions released during a rebalance do not count toward source completion. Kafka copies without an end time or `LIMIT` keep waiting for records or assignments until signalled.
-- For a Kafka copy with an end time or `LIMIT`, the wait starts when Kafka reports an empty assignment while the worker holds no partitions. If it still has none after `worker.idle_exit` (30 seconds by default), it exits `3`. Another empty-assignment notification restarts the timer. Waiting for the first assignment notification or losing all partitions during a rebalance does not start it. The exit logs `local idle exit`, the timeout and the code. A worker assigned an empty partition does not exit this way.
+- A worker exits `0` after every partition it still holds stops or its record limit is reached, outstanding writes are acknowledged and progress is committed. Partitions released during a rebalance do not count toward source completion. Kafka copies without an end time or worker record threshold keep waiting for records or assignments until signalled.
+- For a Kafka copy with an end time or worker record threshold, the wait starts when Kafka reports an empty assignment while the worker holds no partitions. If it still has none after `worker.idle_exit` (30 seconds by default), it exits `3`. Another empty-assignment notification restarts the timer. Waiting for the first assignment notification or losing all partitions during a rebalance does not start it. The exit logs `local idle exit`, the timeout and the code. A worker assigned an empty partition does not exit this way.
 - More workers than source partitions can leave some workers with no partitions to read. This can also happen while Kafka moves partitions between workers. If the last workers exit before a partition reaches its new owner, that partition can remain unfinished. Rerunning the same query and group resumes saved positions and may copy late arrivals.
 - If your supervisor restarts workers on nonzero exits, set a policy for code `3`. Restarting rejoins the group and can give the worker partitions to copy.
 
@@ -89,30 +89,30 @@ Resume requires matching query and endpoint identity:
 
 | Included in query fingerprint | Excluded |
 | --- | --- |
-| Endpoint kinds; Kafka cluster IDs and topics; normalized `WHERE` expressions; `CUTOFF` | Connection aliases/properties, file paths/IDs, `GROUP`, `START`, `LIMIT`, error policies and tuning |
+| Endpoint kinds; Kafka cluster IDs and topics; normalized `WHERE` expressions; `CUTOFF` | Connection aliases/properties, file paths/IDs, `GROUP`, `START`, `WORKER_STOP_AFTER_RECORDS`, error policies and tuning |
 
 Policies can therefore change to SKIP when resuming a failed record. `NOW()` bounds are fingerprinted as expressions; resolved windows are stored separately.
 
 - Kafka saves each next offset with [commit metadata](#commit-metadata).
 - Startup and assignment reject mismatched fingerprints/topic IDs, foreign metadata and missing saved `NOW()` windows. Topic IDs must be nonzero. Source identity is checked at startup and assignment, without continuous monitoring; destination recreation is not detected.
-- File-source checkpoints (version `2`) store fingerprint, resolved window, source file ID, last-frame CRC, next byte position, opening size and optional EOF stop; file output adds destination ID and acknowledged extent. Output headers store group, file ID and fingerprint.
+- File-source checkpoints store fingerprint, resolved window, source file ID, last-frame CRC, next byte position, opening size and an optional [saved stop](#commit-metadata); file output adds destination ID and acknowledged extent. Output headers store group, file ID and fingerprint.
 
 Before subscribing, group inspection also rejects active members whose client IDs do not start with `kaferry-` or are assigned to another topic. An absent group passes; an unavailable check fails. The topic check sees assigned partitions, so it cannot check subscriptions of members with no partitions.
 
 ### Commit metadata
 
-Kafka stores `kaferry:1;` followed by a UTF-8 JSON object with each committed offset. The complete string is at most 4,096 bytes; a broker may enforce a smaller limit.
+Kafka stores `kaferry:2;` followed by a UTF-8 JSON object with each committed offset. The complete string is at most 4,096 bytes; a broker may enforce a smaller limit.
 
 | Field | Meaning |
 | --- | --- |
 | `fp`, `tid` | Query SHA256 hex fingerprint; source topic UUID in unpadded standard Base64 |
 | `win` | Optional `{"lower": integer-or-null, "upper": integer-or-null}`; signed 64-bit Unix milliseconds, lower inclusive/upper exclusive. Required for saved `NOW()` bounds |
 | `fid`, `extent` | Optional destination archive ID and positive acknowledged byte extent; both present or both absent |
-| `stop` | Optional `{"reason": "timestamp" or "tip", "at": integer}`; nonnegative source offset where the stopping rule was reached, at or below the committed offset. `at` is not a timestamp |
+| `stop` | Optional `{"reason": "timestamp", "tip" or "worker_record_cap", "at": integer}`; nonnegative source offset where the stopping rule was reached, at or below the committed offset. `at` is not a timestamp |
 
-Absent `stop` means no saved stop. Zero is a valid offset or time bound. Unknown/duplicate fields, null fields other than window bounds, invalid values, foreign prefixes and unsupported versions are rejected. JSON whitespace and field order do not matter. A format version defines encoding, fields and meaning; any contract change needs a new version. Only version `1` JSON is supported; other encodings require another version.
+Absent `stop` means no saved stop. Zero is a valid offset or time bound. Unknown/duplicate fields, null fields other than window bounds, invalid values, foreign prefixes and unsupported versions are rejected. JSON whitespace and field order do not matter. A format version defines encoding, fields and meaning; any contract change needs a new version. Only version `2` JSON is supported; other encodings require another version.
 
-The initial assignment commit clears the previous stop. A later commit includes it only after every earlier required write succeeds (Kafka acknowledgment or file fsync), including stops at unchanged offsets. Lost assignments never commit. A crash before saving can replay writes. File checkpoints save the same stop shape with reason `eof`; opening size includes any partial final frame.
+The initial assignment commit clears the previous stop. A later commit includes it only after every earlier required write succeeds (Kafka acknowledgment or file fsync), including stops at unchanged offsets. Lost assignments never commit. A crash before saving can replay writes. File checkpoints use version `3` and the same stop shape with reason `eof` or `worker_record_cap`; opening size includes any partial final frame.
 
 ## Kafka output
 
@@ -221,7 +221,7 @@ File inspection reads the archive header, checkpoint and last checkpointed frame
 
 Verdicts: invalid/incompatible progress → `unknown`; incompatible active members → `unknown`; active members, unsettled group state or changed membership → `running`; no saved progress → `unknown`; any current partition without a saved stop → `incomplete`; otherwise → `stopped`. Added partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. File growth since opening makes a saved EOF stop `incomplete`. Broker/filesystem read failures exit 1 with an error and no verdict output.
 
-`stopped` means a stop was saved for every current partition; the cutoff rule can still miss records within the time range. Workers remain independent: they never wait for other workers' stops.
+`stopped` means every current partition has a saved stop reason. More source records may remain; the time cutoff can miss records within the range. Workers remain independent: they never wait for other workers' stops.
 
 Text lists up to eight partitions; `--json` includes all. JSON version `1` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `stop`, `window`). File status adds `opening_size_bytes` and current source `file.size_bytes`. Kafka positions are offsets; file positions are bytes. Status does not scan records or verify destination writes.
 
@@ -287,11 +287,11 @@ Auto-commit/reset, group ID/protocol, read isolation, cooperative assignment, au
 
 | Normal exit | Meaning |
 | --- | --- |
-| 0 | Status is `stopped`, or the preview printed, or this worker finished its file input or remaining Kafka partitions, or reached `LIMIT`. A signal cleanly stopped a Kafka copy with no end time or limit. SKIP counts do not change the code |
-| 1 | Copy, inspection, output, cleanup or the shutdown deadline failed, or a signal arrived before completion of startup, a file copy, or a Kafka copy with an end time or `LIMIT`. Conflicts after the first consumed record also exit 1 |
+| 0 | Status is `stopped`, or the preview printed, or this worker finished its file input or remaining Kafka partitions, or reached its worker record threshold. A signal cleanly stopped a Kafka copy with no end time or worker record threshold. SKIP counts do not change the code |
+| 1 | Copy, inspection, output, cleanup or the shutdown deadline failed, or a signal arrived before completion of startup, a file copy, or a Kafka copy with an end time or worker record threshold. Conflicts after the first consumed record also exit 1 |
 | 2 | Usage/parse/plan/configuration error, or Kafka topic-validation or identity/ownership/self-copy conflict before the first consumed record |
-| 3 | For a Kafka copy with an end time or `LIMIT`, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |
-| 4 | Status is `incomplete`: input lacks a saved stop, or the source file grew |
+| 3 | For a Kafka copy with an end time or worker record threshold, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |
+| 4 | Status is `incomplete`: a partition lacks a saved stop, or the source file grew after an EOF stop |
 | 5 | Status is `unknown`: progress is absent, invalid or incompatible, or the group has an incompatible active member |
 | 6 | Status is `running`: group activity or a change was observed |
 
@@ -321,7 +321,7 @@ Metric names are experimental. All describe this worker's invocation; restarts a
 | `records.filtered`, `records.skipped` | Separate cumulative counts excluded by time filters or error policy |
 | `buffer.entries`, `buffer.entry_limit` | Unsaved tracked progress entries and their worker cap; entries can include cursor gaps and exclude a record deferred before tracking |
 | `buffer.estimated_size`, `buffer.estimated_size_limit` | Tracked cap-accounting bytes and their cap; not payload/wire bytes or total memory |
-| `partitions.held`, `partitions.stopped` | Current held partitions and held partitions at their stop rule, split by `reason=timestamp|tip|eof`; not group completion |
+| `partitions.held`, `partitions.stopped` | Current held partitions and held partitions at their stop rule, split by reason: `timestamp`, `tip`, `eof`, or `worker_record_cap`; not group completion |
 | `progress.saves` | Nonempty save operations, including startup and metadata-only writes; `outcome=success|partial|failure` reflects requested partitions |
 | `progress.save.duration` | Save duration in seconds |
 | `progress.last_success` | Unix seconds of the last nonempty save where every requested partition succeeded; absent until then |

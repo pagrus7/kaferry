@@ -253,9 +253,10 @@ func TestRecordFidelityAndTopicID(t *testing.T) {
 		got := read(t, c)
 
 		// Then
-		if !reflect.DeepEqual(got.Key, m.Key) || !reflect.DeepEqual(got.Value, m.Value) || !reflect.DeepEqual(got.Headers, m.Headers) || !got.Timestamp.Equal(m.Timestamp) {
-			t.Fatalf("fidelity mismatch: key nil=%v/%v, value nil=%v/%v, headers=%v/%v, timestamp=%v/%v", got.Key == nil, m.Key == nil, got.Value == nil, m.Value == nil, got.Headers, m.Headers, got.Timestamp, m.Timestamp)
-		}
+		require.Equal(t, m.Key, got.Key, "key bytes and nullness")
+		require.Equal(t, m.Value, got.Value, "value bytes and nullness")
+		require.Equal(t, m.Headers, got.Headers, "headers and nullness")
+		require.True(t, got.Timestamp.Equal(m.Timestamp), "timestamp: got %v, want %v", got.Timestamp, m.Timestamp)
 	}
 }
 

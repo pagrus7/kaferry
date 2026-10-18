@@ -138,8 +138,8 @@ func (r *runtime) register(meter metric.Meter) error {
 			for i, value := range current {
 				observer.ObserveInt64(gauges[i], value)
 			}
-			for i, reason := range []string{"timestamp", "tip", "eof"} {
-				value := [...]int64{s.TimestampStops, s.TipStops, s.EOFStops}[i]
+			for i, reason := range []string{"timestamp", "tip", "eof", "worker_record_cap"} {
+				value := [...]int64{s.TimestampStops, s.TipStops, s.EOFStops, s.WorkerRecordStops}[i]
 				observer.ObserveInt64(gauges[5], value, metric.WithAttributes(attribute.String("reason", reason)))
 			}
 		}

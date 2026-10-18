@@ -32,7 +32,7 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			count, recordCap, byteCap, configuration := scenario.count, scenario.records, scenario.bytes, scenario.config
 			report := newLoadReport(t, "load")
-			report.RecordLimit = scenario.limit
+			report.WorkerStopAfterRecords = scenario.limit
 			report.SourcePartitions, report.DestinationPartitions = 4, 5
 			report.WorkerRecordCap, report.WorkerByteCap = recordCap, byteCap
 			// Given seeded topics, a compiled CLI and worker limits.
@@ -66,7 +66,7 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			}
 			want := count
 			if scenario.limit > 0 {
-				statement = strings.Replace(statement, "OPTIONS", fmt.Sprintf("LIMIT %d OPTIONS", scenario.limit), 1)
+				statement = strings.Replace(statement, "OPTIONS(", fmt.Sprintf("OPTIONS(WORKER_STOP_AFTER_RECORDS=%d,", scenario.limit), 1)
 				want = min(count, scenario.limit)
 			}
 			// When executing the bounded copy and sampling its memory.

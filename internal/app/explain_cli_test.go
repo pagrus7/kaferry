@@ -26,7 +26,7 @@ type filePreviewFixture struct{ query, config, directory, destination string }
 func TestExplainShowsPerInvocationLimit(t *testing.T) {
 	// Given a limited file copy with no output or checkpoint.
 	fixture := filePreview(t)
-	query := strings.Replace(fixture.query, "OPTIONS", "LIMIT 5 OPTIONS", 1)
+	query := strings.Replace(fixture.query, "OPTIONS(", "OPTIONS(WORKER_STOP_AFTER_RECORDS=5,", 1)
 	for _, asJSON := range []bool{false, true} {
 		args := []string{"explain", "-e", query, "-c", fixture.config}
 		if asJSON {
@@ -40,9 +40,9 @@ func TestExplainShowsPerInvocationLimit(t *testing.T) {
 		if asJSON {
 			var report inspect.Report
 			require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
-			require.EqualValues(t, 5, report.Limit)
+			require.EqualValues(t, 5, report.WorkerStopAfterRecords)
 		} else {
-			require.Contains(t, stdout.String(), "Limit: at most 5 records per worker this run. Resuming gets a fresh limit.")
+			require.Contains(t, stdout.String(), "Worker stop: after 5 records accepted for writing. Resuming gets a fresh allowance.")
 		}
 		_, err := os.Stat(fixture.destination)
 		require.ErrorIs(t, err, os.ErrNotExist, "preview must not create the output")

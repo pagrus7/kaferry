@@ -4,18 +4,18 @@ package inspect
 import "github.com/pagrus7/kaferry/internal/plan"
 
 type Report struct {
-	Version      int           `json:"version"`
-	Fingerprint  string        `json:"fingerprint"`
-	Group        string        `json:"group"`
-	OneOff       bool          `json:"one_off"`
-	CutoffMS     int64         `json:"cutoff_ms"`
-	Limit        uint64        `json:"limit,omitempty"`
-	Source       Endpoint      `json:"source"`
-	Destination  Endpoint      `json:"destination"`
-	Partitions   []Partition   `json:"partitions"`
-	StartRule    string        `json:"start_rule,omitempty"`
-	RecordErrors ErrorPolicies `json:"record_errors"`
-	Warnings     []string      `json:"warnings"`
+	Version                int           `json:"version"`
+	Fingerprint            string        `json:"fingerprint"`
+	Group                  string        `json:"group"`
+	OneOff                 bool          `json:"one_off"`
+	CutoffMS               int64         `json:"cutoff_ms"`
+	WorkerStopAfterRecords uint64        `json:"worker_stop_after_records,omitempty"`
+	Source                 Endpoint      `json:"source"`
+	Destination            Endpoint      `json:"destination"`
+	Partitions             []Partition   `json:"partitions"`
+	StartRule              string        `json:"start_rule,omitempty"`
+	RecordErrors           ErrorPolicies `json:"record_errors"`
+	Warnings               []string      `json:"warnings"`
 }
 
 type ErrorPolicies struct {

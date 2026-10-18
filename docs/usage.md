@@ -42,7 +42,7 @@ SELECT * FROM FILE cbor('archive/orders.cbor') OPTIONS (GROUP = 'orders-restore'
 
 Kafka needs `WHERE` or `START`: `EARLIEST` for retained records, `LATEST` for new ones. Saved progress takes precedence. Files read to their opening size. [Examples](../design/grammar.md#valid-examples).
 
-`LIMIT 100` before `OPTIONS` sends at most 100 records per worker run. Filtered and skipped records do not count; reruns get a fresh cap. [Details](../design/decisions.md#record-limit).
+Add `WORKER_STOP_AFTER_RECORDS = 100` to `OPTIONS` to stop each process after accepting 100 records for writing. Each restart gets a fresh allowance. [Counting rules](../design/decisions.md#worker-record-stop).
 
 ## Stop and check results
 
@@ -52,11 +52,11 @@ SIGINT/SIGTERM stop reading, allow 10 s for writes, then save progress. File flu
 kaferry status -c connections.toml -f copy.sql --json
 ```
 
-`stopped` means a stop was saved for every current partition; the cutoff rule can still miss records within the time range. Kafka activity is checked twice, without an atomic snapshot; file activity is not checked. Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](../design/decisions.md#saved-status).
+`stopped` means every current partition has a saved stop reason, including worker record thresholds. More input may remain; time cutoffs can miss records within the range. Kafka activity is checked twice, without an atomic snapshot; file activity is not checked. Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](../design/decisions.md#saved-status).
 
 ## Resume or start over
 
-Rerun with the same `GROUP`, endpoints, filter, `CUTOFF` and checkpoint directory (default `~/.kaferry/checkpoints`). Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
+Rerun with the same `GROUP`, endpoints, filter, `CUTOFF` and checkpoint directory. Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
 
 Keep output, checkpoints and locks; losing them requires a new group/output. [Recovery rules](../design/decisions.md#output-recovery).
 

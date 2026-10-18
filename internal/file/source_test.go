@@ -150,7 +150,7 @@ func TestFileAssignmentClearsStopAndRefreshesOpeningSize(t *testing.T) {
 	require.NoError(t, err)
 	defer cp.Close()
 	pos := int64(len(header))
-	cp.Initialize(Checkpoint{Version: 2, Fingerprint: "fp", SourceID: "source", Position: pos, OpeningSize: pos})
+	cp.Initialize(Checkpoint{Version: 3, Fingerprint: "fp", SourceID: "source", Position: pos, OpeningSize: pos})
 	if _, err := cp.Save(t.Context(), []core.Cursor{{Position: pos, Stop: &core.Stop{Reason: "eof", At: pos}}}); err != nil {
 		t.Fatal(err)
 	}

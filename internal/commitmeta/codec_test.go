@@ -17,8 +17,9 @@ func TestCodecContract(t *testing.T) {
 		progress Progress
 		golden   string
 	}{
-		{"minimal", Progress{Fingerprint: "fp", TopicID: "/////////////////////w"}, `kaferry:1;{"fp":"fp","tid":"/////////////////////w"}`},
-		{"full", Progress{Fingerprint: "fp", TopicID: "id", Window: &plan.Window{Lower: &zero, Upper: &upper}, FileID: "file", Extent: 128, Stop: &core.Stop{Reason: "tip", At: 0}}, `kaferry:1;{"fp":"fp","tid":"id","win":{"lower":0,"upper":9223372036854775807},"fid":"file","extent":128,"stop":{"reason":"tip","at":0}}`},
+		{"minimal", Progress{Fingerprint: "fp", TopicID: "/////////////////////w"}, `kaferry:2;{"fp":"fp","tid":"/////////////////////w"}`},
+		{"worker stop", Progress{Fingerprint: "fp", TopicID: "id", Stop: &core.Stop{Reason: "worker_record_cap", At: 42}}, `kaferry:2;{"fp":"fp","tid":"id","stop":{"reason":"worker_record_cap","at":42}}`},
+		{"full", Progress{Fingerprint: "fp", TopicID: "id", Window: &plan.Window{Lower: &zero, Upper: &upper}, FileID: "file", Extent: 128, Stop: &core.Stop{Reason: "tip", At: 0}}, `kaferry:2;{"fp":"fp","tid":"id","win":{"lower":0,"upper":9223372036854775807},"fid":"file","extent":128,"stop":{"reason":"tip","at":0}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given logical progress independent of serialized field names.
@@ -37,7 +38,7 @@ func TestCodecContract(t *testing.T) {
 
 func TestCodecAcceptsJSONWhitespaceAndFieldOrder(t *testing.T) {
 	// Given valid JSON with reordered fields and a negative millisecond bound.
-	text := `kaferry:1; {"tid":"id", "win":{"upper":null,"lower":-9223372036854775808}, "fp":"fp"} `
+	text := `kaferry:2; {"tid":"id", "win":{"upper":null,"lower":-9223372036854775808}, "fp":"fp"} `
 	// When decoding without requiring canonical JSON bytes.
 	p, err := NewCodec().Decode(text)
 	// Then integer milliseconds remain exact and absence stays absent.
@@ -52,36 +53,37 @@ func TestCodecAcceptsJSONWhitespaceAndFieldOrder(t *testing.T) {
 func TestCodecRejectsMalformedOrUnsupportedData(t *testing.T) {
 	for _, tc := range []struct{ name, text, kind string }{
 		{"foreign", "other;{}", "foreign"},
-		{"version", "kaferry:2;opaque", "unsupported version of"},
+		{"version", "kaferry:3;opaque", "unsupported version of"},
+		{"previous version", `kaferry:1;{"fp":"fp","tid":"id"}`, "unsupported version of"},
 		{"missing version", "kaferry:;{}", "unsupported version of"},
 		{"oversize", strings.Repeat("x", MaxBytes+1), "oversized"},
-		{"missing identity", `kaferry:1;{}`, "invalid"},
-		{"null root", `kaferry:1;null`, "invalid"},
-		{"array root", `kaferry:1;[]`, "invalid"},
-		{"broken JSON", `kaferry:1;{"fp":`, "invalid"},
-		{"trailing value", `kaferry:1;{"fp":"fp","tid":"id"} {}`, "invalid"},
-		{"duplicate field", `kaferry:1;{"fp":"fp","fp":"other","tid":"id"}`, "invalid"},
-		{"Unicode stop name", `kaferry:1;{"fp":"fp","tid":"id","ſtop":{"reason":"tip","at":0,"at":9}}`, "invalid"},
-		{"Unicode reason name", `kaferry:1;{"fp":"fp","tid":"id","stop":{"reaſon":"tip","at":0}}`, "invalid"},
-		{"duplicate window", `kaferry:1;{"fp":"fp","tid":"id","win":{"lower":null,"upper":1},"win":{"lower":0,"upper":1}}`, "invalid"},
-		{"case variant", `kaferry:1;{"FP":"fp","tid":"id"}`, "invalid"},
-		{"unknown field", `kaferry:1;{"fp":"fp","tid":"id","future":1}`, "invalid"},
-		{"unknown nested field", `kaferry:1;{"fp":"fp","tid":"id","win":{"lower":0,"extra":1}}`, "invalid"},
-		{"duplicate nested field", `kaferry:1;{"fp":"fp","tid":"id","stop":{"reason":"tip","at":0,"at":1}}`, "invalid"},
-		{"null window", `kaferry:1;{"fp":"fp","tid":"id","win":null}`, "invalid"},
-		{"reversed window", `kaferry:1;{"fp":"fp","tid":"id","win":{"lower":1,"upper":0}}`, "invalid"},
-		{"fractional bound", `kaferry:1;{"fp":"fp","tid":"id","win":{"lower":1.5}}`, "invalid"},
-		{"overflow", `kaferry:1;{"fp":"fp","tid":"id","win":{"upper":9223372036854775808}}`, "invalid"},
-		{"file without extent", `kaferry:1;{"fp":"fp","tid":"id","fid":"file"}`, "invalid"},
-		{"empty file pair", `kaferry:1;{"fp":"fp","tid":"id","fid":"","extent":0}`, "invalid"},
-		{"zero extent without file", `kaferry:1;{"fp":"fp","tid":"id","extent":0}`, "invalid"},
-		{"null extent", `kaferry:1;{"fp":"fp","tid":"id","extent":null}`, "invalid"},
-		{"extent without file", `kaferry:1;{"fp":"fp","tid":"id","extent":1}`, "invalid"},
-		{"negative extent", `kaferry:1;{"fp":"fp","tid":"id","fid":"file","extent":-1}`, "invalid"},
-		{"unknown reason", `kaferry:1;{"fp":"fp","tid":"id","stop":{"reason":"eof","at":0}}`, "invalid"},
-		{"missing stop position", `kaferry:1;{"fp":"fp","tid":"id","stop":{"reason":"tip"}}`, "invalid"},
-		{"negative stop position", `kaferry:1;{"fp":"fp","tid":"id","stop":{"reason":"tip","at":-1}}`, "invalid"},
-		{"invalid UTF8", "kaferry:1;{\"fp\":\"\xff\",\"tid\":\"id\"}", "invalid"},
+		{"missing identity", `kaferry:2;{}`, "invalid"},
+		{"null root", `kaferry:2;null`, "invalid"},
+		{"array root", `kaferry:2;[]`, "invalid"},
+		{"broken JSON", `kaferry:2;{"fp":`, "invalid"},
+		{"trailing value", `kaferry:2;{"fp":"fp","tid":"id"} {}`, "invalid"},
+		{"duplicate field", `kaferry:2;{"fp":"fp","fp":"other","tid":"id"}`, "invalid"},
+		{"Unicode stop name", `kaferry:2;{"fp":"fp","tid":"id","ſtop":{"reason":"tip","at":0,"at":9}}`, "invalid"},
+		{"Unicode reason name", `kaferry:2;{"fp":"fp","tid":"id","stop":{"reaſon":"tip","at":0}}`, "invalid"},
+		{"duplicate window", `kaferry:2;{"fp":"fp","tid":"id","win":{"lower":null,"upper":1},"win":{"lower":0,"upper":1}}`, "invalid"},
+		{"case variant", `kaferry:2;{"FP":"fp","tid":"id"}`, "invalid"},
+		{"unknown field", `kaferry:2;{"fp":"fp","tid":"id","future":1}`, "invalid"},
+		{"unknown nested field", `kaferry:2;{"fp":"fp","tid":"id","win":{"lower":0,"extra":1}}`, "invalid"},
+		{"duplicate nested field", `kaferry:2;{"fp":"fp","tid":"id","stop":{"reason":"tip","at":0,"at":1}}`, "invalid"},
+		{"null window", `kaferry:2;{"fp":"fp","tid":"id","win":null}`, "invalid"},
+		{"reversed window", `kaferry:2;{"fp":"fp","tid":"id","win":{"lower":1,"upper":0}}`, "invalid"},
+		{"fractional bound", `kaferry:2;{"fp":"fp","tid":"id","win":{"lower":1.5}}`, "invalid"},
+		{"overflow", `kaferry:2;{"fp":"fp","tid":"id","win":{"upper":9223372036854775808}}`, "invalid"},
+		{"file without extent", `kaferry:2;{"fp":"fp","tid":"id","fid":"file"}`, "invalid"},
+		{"empty file pair", `kaferry:2;{"fp":"fp","tid":"id","fid":"","extent":0}`, "invalid"},
+		{"zero extent without file", `kaferry:2;{"fp":"fp","tid":"id","extent":0}`, "invalid"},
+		{"null extent", `kaferry:2;{"fp":"fp","tid":"id","extent":null}`, "invalid"},
+		{"extent without file", `kaferry:2;{"fp":"fp","tid":"id","extent":1}`, "invalid"},
+		{"negative extent", `kaferry:2;{"fp":"fp","tid":"id","fid":"file","extent":-1}`, "invalid"},
+		{"unknown reason", `kaferry:2;{"fp":"fp","tid":"id","stop":{"reason":"eof","at":0}}`, "invalid"},
+		{"missing stop position", `kaferry:2;{"fp":"fp","tid":"id","stop":{"reason":"tip"}}`, "invalid"},
+		{"negative stop position", `kaferry:2;{"fp":"fp","tid":"id","stop":{"reason":"tip","at":-1}}`, "invalid"},
+		{"invalid UTF8", "kaferry:2;{\"fp\":\"\xff\",\"tid\":\"id\"}", "invalid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given untrusted broker metadata.

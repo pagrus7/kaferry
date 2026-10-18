@@ -81,7 +81,7 @@ Keep passwords out of SQL literals and shell arguments. [Configuration rules](do
 
 ## Before you run
 
-- **Time windows:** Kafka input without an end time or `LIMIT` runs until stopped. With an end time, the [cutoff rule](design/decisions.md#completion) can miss records within the range, including those present before the run.
+- **Time windows:** The [cutoff rule](design/decisions.md#completion) can miss records within the range, including those present before the run.
 - **Delivery:** at least once; crashes and rebalances can duplicate or reorder writes. Expired offsets or lost checkpoints can start fresh. Kafka input reads committed records.
 - **Destination:** Kafka output chooses a destination partition using the original key bytes; null keys can spread. Source partitions are not copied. Ensure bytes and Schema Registry IDs work there. `LogAppendTime` replaces timestamps; retention may delete old records. [Routing](design/decisions.md#kafka-output).
 - **Files:** one process per query on one machine, on a local filesystem that supports file locks and hard links. [File setup and resume](docs/usage.md#run-a-copy).

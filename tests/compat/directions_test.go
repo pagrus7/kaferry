@@ -27,9 +27,9 @@ func execute(t *testing.T, statement, config string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var output bytes.Buffer
-	if code := app.Execute(ctx, []string{"run", "--sql", statement, "--config", config}, nil, io.Discard, &output); code != 0 {
-		t.Fatalf("exit=%d: %s", code, output.String())
-	}
+	code := app.Execute(ctx, []string{"run", "--sql", statement, "--config", config}, nil, io.Discard, &output)
+	require.NoError(t, ctx.Err(), "copy must finish before its timeout: %s", output.String())
+	require.Zero(t, code, output.String())
 }
 func configuration(t *testing.T, workerSettings ...string) string {
 	t.Helper()
@@ -63,6 +63,30 @@ func archiveRecords(t *testing.T, path string) []core.Record {
 	}
 	return records
 }
+func assertTopicRecords(t *testing.T, name string, partitions int, expected []core.Record) {
+	t.Helper()
+	reader := consumer(t, name+"-verify")
+	var assignments []k.TopicPartition
+	for id := range partitions {
+		assignments = append(assignments, k.TopicPartition{Topic: &name, Partition: int32(id), Offset: 0})
+	}
+	require.NoError(t, reader.Assign(assignments))
+	var actual, wanted []core.Record
+	for _, record := range expected {
+		record.Source = nil // Kafka output does not publish source provenance.
+		wanted = append(wanted, record)
+		message := read(t, reader)
+		require.Equal(t, k.TimestampCreateTime, message.TimestampType, "destination timestamp type")
+		stamp := message.Timestamp.UnixMilli()
+		got := core.Record{Key: message.Key, Value: message.Value, TimestampMS: &stamp, TimestampType: "create_time"}
+		for _, header := range message.Headers {
+			got.Headers = append(got.Headers, core.Header{Name: header.Key, Value: header.Value})
+		}
+		actual = append(actual, got)
+	}
+	require.ElementsMatch(t, wanted, actual, "copied records retain bytes, nulls, headers and timestamps")
+}
+
 func TestAllFileDirectionsAndResume(t *testing.T) {
 	// Given
 	a := admin(t)
@@ -113,28 +137,7 @@ func TestAllFileDirectionsAndResume(t *testing.T) {
 	statement = fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='restore')", dst, archive)
 	execute(t, statement, cfg)
 	execute(t, statement, cfg)
-	c := consumer(t, dst+"-reader")
-	var parts []k.TopicPartition
-	for i := range 3 {
-		parts = append(parts, k.TopicPartition{Topic: &dst, Partition: int32(i), Offset: 0})
-	}
-	require.NoError(t, c.Assign(parts))
-	counts := make(map[string]int)
-	for range 24 {
-		r := read(t, c)
-		signature := fmt.Sprintf("%v/%v/%v/%v", r.Key == nil, r.Key, r.Value == nil, r.Value)
-		counts[signature]++
-		if !r.Timestamp.Equal(stamp) || !reflect.DeepEqual(r.Headers, []k.Header{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}, {Key: "binary", Value: []byte{0, 255}}}) {
-			t.Fatal("file→topic changed timestamp or headers")
-		}
-	}
-	for _, r := range expected {
-		signature := fmt.Sprintf("%v/%v/%v/%v", r.Key == nil, r.Key, r.Value == nil, r.Value)
-		counts[signature]--
-	}
-	for _, n := range counts {
-		require.Zero(t, n, "file→topic changed null/empty bytes")
-	}
+	assertTopicRecords(t, dst, 3, expected)
 
 	require.Equal(t, int64(24), topicRecordCount(t, a, dst, 3), "resumed file→topic produced extra records")
 }

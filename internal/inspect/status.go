@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
@@ -13,7 +14,17 @@ import (
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
-const StatusMeaning = "Stopped means a stop was saved for every current partition; the cutoff rule can still miss records within the time range."
+const StatusMeaning = "Stopped means every current partition has a saved stop reason. More source records may remain; the time cutoff can miss records within the range."
+
+var stopDescriptions = map[string]string{
+	"timestamp":         "timestamp cutoff reached",
+	"tip":               "topic end reached after cutoff",
+	"eof":               "file end reached",
+	"worker_record_cap": "worker record threshold reached",
+}
+
+// StopDescription describes a reason validated by the progress reader.
+func StopDescription(reason string) string { return stopDescriptions[reason] }
 
 type StatusReader interface {
 	Status(context.Context, plan.Plan, config.Worker, core.StopObserver) (StatusReport, error)
@@ -156,7 +167,7 @@ func (s *Service) fileStatus(p plan.Plan, limits config.Worker, r *StatusReport)
 	}
 	r.Partitions = append(r.Partitions, row)
 	r.classify()
-	if info.Saved && info.Stop != nil && info.OpeningSize != nil && info.Size > *info.OpeningSize {
+	if info.Saved && info.Stop != nil && info.Stop.Reason == "eof" && info.OpeningSize != nil && info.Size > *info.OpeningSize {
 		r.Verdict, r.Reason = "incomplete", "source file grew"
 	}
 	return nil
@@ -164,9 +175,13 @@ func (s *Service) fileStatus(p plan.Plan, limits config.Worker, r *StatusReport)
 
 func (r *StatusReport) classify() {
 	anySaved, allStopped := false, len(r.Partitions) > 0
+	reasons := make(map[string]bool)
 	for _, p := range r.Partitions {
 		anySaved = anySaved || p.Position != nil
 		allStopped = allStopped && p.Position != nil && p.Stop != nil
+		if p.Stop != nil {
+			reasons[p.Stop.Reason] = true
+		}
 	}
 	switch {
 	case !anySaved:
@@ -175,5 +190,11 @@ func (r *StatusReport) classify() {
 		r.Verdict, r.Reason = "incomplete", "partitions have no saved stop"
 	default:
 		r.Verdict = "stopped"
+		var descriptions []string
+		for reason := range reasons {
+			descriptions = append(descriptions, StopDescription(reason))
+		}
+		slices.Sort(descriptions)
+		r.Reason = strings.Join(descriptions, "; ")
 	}
 }

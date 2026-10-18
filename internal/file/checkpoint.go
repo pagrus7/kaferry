@@ -175,10 +175,10 @@ func readCheckpoint(path string) (*Checkpoint, error) {
 }
 
 func (c Checkpoint) validate() error {
-	if c.Version != 2 || c.Fingerprint == "" || c.SourceID == "" || c.Position < 0 || c.Extent < 0 || (c.DestinationID == "") != (c.Extent == 0) {
+	if c.Version != 3 || c.Fingerprint == "" || c.SourceID == "" || c.Position < 0 || c.Extent < 0 || (c.DestinationID == "") != (c.Extent == 0) {
 		return conflict("invalid checkpoint")
 	}
-	if c.OpeningSize < c.Position || c.Stop != nil && (c.Stop.Reason != "eof" || c.Stop.At != c.Position) {
+	if c.OpeningSize < c.Position || c.Stop != nil && ((c.Stop.Reason != "eof" && c.Stop.Reason != "worker_record_cap") || c.Stop.At != c.Position) {
 		return conflict("invalid checkpoint stop or opening size")
 	}
 	return nil

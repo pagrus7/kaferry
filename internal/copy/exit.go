@@ -25,6 +25,9 @@ func (r *Runner) exit(err error) error {
 }
 
 func (r *Runner) interrupted() error {
+	if r.failure == nil && r.workerStopReached() {
+		return r.finishWorkerStop()
+	}
 	err := r.drain()
 	if r.failure != nil {
 		return errors.Join(r.failure, err)
@@ -32,14 +35,14 @@ func (r *Runner) interrupted() error {
 	if err != nil {
 		return err
 	}
-	if r.bounded() && !r.limitReached() {
+	if r.bounded() {
 		return fmt.Errorf("bounded copy interrupted before completion")
 	}
 	return nil
 }
 
 func (r *Runner) bounded() bool {
-	return r.plan.Limit > 0 || r.plan.Source.Kind == "FILE" || r.plan.Window.Upper != nil
+	return r.plan.WorkerStopAfterRecords > 0 || r.plan.Source.Kind == "FILE" || r.plan.Window.Upper != nil
 }
 
 func (r *Runner) readyToExit() bool {
@@ -62,6 +65,11 @@ func (r *Runner) readyToExit() bool {
 }
 
 func (r *Runner) drain() error {
+	err := r.finishWrites()
+	return errors.Join(err, r.commit(r.ids()))
+}
+
+func (r *Runner) finishWrites() error {
 	r.stop.Begin()
 	r.stop.Stage("finishing writes")
 	r.pending = nil // Unsubmitted input replays from the confirmed cursor.
@@ -74,16 +82,16 @@ func (r *Runner) drain() error {
 		}
 	}
 	if err := r.sink.Flush(); err != nil {
-		return errors.Join(failed, err, r.commit(r.ids()))
+		return errors.Join(failed, err)
 	}
 	for r.clock.Now().Before(deadline) {
 		if err := r.deliveries(); err != nil {
 			failed = errors.Join(failed, err)
 		}
 		if !r.tracker.InFlight() {
-			return errors.Join(failed, r.commit(r.ids()))
+			return failed
 		}
 		r.clock.Sleep(10 * time.Millisecond)
 	}
-	return errors.Join(failed, r.commit(r.ids()), fmt.Errorf("outstanding writes did not finish within 10 seconds"))
+	return errors.Join(failed, fmt.Errorf("outstanding writes did not finish within 10 seconds"))
 }

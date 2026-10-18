@@ -110,8 +110,8 @@ func startRule(rule string) string {
 
 func renderBehavior(output io.Writer, report inspect.Report) {
 	fmt.Fprintln(output, "\nBehavior")
-	if report.Limit > 0 {
-		fmt.Fprintf(output, "  Limit: at most %d records per worker this run. Resuming gets a fresh limit.\n", report.Limit)
+	if report.WorkerStopAfterRecords > 0 {
+		fmt.Fprintf(output, "  Worker stop: after %d records accepted for writing. Resuming gets a fresh allowance.\n", report.WorkerStopAfterRecords)
 	}
 	if report.Destination.Kind == "TOPIC" {
 		fmt.Fprintln(output, "  Routing: original key bytes; destination partitioner.")

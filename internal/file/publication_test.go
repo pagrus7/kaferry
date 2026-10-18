@@ -341,7 +341,7 @@ func TestCheckpointRenameFailurePreservesSavedPositionAndPendingFrames(t *testin
 	cp, err := NewCheckpoints(dir, "g", DurableWriter{})
 	require.NoError(t, err)
 	defer cp.Close()
-	cp.Initialize(Checkpoint{Version: 2, OpeningSize: 10, Fingerprint: "fp", SourceID: "source", Position: 0})
+	cp.Initialize(Checkpoint{Version: 3, OpeningSize: 10, Fingerprint: "fp", SourceID: "source", Position: 0})
 
 	// When
 	_, saveErr := cp.Save(context.Background(), []core.Cursor{{Partition: 0}})

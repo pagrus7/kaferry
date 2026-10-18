@@ -15,7 +15,7 @@ import (
 )
 
 const MaxBytes = 4096
-const prefix = "kaferry:1;"
+const prefix = "kaferry:2;"
 
 // Progress is independent of the serialized field names and representation.
 type Progress struct {
@@ -137,7 +137,7 @@ func validate(p Progress) error {
 	if p.Window != nil && p.Window.Lower != nil && p.Window.Upper != nil && *p.Window.Lower >= *p.Window.Upper {
 		return &Error{Kind: "invalid"}
 	}
-	if p.Stop != nil && (p.Stop.At < 0 || (p.Stop.Reason != "timestamp" && p.Stop.Reason != "tip")) {
+	if p.Stop != nil && (p.Stop.At < 0 || (p.Stop.Reason != "timestamp" && p.Stop.Reason != "tip" && p.Stop.Reason != "worker_record_cap")) {
 		return &Error{Kind: "invalid"}
 	}
 	return nil

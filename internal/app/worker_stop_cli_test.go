@@ -16,16 +16,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFileLimitResumeAndSavedStatus(t *testing.T) {
-	type step struct{ limit, records, status int }
-	resume := []step{{2, 2, 4}, {1, 3, 4}, {10, 5, 0}}
+func TestFileWorkerStopResumeAndSavedStatus(t *testing.T) {
+	type step struct {
+		stopAfter, records int
+		reason             string
+	}
+	resume := []step{{2, 2, "worker_record_cap"}, {1, 3, "worker_record_cap"}, {10, 5, "eof"}}
 	for _, scenario := range []struct {
 		name, group string
 		steps       []step
 	}{
 		{"named group", "'preview'", resume},
 		{"one-off resumed by logged group", "ONE_OFF", resume},
-		{"one-off reaches EOF before cap", "ONE_OFF", []step{{10, 5, 0}}},
+		{"one-off reaches EOF before cap", "ONE_OFF", []step{{10, 5, "eof"}}},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			// Given five complete record frames and an empty destination.
@@ -45,7 +48,7 @@ func TestFileLimitResumeAndSavedStatus(t *testing.T) {
 			require.NoError(t, os.WriteFile(source, data, 0600))
 			query := strings.Replace(fixture.query, "'preview'", scenario.group, 1)
 			for _, step := range scenario.steps {
-				limited := strings.Replace(query, "OPTIONS", fmt.Sprintf("LIMIT %d OPTIONS", step.limit), 1)
+				limited := strings.Replace(query, "OPTIONS(", fmt.Sprintf("OPTIONS(WORKER_STOP_AFTER_RECORDS=%d,", step.stopAfter), 1)
 				var diagnostics bytes.Buffer
 				// When running or resuming with a fresh cap, possibly a different one.
 				code := Execute(t.Context(), []string{"run", "-e", limited, "-c", fixture.config}, nil, io.Discard, &diagnostics)
@@ -63,18 +66,14 @@ func TestFileLimitResumeAndSavedStatus(t *testing.T) {
 				var stdout bytes.Buffer
 				diagnostics.Reset()
 				code = Execute(t.Context(), []string{"status", "-e", query, "-c", fixture.config, "--json"}, nil, &stdout, &diagnostics)
-				require.Equal(t, step.status, code, diagnostics.String())
+				require.Equal(t, 0, code, diagnostics.String())
 				var report inspect.StatusReport
 				require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
 				require.Len(t, report.Partitions, 1)
-				if step.status == 4 {
-					require.Equal(t, "incomplete", report.Verdict)
-					require.Nil(t, report.Partitions[0].Stop, "a cap is not evidence of source exhaustion")
-				} else {
-					require.Equal(t, "stopped", report.Verdict)
-					require.NotNil(t, report.Partitions[0].Stop)
-					require.Equal(t, "eof", report.Partitions[0].Stop.Reason)
-				}
+				require.Equal(t, "stopped", report.Verdict)
+				require.NotNil(t, report.Partitions[0].Stop)
+				require.Equal(t, step.reason, report.Partitions[0].Stop.Reason)
+				require.Equal(t, inspect.StopDescription(step.reason), report.Reason)
 			}
 		})
 	}

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -79,9 +78,10 @@ func (s *streamRecords) verify(t *testing.T, record *k.Message) {
 	if id%7 == 0 {
 		key = nil
 	}
-	if !bytes.Equal(record.Key, key) || (record.Key == nil) != (key == nil) || len(record.Value) != 1024+id%4096 || !record.Timestamp.Equal(s.stamp) || !reflect.DeepEqual(record.Headers, s.headers) {
-		t.Fatal("logical record changed", id)
-	}
+	require.Equal(t, key, record.Key, "record %d key", id)
+	require.Len(t, record.Value, 1024+id%4096, "record %d value length", id)
+	require.True(t, record.Timestamp.Equal(s.stamp), "record %d timestamp: got %v, want %v", id, record.Timestamp, s.stamp)
+	require.Equal(t, s.headers, record.Headers, "record %d headers", id)
 	wantByte := byte(id % 251)
 	for offset, b := range record.Value[4:] {
 		if b != wantByte {

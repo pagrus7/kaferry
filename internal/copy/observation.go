@@ -13,6 +13,7 @@ type Snapshot struct {
 	PendingEntries, PendingEstimatedBytes          int64
 	EntryCap, EstimatedByteCap                     int64
 	Partitions, TimestampStops, TipStops, EOFStops int64
+	WorkerRecordStops                              int64
 }
 
 type SaveResult struct {
@@ -68,7 +69,7 @@ func (r *Runner) report(final bool) {
 	if logDue {
 		r.log.Info("progress", "submitted", s.Submitted, "confirmed", s.Confirmed,
 			"filtered", s.Filtered, "skipped", s.Skipped, "partitions", s.Partitions,
-			"stopped", s.TimestampStops+s.TipStops+s.EOFStops,
+			"stopped", s.TimestampStops+s.TipStops+s.EOFStops+s.WorkerRecordStops,
 			"pending_entries", s.PendingEntries, "pending_estimated_bytes", s.PendingEstimatedBytes)
 		r.nextProgress = now.Add(r.progressInterval)
 	}
@@ -93,6 +94,8 @@ func (r *Runner) snapshot() Snapshot {
 			s.TipStops++
 		case "eof":
 			s.EOFStops++
+		case "worker_record_cap":
+			s.WorkerRecordStops++
 		}
 	}
 	return s
