@@ -68,6 +68,8 @@ func TestInsecureSettingMustMatchEndpointScheme(t *testing.T) {
 		{"http", "false", "", "OTEL_EXPORTER_OTLP_INSECURE"},
 		{"https", "", "true", "OTEL_EXPORTER_OTLP_METRICS_INSECURE"},
 		{"http", "", "false", "OTEL_EXPORTER_OTLP_METRICS_INSECURE"},
+		{"https", "true", " \t", "OTEL_EXPORTER_OTLP_INSECURE"},
+		{"http", "false", " \t", "OTEL_EXPORTER_OTLP_INSECURE"},
 		{"https", "true", "false", ""},
 		{"http", "false", "true", ""},
 	} {

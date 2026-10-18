@@ -124,11 +124,13 @@ func milliseconds(name, value string) error {
 
 func setting(env Environment, suffix string) (string, string) {
 	name := "OTEL_EXPORTER_OTLP_METRICS_" + suffix
-	if value, _ := env.LookupEnv(name); value != "" {
-		return name, strings.TrimSpace(value)
+	value, _ := env.LookupEnv(name)
+	value = strings.TrimSpace(value)
+	if value != "" {
+		return name, value
 	}
 	name = "OTEL_EXPORTER_OTLP_" + suffix
-	value, _ := env.LookupEnv(name)
+	value, _ = env.LookupEnv(name)
 	return name, strings.TrimSpace(value)
 }
 
