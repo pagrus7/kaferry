@@ -174,6 +174,6 @@ Release archives contain the binary, MIT license and notices for linked Go modul
 
 The workflow builds Linux AMD64/ARM64 static binaries and macOS AMD64/ARM64 binaries, then produces per-platform SPDX SBOMs, archive provenance and binary SBOM attestations. [Notices generation](../scripts/notices.py) inspects actual linked packages and fails if required licenses cannot be found.
 
-For downloads with attestation bundles, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document`. Attestations establish build origin. Downloads without these bundles can be checked against `SHA256SUMS` for file integrity.
+For downloads with attestation bundles, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document/v2.3`. Attestations establish build origin. Downloads without these bundles can be checked against `SHA256SUMS` for file integrity.
 
 Manual dispatch defaults to validating builds without publishing. Publishing requires a `v*` tag; the workflow checks that the built commit matches the tag. [Release procedure and note format](../releases/README.md).
