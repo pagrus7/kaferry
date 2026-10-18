@@ -101,6 +101,9 @@ class PRDescriptionTest(unittest.TestCase):
             with self.subTest(result=result):
                 # When linting, then each review must use the agreed result format.
                 self.assertTrue(validate(VALID.replace("Passed", result)))
+                self.assertTrue(validate(VALID.replace("Passed", result), draft=True))
+        for result in ('Pending review', 'pending', 'Failed:'):
+            self.assertTrue(validate(VALID.replace('Passed', result), draft=True))
 
     def test_markdown_heading_variants_cannot_hide_duplicate_sections(self):
         # Given equivalent headings with indentation or optional closing hashes.
@@ -138,6 +141,17 @@ class PRDescriptionTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0 if valid else 1)
                 self.assertFalse((root / "unexpected").exists())
                 self.assertNotIn("$(touch", result.stdout + result.stderr)
+
+    def test_draft_event_allows_pending_but_missing_flag_fails_closed(self):
+        # Given the same pending body in a draft, ready or incomplete event.
+        script = Path(__file__).with_name('pr_description.py')
+        with tempfile.TemporaryDirectory() as name:
+            event = Path(name) / 'event.json'
+            for flags, code in (({'draft': True}, 0), ({'draft': False}, 1), ({}, 1)):
+                event.write_text(json.dumps({'pull_request': {'body': VALID.replace('Passed', 'Pending'), **flags}}))
+                # When checked through the entrypoint, then only the explicit draft is accepted.
+                result = subprocess.run([sys.executable, str(script)], env=dict(os.environ, GITHUB_EVENT_PATH=str(event)), capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, code, result.stderr)
 
 
 if __name__ == "__main__":

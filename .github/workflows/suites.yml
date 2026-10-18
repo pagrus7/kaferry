@@ -23,7 +23,7 @@ env:
 jobs:
   suite:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.suite == 'soak' && 60 || 45 }}
     strategy:
       fail-fast: false
       matrix:
@@ -67,11 +67,27 @@ jobs:
       - name: Run suite
         run: |
           case "$SUITE" in
-            integration) python3 scripts/ci.py integration env CGO_ENABLED=1 go test -count=1 -race -tags=integration ./tests/compat ;;
-            load) python3 scripts/ci.py load go test -count=1 -tags=integration,load -run '^TestLoad' -v ./tests/compat ;;
-            soak) python3 scripts/ci.py soak go test -count=1 -timeout=40m -tags=integration,load -run '^TestStreamingSoak' -v ./tests/compat ;;
-            qualification) python3 scripts/ci.py qualification sh tests/qualification/run.sh ;;
-            fault|fuzz|benchmark) python3 scripts/ci.py "$SUITE" make "$SUITE" ;;
+            integration)
+              python3 scripts/ci.py integration env CGO_ENABLED=1 go test -count=1 -json -race -tags=integration ./tests/compat
+              python3 scripts/ci.py verify-tests integration 'TestTopicToTopicSlice' 'TestAllFileDirectionsAndResume' 'TestCLIInterruptCommitsAndResumeDoesNotRecopy'
+              ;;
+            load)
+              python3 scripts/ci.py load go test -count=1 -json -tags=integration,load -run '^TestLoad' ./tests/compat
+              python3 scripts/ci.py verify-tests load 'TestLoadBoundedKafkaCopy/default' 'TestLoadObservability/round-0/disabled'
+              ;;
+            soak)
+              python3 scripts/ci.py soak go test -count=1 -timeout=40m -json -tags=integration,load -run '^TestStreamingSoak' ./tests/compat
+              python3 scripts/ci.py verify-tests soak 'TestStreamingSoakFidelityCommitLagMemoryAndShutdown'
+              ;;
+            qualification)
+              python3 scripts/ci.py qualification sh tests/qualification/run.sh
+              python3 scripts/ci.py verify-tests qualification 'TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight' 'TestSaslTlsScramMechanisms/SCRAM-SHA-256' 'TestSaslTlsScramMechanisms/SCRAM-SHA-512' 'TestReplicatedClusterLeaderFailurePreservesCopy'
+              ;;
+            fault)
+              python3 scripts/ci.py fault go test -count=1 -json -tags=integration,fault -run 'TestBlockingCommit|TestRebalanceChurn' ./tests/compat
+              python3 scripts/ci.py verify-tests fault 'TestBlockingCommitAcrossBrokerOutage' 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits'
+              ;;
+            fuzz|benchmark) python3 scripts/ci.py "$SUITE" make "$SUITE" ;;
             *) echo 'Unknown extended test suite' >&2; exit 1 ;;
           esac
       - name: Previous successful measurements
@@ -79,6 +95,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/history.py "$SUITE"
+      - name: Reject source rebuilds in archive tests
+        if: always() && inputs.artifact != ''
+        run: test ! -e bin/kaferry
       - if: always() && contains(fromJSON('["integration","load","soak","fault"]'), matrix.suite)
         run: |
           mkdir -p build-results

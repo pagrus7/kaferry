@@ -7,12 +7,27 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
 import time
 
 from quality import benchmarks, markdown
 from history import comparison
+
+
+def verify_tests(log, expected):
+    passed = set()
+    for line in log.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get('Action') == 'pass' and event.get('Test'):
+            passed.add(event['Test'])
+    missing = [pattern for pattern in expected if not any(re.fullmatch(pattern, name) for name in passed)]
+    if missing:
+        raise ValueError('Required tests did not pass: ' + ', '.join(missing))
 
 
 def capture(command):
@@ -111,5 +126,7 @@ if __name__ == "__main__":
     output = Path(os.environ.get("KAFERRY_REPORT_DIR", "build-results"))
     if sys.argv[1] == "summary":
         summarize(output)
+    elif sys.argv[1] == 'verify-tests':
+        verify_tests((output / f'{sys.argv[2]}.log').read_text(), sys.argv[3:])
     else:
         sys.exit(run(sys.argv[1], sys.argv[2:], output))
