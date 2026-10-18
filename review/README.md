@@ -2,6 +2,8 @@
 
 Shared instructions for coding clients with file access and independent agents. The role criteria live in [docs](docs.md), [tests](tests.md) and [simplicity](simplicity.md). Client-specific agent definitions only select settings and point here.
 
+Give initial reviewers scope and evidence without suspected issues or preferred fixes. To validate instructions, record known cases privately, then compare fresh reviewers' first reports; keep misses in the record. Hinted follow-ups do not demonstrate independent discovery. Use fresh context for each revised instruction version. Fix-verification follow-ups may refer to findings and changes.
+
 ## Run a review
 
 The agent doing the work coordinates these steps. Individual reviewers follow the Reviewer contract below.
