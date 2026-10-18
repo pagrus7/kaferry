@@ -70,18 +70,20 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 				want = min(count, scenario.limit)
 			}
 			// When executing the bounded copy and sampling its memory.
-			start := time.Now()
-			process := startCLI(t, ctx, binaryPath, statement, args...)
+			process := launchCLI(t, ctx, binaryPath, args...)
 			report.cli = process
-			stopSampling := watchRSS(process)
+			report.MeasurementMethod = "sql_release_to_exit"
+			stopSampling := watchRSS(t, process)
+			start := time.Now()
+			require.NoError(t, process.send(statement), "release SQL input")
 			err := process.wait()
 			elapsed := time.Since(start)
 			memory := stopSampling()
 			report.ElapsedSeconds = elapsed.Seconds()
 			report.ChildCPUSeconds = process.cpu().Seconds()
 			report.SampledPeakRSSBytes = memory.peak * 1024
+			report.RSSSamples = memory.samples
 			require.NoError(t, err, "load copy: %v %s", err, process.logs())
-			require.NotZero(t, memory.samples, "no RSS samples; failures=%d", memory.failures)
 			summary := summaryFrom(t, process.logs())
 			report.Records = summary.Confirmed
 			report.RecordsPerSecond = float64(report.Records) / elapsed.Seconds()

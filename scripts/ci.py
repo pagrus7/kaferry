@@ -65,15 +65,15 @@ def summarize(directory):
     for filename in sorted(directory.glob("*.result.json")):
         result = json.loads(filename.read_text())
         rows.append(f"| {filename.stem.removesuffix('.result')} | {'PASS' if result['exit_code'] == 0 else 'FAIL'} | {result['elapsed_seconds']:.1f} |")
-    rows.extend(["", "| Test | Result | Records | Records/s | Sampled peak RSS MiB | RSS growth MiB | Peak uncommitted records / bytes | Sampled max lag | Shutdown s |",
-                 "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"])
+    rows.extend(["", "| Test | Result | Records | Records/s | Sampled peak RSS MiB | RSS samples | RSS growth MiB | Peak uncommitted records / bytes | Sampled max lag | Shutdown s |",
+                 "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"])
     for filename in sorted(directory.glob("*.metrics.json")):
         r = json.loads(filename.read_text())
         status = "SKIP" if r["skipped"] else "PASS" if r["passed"] else "FAIL"
         growth = ((r["final_median_rss_bytes"] - r["warm_median_rss_bytes"]) / (1 << 20)
                   if "final_median_rss_bytes" in r and "warm_median_rss_bytes" in r else None)
         shutdown = f"{r['shutdown_seconds']:.3f}" if "shutdown_seconds" in r else "—"
-        rows.append(f"| {r['test']} | {status} | {r['records']} | {r['records_per_second']:.0f} | {r['sampled_peak_rss_bytes'] / (1 << 20):.1f} | {f'{growth:.1f}' if growth is not None else '—'} | {r['peak_uncommitted_records']} / {r['peak_uncommitted_bytes']} | {r.get('max_sampled_commit_lag', '—')} | {shutdown} |")
+        rows.append(f"| {r['test']} | {status} | {r['records']} | {r['records_per_second']:.0f} | {r['sampled_peak_rss_bytes'] / (1 << 20):.1f} | {r.get('rss_samples', '—')} | {f'{growth:.1f}' if growth is not None else '—'} | {r['peak_uncommitted_records']} / {r['peak_uncommitted_bytes']} | {r.get('max_sampled_commit_lag', '—')} | {shutdown} |")
     benchmark = directory / "benchmark.log"
     if benchmark.exists():
         rows += ["", "### CBOR microbenchmarks", "", "| Benchmark | ns/op | B/op | allocs/op |",
@@ -82,7 +82,7 @@ def summarize(directory):
             rows.append(f"| {name} | {ns} | {size} | {allocations} |")
     rows.extend(markdown(directory))
     rows.extend(comparison(directory))
-    rows.extend(["", "Throughput is informational on shared runners. JSON metrics, environment, coverage and logs are retained in this run's artifacts.", ""])
+    rows.extend(["", "Throughput is informational on shared runners. Bounded load timing starts at SQL input release and ends at process exit. RSS includes one sample before SQL input; short copies may finish before another sample. JSON metrics, environment, coverage and logs are retained in this run's artifacts.", ""])
     text = "\n".join(rows)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "summary.md").write_text(text)

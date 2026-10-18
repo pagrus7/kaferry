@@ -26,9 +26,11 @@ type loadReport struct {
 	BinarySHA256           string  `json:"binary_sha256,omitempty"`
 	Records                int     `json:"records"`
 	WorkerStopAfterRecords int     `json:"worker_stop_after_records,omitempty"`
+	MeasurementMethod      string  `json:"measurement_method,omitempty"`
 	ElapsedSeconds         float64 `json:"elapsed_seconds"`
 	RecordsPerSecond       float64 `json:"records_per_second"`
 	ChildCPUSeconds        float64 `json:"child_cpu_seconds"`
+	RSSSamples             int     `json:"rss_samples,omitempty"`
 	SampledPeakRSSBytes    int64   `json:"sampled_peak_rss_bytes"`
 	WarmMedianRSSBytes     int64   `json:"warm_median_rss_bytes,omitempty"`
 	FinalMedianRSSBytes    int64   `json:"final_median_rss_bytes,omitempty"`
