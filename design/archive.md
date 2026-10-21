@@ -1,6 +1,6 @@
 # Archive redesign
 
-Accepted design for directory-based Avro archives. Only the codec is implemented. Capture, recovery, rotation, replay and summaries are pending; the CLI uses [CBOR files](../docs/usage.md).
+Accepted design for directory-based Avro archives. The codec and capture/storage components are implemented. Replay, summaries and CLI integration are pending; the CLI uses [CBOR files](../docs/usage.md).
 
 ## Records and files
 
@@ -42,6 +42,8 @@ Create a namespace with valid empty recovery state under a temporary name, sync 
 
 Any write or sync failure stops capture without further acknowledgements. Required state is versioned and checked for corruption. A record-skip policy cannot bypass a storage failure.
 
+Writer state uses canonical JSON in a SHA-256 envelope. It stores version `1`, writer ID and each private file's full identity, acknowledged byte length and record count. Both saving and loading enforce a 16 MiB limit. State replacement syncs the new file and its directory before returning success.
+
 Recovery validates each saved prefix. Truncate only its unacknowledged private tail, sync, and publish the prefix; start a new file for further capture. A completed file must match the saved identity and length and is never truncated. Missing, shortened or corrupt acknowledged data is fatal. Discard unlisted private files only when valid initialized state and ownership prove they were never acknowledged.
 
 Publishing renames a synced private file without overwriting a conflicting target, syncs the data directory, then durably removes its state entry. A crash between output durability and Kafka commit can produce duplicates; retain them.
@@ -59,6 +61,8 @@ OPTIONS (GROUP = 'orders-archive', START = EARLIEST);
 Only the path is required. Defaults: 1g compressed container bytes or one elapsed hour. Size suffixes k/m/g are case-insensitive powers of 1024; plain integers are bytes. The complete crossing block may exceed the size target. Check age even when no records arrive.
 
 Also rotate when original source identity changes or offsets decrease; equal offsets are allowed. Worker completion publishes every nonempty remainder. Graceful shutdown attempts this within the shutdown deadline. Work caps and source commits flush durable blocks without forcing rotation. Create no empty data files.
+
+The capture component caps open files at 128 by default. Its caller may override this budget. At capacity, publish the least recently used file before opening another; this can produce files below the size/age targets. Check age during input and quiet flushes. `Finish` publishes remaining files; `Close` only releases resources. Calls use one event loop.
 
 ## Replay and progress
 

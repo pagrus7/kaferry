@@ -57,6 +57,7 @@ fuzz:
 	$(GO) test -run '^$$' -fuzz FuzzFraming -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/file
 	$(GO) test -run '^$$' -fuzz FuzzRecordDecoder -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/file
 	$(GO) test -run '^$$' -fuzz FuzzContainer -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/archive/avro
+	$(GO) test -run '^$$' -fuzz FuzzState -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/archive/capture
 benchmark:
 	$(GO) test -run '^$$' -bench BenchmarkRecordFraming -benchmem ./internal/file
 	$(GO) test -run '^$$' -bench 'Benchmark(Encode|Decode)$$' -benchmem ./internal/archive/avro
