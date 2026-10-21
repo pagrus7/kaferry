@@ -21,10 +21,8 @@ func Encode[T any](state T, limit int) ([]byte, error) {
 		return nil, err
 	}
 	hash := sha256.Sum256(payload)
-	data, err := json.Marshal(envelope{State: payload, SHA256: hex.EncodeToString(hash[:])})
-	if err != nil {
-		return nil, err
-	}
+	// The envelope contains valid JSON from Marshal above and a hexadecimal string.
+	data, _ := json.Marshal(envelope{State: payload, SHA256: hex.EncodeToString(hash[:])})
 	if len(data) > limit {
 		return nil, fmt.Errorf("checkpoint exceeds %d MiB", limit>>20)
 	}

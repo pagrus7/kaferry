@@ -4,7 +4,6 @@ import (
 	"container/heap"
 	"errors"
 	"io"
-	"strings"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
 )
@@ -21,7 +20,6 @@ type Entry struct {
 type head struct {
 	file   int
 	offset int64
-	cursor Position
 	source avro.Source
 	id     string
 }
@@ -37,13 +35,7 @@ func (h heads) Less(a, b int) bool {
 	if x.offset != y.offset {
 		return x.offset < y.offset
 	}
-	if n := strings.Compare(x.id, y.id); n != 0 {
-		return n < 0
-	}
-	if x.cursor.Block != y.cursor.Block {
-		return x.cursor.Block < y.cursor.Block
-	}
-	return x.cursor.Record < y.cursor.Record
+	return x.id < y.id
 }
 func (h *heads) Push(v any) { *h = append(*h, v.(head)) }
 func (h *heads) Pop() any {
@@ -89,7 +81,7 @@ func NewReader(files []Progress, blocks Blocks) (*Reader, error) {
 
 func (r *Reader) push(i int, offset int64) {
 	p := r.files[i]
-	heap.Push(&r.queue, head{file: i, offset: offset, cursor: p.Next, source: p.File.Identity.Source, id: p.File.Identity.FileID})
+	heap.Push(&r.queue, head{file: i, offset: offset, source: p.File.Identity.Source, id: p.File.Identity.FileID})
 }
 
 func (r *Reader) Next() (entry Entry, err error) {

@@ -48,10 +48,10 @@ func TestReplayRejectsOffsetsDecreasingBetweenBlocks(t *testing.T) {
 }
 
 func TestDifferentSourceIdentitiesDoNotMergeTheirOffsets(t *testing.T) {
-	// Given reused topic names and offsets with different original topic IDs and partitions.
+	// Given reused offsets in different clusters, topics, topic IDs and partitions.
 	root := t.TempDir()
 	var expected []avro.Record
-	for i := range 3 {
+	for i := range 5 {
 		values := records(42, 43)
 		for j := range values {
 			if i == 1 {
@@ -59,6 +59,12 @@ func TestDifferentSourceIdentitiesDoNotMergeTheirOffsets(t *testing.T) {
 			}
 			if i == 2 {
 				values[j].Source.TopicID[0] = 2
+			}
+			if i == 3 {
+				values[j].Source.Topic = "payments"
+			}
+			if i == 4 {
+				values[j].Source.Cluster = "cluster-b"
 			}
 		}
 		writeFile(t, root, i+1, values, 0)

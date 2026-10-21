@@ -54,7 +54,7 @@ func TestGroupLockSurvivesCheckpointReplacementAndReleasesOnClose(t *testing.T) 
 func TestCheckpointRejectsCorruptionAmbiguityAndInvalidState(t *testing.T) {
 	good, err := checkpoint.Encode(emptyState(), maxCheckpointBytes)
 	require.NoError(t, err)
-	for _, kind := range []string{"checksum", "whitespace", "unknown field", "unknown version", "wrong group", "nil files", "completion", "negative sequence", "bad file", "bad cursor", "duplicate file", "window"} {
+	for _, kind := range []string{"checksum", "whitespace", "unknown field", "unknown version", "wrong group", "nil files", "completion", "negative sequence", "bad file", "bad digest", "bad start", "bad size", "bad cursor", "duplicate file", "window"} {
 		t.Run(kind, func(t *testing.T) {
 			// Given a corrupt or semantically invalid replay checkpoint.
 			j, err := NewJournal(t.TempDir(), query().Group, NativeGroupFiles{}, file.DurableWriter{})
@@ -89,6 +89,12 @@ func TestCheckpointRejectsCorruptionAmbiguityAndInvalidState(t *testing.T) {
 				switch kind {
 				case "bad file":
 					state.Files[0].File.Identity.FileID = "../bad"
+				case "bad digest":
+					state.Files[0].File.SHA256 = "not-a-digest"
+				case "bad start":
+					state.Files[0].File.Start = 0
+				case "bad size":
+					state.Files[0].File.Size = state.Files[0].File.Start
 				case "bad cursor":
 					state.Files[0].Next.Record = -1
 				case "duplicate file":
@@ -205,4 +211,24 @@ func TestCheckpointWireRoundTripIsCanonical(t *testing.T) {
 	require.Equal(t, emptyState(), got)
 	_, err = checkpoint.Decode[State](append(data, []byte("{}")...), maxCheckpointBytes)
 	require.Error(t, err)
+}
+
+func TestRejectedSavePreservesExistingCheckpoint(t *testing.T) {
+	// Given a valid checkpoint whose bytes must survive an invalid replacement request.
+	j, err := NewJournal(t.TempDir(), query().Group, NativeGroupFiles{}, file.DurableWriter{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, j.Close()) })
+	require.NoError(t, j.Save(emptyState()))
+	before, err := os.ReadFile(j.path)
+	require.NoError(t, err)
+	for _, invalid := range []State{
+		{Version: 2},
+		{Version: 1, Group: "foreign-group", Fingerprint: query().Fingerprint, Complete: true, Files: []Progress{}},
+	} {
+		// When saving invalid or foreign-group state, then the previous durable bytes remain intact.
+		require.Error(t, j.Save(invalid))
+		after, err := os.ReadFile(j.path)
+		require.NoError(t, err)
+		require.Equal(t, before, after)
+	}
 }

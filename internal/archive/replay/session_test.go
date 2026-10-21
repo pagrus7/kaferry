@@ -175,7 +175,7 @@ func TestResolvedWindowSurvivesRestartAndOutOfOrderTimestamps(t *testing.T) {
 }
 
 func TestStartupFailureNeverProducesOrChangesSavedProgress(t *testing.T) {
-	for _, stage := range []string{"load", "selection", "initial save", "resume validation", "query identity", "window"} {
+	for _, stage := range []string{"load", "selection", "initial save", "resume validation", "query identity", "window", "resume read"} {
 		t.Run(stage, func(t *testing.T) {
 			// Given a failure at one startup boundary.
 			values := records(42, 43)
@@ -184,9 +184,15 @@ func TestStartupFailureNeverProducesOrChangesSavedProgress(t *testing.T) {
 			inputs := &memorySnapshots{files: []File{f}}
 			blocks := &memoryBlocks{values: map[string][]avro.Record{f.Identity.FileID: values}}
 			q := query()
-			if stage == "resume validation" || stage == "query identity" || stage == "window" {
+			if stage == "resume validation" || stage == "query identity" || stage == "window" || stage == "resume read" {
 				prior := session(t, store, inputs, blocks, 10)
+				if stage == "resume read" {
+					_, err := prior.Next()
+					require.NoError(t, err)
+					require.NoError(t, prior.Checkpoint(1))
+				}
 				require.NoError(t, prior.Close())
+				blocks = &memoryBlocks{values: blocks.values}
 			}
 			switch stage {
 			case "load":
@@ -201,14 +207,22 @@ func TestStartupFailureNeverProducesOrChangesSavedProgress(t *testing.T) {
 				q.Fingerprint = "different"
 			case "window":
 				q.Window = plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 1}}
+			case "resume read":
+				blocks.fail = func(File, Position) error { return errDisk }
 			}
 			before := store.saved
-			reads := blocks.reads
-			// When opening, then it fails before any record reads or progress advancement.
+			reads, closes := blocks.reads, store.closes
+			// When opening fails, then saved progress and caller-owned resources remain unchanged.
 			_, err := NewSession(q, clock{}, store, inputs, blocks, 10)
 			require.Error(t, err)
-			require.Equal(t, reads, blocks.reads)
+			if stage == "resume read" {
+				require.Equal(t, reads+1, blocks.reads)
+			} else {
+				require.Equal(t, reads, blocks.reads)
+			}
 			require.Equal(t, before, store.saved)
+			require.Zero(t, blocks.closes, "failed construction leaves input cleanup to its caller")
+			require.Equal(t, closes, store.closes, "failed construction leaves checkpoint cleanup to its caller")
 		})
 	}
 }

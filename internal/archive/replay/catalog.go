@@ -2,6 +2,7 @@
 package replay
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -207,11 +208,8 @@ func compareFile(a, b File) int {
 	if n := compareSource(a.Identity.Source, b.Identity.Source); n != 0 {
 		return n
 	}
-	if a.Identity.FirstOffset < b.Identity.FirstOffset {
-		return -1
-	}
-	if a.Identity.FirstOffset > b.Identity.FirstOffset {
-		return 1
+	if n := cmp.Compare(a.Identity.FirstOffset, b.Identity.FirstOffset); n != 0 {
+		return n
 	}
 	return strings.Compare(a.Identity.FileID, b.Identity.FileID)
 }
@@ -226,11 +224,5 @@ func compareSource(a, b avro.Source) int {
 	if n := slices.Compare(a.TopicID[:], b.TopicID[:]); n != 0 {
 		return n
 	}
-	if a.Partition < b.Partition {
-		return -1
-	}
-	if a.Partition > b.Partition {
-		return 1
-	}
-	return 0
+	return cmp.Compare(a.Partition, b.Partition)
 }

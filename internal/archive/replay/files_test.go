@@ -265,3 +265,69 @@ func TestCatalogPinsOnlyCompletedRegularFilesAndReportsPrivateFiles(t *testing.T
 	_, err = catalog.Select()
 	require.ErrorContains(t, err, "regular file")
 }
+
+func TestRestartSkipsConsumedFilesAndResumesAtNextBlock(t *testing.T) {
+	// Given one consumed file and another saved after its first complete block, with read-ahead.
+	root, checkpoints := t.TempDir(), t.TempDir()
+	writeFile(t, root, 1, records(42), 0)
+	writeFile(t, root, 2, records(43, 44, 45, 46), 2)
+	s, _ := diskSession(t, root, checkpoints, query(), Limits{}, 10)
+	for range 4 {
+		_, err := s.Next()
+		require.NoError(t, err)
+	}
+	require.NoError(t, s.Checkpoint(3))
+	require.NoError(t, s.Close())
+	// When restarting, then only the second block is returned and the group completes.
+	resumed, _ := diskSession(t, root, checkpoints, query(), Limits{}, 10)
+	require.Equal(t, records(45, 46), drain(t, resumed, true))
+	require.True(t, resumed.Saved().Complete)
+}
+
+func TestMalformedCompletedInputFailsBeforeOutputOrProgress(t *testing.T) {
+	for _, damage := range []string{"missing root", "header only", "corrupt block"} {
+		t.Run(damage, func(t *testing.T) {
+			// Given an absent archive, a header-only file or a bad block checksum.
+			root := t.TempDir()
+			switch damage {
+			case "missing root":
+				root = filepath.Join(root, "missing")
+			case "header only":
+				meta := descriptor(1, records(42))
+				f, err := os.Create(filepath.Join(root, meta.name()))
+				require.NoError(t, err)
+				_, err = codec(t).NewWriter(f, meta.Identity)
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+			case "corrupt block":
+				meta := writeFile(t, root, 1, records(42), 0)
+				path := filepath.Join(root, meta.name())
+				data, err := os.ReadFile(path)
+				require.NoError(t, err)
+				data[len(data)-17] ^= 1
+				require.NoError(t, os.WriteFile(path, data, 0600))
+			}
+			store := &memoryCheckpoints{}
+			catalog := NewCatalog(root, codec(t), NativeFiles{})
+			meter := &measuredOpener{Opener: catalog}
+			pool, err := NewPool(meter, Limits{})
+			require.NoError(t, err)
+			defer pool.Close()
+			// When selecting or reading, then malformed input cannot produce records or advance progress.
+			s, err := NewSession(query(), clock{}, store, catalog, pool, 10)
+			if damage != "corrupt block" {
+				require.Error(t, err)
+				require.Empty(t, store.writes, "do not pin an incomplete selection")
+				return
+			}
+			require.NoError(t, err)
+			defer s.Close()
+			_, first := s.Next()
+			require.Error(t, first)
+			_, second := s.Next()
+			require.Equal(t, first, second)
+			require.Equal(t, 1, meter.blocks, "terminal failures do not retry input")
+			require.Zero(t, store.saved.Position)
+		})
+	}
+}
