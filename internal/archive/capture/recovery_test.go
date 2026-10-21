@@ -157,3 +157,40 @@ func TestRecoveryDiscardsOnlyOwnedUnlistedPrivateFiles(t *testing.T) {
 	require.DirExists(t, initializing)
 	require.Empty(t, completeFiles(t, root))
 }
+
+func TestRecoveryPreservesUnrecognizedOwnedPrivateEntries(t *testing.T) {
+	for _, kind := range []string{"malformed ID", "directory", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			// Given valid writer state and a private entry whose identity or type is untrusted.
+			root := t.TempDir()
+			s := openStore(t, root, NativeFiles{}, file.DurableWriter{})
+			require.NoError(t, s.Close())
+			id := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			if kind == "malformed ID" {
+				id = "bad"
+			}
+			entry := filepath.Join(root, "."+s.state.WriterID+"."+id+".partial")
+			contentPath := entry
+			switch kind {
+			case "directory":
+				require.NoError(t, os.Mkdir(entry, 0700))
+				contentPath = filepath.Join(entry, "keep")
+			case "symlink":
+				contentPath = filepath.Join(t.TempDir(), "keep")
+				require.NoError(t, os.Symlink(contentPath, entry))
+			}
+			require.NoError(t, os.WriteFile(contentPath, []byte("preserve this data"), 0600))
+			before, err := os.Lstat(entry)
+			require.NoError(t, err)
+			// When startup scans private files, then it fails without deleting the entry or target.
+			_, err = Open(root, testCodec(t), NativeFiles{}, NewJournal(NativeFiles{}, file.DurableWriter{}))
+			require.ErrorContains(t, err, "unrecognized private archive file")
+			after, err := os.Lstat(entry)
+			require.NoError(t, err)
+			require.True(t, os.SameFile(before, after), "the original entry remains")
+			data, err := os.ReadFile(contentPath)
+			require.NoError(t, err)
+			require.Equal(t, "preserve this data", string(data))
+		})
+	}
+}
