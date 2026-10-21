@@ -147,7 +147,7 @@ func TestRejectedRecordDoesNotChangePendingBlock(t *testing.T) {
 		func(r *Record) { r.TimestampKind = "bad" },
 		func(r *Record) { r.Offset-- },
 		func(r *Record) { r.Source.TopicID[0]++ },
-		func(r *Record) { r.Headers = make([]Header, maxHeaders+1) },
+		func(r *Record) { r.Headers = make([]Header, c.maxHeaders+1) },
 		func(r *Record) { r.Value = make([]byte, 4096) },
 	} {
 		bad := good

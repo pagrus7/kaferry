@@ -33,7 +33,7 @@ func TestHeaderCountLimitMatchesReader(t *testing.T) {
 	// Given a record at the maximum accepted header count.
 	c := codec(t, 2<<20)
 	record := records()[0]
-	record.Headers = make([]Header, maxHeaders)
+	record.Headers = make([]Header, c.maxHeaders)
 	for i := range record.Headers {
 		record.Headers[i].Key = []byte{}
 	}

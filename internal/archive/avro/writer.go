@@ -60,7 +60,7 @@ func (w *Writer) Append(record Record) error {
 	if w.failed != nil {
 		return w.failed
 	}
-	if err := record.validate(w.identity.Source); err != nil {
+	if err := record.validate(w.identity.Source, w.codec.maxHeaders); err != nil {
 		return &InvalidRecord{Err: err}
 	}
 	if record.Offset < w.last || w.count == 0 && record.Offset != w.identity.FirstOffset {

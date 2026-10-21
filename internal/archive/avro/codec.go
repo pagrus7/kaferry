@@ -23,7 +23,6 @@ const (
 	Version        = 1
 	BlockTarget    = 256 << 10
 	maxHeaderBytes = 64 << 10
-	maxHeaders     = 65536
 	maxRecords     = 1_000_000
 )
 
@@ -58,17 +57,19 @@ type Identity struct {
 }
 
 type Codec struct {
-	api    lib.API
-	schema lib.Schema
-	limit  int64
+	api        lib.API
+	schema     lib.Schema
+	limit      int64
+	maxHeaders int
 }
 
 func New(limit int64) (*Codec, error) {
 	if limit < 1 || limit > 1<<32-1 || snappy.MaxEncodedLen(int(limit)) < 0 {
 		return nil, errors.New("Avro block limit must be positive and fit Snappy size limits")
 	}
-	api := lib.Config{MaxByteSliceSize: int(limit), MaxSliceAllocSize: maxHeaders, MaxMapAllocSize: 16}.Freeze()
-	return &Codec{api: api, schema: recordSchema, limit: limit}, nil
+	headers := max(16, int(limit/32))
+	api := lib.Config{MaxByteSliceSize: int(limit), MaxSliceAllocSize: headers, MaxMapAllocSize: 16}.Freeze()
+	return &Codec{api: api, schema: recordSchema, limit: limit, maxHeaders: headers}, nil
 }
 
 // Schema returns the published record schema for standard Avro tooling.
@@ -106,7 +107,7 @@ func validID(value string) bool {
 	return true
 }
 
-func (r Record) validate(source Source) error {
+func (r Record) validate(source Source, maxHeaders int) error {
 	if r.Source != source || r.Offset < 0 {
 		return errors.New("record does not belong to this source partition")
 	}

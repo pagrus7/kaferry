@@ -72,7 +72,7 @@ type Block struct {
 	index      int64
 	last       int64
 	reader     *lib.Reader
-	schema     lib.Schema
+	codec      *Codec
 	identity   Identity
 	first      bool
 	err        error
@@ -121,7 +121,7 @@ func (r *Reader) Block(position int64) (*Block, error) {
 		return nil, errors.New("Avro record count exceeds block data")
 	}
 	decoder := lib.NewReader(nil, 0, lib.WithReaderConfig(r.codec.api)).Reset(raw)
-	return &Block{Start: position, End: end, Count: count, last: -1, reader: decoder, schema: r.codec.schema, identity: r.Identity, first: position == r.Start}, nil
+	return &Block{Start: position, End: end, Count: count, last: -1, reader: decoder, codec: r.codec, identity: r.Identity, first: position == r.Start}, nil
 }
 
 func (c *Codec) decompress(compressed []byte) ([]byte, error) {
@@ -140,12 +140,12 @@ func (b *Block) Next() (Record, error) {
 	if b.index == b.Count {
 		return record, io.EOF
 	}
-	b.reader.ReadVal(b.schema, &record)
+	b.reader.ReadVal(b.codec.schema, &record)
 	if b.reader.Error != nil {
 		b.err = fmt.Errorf("Avro record: %w", b.reader.Error)
 		return record, b.err
 	}
-	b.err = record.validate(b.identity.Source)
+	b.err = record.validate(b.identity.Source, b.codec.maxHeaders)
 	if b.err == nil && b.first && b.index == 0 && record.Offset != b.identity.FirstOffset {
 		b.err = errors.New("first source offset disagrees with Avro header")
 	}
