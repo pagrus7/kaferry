@@ -83,17 +83,23 @@ func TestBlockPositionsAndExactCount(t *testing.T) {
 
 func TestHeaderValidation(t *testing.T) {
 	c := codec(t, 4096)
-	meta, err := json.Marshal(identity())
+	id := identity()
+	id.BlockLimit = c.limit
+	meta, err := json.Marshal(id)
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name   string
 		change func(*ocf.Header)
 	}{
+		{"valid", func(h *ocf.Header) {}},
 		{"magic", func(h *ocf.Header) { h.Magic[0]++ }},
 		{"codec", func(h *ocf.Header) { h.Meta["avro.codec"] = []byte("null") }},
 		{"schema syntax", func(h *ocf.Header) { h.Meta["avro.schema"] = []byte("{") }},
 		{"schema", func(h *ocf.Header) { h.Meta["avro.schema"] = []byte(`"bytes"`) }},
 		{"identity syntax", func(h *ocf.Header) { h.Meta["kaferry"] = []byte("{") }},
+		{"missing identity", func(h *ocf.Header) { delete(h.Meta, "kaferry") }},
+		{"empty identity", func(h *ocf.Header) { h.Meta["kaferry"] = nil }},
+		{"whitespace identity", func(h *ocf.Header) { h.Meta["kaferry"] = []byte(" \n\t") }},
 		{"trailing identity", func(h *ocf.Header) { h.Meta["kaferry"] = append(h.Meta["kaferry"], []byte(" []")...) }},
 		{"unknown identity field", func(h *ocf.Header) { h.Meta["kaferry"] = []byte(`{"unexpected":true}`) }},
 		{"version", func(h *ocf.Header) {
@@ -101,14 +107,19 @@ func TestHeaderValidation(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Given an OCF header that violates the archive contract.
+			// Given a valid OCF header and variants that violate the archive contract.
 			header := ocf.Header{Magic: [4]byte{'O', 'b', 'j', 1}, Meta: map[string][]byte{"avro.codec": []byte("snappy"), "avro.schema": []byte(Schema()), "kaferry": bytes.Clone(meta)}}
 			tc.change(&header)
 			data, err := c.api.Marshal(ocf.HeaderSchema, header)
 			require.NoError(t, err)
-			// When opened, then the specific header is rejected before block reads.
+			// When opened, then only the unchanged header is accepted.
 			_, err = c.Open(bytes.NewReader(data), int64(len(data)))
+			if tc.name == "valid" {
+				require.NoError(t, err)
+				return
+			}
 			require.Error(t, err)
+			require.NotErrorIs(t, err, io.EOF, "invalid metadata cannot indicate normal completion")
 		})
 	}
 }

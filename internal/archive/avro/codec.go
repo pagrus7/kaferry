@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"unicode/utf8"
 
 	"github.com/golang/snappy"
@@ -157,13 +156,8 @@ func (r Record) validate() error {
 
 func parseIdentity(data []byte) (Identity, error) {
 	var identity Identity
-	d := json.NewDecoder(bytes.NewReader(data))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&identity); err != nil {
+	if err := json.Unmarshal(data, &identity); err != nil {
 		return identity, fmt.Errorf("invalid Avro identity: %w", err)
-	}
-	if err := d.Decode(new(any)); !errors.Is(err, io.EOF) {
-		return identity, errors.New("trailing Avro identity data")
 	}
 	canonical, _ := json.Marshal(identity)
 	if !bytes.Equal(data, canonical) {
