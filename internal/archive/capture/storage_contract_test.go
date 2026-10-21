@@ -36,6 +36,18 @@ func TestRecoveryStreamsRootOnceAcrossMultipleNamespaces(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(root, fmt.Sprintf("external-%04d", i)), nil, 0600))
 	}
 	fs := &observedFiles{Filesystem: NativeFiles{}}
+	fs.hook = func(op, _ string) error {
+		if op == "open-directory" || op == "read-directory-batch" {
+			for _, namespace := range []string{first.namespace, second.namespace} {
+				lock, err := (NativeFiles{}).TryLock(filepath.Join(namespace, "lock"))
+				if lock != nil {
+					require.NoError(t, lock.Close())
+				}
+				require.ErrorIs(t, err, ErrBusy, "both owners stay locked throughout cleanup")
+			}
+		}
+		return nil
+	}
 	// When startup recovers both owners, then one paged root scan serves both.
 	_ = openStore(t, root, fs, file.DurableWriter{})
 	joined := strings.Join(fs.events, "\n")
