@@ -64,11 +64,14 @@ func (w *Writer) Append(record Record) error {
 	if err := record.validate(); err != nil {
 		return err
 	}
-	if record.Source != w.identity.Source || record.Offset < w.last {
+	if record.Source != w.identity.Source {
 		return ErrRotationRequired
 	}
 	if w.count == 0 && record.Offset != w.identity.FirstOffset {
 		return errors.New("first source offset disagrees with file header")
+	}
+	if record.Offset < w.last {
+		return ErrRotationRequired
 	}
 	if len(record.Headers) > w.codec.maxHeaders {
 		return &InvalidRecord{Err: errors.New("record exceeds header count limit")}

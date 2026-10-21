@@ -143,13 +143,15 @@ func TestInvalidFileIdentityAndInitialOffset(t *testing.T) {
 	var output bytes.Buffer
 	w, err := c.NewWriter(&output, identity())
 	require.NoError(t, err)
-	bad := records()[0]
-	bad.Offset++
-	var rejected *InvalidRecord
-	err = w.Append(bad)
-	require.ErrorContains(t, err, "first source offset")
-	require.False(t, errors.As(err, &rejected), "metadata mistakes cannot be skipped")
-	require.Zero(t, w.Count())
+	for _, offset := range []int64{41, 43} {
+		bad := records()[0]
+		bad.Offset = offset
+		var rejected *InvalidRecord
+		err = w.Append(bad)
+		require.ErrorContains(t, err, "first source offset", "initial offset %d", offset)
+		require.False(t, errors.As(err, &rejected), "metadata mistakes cannot be skipped")
+		require.Zero(t, w.Count())
+	}
 	// Then the expected first record can still be appended after a rejection.
 	require.NoError(t, w.Append(records()[0]))
 	require.EqualValues(t, 1, w.Count())
