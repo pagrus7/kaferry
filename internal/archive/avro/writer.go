@@ -37,6 +37,7 @@ type Writer struct {
 }
 
 func (c *Codec) NewWriter(output io.Writer, identity Identity) (*Writer, error) {
+	identity.BlockLimit = c.limit
 	if err := identity.validate(); err != nil {
 		return nil, err
 	}
@@ -60,19 +61,25 @@ func (w *Writer) Append(record Record) error {
 	if w.failed != nil {
 		return w.failed
 	}
-	if err := record.validate(w.identity.Source, w.codec.maxHeaders); err != nil {
-		return &InvalidRecord{Err: err}
+	if err := record.validate(); err != nil {
+		return err
 	}
-	if record.Offset < w.last || w.count == 0 && record.Offset != w.identity.FirstOffset {
-		return &InvalidRecord{Err: errors.New("source offset decreased or disagrees with file header")}
+	if record.Source != w.identity.Source || record.Offset < w.last {
+		return ErrRotationRequired
+	}
+	if w.count == 0 && record.Offset != w.identity.FirstOffset {
+		return errors.New("first source offset disagrees with file header")
+	}
+	if len(record.Headers) > w.codec.maxHeaders {
+		return &InvalidRecord{Err: errors.New("record exceeds header count limit")}
 	}
 	if recordBytes(record) > w.codec.limit {
 		return &InvalidRecord{Err: errors.New("record exceeds Avro block limit")}
 	}
-	// Finish encoding before changing the container: a rejected record is safe to skip.
+	// Finish encoding before changing the container; format-limit rejections leave valid pending data intact.
 	data, err := w.codec.api.Marshal(w.codec.schema, record)
 	if err != nil {
-		return &InvalidRecord{Err: err}
+		return err
 	}
 	if int64(len(data)) > w.codec.limit {
 		return &InvalidRecord{Err: errors.New("record exceeds Avro block limit")}

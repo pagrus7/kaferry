@@ -45,7 +45,7 @@ func (c *Codec) Open(input io.ReaderAt, size int64) (*Reader, error) {
 	var header ocf.Header
 	decoder.ReadVal(ocf.HeaderSchema, &header)
 	if decoder.Error != nil {
-		return nil, fmt.Errorf("archive header: %w", decoder.Error)
+		return nil, fmt.Errorf("archive header: %w", incomplete(decoder.Error))
 	}
 	if header.Magic != [4]byte{'O', 'b', 'j', 1} || string(header.Meta["avro.codec"]) != "snappy" {
 		return nil, errors.New("archive requires Snappy Avro OCF")
@@ -60,6 +60,12 @@ func (c *Codec) Open(input io.ReaderAt, size int64) (*Reader, error) {
 	identity, err := parseIdentity(header.Meta["kaferry"])
 	if err != nil {
 		return nil, err
+	}
+	if identity.BlockLimit > c.limit {
+		return nil, &LimitError{Required: identity.BlockLimit, Allowed: c.limit}
+	}
+	if identity.BlockLimit != c.limit {
+		r.codec = newCodec(identity.BlockLimit)
 	}
 	r.Identity, r.Start, r.sync = identity, stream.bytes, header.Sync
 	return r, nil
@@ -88,14 +94,14 @@ func (r *Reader) Block(position int64) (*Block, error) {
 	input := &countingReader{Reader: io.NewSectionReader(r.input, position, r.size-position)}
 	count, err := binary.ReadVarint(input)
 	if err != nil {
-		return nil, fmt.Errorf("archive block count: %w", err)
+		return nil, fmt.Errorf("archive block count: %w", incomplete(err))
 	}
 	if count < 1 || count > maxRecords {
 		return nil, errors.New("invalid Avro block record count")
 	}
 	size, err := binary.ReadVarint(input)
 	if err != nil {
-		return nil, fmt.Errorf("archive block length: %w", err)
+		return nil, fmt.Errorf("archive block length: %w", incomplete(err))
 	}
 	// A Snappy block includes a four-byte checksum; bound compressed allocation too.
 	if size < 5 || size > int64(snappy.MaxEncodedLen(int(r.codec.limit)))+4 || size > r.size-position-input.bytes-16 {
@@ -103,11 +109,11 @@ func (r *Reader) Block(position int64) (*Block, error) {
 	}
 	compressed := make([]byte, int(size))
 	if _, err := io.ReadFull(input, compressed); err != nil {
-		return nil, fmt.Errorf("archive block data: %w", err)
+		return nil, fmt.Errorf("archive block data: %w", incomplete(err))
 	}
 	var sync [16]byte
 	if _, err := io.ReadFull(input, sync[:]); err != nil {
-		return nil, fmt.Errorf("archive block sync: %w", err)
+		return nil, fmt.Errorf("archive block sync: %w", incomplete(err))
 	}
 	if sync != r.sync {
 		return nil, errors.New("archive block sync mismatch")
@@ -132,6 +138,13 @@ func (c *Codec) decompress(compressed []byte) ([]byte, error) {
 	return (&ocf.SnappyCodec{}).Decode(compressed)
 }
 
+func incomplete(err error) error {
+	if errors.Is(err, io.EOF) {
+		return io.ErrUnexpectedEOF
+	}
+	return err
+}
+
 func (b *Block) Next() (Record, error) {
 	var record Record
 	if b.err != nil {
@@ -142,10 +155,13 @@ func (b *Block) Next() (Record, error) {
 	}
 	b.reader.ReadVal(b.codec.schema, &record)
 	if b.reader.Error != nil {
-		b.err = fmt.Errorf("archive record: %w", b.reader.Error)
+		b.err = fmt.Errorf("archive record: %w", incomplete(b.reader.Error))
 		return record, b.err
 	}
-	b.err = record.validate(b.identity.Source, b.codec.maxHeaders)
+	b.err = record.validate()
+	if b.err == nil && record.Source != b.identity.Source {
+		b.err = errors.New("record source disagrees with Avro header")
+	}
 	if b.err == nil && b.first && b.index == 0 && record.Offset != b.identity.FirstOffset {
 		b.err = errors.New("first source offset disagrees with Avro header")
 	}

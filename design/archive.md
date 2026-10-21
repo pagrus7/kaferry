@@ -1,6 +1,6 @@
 # Archive redesign
 
-Accepted design for directory-based Avro archives. The codec is separate from capture, recovery and replay. CLI support is pending; [current file usage](../docs/usage.md) describes the available commands.
+Accepted design for directory-based Avro archives. Only the codec is implemented. Capture, recovery, rotation, replay and summaries are pending; the CLI uses [CBOR files](../docs/usage.md).
 
 ## Records and files
 
@@ -12,9 +12,11 @@ Each completed file is a Snappy-compressed Avro object container for one origina
 
 Null differs from empty. Duplicate headers and offsets survive. Payloads remain opaque; Kafka destinations use their own partition routing. Topic IDs distinguish deleted and recreated topics.
 
-The [schema](../internal/archive/avro/schema.json) defines the wire fields. OCF metadata `kaferry` contains JSON: `version`, `writer_id`, `file_id`, `source` and `first_offset`. Version is `1`; writer/file IDs are 32 lowercase hexadecimal characters. Readers require the same record schema, permitting equivalent Avro schema representations.
+The [schema](../internal/archive/avro/schema.json) defines the wire fields. OCF metadata `kaferry` contains canonical JSON, with these fields in order: `version`, `writer_id`, `file_id`, `source`, `first_offset`, `block_limit`. Version is `1`; writer/file IDs are 32 lowercase hexadecimal characters. The nested `source` fields are `cluster`, `topic`, `topic_id`, `partition`, in that order. JSON topic IDs use 32 lowercase hexadecimal characters; Avro records store 16 bytes. No whitespace, duplicate/unknown fields or alternate key spellings are accepted. Readers permit equivalent Avro schema representations.
 
-The codec owns block cuts, counts, checksums and exact block positions. The Avro library encodes/decodes individual records. Encoding finishes before a record changes the pending block; rejected records can be skipped safely. Reader and writer limits match. Blocks normally target 256 KiB before compression; a single larger record may form a larger block within the configured limit. A write error stops the writer permanently. Flushing releases pending payload buffers.
+The codec owns block cuts, counts, checksums and exact block positions. The Avro library encodes/decodes individual records. Encoding finishes before a record changes the pending block. Only format-limit rejections permit skipping; source/offset changes require rotation, and caller errors stop capture.
+
+The writer records its decoded-block byte limit. Readers use that limit or return `LimitError` when their configured cap is lower. The header-count limit is `max(16, block_limit/32)`; blocks contain at most one million records. Blocks normally target 256 KiB before compression; a single larger record may form a larger block within the limit. Truncated data is an error, never normal EOF. A write error stops the writer permanently. Flushing releases pending payload buffers.
 
 ## Layout and ownership
 

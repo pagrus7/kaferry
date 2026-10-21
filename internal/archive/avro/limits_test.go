@@ -70,11 +70,12 @@ func TestCompressedBlockGuards(t *testing.T) {
 type failingReaderAt struct {
 	io.ReaderAt
 	failAt int64
+	err    error
 }
 
 func (r failingReaderAt) ReadAt(p []byte, offset int64) (int, error) {
 	if offset >= r.failAt {
-		return 0, errDisk
+		return 0, r.err
 	}
 	return r.ReaderAt.ReadAt(p, offset)
 }
@@ -82,17 +83,24 @@ func (r failingReaderAt) ReadAt(p []byte, offset int64) (int, error) {
 func TestStorageReadErrorsAreNotEndOfFile(t *testing.T) {
 	c := codec(t, 4096)
 	data := write(t, c, records()[:1], 1)
-	for _, endOfBlock := range []bool{false, true} {
-		// Given a file whose storage fails while reading block data or its sync marker.
-		r, err := c.Open(bytes.NewReader(data), int64(len(data)))
-		require.NoError(t, err)
-		failAt := r.Start + 2
-		if endOfBlock {
-			failAt = int64(len(data)) - 16
+	for _, failure := range []error{errDisk, io.EOF} {
+		for _, endOfBlock := range []bool{false, true} {
+			// Given a file whose storage fails while reading block data or its sync marker.
+			r, err := c.Open(bytes.NewReader(data), int64(len(data)))
+			require.NoError(t, err)
+			failAt := r.Start + 2
+			if endOfBlock {
+				failAt = int64(len(data)) - 16
+			}
+			r.input = failingReaderAt{ReaderAt: bytes.NewReader(data), failAt: failAt, err: failure}
+			// When scanned, then the I/O failure is preserved rather than treated as completion.
+			_, err = r.Scan()
+			if failure == io.EOF {
+				require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+			} else {
+				require.ErrorIs(t, err, failure)
+			}
+			require.NotErrorIs(t, err, io.EOF, "data loss must not resemble completion")
 		}
-		r.input = failingReaderAt{ReaderAt: bytes.NewReader(data), failAt: failAt}
-		// When scanned, then the I/O failure is preserved rather than treated as completion.
-		_, err = r.Scan()
-		require.ErrorIs(t, err, errDisk)
 	}
 }

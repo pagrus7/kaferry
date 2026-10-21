@@ -135,9 +135,9 @@ func TestInvalidFileIdentityAndInitialOffset(t *testing.T) {
 	bad := records()[0]
 	bad.Offset++
 	var rejected *InvalidRecord
-	require.ErrorAs(t, w.Append(bad), &rejected)
-	require.NotEmpty(t, rejected.Error())
-	require.NotNil(t, errors.Unwrap(rejected))
+	err = w.Append(bad)
+	require.ErrorContains(t, err, "first source offset")
+	require.False(t, errors.As(err, &rejected), "metadata mistakes cannot be skipped")
 	require.Zero(t, w.Count())
 	// Then the expected first record can still be appended after a rejection.
 	require.NoError(t, w.Append(records()[0]))

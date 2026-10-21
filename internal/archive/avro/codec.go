@@ -4,6 +4,7 @@ package avro
 import (
 	"bytes"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,10 +28,27 @@ const (
 )
 
 type Source struct {
-	Cluster   string   `avro:"cluster" json:"cluster"`
-	Topic     string   `avro:"topic" json:"topic"`
-	TopicID   [16]byte `avro:"topic_id" json:"topic_id"`
-	Partition int32    `avro:"partition" json:"partition"`
+	Cluster   string  `avro:"cluster" json:"cluster"`
+	Topic     string  `avro:"topic" json:"topic"`
+	TopicID   TopicID `avro:"topic_id" json:"topic_id"`
+	Partition int32   `avro:"partition" json:"partition"`
+}
+
+// TopicID is fixed binary data in Avro and lowercase hexadecimal text in JSON.
+type TopicID [16]byte
+
+func (id TopicID) MarshalText() ([]byte, error) {
+	text := make([]byte, 32)
+	hex.Encode(text, id[:])
+	return text, nil
+}
+
+func (id *TopicID) UnmarshalText(text []byte) error {
+	if !validID(string(text)) {
+		return errors.New("topic ID requires 32 lowercase hexadecimal characters")
+	}
+	_, _ = hex.Decode(id[:], text)
+	return nil
 }
 
 type Header struct {
@@ -54,6 +72,7 @@ type Identity struct {
 	FileID      string `json:"file_id"`
 	Source      Source `json:"source"`
 	FirstOffset int64  `json:"first_offset"`
+	BlockLimit  int64  `json:"block_limit"`
 }
 
 type Codec struct {
@@ -64,22 +83,39 @@ type Codec struct {
 }
 
 func New(limit int64) (*Codec, error) {
-	if limit < 1 || limit > 1<<32-1 || snappy.MaxEncodedLen(int(limit)) < 0 {
+	if !validLimit(limit) {
 		return nil, errors.New("archive block limit must be positive and fit Snappy size limits")
 	}
+	return newCodec(limit), nil
+}
+
+func newCodec(limit int64) *Codec {
 	headers := max(16, int(limit/32))
 	api := lib.Config{MaxByteSliceSize: int(limit), MaxSliceAllocSize: headers, MaxMapAllocSize: 16}.Freeze()
-	return &Codec{api: api, schema: recordSchema, limit: limit, maxHeaders: headers}, nil
+	return &Codec{api: api, schema: recordSchema, limit: limit, maxHeaders: headers}
+}
+
+func validLimit(limit int64) bool {
+	return limit > 0 && limit <= 1<<32-1 && snappy.MaxEncodedLen(int(limit)) >= 0
 }
 
 // Schema returns the published record schema for standard Avro tooling.
 func Schema() string { return schemaText }
 
-// InvalidRecord identifies input rejected before any container bytes are changed.
+// InvalidRecord identifies Append input rejected by format limits before output changes.
 type InvalidRecord struct{ Err error }
 
 func (e *InvalidRecord) Error() string { return e.Err.Error() }
 func (e *InvalidRecord) Unwrap() error { return e.Err }
+
+// ErrRotationRequired means Append needs a new file for this source or offset.
+var ErrRotationRequired = errors.New("source identity changed or offset decreased; start another file")
+
+type LimitError struct{ Required, Allowed int64 }
+
+func (e *LimitError) Error() string {
+	return fmt.Sprintf("archive needs a block limit of %d bytes; configured maximum is %d bytes", e.Required, e.Allowed)
+}
 
 func (s Source) validate() error {
 	if s.Cluster == "" || len(s.Cluster) > 4096 || s.Topic == "" || len(s.Topic) > 249 || !utf8.ValidString(s.Cluster) || !utf8.ValidString(s.Topic) || s.TopicID == [16]byte{} || s.Partition < 0 {
@@ -89,7 +125,7 @@ func (s Source) validate() error {
 }
 
 func (i Identity) validate() error {
-	if i.Version != Version || !validID(i.WriterID) || !validID(i.FileID) || i.FirstOffset < 0 {
+	if i.Version != Version || !validID(i.WriterID) || !validID(i.FileID) || i.FirstOffset < 0 || !validLimit(i.BlockLimit) {
 		return errors.New("invalid or unsupported Avro file identity")
 	}
 	return i.Source.validate()
@@ -107,12 +143,9 @@ func validID(value string) bool {
 	return true
 }
 
-func (r Record) validate(source Source, maxHeaders int) error {
-	if r.Source != source || r.Offset < 0 {
-		return errors.New("record does not belong to this source partition")
-	}
-	if len(r.Headers) > maxHeaders {
-		return errors.New("record exceeds header count limit")
+func (r Record) validate() error {
+	if r.Offset < 0 {
+		return errors.New("invalid original source offset")
 	}
 	switch r.TimestampKind {
 	case "unknown", "create_time", "log_append_time":
@@ -131,6 +164,10 @@ func parseIdentity(data []byte) (Identity, error) {
 	}
 	if err := d.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return identity, errors.New("trailing Avro identity data")
+	}
+	canonical, _ := json.Marshal(identity)
+	if !bytes.Equal(data, canonical) {
+		return identity, errors.New("archive identity JSON is not canonical")
 	}
 	return identity, identity.validate()
 }

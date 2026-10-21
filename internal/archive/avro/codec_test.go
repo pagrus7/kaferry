@@ -18,7 +18,7 @@ import (
 )
 
 func identity() Identity {
-	return Identity{Version: Version, WriterID: "0123456789abcdef0123456789abcdef", FileID: "abcdef0123456789abcdef0123456789", Source: Source{Cluster: "cluster", Topic: "orders", TopicID: [16]byte{1, 2, 3}, Partition: 2}, FirstOffset: 42}
+	return Identity{Version: Version, BlockLimit: 4 << 20, WriterID: "0123456789abcdef0123456789abcdef", FileID: "abcdef0123456789abcdef0123456789", Source: Source{Cluster: "cluster", Topic: "orders", TopicID: [16]byte{1, 2, 3}, Partition: 2}, FirstOffset: 42}
 }
 
 func records() []Record {
@@ -143,18 +143,32 @@ func TestRejectedRecordDoesNotChangePendingBlock(t *testing.T) {
 	good := records()[0]
 	require.NoError(t, w.Append(good))
 	// When invalid input is rejected, then flushing retains only the valid record.
-	for _, mutate := range []func(*Record){
-		func(r *Record) { r.TimestampKind = "bad" },
-		func(r *Record) { r.Offset-- },
-		func(r *Record) { r.Source.TopicID[0]++ },
-		func(r *Record) { r.Headers = make([]Header, c.maxHeaders+1) },
-		func(r *Record) { r.Value = make([]byte, 4096) },
-		func(r *Record) { r.Value = make([]byte, 4096-8) },
+	for _, tc := range []struct {
+		name         string
+		change       func(*Record)
+		skip, rotate bool
+	}{
+		{"bad kind", func(r *Record) { r.TimestampKind = "bad" }, false, false},
+		{"negative offset", func(r *Record) { r.Offset = -1 }, false, false},
+		{"backward offset", func(r *Record) { r.Offset-- }, false, true},
+		{"changed topic", func(r *Record) { r.Source.TopicID[0]++ }, false, true},
+		{"header limit", func(r *Record) { r.Headers = make([]Header, c.maxHeaders+1) }, true, false},
+		{"payload limit", func(r *Record) { r.Value = make([]byte, 4096) }, true, false},
+		{"encoded limit", func(r *Record) { r.Value = make([]byte, 4096-8) }, true, false},
 	} {
-		bad := good
-		mutate(&bad)
-		var rejected *InvalidRecord
-		require.ErrorAs(t, w.Append(bad), &rejected)
+		t.Run(tc.name, func(t *testing.T) {
+			bad := good
+			tc.change(&bad)
+			err := w.Append(bad)
+			require.Error(t, err)
+			require.NotEmpty(t, err.Error(), "rejection explains the failure")
+			var rejected *InvalidRecord
+			require.Equal(t, tc.skip, errors.As(err, &rejected), "only format limits permit skipping")
+			require.Equal(t, tc.rotate, errors.Is(err, ErrRotationRequired), "identity/ordering changes require rotation")
+			if tc.skip {
+				require.NotNil(t, errors.Unwrap(err), "classification retains the cause")
+			}
+		})
 	}
 	require.NoError(t, w.Flush())
 	require.Equal(t, []Record{good}, read(t, c, output.Bytes()))
@@ -283,6 +297,7 @@ func TestStrictBlockValidation(t *testing.T) {
 				}
 			}
 			require.Error(t, err)
+			require.NotErrorIs(t, err, io.EOF, "invalid input must not resemble completion")
 		})
 	}
 }
@@ -321,7 +336,9 @@ func TestUnsupportedHeadersAndIdentity(t *testing.T) {
 func rawContainer(t *testing.T, c *Codec, values []Record) []byte {
 	t.Helper()
 	var output bytes.Buffer
-	meta, err := json.Marshal(identity())
+	id := identity()
+	id.BlockLimit = c.limit
+	meta, err := json.Marshal(id)
 	require.NoError(t, err)
 	w, err := ocf.NewEncoder(Schema(), &output, ocf.WithCodec(ocf.Snappy), ocf.WithBlockLength(1), ocf.WithMetadata(map[string][]byte{"kaferry": meta}), ocf.WithSchemaMarshaler(ocf.FullSchemaMarshaler))
 	require.NoError(t, err)
