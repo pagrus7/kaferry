@@ -1,0 +1,24 @@
+{
+  "type": "record", "name": "Record", "namespace": "kaferry.archive",
+  "fields": [
+    {"name": "source", "type": {
+      "type": "record", "name": "Source", "fields": [
+        {"name": "cluster", "type": "string"},
+        {"name": "topic", "type": "string"},
+        {"name": "topic_id", "type": {"type": "fixed", "name": "TopicID", "size": 16}},
+        {"name": "partition", "type": "int"}
+      ]
+    }},
+    {"name": "offset", "type": "long"},
+    {"name": "timestamp_ms", "type": ["null", "long"], "default": null},
+    {"name": "timestamp_kind", "type": {"type": "enum", "name": "TimestampKind", "symbols": ["unknown", "create_time", "log_append_time"]}},
+    {"name": "key", "type": ["null", "bytes"], "default": null},
+    {"name": "value", "type": ["null", "bytes"], "default": null},
+    {"name": "headers", "type": {"type": "array", "items": {
+      "type": "record", "name": "Header", "fields": [
+        {"name": "key", "type": "bytes"},
+        {"name": "value", "type": ["null", "bytes"], "default": null}
+      ]
+    }}}
+  ]
+}

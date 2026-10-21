@@ -74,8 +74,8 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 | `make load` | Bounded Kafka-copy caps/fidelity and file-copy metric overhead; start brokers first | Every PR/main, weekly, release |
 | `make soak` | Streaming fidelity, lag, memory and shutdown; start brokers first | Weekly and release, 30 minutes |
 | `make qualification` | Security/ACLs and replicated failover; starts TLS/SASL fixture | Code PRs, nightly, weekly, release |
-| `make fuzz` | SQL parser, frames and decoder; 100,000 iterations per target | Nightly; weekly |
-| `make benchmark` | CBOR framing CPU/allocations | Nightly; weekly |
+| `make fuzz` | SQL parser, CBOR/Avro decoders; 100,000 iterations per target | Nightly; weekly |
+| `make benchmark` | CBOR framing and Avro blocks: CPU/allocations | Nightly; weekly |
 | `make broker-down` | Stop disposable clusters | Fixture cleanup |
 
 Time-window arithmetic, boundaries and overflow use deterministic unit tests in `make check`. Set `FUZZ_ITERATIONS` to change the per-target fuzz budget; failures remain fatal.
