@@ -40,6 +40,8 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Avro codec | [archive/avro](../internal/archive/avro) | Preserve raw records and source identity in bounded compressed blocks | Standard I/O ports; fixed schema and independent Avro interoperability tests |
 | Archive capture | [archive/capture](../internal/archive/capture) | Route records and rotate by size, age, rewind and file budget | Segments, Clock; no Kafka or copy-loop state |
 | Archive storage | [archive/capture](../internal/archive/capture) | Lock writer namespaces, save durable boundaries, publish and recover files | Filesystem/DataFile, StateStore; Journal uses AtomicWriter for synced replacement |
+| Archive replay | [archive/replay](../internal/archive/replay) | Pin completed inputs, merge source offsets and save confirmed physical cursors | Snapshot, Blocks, Checkpoints; bounded Pool and read-only Catalog |
+| Checkpoint encoding | [checkpoint](../internal/checkpoint) | Derive safe group filenames and encode bounded canonical JSON with checksums | Pure functions; owners validate their state |
 | File publication | [file](../internal/file) | Publish a durable header without replacing another creator | Publisher, private filesystem port |
 | CLI | [cmd](../cmd/kaferry), [app](../internal/app) | Parse flags, compose components and handle signals | Command/Engine; Fx at composition only |
 
@@ -77,8 +79,8 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 | `make load` | Bounded Kafka-copy caps/fidelity and file-copy metric overhead; start brokers first | Every PR/main, weekly, release |
 | `make soak` | Streaming fidelity, lag, memory and shutdown; start brokers first | Weekly and release, 30 minutes |
 | `make qualification` | Security/ACLs and replicated failover; starts TLS/SASL fixture | Code PRs, nightly, weekly, release |
-| `make fuzz` | SQL parser, CBOR/Avro decoders and archive state; 100,000 iterations per target | Nightly; weekly |
-| `make benchmark` | CBOR framing and Avro blocks: CPU/allocations | Nightly; weekly |
+| `make fuzz` | SQL parser, CBOR/Avro decoders and capture/replay state; 100,000 iterations per target | Nightly; weekly |
+| `make benchmark` | CBOR framing, Avro blocks and overlapping replay: CPU/allocations | Nightly; weekly |
 | `make broker-down` | Stop disposable clusters | Fixture cleanup |
 
 Time-window arithmetic, boundaries and overflow use deterministic unit tests in `make check`. Set `FUZZ_ITERATIONS` to change the per-target fuzz budget; failures remain fatal.

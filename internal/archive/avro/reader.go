@@ -13,12 +13,16 @@ import (
 
 type countingReader struct {
 	io.Reader
-	bytes int64
+	bytes   int64
+	failure error
 }
 
 func (r *countingReader) Read(p []byte) (int, error) {
 	n, err := r.Reader.Read(p)
 	r.bytes += int64(n)
+	if err != nil && !errors.Is(err, io.EOF) && r.failure == nil {
+		r.failure = err
+	}
 	return n, err
 }
 
@@ -44,6 +48,9 @@ func (c *Codec) Open(input io.ReaderAt, size int64) (*Reader, error) {
 	decoder := lib.NewReader(stream, 1, lib.WithReaderConfig(config))
 	var header ocf.Header
 	decoder.ReadVal(ocf.HeaderSchema, &header)
+	if stream.failure != nil {
+		return nil, fmt.Errorf("archive header: %w", stream.failure)
+	}
 	if decoder.Error != nil {
 		return nil, fmt.Errorf("archive header: %w", incomplete(decoder.Error))
 	}
@@ -114,6 +121,9 @@ func (r *Reader) Block(position int64) (*Block, error) {
 	var sync [16]byte
 	if _, err := io.ReadFull(input, sync[:]); err != nil {
 		return nil, fmt.Errorf("archive block sync: %w", incomplete(err))
+	}
+	if input.failure != nil {
+		return nil, fmt.Errorf("archive block: %w", input.failure)
 	}
 	if sync != r.sync {
 		return nil, errors.New("archive block sync mismatch")

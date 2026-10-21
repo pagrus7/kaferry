@@ -1,6 +1,6 @@
 # Archive redesign
 
-Accepted design for directory-based Avro archives. The codec and capture/storage components are implemented. Replay, summaries and CLI integration are pending; the CLI uses [CBOR files](../docs/usage.md).
+Accepted design for directory-based Avro archives. The codec, capture/storage and snapshot replay components are implemented. Summaries and CLI integration are pending; the CLI uses [CBOR files](../docs/usage.md).
 
 ## Records and files
 
@@ -73,7 +73,11 @@ Replay selects completed file IDs once and saves that selection before producing
 
 Store and exclusively lock the group-derived checkpoint outside the archive, which may be read-only. Save cursors only through destination-confirmed progress. Missing or changed selected inputs fail an incomplete replay.
 
-Merge overlaps by original source identity, partition and offset. Preserve duplicates with deterministic file-ID/physical-record ties. No ordering across partitions. Bound open handles and payload buffers; cursor/head metadata grows with selected files. Evicting a block may require decompressing it again.
+Merge overlaps by original source identity, partition and offset. Preserve duplicates with deterministic file-ID/physical-record ties. No ordering across partitions. Bound open handles and payload buffers; cursor/head metadata grows with selected files. Evicting a block may require decompressing it and decoding earlier records again. The replay component defaults to 32 open files and 8 cached blocks; callers may change both budgets. Outstanding records awaiting a checkpoint are separately capped at 20,000 by default.
+
+Replay checkpoints use the same group-derived filename as file checkpoints, plus a stable `.lock` file. Their canonical JSON envelope contains `state` and its lowercase SHA-256 digest. State version `1` stores `group`, query `fingerprint`, the resolved time `window`, confirmed sequence `position`, `complete` and selected `files`. Each file stores its full identity, length, header end, SHA-256 digest and next block/record cursor, including the previous source offset. Reads and writes are capped at 64 MiB.
+
+Selection reads every completed file to hash its contents. An incomplete restart rechecks every selected file, including consumed files, before returning records. Completed files must remain immutable during replay. A checkpoint failure stops new reads; a source failure still allows saving earlier confirmed output. Records confirmed at the destination after the last saved checkpoint can repeat after restart.
 
 Time filters inspect record timestamps, including out-of-order values. Do not stop a file at its first timestamp beyond the range. No active-file reads, replay follow mode, global completion barrier or built-in consolidation.
 
