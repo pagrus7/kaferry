@@ -18,7 +18,7 @@ type Segment struct {
 	Bytes, Records int64
 }
 
-// Segments confirms records only after Checkpoint or Publish succeeds.
+// Checkpoint confirms all appended records; Publish confirms only its file.
 type Segments interface {
 	Create(avro.Source, int64) (Segment, error)
 	Append(string, avro.Record) (Segment, error)

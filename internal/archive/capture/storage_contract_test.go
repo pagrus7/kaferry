@@ -35,8 +35,23 @@ func TestRecoveryStreamsRootOnceAcrossMultipleNamespaces(t *testing.T) {
 	for i := range 600 {
 		require.NoError(t, os.WriteFile(filepath.Join(root, fmt.Sprintf("external-%04d", i)), nil, 0600))
 	}
+	var private []string
+	for _, writer := range []*Store{first, second} {
+		for i := range 150 {
+			path := filepath.Join(root, fmt.Sprintf(".%s.%032x.partial", writer.state.WriterID, i+1))
+			require.NoError(t, os.WriteFile(path, nil, 0600))
+			private = append(private, path)
+		}
+	}
 	fs := &observedFiles{Filesystem: NativeFiles{}}
+	scanClosed := false
 	fs.hook = func(op, _ string) error {
+		if op == "close-directory" {
+			scanClosed = true
+		}
+		if op == "remove" {
+			require.True(t, scanClosed, "finish the scan before deletion can reorder later entries")
+		}
 		if op == "open-directory" || op == "read-directory-batch" {
 			for _, namespace := range []string{first.namespace, second.namespace} {
 				lock, err := (NativeFiles{}).TryLock(filepath.Join(namespace, "lock"))
@@ -54,6 +69,9 @@ func TestRecoveryStreamsRootOnceAcrossMultipleNamespaces(t *testing.T) {
 	require.Equal(t, 1, strings.Count(joined, "open-directory:"))
 	require.Greater(t, strings.Count(joined, "read-directory-batch:"), 2)
 	require.Len(t, completeFiles(t, root), 2)
+	for _, path := range private {
+		require.NoFileExists(t, path)
+	}
 }
 
 func TestPublishDoesNotCheckpointOtherPartitions(t *testing.T) {

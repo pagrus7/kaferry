@@ -32,7 +32,7 @@ archive/
 
 Workers own unique namespaces and files. Storage may be local or shared; completed files can be collected unchanged. The storage must support durable sync, atomic rename and exclusive ownership locks across all users of that storage. Shared filesystem support requires checking these guarantees across hosts.
 
-Create a namespace with valid empty recovery state under a temporary name, sync it, then rename and sync its parent before creating data. Keep its stable lock while writing or recovering. Startup recovers every published namespace whose lock it can acquire; skip busy or unpublished namespaces. Keep acquired locks until recovery and one streamed scan for their unacknowledged private files finish. Busy writers remain independent; startup never waits for them. Recovery is independent of Kafka partition assignment. Never steal locks by age or replace lock files.
+Create a namespace with valid empty recovery state under a temporary name, sync it, then rename and sync its parent before creating data. Keep its stable lock while writing or recovering. Startup recovers every published namespace whose lock it can acquire; skip busy or unpublished namespaces. Keep acquired locks until recovery and one streamed scan for their unacknowledged private files finish. Recovery is independent of Kafka partition assignment. Never steal locks by age or replace lock files.
 
 ## Capture and recovery
 

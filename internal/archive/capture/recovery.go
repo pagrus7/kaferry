@@ -99,13 +99,29 @@ func validatePrefix(f DataFile, boundary Boundary, completed bool, codec *avro.C
 	return nil
 }
 
-func discardUnacknowledged(root string, owners map[string]bool, files Filesystem) (result error) {
-	directory, err := files.OpenDirectory(root)
+func discardUnacknowledged(root string, owners map[string]bool, files Filesystem) error {
+	names, err := unacknowledgedFiles(root, owners, files)
 	if err != nil {
 		return err
 	}
+	for _, name := range names {
+		if err := files.Remove(filepath.Join(root, name)); err != nil {
+			return err
+		}
+	}
+	if len(names) > 0 {
+		return files.SyncDirectory(root)
+	}
+	return nil
+}
+
+// Finish and close the scan before deletion can change the directory's order.
+func unacknowledgedFiles(root string, owners map[string]bool, files Filesystem) (names []string, result error) {
+	directory, err := files.OpenDirectory(root)
+	if err != nil {
+		return nil, err
+	}
 	defer func() { result = errors.Join(result, directory.Close()) }()
-	removed := false
 	for {
 		entries, readErr := directory.ReadDir(256)
 		for _, entry := range entries {
@@ -118,22 +134,15 @@ func discardUnacknowledged(root string, owners map[string]bool, files Filesystem
 				continue
 			}
 			if !ok || !validID(id) || !entry.Type().IsRegular() {
-				return errors.New("unrecognized private archive file")
+				return nil, errors.New("unrecognized private archive file")
 			}
-			if err := files.Remove(filepath.Join(root, entry.Name())); err != nil {
-				return err
-			}
-			removed = true
+			names = append(names, entry.Name())
 		}
 		if errors.Is(readErr, io.EOF) {
-			break
+			return names, nil
 		}
 		if readErr != nil {
-			return readErr
+			return nil, readErr
 		}
 	}
-	if removed {
-		return files.SyncDirectory(root)
-	}
-	return nil
 }
