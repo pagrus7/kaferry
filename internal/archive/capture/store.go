@@ -29,9 +29,8 @@ type Segments interface {
 }
 
 type activeFile struct {
-	file    DataFile
-	writer  *avro.Writer
-	changed bool
+	file   DataFile
+	writer *avro.Writer
 }
 
 // Store owns one locked namespace. Its methods run on the caller's event loop.
@@ -78,7 +77,6 @@ func (s *Store) Append(id string, record avro.Record) (Segment, error) {
 		}
 		return segment(f.writer), s.fail(err)
 	}
-	f.changed = true
 	return segment(f.writer), nil
 }
 
@@ -87,10 +85,9 @@ func (s *Store) Checkpoint() error {
 		return s.failed
 	}
 	next := s.state
-	next.Files = maps.Clone(s.state.Files)
-	changed := false
+	next.Files = nil
 	for id, f := range s.active {
-		if !f.changed {
+		if f.writer.Count() == s.state.Files[id].Records {
 			continue
 		}
 		if err := f.writer.Flush(); err != nil {
@@ -99,10 +96,12 @@ func (s *Store) Checkpoint() error {
 		if err := f.file.Sync(); err != nil {
 			return s.fail(err)
 		}
+		if next.Files == nil {
+			next.Files = maps.Clone(s.state.Files)
+		}
 		next.Files[id] = Boundary{Identity: f.writer.Identity(), Extent: f.writer.Size(), Records: f.writer.Count()}
-		changed = true
 	}
-	if !changed {
+	if next.Files == nil {
 		return nil
 	}
 	if err := s.files.SyncDirectory(s.root); err != nil {
@@ -112,9 +111,6 @@ func (s *Store) Checkpoint() error {
 		return s.fail(err)
 	}
 	s.state = next
-	for _, f := range s.active {
-		f.changed = false
-	}
 	return nil
 }
 
