@@ -83,6 +83,33 @@ func (f *observedFiles) ReadDir(path string) ([]os.DirEntry, error) {
 	return f.Filesystem.ReadDir(path)
 }
 
+func (f *observedFiles) OpenDirectory(path string) (Directory, error) {
+	if err := f.call("open-directory", path); err != nil {
+		return nil, err
+	}
+	directory, err := f.Filesystem.OpenDirectory(path)
+	if err != nil {
+		return nil, err
+	}
+	return &observedDirectory{Directory: directory, owner: f, path: path}, nil
+}
+
+type observedDirectory struct {
+	Directory
+	owner *observedFiles
+	path  string
+}
+
+func (d *observedDirectory) ReadDir(n int) ([]os.DirEntry, error) {
+	if err := d.owner.call("read-directory-batch", d.path); err != nil {
+		return nil, err
+	}
+	return d.Directory.ReadDir(n)
+}
+func (d *observedDirectory) Close() error {
+	return errors.Join(d.owner.call("close-directory", d.path), d.Directory.Close())
+}
+
 type observedFile struct {
 	DataFile
 	owner *observedFiles
@@ -170,86 +197,27 @@ func TestCheckpointDurabilityOrderAndQuietFlush(t *testing.T) {
 	require.Empty(t, fs.events, "quiet batches do not repeat sync or state writes")
 }
 
-func TestCheckpointFailuresRemainTerminal(t *testing.T) {
-	for _, fail := range []string{"write", "sync", "sync-directory", "save-state"} {
-		t.Run(fail, func(t *testing.T) {
-			// Given a record accepted into a private file before a durable batch.
-			root := t.TempDir()
-			fs := &observedFiles{Filesystem: NativeFiles{}}
-			w := &observedWriter{AtomicWriter: file.DurableWriter{}, files: fs}
-			s := openStore(t, root, fs, w)
-			r := testRecord(42)
-			part, err := s.Create(r.Source, r.Offset)
-			require.NoError(t, err)
-			_, err = s.Append(part.ID, r)
-			require.NoError(t, err)
-			fs.hook = func(op, path string) error {
-				if op == fail {
-					return errDisk
-				}
-				return nil
-			}
-			// When any durability step fails, then retry cannot turn that batch into success.
-			err = s.Checkpoint()
-			require.ErrorIs(t, err, errDisk)
-			fs.hook, fs.events = nil, nil
-			require.ErrorIs(t, s.Checkpoint(), err)
-			_, again := s.Append(part.ID, testRecord(43))
-			require.ErrorIs(t, again, err)
-			require.ErrorIs(t, s.Publish(part.ID), err)
-			require.Empty(t, fs.events, "a failed writer performs no more I/O")
-			require.NoError(t, s.Close())
-			// Then recovery discards this never-acknowledged file, including fully written blocks.
-			recovered := openStore(t, root, NativeFiles{}, file.DurableWriter{})
-			require.Empty(t, recovered.state.Files)
-			require.Empty(t, completeFiles(t, root))
-		})
-	}
-}
-
-func TestPublicationFailureKeepsRecoverableState(t *testing.T) {
-	for _, failure := range []string{"close", "rename", "sync-directory", "save-state"} {
-		t.Run(failure, func(t *testing.T) {
-			// Given an already durable private prefix.
-			root := t.TempDir()
-			fs := &observedFiles{Filesystem: NativeFiles{}}
-			s := openStore(t, root, fs, &observedWriter{AtomicWriter: file.DurableWriter{}, files: fs})
-			r := testRecord(42)
-			part, err := s.Create(r.Source, r.Offset)
-			require.NoError(t, err)
-			_, err = s.Append(part.ID, r)
-			require.NoError(t, err)
-			require.NoError(t, s.Checkpoint())
-			fs.hook = func(op, path string) error {
-				if op == failure {
-					return errDisk
-				}
-				return nil
-			}
-			// When publication stops at any step, then no retry or further acknowledgement succeeds.
-			err = s.Publish(part.ID)
-			require.ErrorIs(t, err, errDisk)
-			fs.hook = nil
-			require.ErrorIs(t, s.Checkpoint(), err)
-			require.NoError(t, s.Close())
-			// Then a new owner recovers exactly the protected record from either filename.
-			_ = openStore(t, root, NativeFiles{}, file.DurableWriter{})
-			paths := completeFiles(t, root)
-			require.Len(t, paths, 1)
-			require.Equal(t, []avro.Record{r}, readFile(t, paths[0]))
-		})
-	}
-}
-
-func runLifecycle(root string, fs *observedFiles, codec *avro.Codec) (acknowledged bool, result error) {
+func runLifecycle(t testing.TB, root string, fs *observedFiles, codec *avro.Codec) (acknowledged bool, result error) {
+	t.Helper()
 	w := &observedWriter{AtomicWriter: file.DurableWriter{}, files: fs}
 	s, err := Open(root, codec, fs, NewJournal(fs, w))
 	if err != nil {
 		return false, err
 	}
-	defer func() { result = errors.Join(result, s.Close()) }()
+	var part Segment
+	defer func() {
+		if result != nil {
+			before := len(fs.events)
+			require.ErrorIs(t, s.Checkpoint(), result, "checkpoint failure stays terminal")
+			require.ErrorIs(t, s.Publish(part.ID), result, "publication failure stays terminal")
+			_, appendErr := s.Append(part.ID, testRecord(43))
+			require.ErrorIs(t, appendErr, result, "append failure stays terminal")
+			require.Len(t, fs.events, before, "failed storage performs no more I/O")
+		}
+		result = errors.Join(result, s.Close())
+	}()
 	r := testRecord(42)
-	part, err := s.Create(r.Source, r.Offset)
+	part, err = s.Create(r.Source, r.Offset)
 	if err != nil {
 		return false, err
 	}
@@ -265,7 +233,7 @@ func runLifecycle(root string, fs *observedFiles, codec *avro.Codec) (acknowledg
 func TestEveryCaptureIOCutPreservesAcknowledgedRecords(t *testing.T) {
 	// Given a complete reference lifecycle identifying each storage operation.
 	baseline := &observedFiles{Filesystem: NativeFiles{}}
-	_, err := runLifecycle(filepath.Join(t.TempDir(), "archive"), baseline, testCodec(t))
+	_, err := runLifecycle(t, filepath.Join(t.TempDir(), "archive"), baseline, testCodec(t))
 	require.NoError(t, err)
 	for index, event := range baseline.events {
 		t.Run(fmt.Sprintf("%02d_%s", index, event[:strings.IndexByte(event, ':')]), func(t *testing.T) {
@@ -280,7 +248,7 @@ func TestEveryCaptureIOCutPreservesAcknowledgedRecords(t *testing.T) {
 				}
 				return nil
 			}
-			acknowledged, err := runLifecycle(root, fs, testCodec(t))
+			acknowledged, err := runLifecycle(t, root, fs, testCodec(t))
 			require.ErrorIs(t, err, errDisk)
 			// Then healthy restart preserves every record acknowledged before the cut.
 			_ = openStore(t, root, NativeFiles{}, file.DurableWriter{})

@@ -3,6 +3,7 @@ package capture
 import (
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -31,7 +32,7 @@ func recoverNamespace(root, namespace, owner string, codec *avro.Codec, files Fi
 			return err
 		}
 	}
-	return discardUnacknowledged(root, owner, files)
+	return nil
 }
 
 func recoverFile(root string, boundary Boundary, codec *avro.Codec, files Filesystem) (result error) {
@@ -98,25 +99,38 @@ func validatePrefix(f DataFile, boundary Boundary, completed bool, codec *avro.C
 	return nil
 }
 
-func discardUnacknowledged(root, owner string, files Filesystem) error {
-	entries, err := files.ReadDir(root)
+func discardUnacknowledged(root string, owners map[string]bool, files Filesystem) (result error) {
+	directory, err := files.OpenDirectory(root)
 	if err != nil {
 		return err
 	}
+	defer func() { result = errors.Join(result, directory.Close()) }()
 	removed := false
-	prefix := "." + owner + "."
-	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), prefix) || !strings.HasSuffix(entry.Name(), ".partial") {
-			continue
+	for {
+		entries, readErr := directory.ReadDir(256)
+		for _, entry := range entries {
+			if !strings.HasPrefix(entry.Name(), ".") || !strings.HasSuffix(entry.Name(), ".partial") {
+				continue
+			}
+			name := strings.TrimSuffix(strings.TrimPrefix(entry.Name(), "."), ".partial")
+			owner, id, ok := strings.Cut(name, ".")
+			if !owners[owner] {
+				continue
+			}
+			if !ok || !validID(id) || !entry.Type().IsRegular() {
+				return errors.New("unrecognized private archive file")
+			}
+			if err := files.Remove(filepath.Join(root, entry.Name())); err != nil {
+				return err
+			}
+			removed = true
 		}
-		id := strings.TrimSuffix(strings.TrimPrefix(entry.Name(), prefix), ".partial")
-		if !validID(id) || !entry.Type().IsRegular() {
-			return errors.New("unrecognized private archive file")
+		if errors.Is(readErr, io.EOF) {
+			break
 		}
-		if err := files.Remove(filepath.Join(root, entry.Name())); err != nil {
-			return err
+		if readErr != nil {
+			return readErr
 		}
-		removed = true
 	}
 	if removed {
 		return files.SyncDirectory(root)

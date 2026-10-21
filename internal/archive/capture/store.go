@@ -81,12 +81,20 @@ func (s *Store) Append(id string, record avro.Record) (Segment, error) {
 }
 
 func (s *Store) Checkpoint() error {
+	return s.checkpoint("")
+}
+
+// An empty selection checkpoints every active file.
+func (s *Store) checkpoint(only string) error {
 	if s.failed != nil {
 		return s.failed
 	}
 	next := s.state
 	next.Files = nil
 	for id, f := range s.active {
+		if only != "" && id != only {
+			continue
+		}
 		if f.writer.Count() == s.state.Files[id].Records {
 			continue
 		}
@@ -124,7 +132,7 @@ func (s *Store) Publish(id string) error {
 		return s.fail(errors.New("archive segment is not open"))
 	}
 	if f.writer.Count() > 0 {
-		if err := s.Checkpoint(); err != nil {
+		if err := s.checkpoint(id); err != nil {
 			return err
 		}
 		info, err := f.file.Stat()

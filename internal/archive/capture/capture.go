@@ -41,7 +41,7 @@ func New(store Segments, clock Clock, policy Policy) (*Capture, error) {
 		policy.RotateAfterAge = time.Hour
 	}
 	if policy.MaxOpenFiles == 0 {
-		policy.MaxOpenFiles = 128
+		policy.MaxOpenFiles = 1024
 	}
 	if policy.RotateAfterSize < 0 || policy.RotateAfterAge < 0 || policy.MaxOpenFiles < 0 {
 		return nil, errors.New("archive rotation size, age and open-file cap must be positive")

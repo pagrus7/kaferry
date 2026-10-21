@@ -10,15 +10,66 @@ import (
 	"github.com/pagrus7/kaferry/internal/archive/avro"
 )
 
+type owner struct {
+	path string
+	lock io.Closer
+}
+
 // Open recovers every available writer namespace, then keeps one locked for use.
-func Open(root string, codec *avro.Codec, files Filesystem, states StateStore) (*Store, error) {
+func Open(root string, codec *avro.Codec, files Filesystem, states StateStore) (store *Store, result error) {
+	root, err := files.ResolveRoot(root)
+	if err != nil {
+		return nil, err
+	}
 	writers := filepath.Join(root, ".kaferry", "writers")
 	for _, directory := range []string{root, filepath.Dir(writers), writers} {
 		if err := ensureDirectory(files, directory); err != nil {
 			return nil, err
 		}
 	}
-	s := &Store{root: root, files: files, states: states, codec: codec, active: make(map[string]*activeFile)}
+	owners, err := acquireNamespaces(writers, files)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if result != nil {
+			result = errors.Join(result, releaseOwners(owners))
+		}
+	}()
+	if len(owners) == 0 {
+		path, lock, err := initializeNamespace(writers, newID(), files, states)
+		if err != nil {
+			return nil, err
+		}
+		owners = append(owners, owner{path: path, lock: lock})
+	} else {
+		protected := make(map[string]bool, len(owners))
+		for _, owned := range owners {
+			id := filepath.Base(owned.path)
+			if err := recoverNamespace(root, owned.path, id, codec, files, states); err != nil {
+				return nil, fmt.Errorf("recover archive writer %s: %w", id, err)
+			}
+			protected[id] = true
+		}
+		if err := discardUnacknowledged(root, protected, files); err != nil {
+			return nil, err
+		}
+	}
+	if err := releaseOwners(owners[1:]); err != nil {
+		return nil, err
+	}
+	keep := owners[0]
+	return &Store{root: root, namespace: keep.path, lock: keep.lock, files: files, states: states,
+		codec: codec, state: emptyState(filepath.Base(keep.path)), active: make(map[string]*activeFile)}, nil
+}
+
+func acquireNamespaces(writers string, files Filesystem) (owners []owner, result error) {
+	defer func() {
+		if result != nil {
+			result = errors.Join(result, releaseOwners(owners))
+			owners = nil
+		}
+	}()
 	entries, err := files.ReadDir(writers)
 	if err != nil {
 		return nil, err
@@ -28,7 +79,7 @@ func Open(root string, codec *avro.Codec, files Filesystem, states StateStore) (
 			continue
 		}
 		if !entry.IsDir() {
-			return nil, errors.Join(errors.New("archive writer namespace must be a directory"), s.Close())
+			return owners, errors.New("archive writer namespace must be a directory")
 		}
 		namespace := filepath.Join(writers, entry.Name())
 		lock, err := files.TryLock(filepath.Join(namespace, "lock"))
@@ -36,26 +87,22 @@ func Open(root string, codec *avro.Codec, files Filesystem, states StateStore) (
 			continue
 		}
 		if err != nil {
-			return nil, errors.Join(err, s.Close())
+			return owners, err
 		}
-		if err = recoverNamespace(root, namespace, entry.Name(), codec, files, states); err != nil {
-			return nil, errors.Join(fmt.Errorf("recover archive writer %s: %w", entry.Name(), err), lock.Close(), s.Close())
-		}
-		if s.lock == nil {
-			s.namespace, s.lock, s.state = namespace, lock, emptyState(entry.Name())
-		} else if err = lock.Close(); err != nil {
-			return nil, errors.Join(err, s.Close())
+		owners = append(owners, owner{path: namespace, lock: lock})
+	}
+	return owners, nil
+}
+
+func releaseOwners(owners []owner) error {
+	var result error
+	for i := range owners {
+		if owners[i].lock != nil {
+			result = errors.Join(result, owners[i].lock.Close())
+			owners[i].lock = nil
 		}
 	}
-	if s.lock == nil {
-		id := newID()
-		s.namespace, s.lock, err = initializeNamespace(writers, id, files, states)
-		if err != nil {
-			return nil, err
-		}
-		s.state = emptyState(id)
-	}
-	return s, nil
+	return result
 }
 
 func ensureDirectory(files Filesystem, path string) error {

@@ -32,7 +32,7 @@ archive/
 
 Workers own unique namespaces and files. Storage may be local or shared; completed files can be collected unchanged. The storage must support durable sync, atomic rename and exclusive ownership locks across all users of that storage. Shared filesystem support requires checking these guarantees across hosts.
 
-Create a namespace with valid empty recovery state under a temporary name, sync it, then rename and sync its parent before creating data. Keep its stable lock while writing or recovering. Startup recovers every published namespace whose lock it can acquire; skip busy or unpublished namespaces. Recovery is independent of Kafka partition assignment. Never steal locks by age or replace lock files.
+Create a namespace with valid empty recovery state under a temporary name, sync it, then rename and sync its parent before creating data. Keep its stable lock while writing or recovering. Startup recovers every published namespace whose lock it can acquire; skip busy or unpublished namespaces. Keep acquired locks until recovery and one streamed scan for their unacknowledged private files finish. Busy writers remain independent; startup never waits for them. Recovery is independent of Kafka partition assignment. Never steal locks by age or replace lock files.
 
 ## Capture and recovery
 
@@ -62,7 +62,7 @@ Only the path is required. Defaults: 1g compressed container bytes or one elapse
 
 Also rotate when original source identity changes or offsets decrease; equal offsets are allowed. Worker completion publishes every nonempty remainder. Graceful shutdown attempts this within the shutdown deadline. Work caps and source commits flush durable blocks without forcing rotation. Create no empty data files.
 
-The capture component caps open files at 128 by default. Its caller may override this budget. At capacity, publish the least recently used file before opening another; this can produce files below the size/age targets. Check age during input and quiet flushes. `Finish` publishes remaining files; `Close` only releases resources. Calls use one event loop.
+The capture component caps open files at 1024 by default. Its caller may override this budget. At capacity, publish the least recently used file before opening another; more active partitions than this budget can produce files far below the size/age targets. Check age during input and quiet flushes. `Finish` publishes remaining files; `Close` only releases resources. Calls use one event loop.
 
 ## Replay and progress
 
