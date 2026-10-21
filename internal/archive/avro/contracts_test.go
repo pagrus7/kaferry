@@ -60,7 +60,7 @@ func TestCanonicalIdentityJSON(t *testing.T) {
 	id.Source.TopicID = TopicID{0xab, 0xcd}
 	data, err := json.Marshal(id)
 	require.NoError(t, err)
-	require.Contains(t, string(data), `"topic_id":"abcd0000000000000000000000000000"`)
+	require.Equal(t, `{"version":1,"writer_id":"0123456789abcdef0123456789abcdef","file_id":"abcdef0123456789abcdef0123456789","source":{"cluster":"cluster","topic":"orders","topic_id":"abcd0000000000000000000000000000","partition":2},"first_offset":42,"block_limit":4194304}`, string(data), "v1 metadata has a fixed field order and topic ID representation")
 	got, err := parseIdentity(data)
 	require.NoError(t, err)
 	require.Equal(t, id, got)
