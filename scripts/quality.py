@@ -34,7 +34,7 @@ def production_files(root):
 
 
 def benchmarks(text):
-    matches = re.findall(r"^(Benchmark\S+)-\d+\s+\d+\s+([\d.]+) ns/op\s+(?:[\d.]+ MB/s\s+)?(\d+) B/op\s+(\d+) allocs/op", text, re.M)
+    matches = re.findall(r"^(Benchmark\S+)-\d+\s+\d+\s+([\d.]+) ns/op\s+(?:[\d.]+ \S+\s+)*?(\d+) B/op\s+(\d+) allocs/op", text, re.M)
     return {name: (float(ns), int(size), int(allocations)) for name, ns, size, allocations in matches}
 
 
