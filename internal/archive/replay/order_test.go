@@ -151,3 +151,19 @@ func TestReplayRejectsRecordHeaderDisagreementBeforeOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestChangedRestoredHeadFailsBeforeOutput(t *testing.T) {
+	// Given a resumed head whose offset is known before its block is read again.
+	state := partialState()
+	file := state.Files[0].File
+	values := records(42, 43)
+	blocks := &memoryBlocks{values: map[string][]avro.Record{file.Identity.FileID: values}}
+	r, err := NewReader(state.Files, blocks)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, r.Close()) })
+	values[1].Offset = 44
+	// When the rematerialized record differs, then it cannot silently change the merge order.
+	_, err = r.Next()
+	require.ErrorContains(t, err, "expected source offset 43, got 44")
+	require.ErrorContains(t, err, file.name())
+}

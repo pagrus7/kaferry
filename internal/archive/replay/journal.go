@@ -72,6 +72,7 @@ func (NativeGroupFiles) Acquire(path string) (lock io.Closer, result error) {
 		}
 		return nil, fmt.Errorf("exclusive replay group lock: %w", err)
 	}
+	// Keep the lock name bound to its inode if shared storage restarts while workers live.
 	if err = f.Sync(); err != nil {
 		return nil, err
 	}

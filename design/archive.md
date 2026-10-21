@@ -77,7 +77,7 @@ Merge overlaps by original source identity, partition and offset. Preserve dupli
 
 ### Checkpoints
 
-Use the group-derived filename plus a stable `.lock` file. The canonical JSON envelope contains `state` and its lowercase `sha256` digest. State version `1` stores `group`, query `fingerprint`, resolved `window`, confirmed `position`, `complete` and selected `files`.
+Use the same group-derived filename and stable `.lock` file as file checkpoints; the same group and checkpoint directory share one namespace. The canonical JSON envelope contains `state` and its lowercase `sha256` digest. State version `1` stores `group`, query `fingerprint`, resolved `window`, confirmed `position`, `complete` and selected `files`.
 
 Each `files` entry contains:
 

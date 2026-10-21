@@ -121,12 +121,6 @@ func (r *Reader) Next() (entry Entry, err error) {
 	if record.Offset != h.offset {
 		return entry, fmt.Errorf("archive file %s: expected source offset %d, got %d", p.File.name(), h.offset, record.Offset)
 	}
-	if record.Source != p.File.Identity.Source {
-		return entry, fmt.Errorf("archive file %s: record source differs from its identity", p.File.name())
-	}
-	if record.Offset < p.Next.Previous {
-		return entry, fmt.Errorf("archive file %s: source offset decreased", p.File.name())
-	}
 	r.files[h.file].Next = next
 	r.pending = h.file
 	return Entry{Record: record, File: h.file, Next: next}, nil

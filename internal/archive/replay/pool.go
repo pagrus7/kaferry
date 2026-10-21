@@ -55,9 +55,6 @@ func (p *Pool) Read(file File, pos Position) (record avro.Record, next Position,
 	if p.closed {
 		return record, next, errors.New("archive replay pool is closed")
 	}
-	if pos.Block == file.Size && pos.Record == 0 {
-		return record, next, io.EOF
-	}
 	defer func() {
 		if result != nil {
 			if errors.Is(result, io.EOF) {
