@@ -119,6 +119,7 @@ func TestInvalidFileIdentityAndInitialOffset(t *testing.T) {
 		func(i *Identity) { i.Version++ }, func(i *Identity) { i.WriterID = "" },
 		func(i *Identity) { i.FileID = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz" },
 		func(i *Identity) { i.FirstOffset = -1 }, func(i *Identity) { i.Source.Cluster = "" },
+		func(i *Identity) { i.Source.Cluster = "\xc2"; i.Source.Topic = "\xa2" },
 	} {
 		// Given an invalid identity, when a writer is created, then it writes nothing.
 		id := identity()

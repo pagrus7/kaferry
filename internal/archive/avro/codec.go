@@ -82,7 +82,7 @@ func (e *InvalidRecord) Error() string { return e.Err.Error() }
 func (e *InvalidRecord) Unwrap() error { return e.Err }
 
 func (s Source) validate() error {
-	if s.Cluster == "" || len(s.Cluster) > 4096 || s.Topic == "" || len(s.Topic) > 249 || !utf8.ValidString(s.Cluster+s.Topic) || s.TopicID == [16]byte{} || s.Partition < 0 {
+	if s.Cluster == "" || len(s.Cluster) > 4096 || s.Topic == "" || len(s.Topic) > 249 || !utf8.ValidString(s.Cluster) || !utf8.ValidString(s.Topic) || s.TopicID == [16]byte{} || s.Partition < 0 {
 		return errors.New("invalid original source identity")
 	}
 	return nil

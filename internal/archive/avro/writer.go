@@ -66,6 +66,9 @@ func (w *Writer) Append(record Record) error {
 	if record.Offset < w.last || w.count == 0 && record.Offset != w.identity.FirstOffset {
 		return &InvalidRecord{Err: errors.New("source offset decreased or disagrees with file header")}
 	}
+	if recordBytes(record) > w.codec.limit {
+		return &InvalidRecord{Err: errors.New("record exceeds Avro block limit")}
+	}
 	// Finish encoding before changing the container: a rejected record is safe to skip.
 	data, err := w.codec.api.Marshal(w.codec.schema, record)
 	if err != nil {
@@ -86,6 +89,14 @@ func (w *Writer) Append(record Record) error {
 		return w.Flush()
 	}
 	return nil
+}
+
+func recordBytes(record Record) int64 {
+	size := int64(len(record.Key)) + int64(len(record.Value))
+	for _, header := range record.Headers {
+		size += int64(len(header.Key)) + int64(len(header.Value))
+	}
+	return size
 }
 
 // Flush emits complete blocks; the storage component must sync them before acknowledgement.
