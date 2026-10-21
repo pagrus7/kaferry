@@ -3,6 +3,7 @@ package replay
 import (
 	"container/heap"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
@@ -69,7 +70,7 @@ func NewReader(files []Progress, blocks Blocks) (*Reader, error) {
 		if p.Next == initial(p.File) {
 			r.push(i, p.File.Identity.FirstOffset)
 		} else {
-			record, _, err := blocks.Read(p.File, p.Next)
+			record, _, err := readAt(blocks, p)
 			if err != nil {
 				return nil, err
 			}
@@ -101,7 +102,7 @@ func (r *Reader) Next() (entry Entry, err error) {
 		r.pending = -1
 		p := r.files[i]
 		if !p.ended() {
-			record, _, err := r.blocks.Read(p.File, p.Next)
+			record, _, err := readAt(r.blocks, p)
 			if err != nil {
 				return entry, err
 			}
@@ -113,12 +114,18 @@ func (r *Reader) Next() (entry Entry, err error) {
 	}
 	h := heap.Pop(&r.queue).(head)
 	p := r.files[h.file]
-	record, next, err := r.blocks.Read(p.File, p.Next)
+	record, next, err := readAt(r.blocks, p)
 	if err != nil {
 		return entry, err
 	}
-	if record.Offset != h.offset || record.Source != p.File.Identity.Source || record.Offset < p.Next.Previous {
-		return entry, errors.New("archive merge head or source order changed")
+	if record.Offset != h.offset {
+		return entry, fmt.Errorf("archive file %s: expected source offset %d, got %d", p.File.name(), h.offset, record.Offset)
+	}
+	if record.Source != p.File.Identity.Source {
+		return entry, fmt.Errorf("archive file %s: record source differs from its identity", p.File.name())
+	}
+	if record.Offset < p.Next.Previous {
+		return entry, fmt.Errorf("archive file %s: source offset decreased", p.File.name())
 	}
 	r.files[h.file].Next = next
 	r.pending = h.file
@@ -131,4 +138,13 @@ func (r *Reader) Close() error {
 	}
 	r.closed = true
 	return r.blocks.Close()
+}
+
+// readAt is used only for unfinished cursors; EOF here means a shortened input.
+func readAt(blocks Blocks, p Progress) (avro.Record, Position, error) {
+	record, next, err := blocks.Read(p.File, p.Next)
+	if errors.Is(err, io.EOF) {
+		err = fmt.Errorf("archive file %s ended before block byte %d, record %d: %w", p.File.name(), p.Next.Block, p.Next.Record, io.ErrUnexpectedEOF)
+	}
+	return record, next, err
 }

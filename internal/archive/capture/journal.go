@@ -3,6 +3,7 @@ package capture
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 
@@ -45,6 +46,11 @@ func NewJournal(files stateFiles, writer AtomicWriter) *Journal {
 }
 
 func (j *Journal) Load(path string) (state State, result error) {
+	defer func() {
+		if result != nil {
+			result = fmt.Errorf("archive writer state %s: %w", path, result)
+		}
+	}()
 	f, err := j.files.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
 		return State{}, err
@@ -67,7 +73,12 @@ func (j *Journal) Load(path string) (state State, result error) {
 	return decodeState(data)
 }
 
-func (j *Journal) Save(path string, state State) error {
+func (j *Journal) Save(path string, state State) (result error) {
+	defer func() {
+		if result != nil {
+			result = fmt.Errorf("archive writer state %s: %w", path, result)
+		}
+	}()
 	data, err := encodeState(state)
 	if err != nil {
 		return err

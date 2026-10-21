@@ -206,7 +206,7 @@ func TestReplayWritesOnlyToExternalCheckpointDirectory(t *testing.T) {
 }
 
 func TestPoolFailuresAreTerminalAndCloseEveryOwnedHandle(t *testing.T) {
-	for _, stage := range []string{"open", "block", "evict"} {
+	for _, stage := range []string{"open", "block", "premature EOF", "evict"} {
 		t.Run(stage, func(t *testing.T) {
 			// Given two files and a failure while opening, reading or evicting a handle.
 			root := t.TempDir()
@@ -215,11 +215,14 @@ func TestPoolFailuresAreTerminalAndCloseEveryOwnedHandle(t *testing.T) {
 			meter := &measuredOpener{Opener: NewCatalog(root, codec(t), NativeFiles{})}
 			pool, err := NewPool(meter, Limits{OpenFiles: 1, Blocks: 1})
 			require.NoError(t, err)
+			expected := errDisk
 			switch stage {
 			case "open":
 				meter.openErr = errDisk
 			case "block":
 				meter.blockErr = errDisk
+			case "premature EOF":
+				meter.blockErr, expected = io.EOF, io.ErrUnexpectedEOF
 			case "evict":
 				_, _, err = pool.Read(a, initial(a))
 				require.NoError(t, err)
@@ -228,12 +231,13 @@ func TestPoolFailuresAreTerminalAndCloseEveryOwnedHandle(t *testing.T) {
 			}
 			// When the operation fails, then retry does no further I/O and Close releases remaining handles.
 			_, _, err = pool.Read(a, initial(a))
-			require.ErrorIs(t, err, errDisk)
+			require.ErrorIs(t, err, expected)
+			require.NotErrorIs(t, err, io.EOF)
 			require.ErrorContains(t, err, a.name())
 			require.ErrorContains(t, err, "block byte")
 			before := meter.opens + meter.blocks + meter.closes
 			_, _, err = pool.Read(a, initial(a))
-			require.ErrorIs(t, err, errDisk)
+			require.ErrorIs(t, err, expected)
 			require.Equal(t, before, meter.opens+meter.blocks+meter.closes)
 			meter.closeErr = nil
 			require.NoError(t, pool.Close())

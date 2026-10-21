@@ -24,7 +24,7 @@ func Encode[T any](state T, limit int) ([]byte, error) {
 	// The envelope contains valid JSON from Marshal above and a hexadecimal string.
 	data, _ := json.Marshal(envelope{State: payload, SHA256: hex.EncodeToString(hash[:])})
 	if len(data) > limit {
-		return nil, fmt.Errorf("checkpoint exceeds %d MiB", limit>>20)
+		return nil, fmt.Errorf("state exceeds %d MiB", limit>>20)
 	}
 	return data, nil
 }
@@ -32,7 +32,7 @@ func Encode[T any](state T, limit int) ([]byte, error) {
 func Decode[T any](data []byte, limit int) (T, error) {
 	var state T
 	if len(data) > limit {
-		return state, fmt.Errorf("checkpoint exceeds %d MiB", limit>>20)
+		return state, fmt.Errorf("state exceeds %d MiB", limit>>20)
 	}
 	var saved envelope
 	if err := json.Unmarshal(data, &saved); err != nil {
@@ -40,7 +40,7 @@ func Decode[T any](data []byte, limit int) (T, error) {
 	}
 	hash := sha256.Sum256(saved.State)
 	if saved.SHA256 != hex.EncodeToString(hash[:]) {
-		return state, errors.New("checkpoint checksum mismatch")
+		return state, errors.New("state checksum mismatch")
 	}
 	if err := json.Unmarshal(saved.State, &state); err != nil {
 		return state, err
@@ -50,7 +50,7 @@ func Decode[T any](data []byte, limit int) (T, error) {
 		return state, err
 	}
 	if !bytes.Equal(data, canonical) {
-		return state, errors.New("checkpoint JSON is not canonical")
+		return state, errors.New("state JSON is not canonical")
 	}
 	return state, nil
 }

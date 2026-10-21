@@ -106,7 +106,12 @@ func NewJournal(directory, group string, files GroupFiles, writer AtomicWriter) 
 	return &Journal{path: path, group: group, files: files, writer: writer, lock: lock}, nil
 }
 
-func (j *Journal) Load() (*State, error) {
+func (j *Journal) Load() (saved *State, result error) {
+	defer func() {
+		if result != nil {
+			result = fmt.Errorf("replay checkpoint %s: %w", j.path, result)
+		}
+	}()
 	if j.closed {
 		return nil, errors.New("replay checkpoint is closed")
 	}
@@ -130,7 +135,12 @@ func (j *Journal) Load() (*State, error) {
 	return &state, nil
 }
 
-func (j *Journal) Save(state State) error {
+func (j *Journal) Save(state State) (result error) {
+	defer func() {
+		if result != nil {
+			result = fmt.Errorf("replay checkpoint %s: %w", j.path, result)
+		}
+	}()
 	if j.closed {
 		return errors.New("replay checkpoint is closed")
 	}

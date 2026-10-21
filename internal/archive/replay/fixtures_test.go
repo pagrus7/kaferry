@@ -165,3 +165,11 @@ func diskSession(t testing.TB, root, checkpoints string, q Query, limits Limits,
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	return s, pool
 }
+
+func partialState() State {
+	f := descriptor(1, records(42, 43))
+	s := emptyState()
+	s.Complete, s.Position = false, 1
+	s.Files = []Progress{{File: f, Next: Position{Block: f.Start, Record: 1, Previous: 42}}}
+	return s
+}

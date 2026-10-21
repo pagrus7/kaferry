@@ -15,18 +15,7 @@ func TestReplayRejectsOffsetsDecreasingBetweenBlocks(t *testing.T) {
 	// Given a standard Avro writer that emits decreasing offsets in separate blocks.
 	root := t.TempDir()
 	meta := descriptor(1, records(42))
-	f, err := os.Create(filepath.Join(root, meta.name()))
-	require.NoError(t, err)
-	metadata, err := json.Marshal(meta.Identity)
-	require.NoError(t, err)
-	w, err := goavro.NewOCFWriter(goavro.OCFConfig{W: f, Schema: avro.Schema(), CompressionName: "snappy", MetaData: map[string][]byte{"kaferry": metadata}})
-	require.NoError(t, err)
-	source := meta.Identity.Source
-	for _, offset := range []int64{42, 44, 43} {
-		native := map[string]any{"source": map[string]any{"cluster": source.Cluster, "topic": source.Topic, "topic_id": source.TopicID[:], "partition": source.Partition}, "offset": offset, "timestamp_ms": nil, "timestamp_kind": "unknown", "key": nil, "value": nil, "headers": []any{}}
-		require.NoError(t, w.Append([]any{native}))
-	}
-	require.NoError(t, f.Close())
+	writeForeign(t, root, meta, meta.Identity.Source, 42, 44, 43)
 	catalog := NewCatalog(root, codec(t), NativeFiles{})
 	selected, err := catalog.Select()
 	require.NoError(t, err)
@@ -115,4 +104,50 @@ func TestPoolReleasesAllHandlesEvenWhenCloseFails(t *testing.T) {
 	require.NoError(t, pool.Close())
 	_, _, err = pool.Read(a, initial(a))
 	require.ErrorContains(t, err, "closed")
+}
+
+func writeForeign(t *testing.T, root string, meta File, source avro.Source, offsets ...int64) {
+	t.Helper()
+	f, err := os.Create(filepath.Join(root, meta.name()))
+	require.NoError(t, err)
+	defer f.Close()
+	metadata, err := json.Marshal(meta.Identity)
+	require.NoError(t, err)
+	w, err := goavro.NewOCFWriter(goavro.OCFConfig{W: f, Schema: avro.Schema(), CompressionName: "snappy", MetaData: map[string][]byte{"kaferry": metadata}})
+	require.NoError(t, err)
+	for _, offset := range offsets {
+		native := map[string]any{"source": map[string]any{"cluster": source.Cluster, "topic": source.Topic, "topic_id": source.TopicID[:], "partition": source.Partition}, "offset": offset, "timestamp_ms": nil, "timestamp_kind": "unknown", "key": nil, "value": nil, "headers": []any{}}
+		require.NoError(t, w.Append([]any{native}))
+	}
+	require.NoError(t, f.Close())
+}
+
+func TestReplayRejectsRecordHeaderDisagreementBeforeOutput(t *testing.T) {
+	for _, kind := range []string{"first source offset", "record source"} {
+		t.Run(kind, func(t *testing.T) {
+			// Given an independently written file whose first record disagrees with its header.
+			root := t.TempDir()
+			meta := descriptor(1, records(42))
+			source := meta.Identity.Source
+			if kind == "first source offset" {
+				meta.Identity.FirstOffset = 43
+			} else {
+				source.TopicID[0]++
+			}
+			writeForeign(t, root, meta, source, 42)
+			catalog := NewCatalog(root, codec(t), NativeFiles{})
+			pool, err := NewPool(catalog, Limits{})
+			require.NoError(t, err)
+			defer pool.Close()
+			store := &memoryCheckpoints{}
+			s, err := NewSession(query(), clock{}, store, catalog, pool, 10)
+			require.NoError(t, err)
+			defer s.Close()
+			// When reading, then the specific mismatch fails before output or progress advancement.
+			_, err = s.Next()
+			require.ErrorContains(t, err, kind)
+			require.ErrorContains(t, err, meta.name())
+			require.Zero(t, store.saved.Position)
+		})
+	}
 }

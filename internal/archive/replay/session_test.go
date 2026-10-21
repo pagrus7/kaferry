@@ -247,3 +247,30 @@ func TestEmptySelectionAndClosedSession(t *testing.T) {
 	_, err = NewSession(query(), clock{}, &memoryCheckpoints{}, &memorySnapshots{}, &memoryBlocks{}, -1)
 	require.Error(t, err)
 }
+
+func TestPrematureEOFCannotFinishOrDropAnUnfinishedFile(t *testing.T) {
+	// Given two unfinished inputs and an unexpected EOF after the first record of one input.
+	a, b := descriptor(1, records(42, 43)), descriptor(2, records(100))
+	blocks := &memoryBlocks{values: map[string][]avro.Record{a.Identity.FileID: records(42, 43), b.Identity.FileID: records(100)}, fail: func(f File, p Position) error {
+		if f == a && p.Record == 1 {
+			return io.EOF
+		}
+		return nil
+	}}
+	store := &memoryCheckpoints{}
+	s := session(t, store, &memorySnapshots{files: []File{a, b}}, blocks, 10)
+	_, err := s.Next()
+	require.NoError(t, err)
+	// When another record is expected, then EOF is a sticky source failure, never snapshot completion.
+	_, err = s.Next()
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.NotErrorIs(t, err, io.EOF)
+	reads := blocks.reads
+	_, again := s.Next()
+	require.Equal(t, err, again)
+	require.Equal(t, reads, blocks.reads)
+	// Earlier confirmed output can still be saved, retaining the unfinished selection.
+	require.NoError(t, s.Checkpoint(1))
+	require.False(t, store.saved.Complete)
+	require.EqualValues(t, 1, store.saved.Position)
+}

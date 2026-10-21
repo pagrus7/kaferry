@@ -3,6 +3,9 @@ package replay
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,6 +112,7 @@ func TestCheckpointRejectsCorruptionAmbiguityAndInvalidState(t *testing.T) {
 			// When loaded, then it fails rather than inventing an empty or advanced selection.
 			_, err = j.Load()
 			require.Error(t, err)
+			require.ErrorContains(t, err, "replay checkpoint "+j.path)
 		})
 	}
 }
@@ -189,14 +193,25 @@ func FuzzCheckpoint(f *testing.F) {
 	seed, err := checkpoint.Encode(emptyState(), maxCheckpointBytes)
 	require.NoError(f, err)
 	f.Add(seed)
+	payload, err := json.Marshal(partialState())
+	require.NoError(f, err)
+	f.Add(payload)
 	f.Add([]byte("{}"))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > 64<<10 {
 			t.Skip()
 		}
-		state, err := checkpoint.Decode[State](data, maxCheckpointBytes)
-		if err == nil {
-			_ = state.validate()
+		wires := [][]byte{data}
+		var payload bytes.Buffer
+		if json.Compact(&payload, data) == nil {
+			// Recompute the envelope so state mutations reach cursor and identity validation.
+			wires = append(wires, fmt.Appendf(nil, `{"state":%s,"sha256":"%x"}`, payload.Bytes(), sha256.Sum256(payload.Bytes())))
+		}
+		for _, wire := range wires {
+			state, err := checkpoint.Decode[State](wire, maxCheckpointBytes)
+			if err == nil {
+				_ = state.validate()
+			}
 		}
 	})
 }
@@ -231,4 +246,17 @@ func TestRejectedSavePreservesExistingCheckpoint(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, before, after)
 	}
+}
+
+func TestPartialCheckpointWireContract(t *testing.T) {
+	// Given a confirmed record inside a selected file's block and a literal wire fixture.
+	want, err := os.ReadFile("testdata/partial-checkpoint-v1.json")
+	require.NoError(t, err)
+	// When encoding or loading, then all per-file field names and physical cursor values stay stable.
+	data, err := checkpoint.Encode(partialState(), maxCheckpointBytes)
+	require.NoError(t, err)
+	require.Equal(t, want, data)
+	got, err := checkpoint.Decode[State](want, maxCheckpointBytes)
+	require.NoError(t, err)
+	require.Equal(t, partialState(), got)
 }
