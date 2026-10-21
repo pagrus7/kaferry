@@ -56,6 +56,7 @@ func TestMergePreservesDuplicatesFullRecordsAndPhysicalTiesWithBoundedResources(
 	// Given overlapping files whose duplicate offsets must remain separate physical records.
 	root := t.TempDir()
 	var expected []avro.Record
+	var inputs [][]avro.Record
 	for id := range 20 {
 		values := records(42, 42, 43, 44)
 		for i := range values {
@@ -65,26 +66,15 @@ func TestMergePreservesDuplicatesFullRecordsAndPhysicalTiesWithBoundedResources(
 		values[1].Value = []byte{}
 		values[2].TimestampMS = nil
 		values[2].TimestampKind = "unknown"
+		inputs = append(inputs, values)
 		writeFile(t, root, id+1, values, 2)
 	}
 	for _, offset := range []int64{42, 43, 44} {
-		for id := range 20 {
-			for i, r := range records(42, 42, 43, 44) {
-				if r.Offset != offset {
-					continue
+		for _, values := range inputs {
+			for _, r := range values {
+				if r.Offset == offset {
+					expected = append(expected, r)
 				}
-				r.Key = []byte{byte(id), byte(i)}
-				if i == 0 {
-					r.Value = nil
-				}
-				if i == 1 {
-					r.Value = []byte{}
-				}
-				if i == 2 {
-					r.TimestampMS = nil
-					r.TimestampKind = "unknown"
-				}
-				expected = append(expected, r)
 			}
 		}
 	}
@@ -190,6 +180,7 @@ func TestIncompleteRestartRejectsMissingResizedOrModifiedSelectedInput(t *testin
 			defer journal.Close()
 			_, err = NewSession(query(), clock{}, journal, catalog, pool, 10)
 			require.Error(t, err)
+			require.ErrorContains(t, err, a.name())
 		})
 	}
 }
@@ -238,6 +229,8 @@ func TestPoolFailuresAreTerminalAndCloseEveryOwnedHandle(t *testing.T) {
 			// When the operation fails, then retry does no further I/O and Close releases remaining handles.
 			_, _, err = pool.Read(a, initial(a))
 			require.ErrorIs(t, err, errDisk)
+			require.ErrorContains(t, err, a.name())
+			require.ErrorContains(t, err, "block byte")
 			before := meter.opens + meter.blocks + meter.closes
 			_, _, err = pool.Read(a, initial(a))
 			require.ErrorIs(t, err, errDisk)

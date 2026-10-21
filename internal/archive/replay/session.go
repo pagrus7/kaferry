@@ -28,16 +28,15 @@ var ErrPendingFull = errors.New("replay must checkpoint confirmed records before
 
 // Session saves only confirmed prefixes. One event loop owns its mutable state.
 type Session struct {
-	store            Checkpoints
-	blocks           Blocks
-	reader           *Reader
-	saved            State
-	issued           int64
-	pending          []delta
-	limit            int
-	readErr, saveErr error
-	closed           bool
-	PrivateFiles     int
+	store        Checkpoints
+	blocks       Blocks
+	reader       *Reader
+	saved        State
+	pending      []delta
+	limit        int
+	saveErr      error
+	closed       bool
+	PrivateFiles int
 }
 
 // NewSession takes ownership of store and blocks only on success.
@@ -94,7 +93,6 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 			}
 		}
 	}
-	s.issued = s.saved.Position
 	if !s.saved.Complete {
 		s.reader, err = NewReader(s.saved.Files, blocks)
 		if err != nil {
@@ -111,28 +109,22 @@ func (s *Session) Next() (item Item, err error) {
 	if s.saveErr != nil {
 		return item, s.saveErr
 	}
-	if s.readErr != nil {
-		return item, s.readErr
-	}
 	if s.saved.Complete {
 		return item, io.EOF
 	}
 	if len(s.pending) >= s.limit {
 		return item, ErrPendingFull
 	}
-	if s.issued == math.MaxInt64 {
+	position := s.saved.Position + int64(len(s.pending))
+	if position == math.MaxInt64 {
 		return item, errors.New("replay sequence exhausted")
 	}
 	entry, err := s.reader.Next()
 	if err != nil {
-		if !errors.Is(err, io.EOF) {
-			s.readErr = err
-		}
 		return item, err
 	}
 	s.pending = append(s.pending, delta{file: entry.File, next: entry.Next})
-	item = Item{Position: s.issued, Next: s.issued + 1, Record: entry.Record}
-	s.issued++
+	item = Item{Position: position, Next: position + 1, Record: entry.Record}
 	return item, nil
 }
 
@@ -143,7 +135,7 @@ func (s *Session) Checkpoint(position int64) error {
 	if s.saveErr != nil {
 		return s.saveErr
 	}
-	if position < s.saved.Position || position > s.issued {
+	if position < s.saved.Position || position > s.saved.Position+int64(len(s.pending)) {
 		return errors.New("replay checkpoint is not a known confirmed prefix")
 	}
 	if position == s.saved.Position {

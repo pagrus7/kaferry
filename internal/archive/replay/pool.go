@@ -2,6 +2,7 @@ package replay
 
 import (
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
@@ -56,6 +57,7 @@ func (p *Pool) Read(file File, pos Position) (record avro.Record, next Position,
 	}
 	defer func() {
 		if result != nil && !errors.Is(result, io.EOF) {
+			result = fmt.Errorf("read archive file %s at block byte %d, record %d: %w", file.name(), pos.Block, pos.Record, result)
 			p.failed = result
 		}
 	}()

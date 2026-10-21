@@ -140,10 +140,10 @@ func (c *Catalog) Validate(files []File) error {
 	for _, file := range files {
 		current, err := c.describe(file.name())
 		if err != nil {
-			return err
+			return fmt.Errorf("validate archive file %s: %w", file.name(), err)
 		}
 		if current != file {
-			return errors.New("selected archive input changed")
+			return fmt.Errorf("selected archive file %s changed", file.name())
 		}
 	}
 	return nil
