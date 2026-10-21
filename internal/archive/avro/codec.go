@@ -65,7 +65,7 @@ type Codec struct {
 
 func New(limit int64) (*Codec, error) {
 	if limit < 1 || limit > 1<<32-1 || snappy.MaxEncodedLen(int(limit)) < 0 {
-		return nil, errors.New("Avro block limit must be positive and fit Snappy size limits")
+		return nil, errors.New("archive block limit must be positive and fit Snappy size limits")
 	}
 	headers := max(16, int(limit/32))
 	api := lib.Config{MaxByteSliceSize: int(limit), MaxSliceAllocSize: headers, MaxMapAllocSize: 16}.Freeze()

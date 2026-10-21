@@ -45,7 +45,7 @@ func (c *Codec) Open(input io.ReaderAt, size int64) (*Reader, error) {
 	var header ocf.Header
 	decoder.ReadVal(ocf.HeaderSchema, &header)
 	if decoder.Error != nil {
-		return nil, fmt.Errorf("Avro header: %w", decoder.Error)
+		return nil, fmt.Errorf("archive header: %w", decoder.Error)
 	}
 	if header.Magic != [4]byte{'O', 'b', 'j', 1} || string(header.Meta["avro.codec"]) != "snappy" {
 		return nil, errors.New("archive requires Snappy Avro OCF")
@@ -83,19 +83,19 @@ func (r *Reader) Block(position int64) (*Block, error) {
 		return nil, io.EOF
 	}
 	if position < r.Start || position > r.size {
-		return nil, errors.New("Avro block position is outside the file")
+		return nil, errors.New("archive block position is outside the file")
 	}
 	input := &countingReader{Reader: io.NewSectionReader(r.input, position, r.size-position)}
 	count, err := binary.ReadVarint(input)
 	if err != nil {
-		return nil, fmt.Errorf("Avro block count: %w", err)
+		return nil, fmt.Errorf("archive block count: %w", err)
 	}
 	if count < 1 || count > maxRecords {
 		return nil, errors.New("invalid Avro block record count")
 	}
 	size, err := binary.ReadVarint(input)
 	if err != nil {
-		return nil, fmt.Errorf("Avro block length: %w", err)
+		return nil, fmt.Errorf("archive block length: %w", err)
 	}
 	// A Snappy block includes a four-byte checksum; bound compressed allocation too.
 	if size < 5 || size > int64(snappy.MaxEncodedLen(int(r.codec.limit)))+4 || size > r.size-position-input.bytes-16 {
@@ -103,14 +103,14 @@ func (r *Reader) Block(position int64) (*Block, error) {
 	}
 	compressed := make([]byte, int(size))
 	if _, err := io.ReadFull(input, compressed); err != nil {
-		return nil, fmt.Errorf("Avro block data: %w", err)
+		return nil, fmt.Errorf("archive block data: %w", err)
 	}
 	var sync [16]byte
 	if _, err := io.ReadFull(input, sync[:]); err != nil {
-		return nil, fmt.Errorf("Avro block sync: %w", err)
+		return nil, fmt.Errorf("archive block sync: %w", err)
 	}
 	if sync != r.sync {
-		return nil, errors.New("Avro block sync mismatch")
+		return nil, errors.New("archive block sync mismatch")
 	}
 	end := position + input.bytes
 	raw, err := r.codec.decompress(compressed)
@@ -118,7 +118,7 @@ func (r *Reader) Block(position int64) (*Block, error) {
 		return nil, err
 	}
 	if count > int64(len(raw)) {
-		return nil, errors.New("Avro record count exceeds block data")
+		return nil, errors.New("archive record count exceeds block data")
 	}
 	decoder := lib.NewReader(nil, 0, lib.WithReaderConfig(r.codec.api)).Reset(raw)
 	return &Block{Start: position, End: end, Count: count, last: -1, reader: decoder, codec: r.codec, identity: r.Identity, first: position == r.Start}, nil
@@ -142,7 +142,7 @@ func (b *Block) Next() (Record, error) {
 	}
 	b.reader.ReadVal(b.codec.schema, &record)
 	if b.reader.Error != nil {
-		b.err = fmt.Errorf("Avro record: %w", b.reader.Error)
+		b.err = fmt.Errorf("archive record: %w", b.reader.Error)
 		return record, b.err
 	}
 	b.err = record.validate(b.identity.Source, b.codec.maxHeaders)
@@ -155,7 +155,7 @@ func (b *Block) Next() (Record, error) {
 	if b.err == nil && b.index == b.Count-1 {
 		b.reader.Peek()
 		if !errors.Is(b.reader.Error, io.EOF) {
-			b.err = errors.New("Avro record count does not consume block exactly")
+			b.err = errors.New("archive record count does not consume block exactly")
 		}
 	}
 	if b.err != nil {

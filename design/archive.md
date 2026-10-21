@@ -1,6 +1,6 @@
 # Archive redesign
 
-Accepted design for directory-based Avro archives. The codec is separate from capture, recovery and replay. CLI support is pending; [current file usage](../docs/file-format.md) describes the available commands.
+Accepted design for directory-based Avro archives. The codec is separate from capture, recovery and replay. CLI support is pending; [current file usage](../docs/usage.md) describes the available commands.
 
 ## Records and files
 
