@@ -1,0 +1,148 @@
+package capture
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+
+	"github.com/pagrus7/kaferry/internal/archive/avro"
+)
+
+func recoverNamespace(root, namespace, owner string, codec *avro.Codec, files Filesystem, states StateStore) error {
+	path := filepath.Join(namespace, "state.json")
+	state, err := states.Load(path)
+	if err != nil {
+		return err
+	}
+	if state.WriterID != owner {
+		return errors.New("archive state belongs to a different writer")
+	}
+	for _, id := range slices.Sorted(maps.Keys(state.Files)) {
+		if err := recoverFile(root, state.Files[id], codec, files); err != nil {
+			return fmt.Errorf("recover archive file %s: %w", id, err)
+		}
+	}
+	if len(state.Files) > 0 {
+		if err := states.Save(path, emptyState(owner)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func recoverFile(root string, boundary Boundary, codec *avro.Codec, files Filesystem) (result error) {
+	completed := dataPath(root, boundary.Identity, false)
+	f, err := files.OpenFile(completed, os.O_RDONLY, 0)
+	if err == nil {
+		defer func() { result = errors.Join(result, f.Close()) }()
+		if err := validatePrefix(f, boundary, true, codec); err != nil {
+			return err
+		}
+		if _, err := files.Lstat(dataPath(root, boundary.Identity, true)); !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				return err
+			}
+			return errors.New("both private and completed archive files exist")
+		}
+		return files.SyncDirectory(root)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	private := dataPath(root, boundary.Identity, true)
+	f, err = files.OpenFile(private, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	if err := validatePrefix(f, boundary, false, codec); err != nil {
+		return errors.Join(err, f.Close())
+	}
+	if err := f.Truncate(boundary.Extent); err != nil {
+		return errors.Join(err, f.Close())
+	}
+	if err := errors.Join(f.Sync(), f.Close()); err != nil {
+		return err
+	}
+	if err := files.RenameExclusive(private, completed); err != nil {
+		return err
+	}
+	return files.SyncDirectory(root)
+}
+
+func validatePrefix(f DataFile, boundary Boundary, completed bool, codec *avro.Codec) error {
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() < boundary.Extent || completed && info.Size() != boundary.Extent {
+		return errors.New("acknowledged archive length or file type changed")
+	}
+	reader, err := codec.Open(f, boundary.Extent)
+	if err != nil {
+		return err
+	}
+	if reader.Identity != boundary.Identity {
+		return errors.New("acknowledged archive identity changed")
+	}
+	stats, err := reader.Scan()
+	if err != nil {
+		return err
+	}
+	if stats.Records != boundary.Records {
+		return errors.New("acknowledged archive record count changed")
+	}
+	return nil
+}
+
+func discardUnacknowledged(root string, owners map[string]bool, files Filesystem) error {
+	names, err := unacknowledgedFiles(root, owners, files)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if err := files.Remove(filepath.Join(root, name)); err != nil {
+			return err
+		}
+	}
+	if len(names) > 0 {
+		return files.SyncDirectory(root)
+	}
+	return nil
+}
+
+// Finish and close the scan before deletion can change the directory's order.
+func unacknowledgedFiles(root string, owners map[string]bool, files Filesystem) (names []string, result error) {
+	directory, err := files.OpenDirectory(root)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { result = errors.Join(result, directory.Close()) }()
+	for {
+		entries, readErr := directory.ReadDir(256)
+		for _, entry := range entries {
+			if !strings.HasPrefix(entry.Name(), ".") || !strings.HasSuffix(entry.Name(), ".partial") {
+				continue
+			}
+			name := strings.TrimSuffix(strings.TrimPrefix(entry.Name(), "."), ".partial")
+			owner, id, ok := strings.Cut(name, ".")
+			if !owners[owner] {
+				continue
+			}
+			if !ok || !validID(id) || !entry.Type().IsRegular() {
+				return nil, errors.New("unrecognized private archive file")
+			}
+			names = append(names, entry.Name())
+		}
+		if errors.Is(readErr, io.EOF) {
+			return names, nil
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+}

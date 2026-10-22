@@ -132,5 +132,6 @@ func (w *Writer) Flush() error {
 }
 
 // Size is the emitted compressed container size, excluding the pending raw block.
-func (w *Writer) Size() int64  { return w.output.bytes }
-func (w *Writer) Count() int64 { return w.count }
+func (w *Writer) Size() int64        { return w.output.bytes }
+func (w *Writer) Count() int64       { return w.count }
+func (w *Writer) Identity() Identity { return w.identity }
