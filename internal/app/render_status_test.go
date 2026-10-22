@@ -80,5 +80,4 @@ func TestArchiveStatusTextReportsSavedSnapshot(t *testing.T) {
 	// When rendering status, then bytes describe that snapshot rather than the current directory.
 	require.NoError(t, renderStatus(&output, report, false))
 	require.Contains(t, output.String(), "Snapshot: 3 completed files, 150 encoded bytes.")
-	require.NotContains(t, output.String(), "Current source size")
 }

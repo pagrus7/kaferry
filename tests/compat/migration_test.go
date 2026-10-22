@@ -38,7 +38,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			}
 			archive := filepath.Join(t.TempDir(), "archive")
 			clone := filepath.Join(t.TempDir(), "clone")
-			config := configuration(t)
+			config := configuration(t, "max_frame_bytes=8192")
 			group := source + "-migration"
 			sql := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s', CUTOFF=INTERVAL '0' SECOND)", archive, source, stamp.Add(time.Second).Format(time.RFC3339Nano), group)
 			limited := func(query string) string {

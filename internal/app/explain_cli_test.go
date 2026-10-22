@@ -105,7 +105,7 @@ func TestExplainCLIReusesFileProgressAndReportsOutputErrors(t *testing.T) {
 	stderr.Reset()
 	// When inspecting a rerun.
 	code := Execute(t.Context(), []string{"explain", "-e", fixture.query, "-c", fixture.config, "--json"}, nil, &stdout, &stderr)
-	// Then saved progress and acknowledged output are preserved.
+	// Then saved progress and existing output are preserved.
 	var report inspect.Report
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
 	require.Zero(t, code)

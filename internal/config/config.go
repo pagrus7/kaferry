@@ -16,7 +16,7 @@ type Worker struct {
 	ArchiveCaptureOpenFiles int     `toml:"archive_capture_open_files"`
 	ArchiveReplayOpenFiles  int     `toml:"archive_replay_open_files"`
 	ArchiveReplayBlocks     int     `toml:"archive_replay_blocks"`
-	ArchiveBlockMaxBytes    int64   `toml:"archive_block_max_bytes"`
+	ArchiveBlockMaxBytes    int64   `toml:"max_frame_bytes"`
 	PartitionRecordCap      int     `toml:"partition_record_cap"`
 	PartitionByteCap        int64   `toml:"partition_byte_cap"`
 	RecordCap               int     `toml:"record_cap"`
@@ -96,7 +96,7 @@ func (w Worker) Validate() error {
 		return fmt.Errorf("worker.progress_interval must be a nonnegative duration")
 	}
 	if w.ArchiveBlockMaxBytes < 1 || w.ArchiveBlockMaxBytes > 4294967295 {
-		return fmt.Errorf("worker.archive_block_max_bytes must be between 1 and 4294967295 bytes")
+		return fmt.Errorf("worker.max_frame_bytes must be between 1 and 4294967295 bytes")
 	}
 	if w.PartitionRecordCap <= 0 || w.PartitionByteCap <= 0 || w.RecordCap <= 0 || w.ByteCap <= 0 {
 		return fmt.Errorf("worker record and byte caps must be positive")

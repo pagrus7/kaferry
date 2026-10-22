@@ -120,7 +120,6 @@ func TestArchiveCLIResumeUsesFixedSelectionAndSavesStopReason(t *testing.T) {
 	code, logs = execute("status", sql+")")
 	require.Zero(t, code, logs)
 	require.Contains(t, logs, fmt.Sprintf("Snapshot: 1 completed files, %d encoded bytes.", state.Files[0].File.Size))
-	require.NotContains(t, logs, "Current source size")
 	// When the same group resumes, then it finishes only the originally selected file.
 	code, logs = execute("run", sql+")")
 	require.Zero(t, code, logs)

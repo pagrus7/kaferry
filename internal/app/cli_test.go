@@ -104,27 +104,27 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 }
 
 func TestCLIMissingHomeReportsConfigurationErrors(t *testing.T) {
-	for _, configured := range []bool{false, true} {
-		t.Run(map[bool]string{false: "default directory", true: "missing configuration"}[configured], func(t *testing.T) {
-			// Given a valid file-copy statement and no home directory.
-			t.Setenv("HOME", "")
-			statement := "INSERT INTO FILE avro('/unused-output.avro') SELECT * FROM FILE avro('/unused-source.avro') OPTIONS(GROUP='restore')"
-			args := []string{"run", "--sql", statement}
-			want := "set HOME or worker.checkpoint_dir"
-			if configured {
-				args = append(args, "--config", filepath.Join(t.TempDir(), "missing.toml"))
-				want = "read configuration"
-			}
-			var out bytes.Buffer
-
-			// When the CLI loads configuration and opens the source.
-			code := Execute(context.Background(), args, nil, io.Discard, &out)
-
-			// Then startup diagnostics identify the required configuration.
-			require.EqualValues(t, 2, code)
-			require.Contains(t, out.String(), want)
-			require.NotContains(t, out.String(), "composition failed")
-		})
+	for _, command := range []string{"run", "explain", "status"} {
+		for _, configured := range []bool{false, true} {
+			t.Run(command+"/"+map[bool]string{false: "default directory", true: "missing configuration"}[configured], func(t *testing.T) {
+				// Given a valid file-copy statement and no home directory.
+				t.Setenv("HOME", "")
+				statement := "INSERT INTO FILE avro('/unused-output.avro') SELECT * FROM FILE avro('/unused-source.avro') OPTIONS(GROUP='restore')"
+				args := []string{command, "--sql", statement}
+				want := "set HOME or worker.checkpoint_dir"
+				if configured {
+					args = append(args, "--config", filepath.Join(t.TempDir(), "missing.toml"))
+					want = "read configuration"
+				}
+				var stdout, stderr bytes.Buffer
+				// When executing, then report the configuration error without a status verdict or preview.
+				code := Execute(t.Context(), args, nil, &stdout, &stderr)
+				require.EqualValues(t, 2, code)
+				require.Empty(t, stdout.String())
+				require.Contains(t, stderr.String(), want)
+				require.NotContains(t, stderr.String(), "composition failed")
+			})
+		}
 	}
 }
 

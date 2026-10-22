@@ -14,7 +14,7 @@ Completion, delivery and restart contracts. See the [usage guide](../docs/usage.
 - `WHERE` filters Kafka record timestamps, not payload event time. Bounds normalize to a logged half-open millisecond range `[lo, hi)`; `BETWEEN` includes both endpoints by adding 1 ms to its upper bound.
 - `NOW()` resolves once and is stored with progress: per partition for Kafka, per checkpoint for files. Restart and reassignment reuse the saved window, even when its offset falls outside retention.
 - A partition without progress adopts the lowest-numbered partition's valid saved window. If none exists, its worker resolves `NOW()`. Concurrent workers may resolve different windows; use literal bounds for a consistent group-wide range.
-- Changed filters require a new `GROUP`. If all group offsets expire or a checkpoint is lost, the job starts fresh and resolves `NOW()` again. Startup logs whether progress exists.
+- Changed filters require a new `GROUP`. If all group offsets expire or a checkpoint is lost, the job starts fresh and resolves `NOW()` again. Kafka startup logs how many partitions have saved progress.
 
 ## Kafka start positions
 
@@ -173,7 +173,7 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 | `start_rule` | Kafka fallback for partitions without progress: `WINDOW`, `EARLIEST` or `LATEST`; absent for file sources |
 | `record_errors` | Effective `FAIL`/`SKIP` policies: `missing_timestamp`, `rejected_timestamp`, `other_record`; SKIP applies before writing, not to delivery failures |
 | `source`, `destination` | `kind`, `name`, optional connection alias, cluster/topic IDs, partition count, destination timestamp type |
-| Endpoint `file` | `exists`, `size_bytes`, `file_count`; source `position_records`, `window`, `window_origin`, `checkpoint`, `checkpoint_exists` |
+| Endpoint `file` | `exists`; source adds `size_bytes`, `file_count`, `position_records`, `window`, `window_origin`, `checkpoint`, `checkpoint_exists`. Destination `size_bytes` is zero; destination size and file count are not inspected |
 | `partitions` | Sorted `partition`, `start`, `log_start`, `log_end`, `saved`, `window`, `window_origin` |
 | `window` | Inclusive `lower`, exclusive `upper`; null means unbounded. `window_origin`: `literal`, `saved`, `adopted` or `resolved` for preview-only NOW |
 | `warnings` | Detected retention gaps and unavailable/changed destination timestamp behavior; may be empty |
@@ -202,7 +202,7 @@ Optional keys in TOML's `[worker]` table; byte values are integers:
 | --- | --- | --- |
 | `partition_record_cap`, `partition_byte_cap` | 5000, 16777216 (16 MiB) | Unsaved work per partition |
 | `record_cap`, `byte_cap` | 20000, 134217728 (128 MiB) | Unsaved work per worker; also sizes Kafka queues |
-| `archive_block_max_bytes` | 67108864 (64 MiB) | Maximum decoded Avro block |
+| `max_frame_bytes` | 67108864 (64 MiB) | Maximum decoded Avro block |
 | `archive_capture_open_files` | 1024 | Open capture files; reaching this budget rotates the least recently used file |
 | `archive_replay_open_files` | 32 | Open replay handles |
 | `archive_replay_blocks` | 8 | Cached replay blocks; overlapping files beyond this budget repeat decoding |
@@ -213,7 +213,7 @@ Optional keys in TOML's `[worker]` table; byte values are integers:
 | `progress_interval` | '30s' | Progress logs; '0' disables |
 | `checkpoint_dir` | `~/.kaferry/checkpoints` | File-source checkpoint directory |
 
-Caps must be positive; `archive_block_max_bytes` is at most 4,294,967,295. Durations are positive Go duration strings, except `progress_interval` permits zero; `delivery_timeout` is 1 ms–2,147,483,647 ms. `checkpoint_dir` must not be empty. Unknown keys fail.
+Caps must be positive; `max_frame_bytes` is at most 4,294,967,295. Durations are positive Go duration strings, except `progress_interval` permits zero; `delivery_timeout` is 1 ms–2,147,483,647 ms. `checkpoint_dir` must not be empty. Unknown keys fail.
 
 Caps include delivered records whose source progress is not yet saved. [Delivery and progress](#delivery-and-progress).
 

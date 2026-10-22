@@ -1,4 +1,4 @@
-// Package checkpoint contains shared checkpoint naming and wire-format helpers.
+// Package checkpoint provides checkpoint naming, checksummed encoding and durable file replacement.
 package checkpoint
 
 import (

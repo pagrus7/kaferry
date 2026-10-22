@@ -359,7 +359,7 @@ func TestPreviewReportsNewPartitionFallbackAndEffectiveRecordPolicies(t *testing
 func TestFilePreviewPreservesFreshAndSavedRelativeWindows(t *testing.T) {
 	for _, saved := range []bool{false, true} {
 		t.Run(fmt.Sprint(saved), func(t *testing.T) {
-			// Given a file inspector's resolved NOW bounds, byte position and checkpoint state.
+			// Given a file inspector's resolved NOW bounds, record position and checkpoint state.
 			service, p, factory, files := fixture()
 			p.Source.Kind = "FILE"
 			p.Window = plan.WindowSpec{Upper: &plan.Expression{Now: true}}

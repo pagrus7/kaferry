@@ -82,7 +82,7 @@ func checkpointDirectory(w config.Worker) (string, error) {
 	} else {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", &Conflict{Err: errors.New("cannot resolve the default checkpoint directory; set HOME or worker.checkpoint_dir")}
+			return "", &core.Exit{Code: 2, Err: errors.New("cannot resolve the default checkpoint directory; set HOME or worker.checkpoint_dir")}
 		}
 		directory = filepath.Join(home, ".kaferry", "checkpoints")
 	}
