@@ -53,3 +53,26 @@ func TestArchiveOptionDiagnosticsLocateValuesWithoutLeakingPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestArchiveEndpointRestrictionsLocateAndRedactDiagnostics(t *testing.T) {
+	for _, tc := range []struct{ destination, source, marker, message string }{
+		{"avro('private/output')", "avro('private/input',ROTATE_AFTER_SIZE=1k)", "ROTATE_AFTER_SIZE", "rotation options require a FILE avro destination"},
+		{"cbor('private/output',ROTATE_AFTER_SIZE=1k)", "cbor('private/input')", "ROTATE_AFTER_SIZE", "rotation options require FILE avro"},
+		{"avro('private/output')", "cbor('private/input')", "'private/output'", "file copies require matching formats"},
+		{"cbor('private/output')", "avro('private/input')", "'private/output'", "file copies require matching formats"},
+	} {
+		t.Run(tc.destination+" from "+tc.source, func(t *testing.T) {
+			// Given parsed SQL whose endpoint options or formats cannot be combined.
+			query := "INSERT INTO FILE " + tc.destination + " SELECT * FROM FILE " + tc.source + " OPTIONS(GROUP='g')"
+			ast, err := sql.NewParser().Parse(query)
+			require.NoError(t, err)
+			// When planning, then locate the restriction without echoing private paths.
+			_, err = NewPlanner(nil).Build(ast, nil)
+			require.ErrorContains(t, err, tc.message)
+			require.NotContains(t, err.Error(), "private/")
+			var diagnostic *sql.Diagnostic
+			require.ErrorAs(t, err, &diagnostic)
+			require.Equal(t, strings.Index(query, tc.marker)+1, diagnostic.Position.Column)
+		})
+	}
+}

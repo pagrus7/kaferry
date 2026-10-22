@@ -2,15 +2,18 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
 	"github.com/pagrus7/kaferry/internal/archive/replay"
 	"github.com/pagrus7/kaferry/internal/checkpoint"
+	"github.com/pagrus7/kaferry/internal/inspect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -138,4 +141,111 @@ func TestArchiveCLIAllFilteredRecordsCanExceedPendingCap(t *testing.T) {
 	require.True(t, state.Complete)
 	require.Equal(t, "eof", state.Stop.Reason)
 	require.Empty(t, archiveRecords(t, dst), "filtered capture creates no empty data files")
+}
+
+func TestArchiveCLIFreshPreviewDoesNotCreateRunState(t *testing.T) {
+	// Given a completed file, an unfinished file and a query with a relative time window.
+	root := t.TempDir()
+	src, dst := filepath.Join(root, "input"), filepath.Join(root, "output")
+	archiveFixture(t, src, 1, []avro.Record{{Source: avro.Source{Cluster: "cluster", Topic: "orders", TopicID: avro.TopicID{1}}, TimestampKind: "unknown"}})
+	require.NoError(t, os.WriteFile(filepath.Join(src, "capture.partial"), nil, 0600))
+	cfg := filepath.Join(root, "worker.toml")
+	require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)), 0600))
+	query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WHERE RECORD_TIMESTAMP < NOW() OPTIONS(GROUP='preview')", dst, src)
+	before := time.Now().UnixMilli()
+	var stdout, diagnostics bytes.Buffer
+	// When explaining a query that has never run, then describe the current files without pinning them.
+	require.Zero(t, Execute(t.Context(), []string{"explain", "-e", query, "-c", cfg, "--json"}, nil, &stdout, &diagnostics), diagnostics.String())
+	var report inspect.Report
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
+	info := report.Source.File
+	require.True(t, info.Directory)
+	require.Equal(t, 1, info.FileCount)
+	require.Positive(t, info.SizeBytes)
+	require.False(t, *info.CheckpointExists)
+	require.Equal(t, "resolved", info.WindowOrigin)
+	require.GreaterOrEqual(t, *info.Window.Upper, before)
+	require.LessOrEqual(t, *info.Window.Upper, time.Now().UnixMilli())
+	require.Contains(t, report.Warnings, "Snapshot excludes 1 unfinished files.")
+	require.False(t, report.Destination.File.Exists)
+	// When checking status, then an absent checkpoint means unknown progress and creates nothing.
+	stdout.Reset()
+	diagnostics.Reset()
+	require.Equal(t, 5, Execute(t.Context(), []string{"status", "-e", query, "-c", cfg, "--json"}, nil, &stdout, &diagnostics), diagnostics.String())
+	var status inspect.StatusReport
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &status))
+	require.Equal(t, "unknown", status.Verdict)
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	require.Len(t, entries, 2, "preview creates neither checkpoint, lock nor destination")
+}
+
+func TestArchiveCLIInspectionRejectsChangedSavedInputs(t *testing.T) {
+	for _, change := range []string{"query", "missing", "resized"} {
+		t.Run(change, func(t *testing.T) {
+			// Given a partially replayed group with a fixed selection.
+			root := t.TempDir()
+			src, dst := filepath.Join(root, "input"), filepath.Join(root, "output")
+			record := avro.Record{Source: avro.Source{Cluster: "cluster", Topic: "orders", TopicID: avro.TopicID{1}}, TimestampKind: "unknown"}
+			archiveFixture(t, src, 1, []avro.Record{record, record})
+			cfg := filepath.Join(root, "worker.toml")
+			require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)), 0600))
+			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') OPTIONS(GROUP='saved',WORKER_STOP_AFTER_RECORDS=1)", dst, src)
+			var output bytes.Buffer
+			require.Zero(t, Execute(t.Context(), []string{"run", "-e", query, "-c", cfg}, nil, &output, &output), output.String())
+			files, err := filepath.Glob(filepath.Join(src, "*.avro"))
+			require.NoError(t, err)
+			require.Len(t, files, 1)
+			message := "selected archive input changed"
+			switch change {
+			case "query":
+				query = fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WHERE RECORD_TIMESTAMP < NOW() OPTIONS(GROUP='saved')", dst, src)
+				message = "query identity mismatch"
+			case "missing":
+				require.NoError(t, os.Remove(files[0]))
+				message = "no such file"
+			case "resized":
+				info, err := os.Stat(files[0])
+				require.NoError(t, err)
+				require.NoError(t, os.Truncate(files[0], info.Size()+1))
+			}
+			// When inspecting, then fail rather than reporting the altered selection as valid.
+			output.Reset()
+			require.NotZero(t, Execute(t.Context(), []string{"explain", "-e", query, "-c", cfg}, nil, &output, &output))
+			require.Contains(t, output.String(), message)
+		})
+	}
+}
+
+func TestArchiveCLIOneOffDeletesOnlyCompletedProgress(t *testing.T) {
+	for _, capped := range []bool{false, true} {
+		t.Run(fmt.Sprintf("capped=%v", capped), func(t *testing.T) {
+			// Given a fresh one-off replay with two records.
+			root := t.TempDir()
+			src, dst := filepath.Join(root, "input"), filepath.Join(root, "output")
+			record := avro.Record{Source: avro.Source{Cluster: "cluster", Topic: "orders", TopicID: avro.TopicID{1}}, TimestampKind: "unknown"}
+			archiveFixture(t, src, 1, []avro.Record{record, record})
+			cfg := filepath.Join(root, "worker.toml")
+			require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)), 0600))
+			options := "GROUP=ONE_OFF"
+			if capped {
+				options += ",WORKER_STOP_AFTER_RECORDS=1"
+			}
+			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') OPTIONS(%s)", dst, src, options)
+			var output bytes.Buffer
+			// When running, then completed one-off progress is deleted; capped progress remains resumable.
+			require.Zero(t, Execute(t.Context(), []string{"run", "-e", query, "-c", cfg}, nil, &output, &output), output.String())
+			checkpoints, err := filepath.Glob(filepath.Join(root, "*.json"))
+			require.NoError(t, err)
+			count := 0
+			if capped {
+				count = 1
+			}
+			require.Len(t, checkpoints, count)
+			require.Len(t, archiveRecords(t, dst), 2-count)
+			locks, err := filepath.Glob(filepath.Join(root, "*.lock"))
+			require.NoError(t, err)
+			require.Len(t, locks, 1, "stable lock inode remains after JSON deletion")
+		})
+	}
 }

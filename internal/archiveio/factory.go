@@ -105,7 +105,7 @@ func checkpointDirectory(w config.Worker) (string, error) {
 	if !info.IsDir() {
 		return "", &file.Conflict{Err: errors.New("checkpoint path must be a directory")}
 	}
-	return filepath.EvalSymlinks(directory)
+	return resolvedPath(directory)
 }
 func resolvedPath(path string) (string, error) {
 	absolute, err := filepath.Abs(path)

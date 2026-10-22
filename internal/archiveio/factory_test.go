@@ -16,8 +16,9 @@ import (
 )
 
 func TestFactoryOwnsReplayCheckpointAndRejectsUnsafePaths(t *testing.T) {
-	// Given an archive created through the real output adapter.
-	root := t.TempDir()
+	// Given an archive and checkpoint directory configured relative to the working directory.
+	t.Chdir(t.TempDir())
+	root := "."
 	limits := config.Defaults("").Worker
 	limits.CheckpointDir = &root
 	factory := NewFactory(nil, core.RealClock{}, file.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
