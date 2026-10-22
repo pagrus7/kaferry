@@ -14,7 +14,7 @@
   },
   "destination": {
     "kind": "FILE",
-    "name": "out.cbor",
+    "name": "out.avro",
     "file": {
       "exists": false,
       "size_bytes": 0

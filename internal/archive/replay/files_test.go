@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
-	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/stretchr/testify/require"
 )
 
@@ -175,7 +175,7 @@ func TestIncompleteRestartRejectsMissingResizedOrModifiedSelectedInput(t *testin
 			pool, err := NewPool(catalog, Limits{})
 			require.NoError(t, err)
 			defer pool.Close()
-			journal, err := NewJournal(checkpoints, query().Group, NativeGroupFiles{}, file.DurableWriter{})
+			journal, err := NewJournal(checkpoints, query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 			require.NoError(t, err)
 			defer journal.Close()
 			_, err = NewSession(query(), clock{}, journal, catalog, pool, 10)

@@ -19,11 +19,6 @@ import (
 )
 
 func TestLoadArchiveCopy(t *testing.T) {
-	format := os.Getenv("KAFERRY_ARCHIVE_FORMAT")
-	if format == "" {
-		format = "avro"
-	}
-	require.Contains(t, []string{"cbor", "avro"}, format)
 	count := loadRecordCount(t, "KAFERRY_LOAD_ARCHIVE_RECORDS", 16000, 200000)
 	for _, direction := range []string{"capture", "replay", "file"} {
 		t.Run(direction, func(t *testing.T) {
@@ -32,7 +27,7 @@ func TestLoadArchiveCopy(t *testing.T) {
 			source, output := filepath.Join(root, "input"), filepath.Join(root, "output")
 			cfg := filepath.Join(root, "worker.toml")
 			require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\nprogress_interval='0'\n", root)), 0600))
-			inputSQL, outputSQL := archiveQuery(format, source), archiveQuery(format, output)
+			inputSQL, outputSQL := archiveQuery(source), archiveQuery(output)
 			options := "GROUP='archive-load'"
 			prefix := ""
 			var destination string
@@ -82,10 +77,10 @@ func TestLoadArchiveCopy(t *testing.T) {
 				}
 			}
 			if direction != "capture" {
-				seedArchive(t, source, format, count)
+				seedArchive(t, source, count)
 			}
 			statement := fmt.Sprintf("%sINSERT INTO %s SELECT * FROM %s OPTIONS(%s)", prefix, outputSQL, inputSQL, options)
-			report := measureArchiveCLI(t, statement, cfg, format, count)
+			report := measureArchiveCLI(t, statement, cfg, count)
 
 			// Then verify every output after the timed region, so measurements cannot hide data loss.
 			if destination != "" {
@@ -105,17 +100,17 @@ func TestLoadArchiveCopy(t *testing.T) {
 					require.EqualValues(t, *expected.TimestampMS, record.Timestamp.UnixMilli())
 				}
 			} else {
-				verifyArchive(t, output, format, count, original)
+				verifyArchive(t, output, count, original)
 			}
-			t.Logf("format=%s direction=%s records=%d elapsed=%s records/s=%.0f cpu=%s peak_RSS_MiB=%.1f", format, direction, count, time.Duration(report.ElapsedSeconds*float64(time.Second)), report.RecordsPerSecond, time.Duration(report.ChildCPUSeconds*float64(time.Second)), float64(report.SampledPeakRSSBytes)/(1<<20))
+			t.Logf("format=avro direction=%s records=%d elapsed=%s records/s=%.0f cpu=%s peak_RSS_MiB=%.1f", direction, count, time.Duration(report.ElapsedSeconds*float64(time.Second)), report.RecordsPerSecond, time.Duration(report.ChildCPUSeconds*float64(time.Second)), float64(report.SampledPeakRSSBytes)/(1<<20))
 		})
 	}
 }
 
-func measureArchiveCLI(t *testing.T, statement, cfg, format string, count int) *loadReport {
+func measureArchiveCLI(t *testing.T, statement, cfg string, count int) *loadReport {
 	t.Helper()
 	report := newLoadReport(t, "archive")
-	report.ArchiveFormat = format
+	report.ArchiveFormat = "avro"
 	report.ArchivePayload = os.Getenv("KAFERRY_ARCHIVE_PAYLOAD")
 	if report.ArchivePayload == "" {
 		report.ArchivePayload = "compressible"

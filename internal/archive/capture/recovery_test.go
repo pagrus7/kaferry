@@ -7,13 +7,13 @@ import (
 	"testing"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
-	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/stretchr/testify/require"
 )
 
 func savedPrefix(t testing.TB, root string) (*Store, Boundary) {
 	t.Helper()
-	s := openStore(t, root, NativeFiles{}, file.DurableWriter{})
+	s := openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 	r := testRecord(42)
 	part, err := s.Create(r.Source, r.Offset)
 	require.NoError(t, err)
@@ -36,7 +36,7 @@ func TestRecoveryTruncatesOnlyUnacknowledgedTail(t *testing.T) {
 	require.Greater(t, info.Size(), boundary.Extent)
 	require.NoError(t, s.Close())
 	// When another owner recovers, then only the saved record becomes visible.
-	_ = openStore(t, root, NativeFiles{}, file.DurableWriter{})
+	_ = openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 	paths := completeFiles(t, root)
 	require.Len(t, paths, 1)
 	require.Equal(t, []avro.Record{testRecord(42)}, readFile(t, paths[0]))
@@ -94,7 +94,7 @@ func TestRecoveryRejectsDamagedAcknowledgedData(t *testing.T) {
 			beforePrivate, _ := os.ReadFile(private)
 			beforeCompleted, _ := os.ReadFile(completed)
 			// When startup validates recovery, then it fails without modifying either data path.
-			_, err = Open(root, testCodec(t), NativeFiles{}, NewJournal(NativeFiles{}, file.DurableWriter{}))
+			_, err = Open(root, testCodec(t), NativeFiles{}, NewJournal(NativeFiles{}, checkpoint.DurableWriter{}))
 			require.Error(t, err)
 			afterPrivate, _ := os.ReadFile(private)
 			afterCompleted, _ := os.ReadFile(completed)
@@ -112,11 +112,11 @@ func TestRecoveryHonorsRecordedCodecLimit(t *testing.T) {
 	small, err := avro.New(1 << 20)
 	require.NoError(t, err)
 	// When recovering, then the configuration error preserves the acknowledged file.
-	_, err = Open(root, small, NativeFiles{}, NewJournal(NativeFiles{}, file.DurableWriter{}))
+	_, err = Open(root, small, NativeFiles{}, NewJournal(NativeFiles{}, checkpoint.DurableWriter{}))
 	var limit *avro.LimitError
 	require.ErrorAs(t, err, &limit)
 	require.FileExists(t, dataPath(root, boundary.Identity, true))
-	_ = openStore(t, root, NativeFiles{}, file.DurableWriter{})
+	_ = openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 	require.Len(t, completeFiles(t, root), 1)
 }
 
@@ -130,7 +130,7 @@ func TestWorkersSkipBusyNamespacesAndRecoverAllReleasedOwners(t *testing.T) {
 	require.NoError(t, first.Close())
 	require.NoError(t, second.Close())
 	// When a new worker starts, then it recovers both released namespaces without assignments.
-	_ = openStore(t, root, NativeFiles{}, file.DurableWriter{})
+	_ = openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 	paths := completeFiles(t, root)
 	require.Len(t, paths, 2)
 	for _, path := range paths {
@@ -141,7 +141,7 @@ func TestWorkersSkipBusyNamespacesAndRecoverAllReleasedOwners(t *testing.T) {
 func TestRecoveryDiscardsOnlyOwnedUnlistedPrivateFiles(t *testing.T) {
 	// Given an empty unacknowledged file, an unrelated owner and an unpublished namespace.
 	root := t.TempDir()
-	s := openStore(t, root, NativeFiles{}, file.DurableWriter{})
+	s := openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 	part, err := s.Create(testRecord(42).Source, 42)
 	require.NoError(t, err)
 	owned := filepath.Join(root, "."+s.state.WriterID+"."+part.ID+".partial")
@@ -151,7 +151,7 @@ func TestRecoveryDiscardsOnlyOwnedUnlistedPrivateFiles(t *testing.T) {
 	require.NoError(t, os.Mkdir(initializing, 0700))
 	require.NoError(t, s.Close())
 	// When a new owner recovers, then only the file proven unacknowledged is removed.
-	_ = openStore(t, root, NativeFiles{}, file.DurableWriter{})
+	_ = openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 	require.NoFileExists(t, owned)
 	require.FileExists(t, foreign)
 	require.DirExists(t, initializing)
@@ -163,7 +163,7 @@ func TestRecoveryPreservesUnrecognizedOwnedPrivateEntries(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			// Given valid writer state and a private entry whose identity or type is untrusted.
 			root := t.TempDir()
-			s := openStore(t, root, NativeFiles{}, file.DurableWriter{})
+			s := openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 			require.NoError(t, s.Close())
 			id := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 			if kind == "malformed ID" {
@@ -183,7 +183,7 @@ func TestRecoveryPreservesUnrecognizedOwnedPrivateEntries(t *testing.T) {
 			before, err := os.Lstat(entry)
 			require.NoError(t, err)
 			// When startup scans private files, then it fails without deleting the entry or target.
-			_, err = Open(root, testCodec(t), NativeFiles{}, NewJournal(NativeFiles{}, file.DurableWriter{}))
+			_, err = Open(root, testCodec(t), NativeFiles{}, NewJournal(NativeFiles{}, checkpoint.DurableWriter{}))
 			require.ErrorContains(t, err, "unrecognized private archive file")
 			after, err := os.Lstat(entry)
 			require.NoError(t, err)

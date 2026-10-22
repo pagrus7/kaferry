@@ -21,7 +21,6 @@ import (
 	"github.com/pagrus7/kaferry/internal/app"
 	"github.com/pagrus7/kaferry/internal/commitmeta"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
 	adapter "github.com/pagrus7/kaferry/internal/franz"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/stretchr/testify/require"
@@ -282,15 +281,9 @@ func TestMissingTimestampWithoutFilterUsesProducerClockAndCountsIt(t *testing.T)
 	// Given
 	a := admin(t)
 	dst := topic(t, a, 1)
-	path := filepath.Join(t.TempDir(), "source.cbor")
-	codec, err := file.NewCodec(1 << 20)
-	require.NoError(t, err)
-	out, err := file.NewOutput(file.NewPublisher(), path, "fixture", "fixture", "", 0, codec, 10, slog.New(slog.NewJSONHandler(os.Stderr, nil)))
-	require.NoError(t, err)
-	require.NoError(t, out.Submit(core.Record{Key: nil, Value: []byte{}, TimestampType: "unknown"}, core.Token{}))
-	require.NoError(t, out.Flush())
-	out.Close()
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='unstamped')", dst, path)
+	path := filepath.Join(t.TempDir(), "source.avro")
+	writeArchiveRecords(t, path, []core.Record{{Key: nil, Value: []byte{}, TimestampType: "unknown"}})
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE avro('%s') OPTIONS(GROUP='unstamped')", dst, path)
 	before := time.Now().UnixMilli()
 
 	// When

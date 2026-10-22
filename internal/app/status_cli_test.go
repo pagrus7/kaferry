@@ -19,52 +19,27 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-func TestFileStatusObservesSavedStopsWithoutChangingFiles(t *testing.T) {
-	// Given a file whose partial final frame already exists when copying starts.
-	f := filePreview(t)
-	source := filepath.Join(f.directory, "source.cbor")
-	appendBytes := func(data []byte) {
-		t.Helper()
-		w, err := os.OpenFile(source, os.O_APPEND|os.O_WRONLY, 0600)
-		require.NoError(t, err)
-		defer w.Close()
-		_, err = w.Write(data)
-		require.NoError(t, err)
-	}
-	appendBytes([]byte{0, 0, 0})
-	status := func(want string, code int) {
-		t.Helper()
-		before := fileTree(t, f.directory)
-		var out, errout bytes.Buffer
-		got := Execute(t.Context(), []string{"status", "-e", f.query, "-c", f.config, "--json"}, nil, &out, &errout)
-		var report inspect.StatusReport
-		require.NoError(t, json.Unmarshal(out.Bytes(), &report))
-		require.Equal(t, code, got)
-		require.Equal(t, want, report.Verdict)
-		require.Equal(t, fileTree(t, f.directory), before)
-	}
-	status("unknown", 5)
-	// When copying reaches EOF and saves its stop, including an unchanged source cursor.
-	var diagnostics bytes.Buffer
-	for range 2 {
-		require.Zero(t, Execute(t.Context(), []string{"run", "-e", f.query, "-c", f.config}, nil, io.Discard, &diagnostics))
-		// Then the saved opening size, rather than the shorter EOF position, yields stopped.
-		status("stopped", 0)
-	}
-	// When bytes are appended after that stop, then the saved stop no longer covers the current file.
-	appendBytes([]byte{0})
-	status("incomplete", 4)
-}
 func fileTree(t *testing.T, directory string) map[string]string {
 	t.Helper()
-	entries, err := os.ReadDir(directory)
-	require.NoError(t, err)
 	out := map[string]string{}
-	for _, e := range entries {
-		data, err := os.ReadFile(filepath.Join(directory, e.Name()))
-		require.NoError(t, err)
-		out[e.Name()] = string(data)
-	}
+	require.NoError(t, filepath.WalkDir(directory, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(directory, path)
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			out[relative+"/"] = ""
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err == nil {
+			out[relative] = string(data)
+		}
+		return err
+	}))
 	return out
 }
 

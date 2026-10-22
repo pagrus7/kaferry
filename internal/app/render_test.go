@@ -18,7 +18,7 @@ func explanationFixture() inspect.Report {
 	lo, hi := int64(1000), int64(2000)
 	return inspect.Report{Version: 1, Fingerprint: "query-id", Group: "backfill", CutoffMS: 1000, StartRule: "WINDOW",
 		Source:       inspect.Endpoint{Kind: "TOPIC", Name: "input", Connection: "prod", ClusterID: "cluster-id", TopicID: "topic-id", PartitionCount: 1},
-		Destination:  inspect.Endpoint{Kind: "FILE", Name: "out.cbor", File: &inspect.FileSummary{}},
+		Destination:  inspect.Endpoint{Kind: "FILE", Name: "out.avro", File: &inspect.FileSummary{}},
 		Partitions:   []inspect.Partition{{ID: 0, Start: 4, LogEnd: 12, Saved: true, Window: plan.Window{Lower: &lo, Upper: &hi}, WindowOrigin: "literal"}},
 		RecordErrors: inspect.ErrorPolicies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}, Warnings: []string{}}
 }
@@ -53,7 +53,7 @@ func TestTextExplanationStructuresBehaviorAndEscapesNames(t *testing.T) {
 		require.Greater(t, position, previous)
 		previous = position
 	}
-	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "1970-01-01T00:00:03Z", "clock passes it and reading reaches a sampled log end", "Open transactions", "worker.tip_wait", "saved offset 1 expired", "Record errors: stop", "Output: create a new file"} {
+	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "1970-01-01T00:00:03Z", "clock passes it and reading reaches a sampled log end", "Open transactions", "worker.tip_wait", "saved offset 1 expired", "Record errors: stop", "Output: independent Avro files"} {
 		require.Contains(t, output, want)
 	}
 	for _, absent := range []string{"query-id", "topic-id", "lookup end", "span", "Run permissions", "\x1b"} {
@@ -129,9 +129,9 @@ func TestTextExplanationLimitedStopRules(t *testing.T) {
 			case "file":
 				position, window := int64(0), plan.Window{}
 				saved := false
-				report.Source = inspect.Endpoint{Kind: "FILE", File: &inspect.FileSummary{StartBytes: &position, Window: &window, CheckpointExists: &saved}}
+				report.Source = inspect.Endpoint{Kind: "FILE", File: &inspect.FileSummary{PositionRecords: &position, Window: &window, CheckpointExists: &saved}}
 				report.Partitions = nil
-				want = "Stop: worker record threshold or end of input as observed when the run opens the file, whichever comes first"
+				want = "Stop: worker record threshold or end of this group's fixed selection of completed archive files, whichever comes first"
 			case "following topic":
 				report.Partitions[0].Window = plan.Window{}
 				want = "Stop: follow new records until the worker record threshold is reached or interrupted."
@@ -144,27 +144,27 @@ func TestTextExplanationLimitedStopRules(t *testing.T) {
 	}
 }
 
-func TestTextExplanationFileProgressAndOpeningSize(t *testing.T) {
+func TestTextExplanationArchiveProgressAndSelection(t *testing.T) {
 	for _, saved := range []bool{false, true} {
 		t.Run(fmt.Sprint(saved), func(t *testing.T) {
 			// Given a time-filtered file source with 300 encoded bytes after the selected position.
 			report := explanationFixture()
-			position, upper, extent := int64(200), int64(2000), int64(100)
+			position, upper := int64(200), int64(2000)
 			window := plan.Window{Upper: &upper}
-			report.Source = inspect.Endpoint{Kind: "FILE", Name: "input.cbor", File: &inspect.FileSummary{Exists: true, SizeBytes: 500, StartBytes: &position, Window: &window, CheckpointExists: &saved}}
+			report.Source = inspect.Endpoint{Kind: "FILE", Name: "input.avro", File: &inspect.FileSummary{Exists: true, SizeBytes: 500, PositionRecords: &position, Window: &window, CheckpointExists: &saved}}
 			report.Partitions = nil
 			report.OneOff = !saved
 			if saved {
 				report.Source.File.Checkpoint = "saved.json"
-				report.Destination.File = &inspect.FileSummary{Exists: true, SizeBytes: 120, AcknowledgedExtent: &extent}
+				report.Destination.File = &inspect.FileSummary{Exists: true, SizeBytes: 120}
 			}
 			// When rendering, then report bytes before filtering and EOF, never a timestamp stop or work estimate.
 			output := textExplanation(t, report)
-			for _, want := range []string{"Input position: 200 bytes", "Encoded input after position: 300 bytes (before filtering)", "Stop: end of input as observed when the run opens the file"} {
+			for _, want := range []string{"Input position: 200 records", "snapshot: 0 completed files, 500 encoded bytes", "Stop: end of this group's fixed selection of completed archive files"} {
 				require.Contains(t, output, want)
 			}
 			if saved {
-				for _, want := range []string{"saved file checkpoint", "saved.json", "resume existing file", "Acknowledged output: 100 bytes", "reads every existing output frame"} {
+				for _, want := range []string{"saved file checkpoint", "saved.json", "independent Avro files", "worker completion publishes remaining files"} {
 					require.Contains(t, output, want)
 				}
 			} else {

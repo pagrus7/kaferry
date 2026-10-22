@@ -37,18 +37,14 @@ type Endpoint struct {
 }
 
 type FileSummary struct {
-	Directory          bool         `json:"directory,omitempty"`
-	FileCount          int          `json:"file_count,omitempty"`
-	PositionRecords    *int64       `json:"position_records,omitempty"`
-	Exists             bool         `json:"exists"`
-	ID                 string       `json:"id,omitempty"`
-	SizeBytes          int64        `json:"size_bytes"`
-	StartBytes         *int64       `json:"start_bytes,omitempty"`
-	Window             *plan.Window `json:"window,omitempty"`
-	WindowOrigin       string       `json:"window_origin,omitempty"`
-	Checkpoint         string       `json:"checkpoint,omitempty"`
-	CheckpointExists   *bool        `json:"checkpoint_exists,omitempty"`
-	AcknowledgedExtent *int64       `json:"acknowledged_extent_bytes,omitempty"`
+	FileCount        int          `json:"file_count,omitempty"`
+	PositionRecords  *int64       `json:"position_records,omitempty"`
+	Exists           bool         `json:"exists"`
+	SizeBytes        int64        `json:"size_bytes"`
+	Window           *plan.Window `json:"window,omitempty"`
+	WindowOrigin     string       `json:"window_origin,omitempty"`
+	Checkpoint       string       `json:"checkpoint,omitempty"`
+	CheckpointExists *bool        `json:"checkpoint_exists,omitempty"`
 }
 
 type Partition struct {

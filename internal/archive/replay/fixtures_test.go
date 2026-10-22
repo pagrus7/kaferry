@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
-	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/stretchr/testify/require"
 )
 
@@ -154,7 +154,7 @@ func diskSession(t testing.TB, root, checkpoints string, q Query, limits Limits,
 	catalog := NewCatalog(root, codec(t), NativeFiles{})
 	pool, err := NewPool(catalog, limits)
 	require.NoError(t, err)
-	journal, err := NewJournal(checkpoints, q.Group, NativeGroupFiles{}, file.DurableWriter{})
+	journal, err := NewJournal(checkpoints, q.Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 	require.NoError(t, err)
 	s, err := NewSession(q, clock{}, journal, catalog, pool, pending)
 	if err != nil {

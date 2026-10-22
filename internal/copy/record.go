@@ -101,7 +101,6 @@ type Sink interface {
 	Deliveries() <-chan Delivery
 	Close()
 }
-type OutputProgress interface{ DurableOutput() (string, int64) }
 type ProgressStore interface {
 	Save(context.Context, []Cursor) (map[int32]error, error)
 }

@@ -60,7 +60,7 @@ def comparison(directory, baseline=Path(".cache/previous")):
     if before != after:
         rows += [f'Client versions: previous {", ".join(before)}; current {", ".join(after)}.', '']
     rows += ["| Test / measure | Previous | Current |", "| --- | ---: | ---: |"]
-    settings = ("platform", "worker_record_cap", "worker_byte_cap", "source_partitions", "destination_partitions", "worker_stop_after_records", "measurement_method", "fixture_client")
+    settings = ("platform", "worker_record_cap", "worker_byte_cap", "source_partitions", "destination_partitions", "worker_stop_after_records", "measurement_method", "fixture_client", "archive_format", "archive_payload")
     measures = ("records_per_second", "sampled_peak_rss_bytes", "shutdown_seconds")
     for r in current_records:
         p = old.get(r["test"])

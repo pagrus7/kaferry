@@ -143,7 +143,7 @@ func TestExplainIgnoresMetricTransportAndRunValidatesBeforeOutput(t *testing.T) 
 	}
 }
 
-func TestFileCopyExportsInitialAndFinalSaves(t *testing.T) {
+func TestArchiveCopyExportsTheEOFSave(t *testing.T) {
 	// Given a real empty archive copy and an OTLP receiver.
 	fixture := filePreview(t)
 	received := make(chan *collectormetrics.ExportMetricsServiceRequest, 1)
@@ -169,7 +169,7 @@ func TestFileCopyExportsInitialAndFinalSaves(t *testing.T) {
 	require.NoError(t, err)
 	// When running through the composed CLI, sources, stores and exporter.
 	code := Execute(t.Context(), []string{"run", "-c", fixture.config, "-e", fixture.query}, nil, io.Discard, io.Discard)
-	// Then both initialization and final EOF saves are counted, with no copied records invented.
+	// Then the runner's EOF progress save is counted, with no copied records invented.
 	require.Zero(t, code)
 	select {
 	case request := <-received:
@@ -195,7 +195,7 @@ func TestFileCopyExportsInitialAndFinalSaves(t *testing.T) {
 				}
 			}
 		}
-		require.EqualValues(t, 2, saves)
+		require.EqualValues(t, 1, saves)
 		require.True(t, eof)
 	case <-time.After(2 * time.Second):
 		t.Fatal("no metrics received")

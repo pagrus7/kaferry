@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/pagrus7/kaferry/internal/archiveio"
 	"github.com/pagrus7/kaferry/internal/config"
 	copy "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/observability"
 	"github.com/pagrus7/kaferry/internal/plan"
@@ -22,8 +22,8 @@ type KafkaFactory interface {
 	Open(context.Context, plan.Endpoint) (kafkaport.Connection, error)
 }
 type FileFactory interface {
-	OpenSource(plan.Plan, string, config.Worker) (file.Input, error)
-	OpenOutput(plan.Plan, string, file.DestinationProgress, config.Worker) (file.OutputSink, error)
+	OpenSource(plan.Plan, string, config.Worker) (archiveio.Input, error)
+	OpenOutput(plan.Endpoint, config.Worker) (archiveio.Output, error)
 }
 type Execution interface{ Run(context.Context) error }
 type RunnerFactory interface {
@@ -81,7 +81,7 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 	if err != nil {
 		return &kafkaport.Conflict{Err: err}
 	}
-	input, progress, err := e.sourceProgress(ctx, p, fp, limits, sourceEndpoint.connection)
+	input, err := e.prepareSource(ctx, p, fp, limits, sourceEndpoint.connection)
 	if err != nil {
 		return err
 	}
@@ -94,15 +94,13 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 	}
 	var source copy.Source
 	var store copy.ProgressStore
-	var bindOutput func(copy.OutputProgress)
 	if input != nil {
 		source, store = input, input
-		bindOutput = input.BindOutput
 	} else {
 		if p.Window.Upper != nil {
 			e.log.Warn("bounded copy can omit late and out-of-order timestamps after a cutoff stop")
 		}
-		var sourceProgress kafkaport.SourceProgress
+		var sourceProgress copy.ProgressStore
 		source, sourceProgress, err = sourceEndpoint.connection.Source(ctx, p, fp, limits)
 		if err != nil {
 			return err
@@ -112,12 +110,12 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 			stop.Stage("closing Kafka input")
 			result = copy.CleanupResult(result, "close Kafka input", source.Close())
 		}()
-		store, bindOutput = sourceProgress, sourceProgress.BindOutput
+		store = sourceProgress
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	sink, output, err := e.openSink(ctx, p, fp, limits, destinationEndpoint.connection, progress)
+	sink, err := e.openSink(ctx, p, limits, destinationEndpoint.connection)
 	if err != nil {
 		return err
 	}
@@ -126,7 +124,6 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 		stop.Stage("closing output")
 		sink.Close()
 	}()
-	bindOutput(output)
 	runErr := e.runner.New(source, sink, store, p, limits, stop, observer).Run(ctx)
 	if finalizer, ok := sink.(interface{ Finish() error }); ok {
 		stop.Begin()
@@ -199,44 +196,24 @@ func (e *inspectedEndpoint) close(stop copy.StopObserver) error {
 	return nil
 }
 
-func (e *runtimeEngine) sourceProgress(ctx context.Context, p plan.Plan, fp string, limits config.Worker, connection kafkaport.Connection) (file.Input, file.DestinationProgress, error) {
+func (e *runtimeEngine) prepareSource(ctx context.Context, p plan.Plan, fp string, limits config.Worker, connection kafkaport.Connection) (archiveio.Input, error) {
 	if p.Source.Kind == "FILE" {
-		input, err := e.files.OpenSource(p, fp, limits)
-		if err != nil {
-			return nil, file.DestinationProgress{}, err
-		}
-		progress := input.Progress()
-		e.log.Info("source progress inspected", "group", p.Group, "exists", progress.Exists)
-		return input, progress, nil
+		return e.files.OpenSource(p, fp, limits)
 	}
 	if err := connection.CheckMembers(ctx, p.Group); err != nil {
-		return nil, file.DestinationProgress{}, err
+		return nil, err
 	}
 	saved, err := connection.ReadProgress(ctx, p.Group, fp, p.Window, p.CutoffMS)
 	if err != nil {
-		return nil, file.DestinationProgress{}, err
+		return nil, err
 	}
 	e.log.Info("source progress inspected", "group", p.Group, "partitions_with_progress", len(saved))
-	if p.Destination.Format == "avro" {
-		return nil, file.DestinationProgress{Exists: len(saved) > 0}, nil
-	}
-	progress, err := destinationProgress(saved)
-	return nil, progress, err
+	return nil, nil
 }
 
-func destinationProgress(saved map[int32]kafkaport.Progress) (file.DestinationProgress, error) {
-	id, extent, err := kafkaport.FileExtent(saved)
-	return file.DestinationProgress{ID: id, Extent: extent, Exists: len(saved) > 0}, err
-}
-
-func (e *runtimeEngine) openSink(ctx context.Context, p plan.Plan, fp string, limits config.Worker, connection kafkaport.Connection, progress file.DestinationProgress) (copy.Sink, copy.OutputProgress, error) {
+func (e *runtimeEngine) openSink(ctx context.Context, p plan.Plan, limits config.Worker, connection kafkaport.Connection) (copy.Sink, error) {
 	if p.Destination.Kind == "FILE" {
-		output, err := e.files.OpenOutput(p, fp, progress, limits)
-		if p.Destination.Format == "avro" {
-			return output, nil, err
-		}
-		return output, output, err
+		return e.files.OpenOutput(p.Destination, limits)
 	}
-	sink, err := connection.Sink(ctx, limits)
-	return sink, nil, err
+	return connection.Sink(ctx, limits)
 }

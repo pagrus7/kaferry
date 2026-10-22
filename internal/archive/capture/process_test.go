@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
-	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
@@ -48,13 +48,13 @@ func TestKilledWorkerReleasesLockAndRetainsOnlySavedPrefix(t *testing.T) {
 	ready, err := bufio.NewReader(output).ReadString('\n')
 	require.NoError(t, err)
 	require.Equal(t, "READY\n", ready)
-	other := openStore(t, root, NativeFiles{}, file.DurableWriter{})
+	other := openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 	require.Empty(t, completeFiles(t, root), "another process skips the live owner's namespace")
 	// When the worker is killed, then a new process owner recovers its acknowledged prefix.
 	require.NoError(t, command.Process.Kill())
 	require.Error(t, command.Wait())
 	require.NoError(t, other.Close())
-	_ = openStore(t, root, NativeFiles{}, file.DurableWriter{})
+	_ = openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 	paths := completeFiles(t, root)
 	require.Len(t, paths, 1)
 	require.Equal(t, []avro.Record{testRecord(42)}, readFile(t, paths[0]))
@@ -80,7 +80,7 @@ func TestNamespaceIsLockedAndInitializedBeforePublication(t *testing.T) {
 		return nil
 	}
 	// When the namespace becomes visible, then competitors cannot acquire its lock.
-	_ = openStore(t, root, fs, file.DurableWriter{})
+	_ = openStore(t, root, fs, checkpoint.DurableWriter{})
 	require.True(t, checked)
 }
 
@@ -89,7 +89,7 @@ func TestPublishedLockIsNeverRecreatedOrFollowed(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			// Given a published namespace whose stable lock is damaged or replaced.
 			root := t.TempDir()
-			s := openStore(t, root, NativeFiles{}, file.DurableWriter{})
+			s := openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 			require.NoError(t, s.Close())
 			lock := filepath.Join(s.namespace, "lock")
 			require.NoError(t, os.Remove(lock))
@@ -102,7 +102,7 @@ func TestPublishedLockIsNeverRecreatedOrFollowed(t *testing.T) {
 				require.NoError(t, unix.Mkfifo(lock, 0600))
 			}
 			// When opening the archive, then startup fails rather than creating a competing lock.
-			_, err := Open(root, testCodec(t), NativeFiles{}, NewJournal(NativeFiles{}, file.DurableWriter{}))
+			_, err := Open(root, testCodec(t), NativeFiles{}, NewJournal(NativeFiles{}, checkpoint.DurableWriter{}))
 			require.Error(t, err)
 			if kind == "missing" {
 				require.NoFileExists(t, lock)
@@ -124,7 +124,7 @@ func TestRequiredStateNeverFollowsASymlinkOrBlocksOnAFIFO(t *testing.T) {
 				require.NoError(t, unix.Mkfifo(path, 0600))
 			}
 			// When loaded, then it is rejected before reading or waiting for a writer.
-			_, err := NewJournal(NativeFiles{}, file.DurableWriter{}).Load(path)
+			_, err := NewJournal(NativeFiles{}, checkpoint.DurableWriter{}).Load(path)
 			require.Error(t, err)
 		})
 	}
@@ -148,7 +148,7 @@ func TestOpenRejectsInvalidArchiveDirectories(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(writerDir, strings.Repeat("a", 32)), nil, 0600))
 			}
 			// When opening, then it fails without claiming usable archive storage.
-			_, err := Open(root, testCodec(t), NativeFiles{}, NewJournal(NativeFiles{}, file.DurableWriter{}))
+			_, err := Open(root, testCodec(t), NativeFiles{}, NewJournal(NativeFiles{}, checkpoint.DurableWriter{}))
 			require.Error(t, err)
 		})
 	}

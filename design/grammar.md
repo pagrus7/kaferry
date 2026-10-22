@@ -22,7 +22,6 @@ env         = "ENV" "(" string ")" ;
 insert      = "INSERT" "INTO" endpoint ;
 select      = "SELECT" "*" "FROM" endpoint ;
 endpoint    = "TOPIC" string                       (* 'topic' or 'topic@alias' *)
-            | "FILE" "cbor" "(" string ")"
             | "FILE" "avro" "(" string { "," file_option } ")" ;
 file_option = "ROTATE_AFTER_SIZE" "=" integer [ "k" | "m" | "g" ]
             | "ROTATE_AFTER_AGE" "=" interval ;    (* destination only *)
@@ -138,13 +137,13 @@ SQL errors identify the first error found by one-based line and character (code 
 | --- | --- |
 | `... WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` cannot be combined with a time filter |
 | `... WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS (GROUP = 'g', ON_ERROR = SKIP, ON_MISSING_TIMESTAMP = FAIL)` | `ON_ERROR` cannot be mixed with specific error policies |
-| `... FROM FILE cbor('a.cbor') ... OPTIONS (GROUP = 'g', CUTOFF = INTERVAL '1' MINUTE)` | `CUTOFF` applies to topic sources |
-| `... FROM FILE cbor('a.cbor') OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` applies to topic sources |
+| `... FROM FILE avro('archive') ... OPTIONS (GROUP = 'g', CUTOFF = INTERVAL '1' MINUTE)` | `CUTOFF` applies to topic sources |
+| `... FROM FILE avro('archive') OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` applies to topic sources |
 | `... FROM TOPIC 'a' OPTIONS (GROUP = 'g')` | `START` is required without a time filter |
 | `OPTIONS (START = EARLIEST)` | `GROUP` is required |
 | `OPTIONS (GROUP = 'a', GROUP = 'b')` | repeated option `GROUP` |
 | `INSERT INTO TOPIC 'a@x' SELECT * FROM TOPIC 'a@y' ...` where `x` and `y` reach one cluster | destination is the source topic |
-| `INSERT INTO FILE cbor('a.cbor') SELECT * FROM FILE cbor('./a.cbor') ...` | destination is the source file |
+| `INSERT INTO FILE avro('archive') SELECT * FROM FILE avro('./archive') ...` | destination is the source archive |
 | `SELECT key FROM TOPIC 'a' ...` | only `SELECT *` is supported |
 | `WHERE RECORD_TIMESTAMP >= NOW() OR ...` | `OR` is unsupported; bounds combine with `AND` |
 | `WHERE RECORD_TIMESTAMP > TIMESTAMP '...' AND RECORD_TIMESTAMP >= TIMESTAMP '...'` | two lower bounds |

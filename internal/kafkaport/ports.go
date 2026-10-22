@@ -9,11 +9,6 @@ import (
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
-type SourceProgress interface {
-	core.ProgressStore
-	BindOutput(core.OutputProgress)
-}
-
 type OffsetKind uint8
 
 const (
@@ -39,7 +34,7 @@ type Connection interface {
 	ClusterID(context.Context) (string, error)
 	CheckMembers(context.Context, string) error
 	ReadProgress(context.Context, string, string, plan.WindowSpec, int64) (map[int32]Progress, error)
-	Source(context.Context, plan.Plan, string, config.Worker) (core.Source, SourceProgress, error)
+	Source(context.Context, plan.Plan, string, config.Worker) (core.Source, core.ProgressStore, error)
 	Sink(context.Context, config.Worker) (core.Sink, error)
 	Close(context.Context) error
 }

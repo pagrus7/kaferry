@@ -1,6 +1,6 @@
 # Archive redesign
 
-Accepted design for directory-based Avro archives. The CLI supports capture, snapshot replay and file-to-file copying. Optional summaries are pending. [Usage](../docs/usage.md).
+Directory-based Avro archives support capture, snapshot replay and file-to-file copying. Optional summaries are pending. [Usage](../docs/usage.md).
 
 ## Records and files
 
@@ -16,7 +16,7 @@ The [schema](../internal/archive/avro/schema.json) defines the wire fields. OCF 
 
 The codec owns block cuts, counts, checksums and exact block positions. The Avro library encodes/decodes individual records. Encoding finishes before a record changes the pending block. Only format-limit rejections permit skipping; source identity changes or decreasing offsets require rotation, and caller errors stop capture.
 
-The writer records its decoded-block byte limit. Readers use that limit or return `LimitError` when their configured cap is lower. The header-count limit is `max(16, block_limit/32)`; blocks contain at most one million records. Blocks normally stay within a 256 KiB target before compression; a single larger record may form a larger block within the limit. Truncated data is an error, never normal EOF. A write error stops the writer permanently. Flushing releases pending payload buffers.
+The writer records its decoded-block byte limit (`worker.archive_block_max_bytes`, default 64 MiB). Readers use that limit or return `LimitError` when their configured cap is lower. The header-count limit is `max(16, block_limit/32)`; blocks contain at most one million records. Blocks normally stay within a 256 KiB target before compression; a single larger record may form a larger block within the limit. Truncated data is an error, never normal EOF. A write error stops the writer permanently. Flushing releases pending payload buffers.
 
 ## Layout and ownership
 
@@ -77,7 +77,7 @@ Merge overlaps by original source identity, partition and offset. Preserve dupli
 
 ### Checkpoints
 
-Use the same group-derived filename and stable `.lock` file as file checkpoints; the same group and checkpoint directory share one namespace. The canonical JSON envelope contains `state` and its lowercase `sha256` digest. State version `1` stores `group`, query `fingerprint`, resolved `window`, confirmed `position`, `complete`, selected `files` and optional `stop` (`reason`, `at`). Stop reason `eof` means the fixed selection was consumed; `worker_record_cap` means the requested worker threshold was reached. `at` equals the confirmed input-record count. Restart clears a previous threshold stop when new progress is saved.
+Checkpoints use group-derived filenames and stable `.lock` files in `~/.kaferry/checkpoints`, or `worker.checkpoint_dir`. The directory must exist. A group and checkpoint directory identify one replay; another directory starts fresh and can duplicate output. The canonical JSON envelope contains `state` and its lowercase `sha256` digest. State version `1` stores `group`, query `fingerprint`, resolved `window`, confirmed `position`, `complete`, selected `files` and optional `stop` (`reason`, `at`). Stop reason `eof` means the fixed selection was consumed; `worker_record_cap` means the requested worker threshold was reached. `at` equals the confirmed input-record count. Restart clears a previous threshold stop when new progress is saved.
 
 Each `files` entry contains:
 
@@ -95,7 +95,3 @@ The session returns every record and retains the resolved time window for the ca
 ## Optional summaries
 
 Each completed file may have a rebuildable versioned JSON summary: file ID, actual length, source identity, count, offset/time ranges and missing timestamp count. Trust it only with matching file ID and length; otherwise scan Avro. Pruning must preserve missing-timestamp/error behavior. Summary failure warns and does not invalidate completed data. Summaries never replace required recovery state or replay checkpoints.
-
-## CBOR validation limits
-
-Payload limits: 65,536 bytes for the header; `worker.max_frame_bytes` (default 64 MiB) for a record. Reject duplicate/unknown keys, indefinite lengths, tags, nesting above eight. The record's `headers` array limit is `max(16, max_frame_bytes/32)` (integer division); writer and reader enforce it.

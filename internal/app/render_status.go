@@ -27,10 +27,7 @@ func renderStatus(output io.Writer, r inspect.StatusReport, asJSON bool) error {
 		fmt.Fprintln(&b, "\nSaved progress")
 		unit := "offset"
 		if r.Source.Kind == "FILE" {
-			unit = "byte position"
-			if r.Source.File != nil && r.Source.File.Directory {
-				unit = "input records"
-			}
+			unit = "input records"
 		}
 		for _, p := range r.Partitions[:min(8, len(r.Partitions))] {
 			if p.Position == nil {
@@ -49,11 +46,7 @@ func renderStatus(output io.Writer, r inspect.StatusReport, asJSON bool) error {
 			fmt.Fprintf(&b, "  %d more partitions; see --json.\n", len(r.Partitions)-8)
 		}
 		if r.Source.File != nil {
-			if r.Source.File.Directory {
-				fmt.Fprintf(&b, "  Snapshot: %d completed files, %d encoded bytes.\n", r.Source.File.FileCount, r.Source.File.SizeBytes)
-			} else {
-				fmt.Fprintf(&b, "  Current source size: %d bytes\n", r.Source.File.SizeBytes)
-			}
+			fmt.Fprintf(&b, "  Snapshot: %d completed files, %d encoded bytes.\n", r.Source.File.FileCount, r.Source.File.SizeBytes)
 		}
 		fmt.Fprintf(&b, "\n%s\nActivity: %s.\n", r.Meaning, r.Activity)
 	}

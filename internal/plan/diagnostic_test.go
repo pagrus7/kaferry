@@ -10,7 +10,7 @@ import (
 )
 
 func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
-	const files = "INSERT INTO FILE cbor('out')\nSELECT * FROM FILE cbor('in')\n"
+	const files = "INSERT INTO FILE avro('out')\nSELECT * FROM FILE avro('in')\n"
 	const topics = "INSERT INTO TOPIC 'b'\nSELECT * FROM TOPIC 'a'\n"
 	for _, tc := range []struct {
 		name, query, marker, message string
@@ -19,7 +19,7 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 	}{
 		{"missing group", files + "OPTIONS(ON_ERROR=SKIP)", "OPTIONS", "GROUP is required; add GROUP = 'name' or GROUP = ONE_OFF to OPTIONS", nil, nil},
 		{"whitespace group", files + "OPTIONS(GROUP=' ')", "' '", "GROUP must not be blank; use a quoted name or ONE_OFF", nil, nil},
-		{"empty file endpoint", "INSERT INTO FILE cbor('')\nSELECT * FROM FILE cbor('in') OPTIONS(GROUP='g')", "''", "INTO endpoint: endpoint name is empty", nil, nil},
+		{"empty file endpoint", "INSERT INTO FILE avro('')\nSELECT * FROM FILE avro('in') OPTIONS(GROUP='g')", "''", "INTO endpoint: endpoint name is empty", nil, nil},
 		{"empty topic endpoint", "INSERT INTO TOPIC ''\nSELECT * FROM TOPIC 'a' OPTIONS(GROUP='g', START=EARLIEST)", "''", "INTO endpoint: endpoint name is empty", nil, nil},
 		{"empty group", files + "OPTIONS(GROUP='')", "''", "GROUP must not be blank; use a quoted name or ONE_OFF", nil, nil},
 		{"duplicate group", files + "OPTIONS(GROUP='g', GROUP='h')", "GROUP='h'", "option GROUP repeats; specify it once; first declaration at line 3, column 9", nil, nil},
@@ -37,7 +37,7 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 		{"CUTOFF overflow", topics + "WHERE RECORD_TIMESTAMP < TIMESTAMP '9999-12-31T23:59:59Z'\nOPTIONS(GROUP='g', CUTOFF=INTERVAL '9223372036854775' SECOND)", "CUTOFF", "upper bound plus CUTOFF: timestamp arithmetic overflows milliseconds", nil, nil},
 		{"default CUTOFF overflow", topics + "WHERE RECORD_TIMESTAMP < TIMESTAMP '1970-01-01T00:00:00Z' + INTERVAL '9223372036854775' SECOND\nOPTIONS(GROUP='g')", "WHERE", "upper bound plus CUTOFF: timestamp arithmetic overflows milliseconds", nil, nil},
 		{"empty range", files + "WHERE RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP < NOW()\nOPTIONS(GROUP='g')", "< NOW()", "time range is empty; lower bound at line 3, column 24 must precede upper bound at line 3, column 54", nil, nil},
-		{"default connection", "INSERT INTO FILE cbor('out')\nSELECT * FROM TOPIC 'a'\nOPTIONS(GROUP='g', START=EARLIEST)", "'a'", "FROM endpoint: default connection is not defined; add WITH CONNECTION default or TOML [connections.default]", nil, Profiles{}},
+		{"default connection", "INSERT INTO FILE avro('out')\nSELECT * FROM TOPIC 'a'\nOPTIONS(GROUP='g', START=EARLIEST)", "'a'", "FROM endpoint: default connection is not defined; add WITH CONNECTION default or TOML [connections.default]", nil, Profiles{}},
 		{"destination before source", "INSERT INTO TOPIC 'out@missing'\nSELECT * FROM TOPIC 'in@missing'\nOPTIONS(GROUP='g', START=EARLIEST)", "'out@missing'", "INTO endpoint: connection alias is not defined; add it with WITH CONNECTION or TOML [connections.alias]", nil, nil},
 		{"conflicting policies", topics + "WHERE RECORD_TIMESTAMP < NOW()\nOPTIONS(GROUP='g', ON_ERROR=SKIP, ON_MISSING_TIMESTAMP=FAIL)", "ON_MISSING_TIMESTAMP", "ON_ERROR cannot be combined with specific error policies; choose ON_ERROR or the specific policies; conflicting declaration at line 4, column 20", nil, nil},
 		{"reversed policy conflict", topics + "WHERE RECORD_TIMESTAMP < NOW()\nOPTIONS(GROUP='g', ON_MISSING_TIMESTAMP=FAIL, ON_ERROR=SKIP)", "ON_ERROR", "ON_ERROR cannot be combined with specific error policies; choose ON_ERROR or the specific policies; conflicting declaration at line 4, column 20", nil, nil},
@@ -45,7 +45,7 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 		{"missing zone", files + "WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00'\nOPTIONS(GROUP='g')", "'2026-10-01", "timestamp must be RFC 3339 with an explicit zone and at most 3 fractional digits, for example '2026-10-01T09:00:00Z'", nil, nil},
 		{"negative interval", files + "WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '-1' HOUR\nOPTIONS(GROUP='g')", "'-1'", "interval must be a non-negative integer, for example INTERVAL '7' DAY", nil, nil},
 		{"duplicate lower bound", files + "WHERE RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP > NOW()\nOPTIONS(GROUP='g')", "> NOW()", "at most one lower and one upper bound are allowed; remove this repeated bound; first bound at line 3, column 24", nil, nil},
-		{"undefined connection", "INSERT INTO FILE cbor('out')\nSELECT * FROM TOPIC 'a@missing'\nOPTIONS(GROUP='g', START=EARLIEST)", "'a@missing'", "FROM endpoint: connection alias is not defined; add it with WITH CONNECTION or TOML [connections.alias]", nil, nil},
+		{"undefined connection", "INSERT INTO FILE avro('out')\nSELECT * FROM TOPIC 'a@missing'\nOPTIONS(GROUP='g', START=EARLIEST)", "'a@missing'", "FROM endpoint: connection alias is not defined; add it with WITH CONNECTION or TOML [connections.alias]", nil, nil},
 		{"duplicate alias", "WITH CONNECTION prod AS ('bootstrap.servers'='x'), CONNECTION prod AS ('bootstrap.servers'='y')\n" + files + "OPTIONS(GROUP='g')", "prod AS ('bootstrap.servers'='y')", "connection alias repeats; declare each alias once; first declaration at line 1, column 17", nil, nil},
 		{"duplicate property", "WITH CONNECTION prod AS ('private'='x', 'private'='y')\n" + files + "OPTIONS(GROUP='g')", "'private'='y'", "inline connection property repeats; specify it once per CONNECTION; first declaration at line 1, column 26", nil, nil},
 		{"empty property", "WITH CONNECTION prod AS (''='x')\n" + files + "OPTIONS(GROUP='g')", "''", "inline connection property name must not be empty", nil, nil},
@@ -101,7 +101,7 @@ func TestSourcePositionsDoNotChangePlansOrSavedIdentity(t *testing.T) {
 
 func TestPlannerDiagnosticsRedactLiteralAndResolvedSecrets(t *testing.T) {
 	const secret = "sensitive_SENTINEL_5c27"
-	const files = " INSERT INTO FILE cbor('out') SELECT * FROM FILE cbor('in') "
+	const files = " INSERT INTO FILE avro('out') SELECT * FROM FILE avro('in') "
 	for _, tc := range []struct {
 		query         string
 		invalidPolicy bool
@@ -109,7 +109,7 @@ func TestPlannerDiagnosticsRedactLiteralAndResolvedSecrets(t *testing.T) {
 		{"WITH CONNECTION prod AS ('sasl.password'=ENV('" + secret + "'))" + files + "OPTIONS(GROUP='g')", false},
 		{"WITH CONNECTION prod AS ('sasl.password'=ENV('PASSWORD'), 'bootstrap.servers'='x')" + files + "OPTIONS(GROUP='g', ON_ERROR=" + secret + ")", true},
 		{"WITH CONNECTION prod AS ('" + secret + "'='x', '" + secret + "'='y')" + files + "OPTIONS(GROUP='g')", false},
-		{"INSERT INTO FILE cbor('out') SELECT * FROM TOPIC 'a@" + secret + "' OPTIONS(GROUP='g', START=EARLIEST)", false},
+		{"INSERT INTO FILE avro('out') SELECT * FROM TOPIC 'a@" + secret + "' OPTIONS(GROUP='g', START=EARLIEST)", false},
 		{files + "WHERE RECORD_TIMESTAMP >= TIMESTAMP '" + secret + "' OPTIONS(GROUP='g')", false},
 	} {
 		// Given sensitive literals and a resolved environment credential.
@@ -133,7 +133,7 @@ func TestPlannerDiagnosticsRedactLiteralAndResolvedSecrets(t *testing.T) {
 
 func TestConnectionErrorsDistinguishUndefinedAndMissingSettings(t *testing.T) {
 	// Given an existing connection with no bootstrap.servers.
-	query := "INSERT INTO FILE cbor('out') SELECT * FROM TOPIC 'a@empty' OPTIONS(GROUP='g', START=EARLIEST)"
+	query := "INSERT INTO FILE avro('out') SELECT * FROM TOPIC 'a@empty' OPTIONS(GROUP='g', START=EARLIEST)"
 	statement, err := sql.NewParser().Parse(query)
 	require.NoError(t, err)
 	// When comparing validation of a defined and an undefined connection.
@@ -165,7 +165,7 @@ func TestConnectionSettingsReportEmptyValuesAndOrigins(t *testing.T) {
 		{"'sasl.password'='x'", "bootstrap.servers is empty in the configured connection profile; set a nonempty value there", Profiles{"prod": {"bootstrap.servers": ""}}},
 	} {
 		// Given broker settings from literal SQL, ENV, configuration or a merged connection.
-		query := "INSERT INTO FILE cbor('out')\nSELECT * FROM TOPIC 'a@prod' OPTIONS(GROUP='g', START=EARLIEST)"
+		query := "INSERT INTO FILE avro('out')\nSELECT * FROM TOPIC 'a@prod' OPTIONS(GROUP='g', START=EARLIEST)"
 		line := 2
 		if tc.connection != "" {
 			query = "WITH CONNECTION prod AS (" + tc.connection + ")\n" + query
@@ -190,7 +190,7 @@ func TestConnectionSettingsReportEmptyValuesAndOrigins(t *testing.T) {
 
 func TestLocationFreeASTsKeepCompleteMessages(t *testing.T) {
 	// Given a caller-built AST without source positions and repeated known options.
-	statement := sql.Statement{Source: sql.Endpoint{Kind: "FILE", Format: "cbor", Name: "in"}, Destination: sql.Endpoint{Kind: "FILE", Format: "cbor", Name: "out"}, Options: []sql.Option{{Name: "GROUP", Value: "g"}, {Name: "GROUP", Value: "h"}}}
+	statement := sql.Statement{Source: sql.Endpoint{Kind: "FILE", Format: "avro", Name: "in"}, Destination: sql.Endpoint{Kind: "FILE", Format: "avro", Name: "out"}, Options: []sql.Option{{Name: "GROUP", Value: "g"}, {Name: "GROUP", Value: "h"}}}
 	// When validating the plan without invented coordinates.
 	_, err := NewPlanner(environment{}).Build(statement, nil)
 	// Then retain a complete corrective hint with no dangling location reference.

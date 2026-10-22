@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/pagrus7/kaferry/internal/archive/replay"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -21,16 +21,16 @@ func TestFactoryOwnsReplayCheckpointAndRejectsUnsafePaths(t *testing.T) {
 	root := "."
 	limits := config.Defaults("").Worker
 	limits.CheckpointDir = &root
-	factory := NewFactory(nil, core.RealClock{}, file.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	factory := NewFactory(core.RealClock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Format: "avro", Name: filepath.Join(root, "input")}, Destination: plan.Endpoint{Kind: "FILE", Format: "avro", Name: filepath.Join(root, "output")}, Group: "group"}
 	seed := p
 	seed.Destination = p.Source
-	sink, err := factory.OpenOutput(seed, "fixture", file.DestinationProgress{}, limits)
+	sink, err := factory.OpenOutput(seed.Destination, limits)
 	require.NoError(t, err)
 	record := core.Record{Source: &core.Provenance{Cluster: "cluster", TopicID: [16]byte{1}, Topic: "orders"}, TimestampType: "unknown"}
 	require.NoError(t, sink.Submit(record, core.Token{}))
 	require.NoError(t, sink.Flush())
-	require.NoError(t, sink.(interface{ Finish() error }).Finish())
+	require.NoError(t, sink.Finish())
 	sink.Close()
 	// When one process owns a replay group, then another process cannot acquire it.
 	fp, err := p.Fingerprint("", "")
@@ -59,7 +59,7 @@ func TestFactoryOwnsReplayCheckpointAndRejectsUnsafePaths(t *testing.T) {
 	p.Group = "missing"
 	_, err = factory.OpenSource(p, fp, limits)
 	require.Error(t, err)
-	journal, err := replay.NewJournal(root, p.Group, replay.NativeGroupFiles{}, file.DurableWriter{})
+	journal, err := replay.NewJournal(root, p.Group, replay.NativeGroupFiles{}, checkpoint.DurableWriter{})
 	require.NoError(t, err, "failed construction releases checkpoint ownership")
 	require.NoError(t, journal.Close())
 	_, err = os.Stat(p.Destination.Name)

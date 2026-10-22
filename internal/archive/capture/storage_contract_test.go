@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
@@ -64,7 +64,7 @@ func TestRecoveryStreamsRootOnceAcrossMultipleNamespaces(t *testing.T) {
 		return nil
 	}
 	// When startup recovers both owners, then one paged root scan serves both.
-	_ = openStore(t, root, fs, file.DurableWriter{})
+	_ = openStore(t, root, fs, checkpoint.DurableWriter{})
 	joined := strings.Join(fs.events, "\n")
 	require.Equal(t, 1, strings.Count(joined, "open-directory:"))
 	require.Greater(t, strings.Count(joined, "read-directory-batch:"), 2)
@@ -78,7 +78,7 @@ func TestPublishDoesNotCheckpointOtherPartitions(t *testing.T) {
 	// Given two partitions, with one saved prefix and newer unsaved input on the other.
 	root := t.TempDir()
 	fs := &observedFiles{Filesystem: NativeFiles{}}
-	s := openStore(t, root, fs, file.DurableWriter{})
+	s := openStore(t, root, fs, checkpoint.DurableWriter{})
 	b := testRecord(42)
 	b.Source.Partition++
 	bFile, err := s.Create(b.Source, b.Offset)

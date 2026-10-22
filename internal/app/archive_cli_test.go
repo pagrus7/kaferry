@@ -13,6 +13,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/archive/avro"
 	"github.com/pagrus7/kaferry/internal/archive/replay"
 	"github.com/pagrus7/kaferry/internal/checkpoint"
+	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/inspect"
 	"github.com/stretchr/testify/require"
 )
@@ -33,6 +34,26 @@ func archiveFixture(t *testing.T, root string, id int, records []avro.Record) {
 	require.NoError(t, w.Flush())
 	require.NoError(t, f.Close())
 }
+func writeArchiveRecords(t *testing.T, root string, records []core.Record) {
+	t.Helper()
+	if len(records) == 0 {
+		require.NoError(t, os.MkdirAll(root, 0700))
+		return
+	}
+	values := make([]avro.Record, len(records))
+	for index, record := range records {
+		source := &core.Provenance{Cluster: "fixture", Topic: "orders", TopicID: [16]byte{1}, Offset: int64(index)}
+		if record.Source != nil {
+			source = record.Source
+		}
+		values[index] = avro.Record{Source: avro.Source{Cluster: source.Cluster, Topic: source.Topic, TopicID: avro.TopicID(source.TopicID), Partition: source.Partition}, Offset: source.Offset, Key: record.Key, Value: record.Value, TimestampMS: record.TimestampMS, TimestampKind: record.TimestampType, Headers: make([]avro.Header, len(record.Headers))}
+		for i, header := range record.Headers {
+			values[index].Headers[i] = avro.Header{Key: []byte(header.Name), Value: header.Value}
+		}
+	}
+	archiveFixture(t, root, 1, values)
+}
+
 func archiveRecords(t *testing.T, root string) []avro.Record {
 	t.Helper()
 	codec, err := avro.New(64 << 20)
@@ -164,7 +185,6 @@ func TestArchiveCLIFreshPreviewDoesNotCreateRunState(t *testing.T) {
 	var report inspect.Report
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
 	info := report.Source.File
-	require.True(t, info.Directory)
 	require.Equal(t, 1, info.FileCount)
 	require.Positive(t, info.SizeBytes)
 	require.False(t, *info.CheckpointExists)

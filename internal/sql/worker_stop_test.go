@@ -8,7 +8,7 @@ import (
 
 func TestWorkerStopSyntaxAndLocation(t *testing.T) {
 	// Given a worker stop option after a time filter, with a comment before its value.
-	query := "INSERT INTO FILE cbor('out') SELECT * FROM FILE cbor('in')\n" +
+	query := "INSERT INTO FILE avro('out') SELECT * FROM FILE avro('in')\n" +
 		"WHERE RECORD_TIMESTAMP >= NOW()\nOPTIONS(GROUP='g', worker_stop_after_records=/* sample */ 005)"
 	// When parsing without accessing endpoints.
 	statement, err := NewParser().Parse(query)
@@ -21,7 +21,7 @@ func TestWorkerStopSyntaxAndLocation(t *testing.T) {
 }
 
 func TestWorkerStopSyntaxErrorsAreLocatedAndRedacted(t *testing.T) {
-	const prefix = "INSERT INTO FILE cbor('out')\nSELECT * FROM FILE cbor('in')\nOPTIONS(GROUP='g',WORKER_STOP_AFTER_RECORDS="
+	const prefix = "INSERT INTO FILE avro('out')\nSELECT * FROM FILE avro('in')\nOPTIONS(GROUP='g',WORKER_STOP_AFTER_RECORDS="
 	for _, value := range []string{"", "'private-value'", "private_identifier", "-1", "+1"} {
 		t.Run(value, func(t *testing.T) {
 			// Given a missing or non-integer worker stop value.
@@ -41,6 +41,6 @@ func TestWorkerStopSyntaxErrorsAreLocatedAndRedacted(t *testing.T) {
 		require.Error(t, err)
 	}
 	// Given query-level LIMIT syntax, when parsing, then require the explicit worker option instead.
-	_, err := NewParser().Parse("INSERT INTO FILE cbor('out') SELECT * FROM FILE cbor('in') LIMIT 5 OPTIONS(GROUP='g')")
+	_, err := NewParser().Parse("INSERT INTO FILE avro('out') SELECT * FROM FILE avro('in') LIMIT 5 OPTIONS(GROUP='g')")
 	require.ErrorContains(t, err, "expected WHERE or OPTIONS")
 }

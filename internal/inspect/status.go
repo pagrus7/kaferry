@@ -7,9 +7,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/pagrus7/kaferry/internal/archiveio"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 )
@@ -40,7 +40,6 @@ type StatusReport struct {
 	Source      Endpoint         `json:"source"`
 	Destination Endpoint         `json:"destination"`
 	Partitions  []SavedPartition `json:"partitions"`
-	OpeningSize *int64           `json:"opening_size_bytes,omitempty"`
 	Activity    string           `json:"activity"`
 }
 type SavedPartition struct {
@@ -96,8 +95,8 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 		err = s.fileStatus(p, limits, &report)
 	}
 	var kafkaConflict *kafkaport.Conflict
-	var fileConflict *file.Conflict
-	if errors.As(err, &kafkaConflict) || errors.As(err, &fileConflict) {
+	var archiveConflict *archiveio.Conflict
+	if errors.As(err, &kafkaConflict) || errors.As(err, &archiveConflict) {
 		report.Verdict, report.Reason = "unknown", "saved progress does not match this query or source"
 		return report, nil
 	}
@@ -160,20 +159,14 @@ func (s *Service) fileStatus(p plan.Plan, limits config.Worker, r *StatusReport)
 		return err
 	}
 	r.Source.File = fileSummary(info.ArchiveInspection)
-	if info.Directory {
-		r.Source.File.PositionRecords = &info.Position
-		r.Meaning = "Stopped means this group saved a stop reason for its fixed selection of archive files. A new group selects current completed files."
-	}
-	r.OpeningSize = info.OpeningSize
+	r.Source.File.PositionRecords = &info.Position
+	r.Meaning = "Stopped means this group saved a stop reason for its fixed selection of archive files. A new group selects current completed files."
 	row := SavedPartition{ID: 0}
 	if info.Saved {
 		row.Position, row.Stop, row.Window = &info.Position, info.Stop, &info.Window
 	}
 	r.Partitions = append(r.Partitions, row)
 	r.classify()
-	if info.Saved && info.Stop != nil && info.Stop.Reason == "eof" && info.OpeningSize != nil && info.Size > *info.OpeningSize {
-		r.Verdict, r.Reason = "incomplete", "source file grew"
-	}
 	return nil
 }
 

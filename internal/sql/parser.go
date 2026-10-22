@@ -161,11 +161,11 @@ func (p *parser) endpoint() Endpoint {
 		p.fail()
 		return Endpoint{}
 	}
-	format := strings.ToLower(p.oneOf("cbor", "avro"))
+	p.expect("avro")
 	p.expect("(")
 	position := p.current.Position
 	name := p.text("string")
-	e := Endpoint{Position: position, Kind: "FILE", Name: name, Format: format}
+	e := Endpoint{Position: position, Kind: "FILE", Name: name, Format: "avro"}
 	for p.take(",") {
 		o := Option{Position: p.current.Position}
 		o.Name = p.oneOf("ROTATE_AFTER_SIZE", "ROTATE_AFTER_AGE")

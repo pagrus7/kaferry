@@ -16,7 +16,6 @@ import (
 	"github.com/pagrus7/kaferry/internal/commitmeta"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
 	adapter "github.com/pagrus7/kaferry/internal/franz"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
@@ -53,19 +52,15 @@ func TestLegacyTimestampLimitSkipsOnlyRejectedRecord(t *testing.T) {
 	a := admin(t)
 	dst := topic(t, a, 1)
 	alterTopicConfig(t, a, dst, map[string]string{"message.timestamp.difference.max.ms": "3600000"})
-	path := filepath.Join(t.TempDir(), "legacy.cbor")
-	c, err := file.NewCodec(1 << 20)
-	require.NoError(t, err)
-	out, err := file.NewOutput(file.NewPublisher(), path, "fixture", "fixture", "", 0, c, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "legacy.avro")
 	stamp := time.Now().Truncate(time.Millisecond)
+	var records []core.Record
 	for i, age := range []time.Duration{0, -24 * time.Hour, 0} {
 		ts := stamp.Add(age).UnixMilli()
-		require.NoError(t, out.Submit(core.Record{Key: []byte("same"), Value: []byte(fmt.Sprint(i)), TimestampMS: &ts, TimestampType: "create_time"}, core.Token{}))
+		records = append(records, core.Record{Key: []byte("same"), Value: []byte(fmt.Sprint(i)), TimestampMS: &ts, TimestampType: "create_time"})
 	}
-	require.NoError(t, out.Flush())
-	out.Close()
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='%s-legacy',ON_REJECTED_TIMESTAMP=SKIP)", dst, path, dst)
+	writeArchiveRecords(t, path, records)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE avro('%s') OPTIONS(GROUP='%s-legacy',ON_REJECTED_TIMESTAMP=SKIP)", dst, path, dst)
 
 	// When restoring mixed valid and rejected timestamps into a producer batch.
 	execute(t, statement, configuration(t))
@@ -105,7 +100,7 @@ func probeSource(t *testing.T, name, group string) *adapter.Source {
 	source, _ := probeSourceProgress(t, name, group)
 	return source
 }
-func probeSourceProgress(t *testing.T, name, group string) (*adapter.Source, kafkaport.SourceProgress) {
+func probeSourceProgress(t *testing.T, name, group string) (*adapter.Source, core.ProgressStore) {
 	t.Helper()
 	statement, err := sql.NewParser().Parse(fmt.Sprintf("INSERT INTO TOPIC 'unused' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", name, group))
 	require.NoError(t, err)

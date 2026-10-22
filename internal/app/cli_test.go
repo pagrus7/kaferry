@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,7 +14,6 @@ import (
 	"testing/iotest"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/sql"
 	"github.com/stretchr/testify/require"
 )
@@ -76,18 +74,12 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 			// Given
 			t.Setenv("HOME", "") // Explicit configuration must not require a home directory.
 			dir := t.TempDir()
-			src, dst := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "destination.cbor")
-			codec, err := file.NewCodec(1 << 20)
-			require.NoError(t, err)
-			o, err := file.NewOutput(file.NewPublisher(), src, "fixture", "fixture", "", 0, codec, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
-			require.NoError(t, err)
-			require.NoError(t, o.Submit(core.Record{Key: []byte{}, Value: nil, TimestampType: "unknown"}, core.Token{}))
-			require.NoError(t, o.Flush())
-			o.Close()
+			src, dst := filepath.Join(dir, "source.avro"), filepath.Join(dir, "destination.avro")
+			writeArchiveRecords(t, src, []core.Record{{Key: []byte{}, Value: nil, TimestampType: "unknown"}})
 			cpdir := t.TempDir()
 			cfg := filepath.Join(dir, "config.toml")
 			require.NoError(t, os.WriteFile(cfg, []byte("[worker]\ncheckpoint_dir = '"+cpdir+"'\n"), 0600))
-			statement := "INSERT INTO FILE cbor('" + dst + "') SELECT * FROM FILE cbor('" + src + "') OPTIONS(GROUP=ONE_OFF)"
+			statement := "INSERT INTO FILE avro('" + dst + "') SELECT * FROM FILE avro('" + src + "') OPTIONS(GROUP=ONE_OFF)"
 			var out bytes.Buffer
 
 			inputPath := "-"
@@ -105,7 +97,7 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 			files, err := filepath.Glob(filepath.Join(cpdir, "*.json"))
 			require.NoError(t, err)
 			require.Len(t, files, 0)
-			statement = "INSERT INTO FILE cbor('" + src + "') SELECT * FROM FILE cbor('" + src + "') OPTIONS(GROUP='self')"
+			statement = "INSERT INTO FILE avro('" + src + "') SELECT * FROM FILE avro('" + src + "') OPTIONS(GROUP='self')"
 			require.EqualValues(t, 2, Execute(context.Background(), []string{"run", "-e", statement, "-c", cfg}, nil, io.Discard, &out))
 		})
 	}
@@ -116,7 +108,7 @@ func TestCLIMissingHomeReportsConfigurationErrors(t *testing.T) {
 		t.Run(map[bool]string{false: "default directory", true: "missing configuration"}[configured], func(t *testing.T) {
 			// Given a valid file-copy statement and no home directory.
 			t.Setenv("HOME", "")
-			statement := "INSERT INTO FILE cbor('/unused-output.cbor') SELECT * FROM FILE cbor('/unused-source.cbor') OPTIONS(GROUP='restore')"
+			statement := "INSERT INTO FILE avro('/unused-output.avro') SELECT * FROM FILE avro('/unused-source.avro') OPTIONS(GROUP='restore')"
 			args := []string{"run", "--sql", statement}
 			want := "set HOME or worker.checkpoint_dir"
 			if configured {
@@ -167,8 +159,8 @@ func TestCLISQLDiagnosticsIdentifyInputWithoutCreatingOutput(t *testing.T) {
 			// Given malformed SQL, explicit configuration and an output that does not exist.
 			t.Setenv("HOME", "")
 			dir := t.TempDir()
-			destination := filepath.Join(dir, "output.cbor")
-			query := "INSERT INTO FILE cbor('" + destination + "')\nSELECT 'sensitive_SENTINEL_5c27' FROM FILE cbor('missing.cbor')\nOPTIONS(GROUP='g')"
+			destination := filepath.Join(dir, "output.avro")
+			query := "INSERT INTO FILE avro('" + destination + "')\nSELECT 'sensitive_SENTINEL_5c27' FROM FILE avro('missing.avro')\nOPTIONS(GROUP='g')"
 			want := "line 2, column 8: expected \"*\"; found string literal"
 			if input == "file validation" {
 				query = strings.Replace(query, "'sensitive_SENTINEL_5c27'", "*", 1)

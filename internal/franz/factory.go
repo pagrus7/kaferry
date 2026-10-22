@@ -108,7 +108,7 @@ func (c *connection) ReadProgress(ctx context.Context, group, fp string, window 
 }
 func (c *connection) Close(context.Context) error { c.cancel(); c.inspector.client.Close(); return nil }
 
-func (c *connection) Source(query context.Context, p plan.Plan, fp string, limits config.Worker) (core.Source, kafkaport.SourceProgress, error) {
+func (c *connection) Source(query context.Context, p plan.Plan, fp string, limits config.Worker) (core.Source, core.ProgressStore, error) {
 	if err := query.Err(); err != nil {
 		return nil, nil, err
 	}

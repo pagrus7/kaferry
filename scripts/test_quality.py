@@ -61,7 +61,7 @@ class CoverageTest(unittest.TestCase):
                            "worker_stop_after_records": 10, "records_per_second": 100,
                            "measurement_method": "sql_release_to_exit", "fixture_client": "franz-go"}
             (previous / "load.metrics.json").write_text(json.dumps(measurement))
-            for changes in ({"worker_stop_after_records": 20}, {}, {"client": "new-version"}, {"measurement_method": None}, {"fixture_client": None}):
+            for changes in ({"worker_stop_after_records": 20}, {}, {"client": "new-version"}, {"measurement_method": None}, {"fixture_client": None}, {"archive_format": "avro"}, {"archive_payload": "random"}):
                 with self.subTest(changes=changes):
                     actual = {key: value for key, value in {**measurement, **changes}.items()
                               if value is not None}

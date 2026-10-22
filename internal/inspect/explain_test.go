@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pagrus7/kaferry/internal/archiveio"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/stretchr/testify/require"
@@ -112,18 +112,16 @@ func (f *factoryMock) OpenInspection(_ context.Context, endpoint plan.Endpoint) 
 }
 
 type filesMock struct {
-	source      file.SourceInspection
-	destination file.ArchiveInspection
+	source      archiveio.SourceInspection
+	destination archiveio.ArchiveInspection
 	failSource  error
 	failOutput  error
-	output      file.DestinationProgress
 }
 
-func (f *filesMock) Source(plan.Plan, string, config.Worker) (file.SourceInspection, error) {
+func (f *filesMock) Source(plan.Plan, string, config.Worker) (archiveio.SourceInspection, error) {
 	return f.source, f.failSource
 }
-func (f *filesMock) Destination(_ plan.Plan, _ string, progress file.DestinationProgress, _ config.Worker) (file.ArchiveInspection, error) {
-	f.output = progress
+func (f *filesMock) Destination(string) (archiveio.ArchiveInspection, error) {
 	return f.destination, f.failOutput
 }
 
@@ -236,31 +234,22 @@ func TestOneOffDoesNotReadOrGenerateAConsumerGroup(t *testing.T) {
 	require.Zero(t, factory.connections["input"].memberChecks)
 }
 
-func TestFileInspectionCarriesPositionsAndAcknowledgedOutputExtent(t *testing.T) {
-	// Given file-source checkpoint data and an existing destination.
+func TestArchiveInspectionCarriesSnapshotAndReplayPosition(t *testing.T) {
+	// Given a saved archive selection and its destination directory.
 	service, p, factory, files := fixture()
 	p.Source.Kind, p.Destination.Kind = "FILE", "FILE"
-	files.source = file.SourceInspection{ArchiveInspection: file.ArchiveInspection{Exists: true, ID: "source", Size: 250}, Position: 200, Saved: true, CheckpointPath: "checkpoint.json", Output: file.DestinationProgress{Exists: true, ID: "destination", Extent: 300}}
-	files.destination = file.ArchiveInspection{Exists: true, ID: "destination", Size: 310}
-	// When inspecting both file endpoints.
+	p.Source.Format, p.Destination.Format = "avro", "avro"
+	files.source = archiveio.SourceInspection{ArchiveInspection: archiveio.ArchiveInspection{Exists: true, Size: 250, FileCount: 2}, Position: 200, Saved: true, CheckpointPath: "checkpoint.json"}
+	files.destination = archiveio.ArchiveInspection{Exists: true}
+	// When inspecting both endpoints.
 	report := preview(t, service, p)
-	// Then the saved byte position and output extent are reported without Kafka access.
+	// Then positions count records, sizes describe the selection, and Kafka is untouched.
 	require.Zero(t, factory.opened)
-	require.EqualValues(t, 200, *report.Source.File.StartBytes)
+	require.EqualValues(t, 200, *report.Source.File.PositionRecords)
+	require.Equal(t, 2, report.Source.File.FileCount)
+	require.EqualValues(t, 250, report.Source.File.SizeBytes)
 	require.True(t, *report.Source.File.CheckpointExists)
-	require.EqualValues(t, 300, *report.Destination.File.AcknowledgedExtent)
-	require.Equal(t, "destination", files.output.ID)
-	// Given a Kafka source with per-partition extents, then the greatest acknowledged extent is used.
-	service, p, factory, files = fixture()
-	p.Destination.Kind = "FILE"
-	for id := range 2 {
-		factory.connections["input"].positions[int32(id)] = 4
-		factory.connections["input"].metadata[int32(id)] = kafkaport.Progress{FileID: "archive", Extent: int64(200 + id*100)}
-	}
-	report = preview(t, service, p)
-	require.Equal(t, "archive", files.output.ID)
-	require.EqualValues(t, 300, files.output.Extent)
-	require.EqualValues(t, 300, *report.Destination.File.AcknowledgedExtent)
+	require.True(t, report.Destination.File.Exists)
 }
 
 func TestInspectionFailuresCloseOnlyAcquiredConnections(t *testing.T) {
@@ -295,7 +284,7 @@ func TestInspectionFailuresCloseOnlyAcquiredConnections(t *testing.T) {
 }
 
 func TestInvalidSavedPositionsAndWindowOverflowFailBeforeLookup(t *testing.T) {
-	for _, invalid := range []string{"past log end", "overflow", "missing lookup", "file identity"} {
+	for _, invalid := range []string{"past log end", "overflow", "missing lookup"} {
 		t.Run(invalid, func(t *testing.T) {
 			// Given invalid progress or an incomplete metadata response.
 			service, p, factory, _ := fixture()
@@ -307,8 +296,6 @@ func TestInvalidSavedPositionsAndWindowOverflowFailBeforeLookup(t *testing.T) {
 				p.Window.Upper.LiteralMS = math.MaxInt64
 			case "missing lookup":
 				source.times = func(map[int32]int64) map[int32]int64 { return map[int32]int64{} }
-			case "file identity":
-				source.metadata = map[int32]kafkaport.Progress{0: {FileID: "a", Extent: 100}, 1: {FileID: "b", Extent: 100}}
 			}
 			// When inspecting, then reject the invalid evidence and release both connections.
 			_, err := service.Explain(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
@@ -378,13 +365,13 @@ func TestFilePreviewPreservesFreshAndSavedRelativeWindows(t *testing.T) {
 			if saved {
 				upper, origin = 1000, "saved"
 			}
-			files.source = file.SourceInspection{ArchiveInspection: file.ArchiveInspection{Exists: true, Size: 300}, Position: 200, Saved: saved, Window: plan.Window{Upper: &upper}, CheckpointPath: "checkpoint.json"}
+			files.source = archiveio.SourceInspection{ArchiveInspection: archiveio.ArchiveInspection{Exists: true, Size: 300}, Position: 200, Saved: saved, Window: plan.Window{Upper: &upper}, CheckpointPath: "checkpoint.json"}
 			// When composing the preview, then retain the inspector's bounds and describe their origin accurately.
 			report := preview(t, service, p)
 			info := report.Source.File
 			require.Equal(t, origin, info.WindowOrigin)
 			require.Equal(t, files.source.Window, *info.Window)
-			require.EqualValues(t, 200, *info.StartBytes)
+			require.EqualValues(t, 200, *info.PositionRecords)
 			require.Equal(t, saved, *info.CheckpointExists)
 			require.Equal(t, "checkpoint.json", info.Checkpoint)
 			require.EqualValues(t, 1, factory.opened)

@@ -58,7 +58,7 @@ kaferry status -c connections.toml -f copy.sql --json
 
 Rerun with the same `GROUP`, endpoints, filter, `CUTOFF` and checkpoint directory. Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
 
-Keep output, checkpoints and locks. Archive files must stay unchanged until replay completes. [Recovery rules](../design/decisions.md#output-recovery).
+Keep output, checkpoints and locks. Archive files must stay unchanged until replay completes. [Recovery rules](../design/archive.md#capture-and-recovery).
 
 ## Errors
 

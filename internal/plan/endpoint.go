@@ -16,7 +16,7 @@ func endpoint(source sql.Endpoint, profiles Profiles, inline []sql.Connection) (
 	}
 	switch e.Kind {
 	case "FILE":
-		if e.Format != "cbor" && e.Format != "avro" {
+		if e.Format != "avro" {
 			return Endpoint{}, fmt.Errorf("unsupported file format")
 		}
 		if err := e.fileOptions(source.Options); err != nil {
@@ -110,9 +110,6 @@ func validTopicName(name string) bool {
 func (e *Endpoint) fileOptions(options []sql.Option) error {
 	seen := map[string]bool{}
 	for _, o := range options {
-		if e.Format != "avro" {
-			return sql.At(o.Position, fmt.Errorf("rotation options require FILE avro"))
-		}
 		if seen[o.Name] {
 			return sql.At(o.Position, fmt.Errorf("file option %s repeats; specify it once", o.Name))
 		}

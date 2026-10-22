@@ -10,8 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pagrus7/kaferry/internal/archive/replay"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/inspect"
 	"github.com/stretchr/testify/require"
 )
@@ -33,19 +34,12 @@ func TestFileWorkerStopResumeAndSavedStatus(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			// Given five complete record frames and an empty destination.
 			fixture := filePreview(t)
-			codec, err := file.NewCodec(1 << 20)
-			require.NoError(t, err)
-			source := filepath.Join(fixture.directory, "source.cbor")
-			data, err := os.ReadFile(source)
-			require.NoError(t, err)
-			var frames [][]byte
+			source := filepath.Join(fixture.directory, "source.avro")
+			var records []core.Record
 			for i := range 5 {
-				frame, err := codec.EncodeRecord(core.Record{Value: []byte{byte(i)}, TimestampType: "unknown"})
-				require.NoError(t, err)
-				frames = append(frames, frame)
-				data = append(data, frame...)
+				records = append(records, core.Record{Value: []byte{byte(i)}, TimestampType: "unknown"})
 			}
-			require.NoError(t, os.WriteFile(source, data, 0600))
+			writeArchiveRecords(t, source, records)
 			query := strings.Replace(fixture.query, "'preview'", scenario.group, 1)
 			for _, step := range scenario.steps {
 				limited := strings.Replace(query, "OPTIONS(", fmt.Sprintf("OPTIONS(WORKER_STOP_AFTER_RECORDS=%d,", step.stopAfter), 1)
@@ -54,15 +48,19 @@ func TestFileWorkerStopResumeAndSavedStatus(t *testing.T) {
 				code := Execute(t.Context(), []string{"run", "-e", limited, "-c", fixture.config}, nil, io.Discard, &diagnostics)
 				// Then keep exactly the expected prefix and a resumable checkpoint.
 				require.Zero(t, code, diagnostics.String())
-				output, err := os.ReadFile(fixture.destination)
-				require.NoError(t, err)
-				header, start, err := codec.Header(bytes.NewReader(output), int64(len(output)))
-				require.NoError(t, err)
-				require.Equal(t, bytes.Join(frames[:step.records], nil), output[start:])
+				output := archiveRecords(t, fixture.destination)
+				require.Len(t, output, step.records)
+				for i, record := range output {
+					require.Equal(t, []byte{byte(i)}, record.Value)
+				}
 				checkpoints, err := filepath.Glob(filepath.Join(fixture.directory, "*.json"))
 				require.NoError(t, err)
 				require.Len(t, checkpoints, 1, "limited ONE_OFF progress must remain available")
-				query = strings.Replace(fixture.query, "'preview'", "'"+header.Group+"'", 1)
+				data, err := os.ReadFile(checkpoints[0])
+				require.NoError(t, err)
+				state, err := checkpoint.Decode[replay.State](data, 64<<20)
+				require.NoError(t, err)
+				query = strings.Replace(fixture.query, "'preview'", "'"+state.Group+"'", 1)
 				var stdout bytes.Buffer
 				diagnostics.Reset()
 				code = Execute(t.Context(), []string{"status", "-e", query, "-c", fixture.config, "--json"}, nil, &stdout, &diagnostics)

@@ -11,7 +11,6 @@ import (
 
 	"github.com/pagrus7/kaferry/internal/archive/replay"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
 )
 
 type Replay interface {
@@ -72,9 +71,7 @@ func (s *Source) Pause(_ int32, pause bool) error { s.paused = pause; return nil
 func (s *Source) HighWatermark(int32) (int64, error) {
 	return 0, errors.New("archive replay has no Kafka high watermark")
 }
-func (s *Source) BindOutput(core.OutputProgress)     {}
-func (s *Source) Progress() file.DestinationProgress { return file.DestinationProgress{Exists: true} }
-func (s *Source) Close() error                       { return s.session.Close() }
+func (s *Source) Close() error { return s.session.Close() }
 func (s *Source) DeleteCheckpoint() error {
 	if err := os.Remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
