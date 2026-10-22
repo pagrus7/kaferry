@@ -30,6 +30,7 @@ type Writer struct {
 	identity   Identity
 	output     *countingWriter
 	pending    []byte
+	reserve    int
 	datum      *lib.Writer
 	blockCount int64
 	sync       [16]byte
@@ -103,7 +104,7 @@ func (w *Writer) Append(record Record) error {
 		}
 	}
 	if w.pending == nil {
-		w.pending = make([]byte, 0, max(min(BlockTarget, int(w.codec.limit)), len(data)))
+		w.pending = make([]byte, 0, max(w.reserve, len(data)))
 	}
 	w.pending = append(w.pending, data...)
 	w.blockCount++
@@ -139,6 +140,8 @@ func (w *Writer) Flush() error {
 			break
 		}
 	}
+	// Keep only a bounded size hint, so sparse writers do not reserve full blocks.
+	w.reserve = min(min(len(w.pending), BlockTarget/2)*2, int(w.codec.limit))
 	// Release each partition's block capacity after the batch; idle partitions retain no payload buffers.
 	w.pending, w.blockCount, w.datum = nil, 0, nil
 	return w.failed

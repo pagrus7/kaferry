@@ -85,3 +85,13 @@ func TestFileStatusTextReportsBytePositionStopAndCurrentSize(t *testing.T) {
 	require.Contains(t, output.String(), "Partition 0: byte position 120; file end reached at 120")
 	require.Contains(t, output.String(), "Current source size: 150 bytes")
 }
+
+func TestArchiveStatusTextReportsSavedSnapshot(t *testing.T) {
+	// Given an Avro group's selected files, which may differ from current directory contents.
+	report := inspect.StatusReport{Source: inspect.Endpoint{Kind: "FILE", File: &inspect.FileSummary{Directory: true, FileCount: 3, SizeBytes: 150}}}
+	var output bytes.Buffer
+	// When rendering status, then bytes describe that snapshot rather than the current directory.
+	require.NoError(t, renderStatus(&output, report, false))
+	require.Contains(t, output.String(), "Snapshot: 3 completed files, 150 encoded bytes.")
+	require.NotContains(t, output.String(), "Current source size")
+}

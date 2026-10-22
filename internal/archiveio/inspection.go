@@ -38,9 +38,9 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result file
 	}
 	result.Directory = true
 	result.Exists = true
-	result.CheckpointPath = checkpoint.Path(directory, p.Group)
 	var saved *replay.State
 	if !p.OneOff {
+		result.CheckpointPath = checkpoint.Path(directory, p.Group)
 		saved, err = replay.ReadCheckpoint(directory, p.Group, replay.NativeGroupFiles{})
 		if err != nil {
 			return result, &file.Conflict{Err: err}

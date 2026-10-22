@@ -54,6 +54,34 @@ func TestBlockTargetAllowsLargeRecordsWithoutCombiningFullBlocks(t *testing.T) {
 	require.Len(t, values, blocks)
 }
 
+func TestSparseWriterDoesNotReserveFullBlocks(t *testing.T) {
+	for _, previouslyBusy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cold", true: "after busy block"}[previouslyBusy], func(t *testing.T) {
+			// Given a new writer or one that has just flushed a large block.
+			c := codec(t, 2*BlockTarget)
+			w, err := c.NewWriter(io.Discard, identity())
+			require.NoError(t, err)
+			record := records()[0]
+			if previouslyBusy {
+				record.Value = make([]byte, BlockTarget)
+				require.NoError(t, w.Append(record))
+			}
+			record.Value = make([]byte, 3<<10)
+			// When small records are flushed individually, then the writer releases buffers
+			// and settles to small allocations even after a busy period.
+			for i := range 3 {
+				require.NoError(t, w.Append(record))
+				if !previouslyBusy || i > 0 {
+					require.Less(t, cap(w.pending), BlockTarget/16, "sparse input must not reserve a full block")
+				}
+				require.NoError(t, w.Flush())
+				require.Nil(t, w.pending)
+				require.Nil(t, w.datum)
+			}
+		})
+	}
+}
+
 func TestRejectedEncodedRecordPreservesEarlierAndLaterRecords(t *testing.T) {
 	// Given a valid pending record and a rejection caused by encoded envelope size.
 	c := codec(t, 4096)

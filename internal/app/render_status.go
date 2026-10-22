@@ -49,7 +49,11 @@ func renderStatus(output io.Writer, r inspect.StatusReport, asJSON bool) error {
 			fmt.Fprintf(&b, "  %d more partitions; see --json.\n", len(r.Partitions)-8)
 		}
 		if r.Source.File != nil {
-			fmt.Fprintf(&b, "  Current source size: %d bytes\n", r.Source.File.SizeBytes)
+			if r.Source.File.Directory {
+				fmt.Fprintf(&b, "  Snapshot: %d completed files, %d encoded bytes.\n", r.Source.File.FileCount, r.Source.File.SizeBytes)
+			} else {
+				fmt.Fprintf(&b, "  Current source size: %d bytes\n", r.Source.File.SizeBytes)
+			}
 		}
 		fmt.Fprintf(&b, "\n%s\nActivity: %s.\n", r.Meaning, r.Activity)
 	}

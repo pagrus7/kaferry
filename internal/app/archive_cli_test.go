@@ -95,6 +95,11 @@ func TestArchiveCLIResumeUsesFixedSelectionAndSavesStopReason(t *testing.T) {
 	extra := records[4]
 	extra.Offset = 10
 	archiveFixture(t, src, 2, []avro.Record{extra})
+	// When more files appear, then status still describes the saved selection.
+	code, logs = execute("status", sql+")")
+	require.Zero(t, code, logs)
+	require.Contains(t, logs, fmt.Sprintf("Snapshot: 1 completed files, %d encoded bytes.", state.Files[0].File.Size))
+	require.NotContains(t, logs, "Current source size")
 	// When the same group resumes, then it finishes only the originally selected file.
 	code, logs = execute("run", sql+")")
 	require.Zero(t, code, logs)
@@ -233,6 +238,13 @@ func TestArchiveCLIOneOffDeletesOnlyCompletedProgress(t *testing.T) {
 			}
 			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') OPTIONS(%s)", dst, src, options)
 			var output bytes.Buffer
+			// When previewing, then no checkpoint path is invented for the generated group.
+			require.Zero(t, Execute(t.Context(), []string{"explain", "--json", "-e", query, "-c", cfg}, nil, &output, &output), output.String())
+			var preview inspect.Report
+			require.NoError(t, json.Unmarshal(output.Bytes(), &preview))
+			require.NotNil(t, preview.Source.File)
+			require.Empty(t, preview.Source.File.Checkpoint)
+			output.Reset()
 			// When running, then completed one-off progress is deleted; capped progress remains resumable.
 			require.Zero(t, Execute(t.Context(), []string{"run", "-e", query, "-c", cfg}, nil, &output, &output), output.String())
 			checkpoints, err := filepath.Glob(filepath.Join(root, "*.json"))

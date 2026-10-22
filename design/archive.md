@@ -73,7 +73,7 @@ Replay selects completed file IDs once and saves that selection before producing
 
 Store and exclusively lock the group-derived checkpoint outside the archive, which may be read-only. Save cursors only through destination-confirmed progress. Missing or changed selected inputs fail an incomplete replay.
 
-Merge overlaps by original source identity, partition and offset. Preserve duplicates with deterministic file-ID/physical-record ties. No ordering across partitions. Bound open handles and payload buffers; cursor/head metadata grows with selected files. Evicting a block may require decompressing it and decoding earlier records again. The replay component defaults to 32 open files and 8 cached blocks; TOML `worker.archive_replay_open_files` and `worker.archive_replay_blocks` change these budgets. More simultaneously overlapping files than cached blocks can sharply reduce throughput. Outstanding records awaiting a checkpoint are separately capped at 20,000 by default.
+Merge overlaps by original source identity, partition and offset. Preserve duplicates with deterministic file-ID/physical-record ties. No ordering across partitions. Bound open handles and payload buffers; cursor/head metadata grows with selected files. Evicting a block may require decompressing it and decoding earlier records again. The replay component defaults to 32 open files and 8 cached blocks; TOML `worker.archive_replay_open_files` and `worker.archive_replay_blocks` change these budgets. More simultaneously overlapping files than cached blocks can sharply reduce throughput. The CLI applies partition caps to the whole replay: 5,000 unsaved records / 16 MiB by default.
 
 ### Checkpoints
 
@@ -86,7 +86,7 @@ Each `files` entry contains:
 
 `position` counts confirmed input records in merge order. EOF uses the file length as `block` and record index zero. Reads and writes are capped at 64 MiB. A [partial checkpoint fixture](../internal/archive/replay/testdata/partial-checkpoint-v1.json) fixes the wire representation.
 
-Writer-state checksums are calculated on durability flushes and publication; replay-checkpoint checksums are calculated on progress saves. Appends do not hash JSON themselves. Frequent rotation can make these batches small. Idle flushes with no new writes do not save writer state. Selection hashes every completed file. An incomplete restart rechecks every selected file, including consumed files, before returning records. Explain/status read headers, sizes and saved JSON without hashing archive payloads. Completed files must remain immutable during replay.
+Writer-state checksums are calculated on durability flushes and publication; replay-checkpoint checksums are calculated on progress saves. Every replay progress save rewrites and checksums the whole file list, so save time and bytes written grow with selection size. Appends do not hash JSON themselves. Frequent rotation can make these batches small. Idle flushes with no new writes do not save writer state. Selection hashes every completed file. An incomplete restart rechecks every selected file, including consumed files, before returning records. Explain/status read headers, sizes and saved JSON without hashing archive payloads. Completed files must remain immutable during replay.
 
 A checkpoint failure stops new reads. A source failure still allows saving earlier confirmed output. Destination-confirmed records after the last saved checkpoint can repeat after restart.
 
