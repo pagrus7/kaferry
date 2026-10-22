@@ -1,6 +1,6 @@
 # Archive redesign
 
-Accepted design for directory-based Avro archives. The codec and capture/storage components are implemented. Replay, summaries and CLI integration are pending; the CLI uses [CBOR files](../docs/usage.md).
+Accepted design for directory-based Avro archives. The codec, capture/storage and snapshot replay components are implemented. Summaries and CLI integration are pending; the CLI uses [CBOR files](../docs/usage.md).
 
 ## Records and files
 
@@ -73,9 +73,24 @@ Replay selects completed file IDs once and saves that selection before producing
 
 Store and exclusively lock the group-derived checkpoint outside the archive, which may be read-only. Save cursors only through destination-confirmed progress. Missing or changed selected inputs fail an incomplete replay.
 
-Merge overlaps by original source identity, partition and offset. Preserve duplicates with deterministic file-ID/physical-record ties. No ordering across partitions. Bound open handles and payload buffers; cursor/head metadata grows with selected files. Evicting a block may require decompressing it again.
+Merge overlaps by original source identity, partition and offset. Preserve duplicates with deterministic file-ID/physical-record ties. No ordering across partitions. Bound open handles and payload buffers; cursor/head metadata grows with selected files. Evicting a block may require decompressing it and decoding earlier records again. The replay component defaults to 32 open files and 8 cached blocks; callers may change both budgets. Outstanding records awaiting a checkpoint are separately capped at 20,000 by default.
 
-Time filters inspect record timestamps, including out-of-order values. Do not stop a file at its first timestamp beyond the range. No active-file reads, replay follow mode, global completion barrier or built-in consolidation.
+### Checkpoints
+
+Use the same group-derived filename and stable `.lock` file as file checkpoints; the same group and checkpoint directory share one namespace. The canonical JSON envelope contains `state` and its lowercase `sha256` digest. State version `1` stores `group`, query `fingerprint`, resolved `window`, confirmed `position`, `complete` and selected `files`.
+
+Each `files` entry contains:
+
+- `file`: `identity`, byte `size`, header-end byte `start` and content `sha256`.
+- `next`: byte offset `block`, zero-based record index `record` and `previous` source offset (`-1` at the start).
+
+`position` counts confirmed input records in merge order. EOF uses the file length as `block` and record index zero. Reads and writes are capped at 64 MiB. A [partial checkpoint fixture](../internal/archive/replay/testdata/partial-checkpoint-v1.json) fixes the wire representation.
+
+Selection hashes every completed file. An incomplete restart rechecks every selected file, including consumed files, before returning records. Completed files must remain immutable during replay.
+
+A checkpoint failure stops new reads. A source failure still allows saving earlier confirmed output. Destination-confirmed records after the last saved checkpoint can repeat after restart.
+
+The session returns every record and retains the resolved time window for the caller's filter. Out-of-order timestamps do not end a file. No active-file reads, replay follow mode, global completion barrier or built-in consolidation.
 
 ## Optional summaries
 

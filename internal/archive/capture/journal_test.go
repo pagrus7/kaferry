@@ -93,7 +93,9 @@ func TestJournalReadAndWriteSizeBoundsMatch(t *testing.T) {
 	journal := NewJournal(fs, &observedWriter{AtomicWriter: file.DurableWriter{}, files: fs})
 	path := filepath.Join(t.TempDir(), "state.json")
 	// When saved, then it is rejected before disk replacement, never creating unrecoverable state.
-	require.ErrorContains(t, journal.Save(path, state), "exceeds")
+	err := journal.Save(path, state)
+	require.ErrorContains(t, err, "exceeds")
+	require.ErrorContains(t, err, "archive writer state "+path)
 	require.Empty(t, fs.events)
 	require.NoFileExists(t, path)
 	// When an oversized file exists on disk, then loading rejects it before reading its contents.
@@ -103,6 +105,7 @@ func TestJournalReadAndWriteSizeBoundsMatch(t *testing.T) {
 	require.NoError(t, f.Close())
 	_, err = journal.Load(path)
 	require.ErrorContains(t, err, "size limit")
+	require.ErrorContains(t, err, "archive writer state "+path)
 	_, err = journal.Load(filepath.Dir(path))
 	require.ErrorContains(t, err, "regular file")
 }

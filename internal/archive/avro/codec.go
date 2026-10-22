@@ -123,7 +123,8 @@ func (s Source) validate() error {
 	return nil
 }
 
-func (i Identity) validate() error {
+// Validate checks the portable file identity independently of file I/O.
+func (i Identity) Validate() error {
 	if i.Version != Version || !validID(i.WriterID) || !validID(i.FileID) || i.FirstOffset < 0 || !validLimit(i.BlockLimit) {
 		return errors.New("invalid or unsupported Avro file identity")
 	}
@@ -163,5 +164,5 @@ func parseIdentity(data []byte) (Identity, error) {
 	if !bytes.Equal(data, canonical) {
 		return identity, errors.New("archive identity JSON is not canonical")
 	}
-	return identity, identity.validate()
+	return identity, identity.Validate()
 }

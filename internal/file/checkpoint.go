@@ -2,8 +2,6 @@ package file
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/pagrus7/kaferry/internal/checkpoint"
 	copy "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
 )
@@ -120,21 +119,7 @@ func validateCheckpointDirectory(directory string) error {
 	return nil
 }
 
-func checkpointPath(directory, group string) string {
-	var slug strings.Builder
-	for _, r := range group {
-		if slug.Len() >= 48 {
-			break
-		}
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
-			slug.WriteRune(r)
-		} else {
-			slug.WriteByte('_')
-		}
-	}
-	hash := sha256.Sum256([]byte(group))
-	return filepath.Join(directory, slug.String()+"-"+hex.EncodeToString(hash[:8])+".json")
-}
+func checkpointPath(directory, group string) string { return checkpoint.Path(directory, group) }
 
 func openCheckpointLock(path string) (*os.File, error) {
 	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)

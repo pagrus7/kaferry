@@ -1,16 +1,14 @@
 package capture
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
 )
 
 const maxStateBytes = 16 << 20
@@ -48,6 +46,11 @@ func NewJournal(files stateFiles, writer AtomicWriter) *Journal {
 }
 
 func (j *Journal) Load(path string) (state State, result error) {
+	defer func() {
+		if result != nil {
+			result = fmt.Errorf("archive writer state %s: %w", path, result)
+		}
+	}()
 	f, err := j.files.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
 		return State{}, err
@@ -70,7 +73,12 @@ func (j *Journal) Load(path string) (state State, result error) {
 	return decodeState(data)
 }
 
-func (j *Journal) Save(path string, state State) error {
+func (j *Journal) Save(path string, state State) (result error) {
+	defer func() {
+		if result != nil {
+			result = fmt.Errorf("archive writer state %s: %w", path, result)
+		}
+	}()
 	data, err := encodeState(state)
 	if err != nil {
 		return err
@@ -78,45 +86,19 @@ func (j *Journal) Save(path string, state State) error {
 	return j.writer.Replace(path, data)
 }
 
-type envelope struct {
-	State  json.RawMessage `json:"state"`
-	SHA256 string          `json:"sha256"`
-}
-
 func encodeState(state State) ([]byte, error) {
 	if err := state.validate(); err != nil {
 		return nil, err
 	}
-	payload, _ := json.Marshal(state)
-	hash := sha256.Sum256(payload)
-	data, _ := json.Marshal(envelope{State: payload, SHA256: hex.EncodeToString(hash[:])})
-	if len(data) > maxStateBytes {
-		return nil, errors.New("archive writer state exceeds 16 MiB")
-	}
-	return data, nil
+	return checkpoint.Encode(state, maxStateBytes)
 }
 
 func decodeState(data []byte) (State, error) {
-	var saved envelope
-	var state State
-	if err := json.Unmarshal(data, &saved); err != nil {
-		return state, fmt.Errorf("invalid archive writer state: %w", err)
-	}
-	hash := sha256.Sum256(saved.State)
-	if saved.SHA256 != hex.EncodeToString(hash[:]) {
-		return state, errors.New("archive writer state checksum mismatch")
-	}
-	if err := json.Unmarshal(saved.State, &state); err != nil {
-		return state, fmt.Errorf("invalid archive writer state: %w", err)
-	}
-	canonical, err := encodeState(state)
+	state, err := checkpoint.Decode[State](data, maxStateBytes)
 	if err != nil {
 		return state, err
 	}
-	if !bytes.Equal(data, canonical) {
-		return state, errors.New("archive writer state JSON is not canonical")
-	}
-	return state, nil
+	return state, state.validate()
 }
 
 func (s State) validate() error {

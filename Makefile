@@ -58,9 +58,11 @@ fuzz:
 	$(GO) test -run '^$$' -fuzz FuzzRecordDecoder -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/file
 	$(GO) test -run '^$$' -fuzz FuzzContainer -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/archive/avro
 	$(GO) test -run '^$$' -fuzz FuzzState -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/archive/capture
+	$(GO) test -run '^$$' -fuzz FuzzCheckpoint -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/archive/replay
 benchmark:
 	$(GO) test -run '^$$' -bench BenchmarkRecordFraming -benchmem ./internal/file
 	$(GO) test -run '^$$' -bench 'Benchmark(Encode|Decode)$$' -benchmem ./internal/archive/avro
+	$(GO) test -run '^$$' -bench BenchmarkReplayOverlap -benchmem ./internal/archive/replay
 metrics:
 	@rg --files cmd internal -g '*.go' -g '!**/*_test.go' | xargs wc -l
 	$(GO) run github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0 -top 10 $$(rg --files cmd internal -g '*.go' -g '!**/*_test.go')

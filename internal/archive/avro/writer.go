@@ -38,7 +38,7 @@ type Writer struct {
 
 func (c *Codec) NewWriter(output io.Writer, identity Identity) (*Writer, error) {
 	identity.BlockLimit = c.limit
-	if err := identity.validate(); err != nil {
+	if err := identity.Validate(); err != nil {
 		return nil, err
 	}
 	meta, _ := json.Marshal(identity)
