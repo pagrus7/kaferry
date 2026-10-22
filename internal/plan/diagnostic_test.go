@@ -19,6 +19,7 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 	}{
 		{"missing group", files + "OPTIONS(ON_ERROR=SKIP)", "OPTIONS", "GROUP is required; add GROUP = 'name' or GROUP = ONE_OFF to OPTIONS", nil, nil},
 		{"whitespace group", files + "OPTIONS(GROUP=' ')", "' '", "GROUP must not be blank; use a quoted name or ONE_OFF", nil, nil},
+		{"unsupported AST file format", "INSERT INTO FILE avro('private-output')\nSELECT * FROM FILE avro('private-input') OPTIONS(GROUP='g')", "'private-output'", "INTO endpoint: unsupported file format", func(s *sql.Statement) { s.Destination.Format = "unsupported" }, nil},
 		{"empty file endpoint", "INSERT INTO FILE avro('')\nSELECT * FROM FILE avro('in') OPTIONS(GROUP='g')", "''", "INTO endpoint: endpoint name is empty", nil, nil},
 		{"empty topic endpoint", "INSERT INTO TOPIC ''\nSELECT * FROM TOPIC 'a' OPTIONS(GROUP='g', START=EARLIEST)", "''", "INTO endpoint: endpoint name is empty", nil, nil},
 		{"empty group", files + "OPTIONS(GROUP='')", "''", "GROUP must not be blank; use a quoted name or ONE_OFF", nil, nil},

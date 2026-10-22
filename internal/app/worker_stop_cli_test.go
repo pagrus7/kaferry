@@ -32,7 +32,7 @@ func TestFileWorkerStopResumeAndSavedStatus(t *testing.T) {
 		{"one-off reaches EOF before cap", "ONE_OFF", []step{{10, 5, "eof"}}},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
-			// Given five complete record frames and an empty destination.
+			// Given five archived records and an empty destination.
 			fixture := filePreview(t)
 			source := filepath.Join(fixture.directory, "source.avro")
 			var records []core.Record

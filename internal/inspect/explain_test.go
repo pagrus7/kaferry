@@ -253,7 +253,7 @@ func TestArchiveInspectionCarriesSnapshotAndReplayPosition(t *testing.T) {
 }
 
 func TestInspectionFailuresCloseOnlyAcquiredConnections(t *testing.T) {
-	for _, failure := range []string{"source open", "source describe", "destination open", "destination describe", "members", "saved", "offsets", "times", "file output", "close"} {
+	for _, failure := range []string{"source open", "source describe", "destination open", "destination describe", "source refresh", "members", "saved", "offsets", "times", "file output", "close"} {
 		t.Run(failure, func(t *testing.T) {
 			// Given a failure at one acquisition, positioning or cleanup boundary.
 			service, p, factory, files := fixture()
@@ -269,6 +269,8 @@ func TestInspectionFailuresCloseOnlyAcquiredConnections(t *testing.T) {
 				factory.fail, factory.failure, wantDestination = "output", injected, 0
 			case "destination describe":
 				destination.fail, destination.failure = "describe", injected
+			case "source refresh":
+				source.afterSaved = func() { source.fail = "describe" }
 			case "file output":
 				p.Destination.Kind, files.failOutput, wantDestination = "FILE", injected, 0
 			default:

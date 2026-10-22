@@ -1,4 +1,4 @@
-# Archive redesign
+# Avro archives
 
 Directory-based Avro archives support capture, snapshot replay and file-to-file copying. Optional summaries are pending. [Usage](../docs/usage.md).
 

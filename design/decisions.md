@@ -109,7 +109,7 @@ Kafka stores `kaferry:2;` followed by a UTF-8 JSON object with each committed of
 | `win` | Optional `{"lower": integer-or-null, "upper": integer-or-null}`; signed 64-bit Unix milliseconds, lower inclusive/upper exclusive. Required for saved `NOW()` bounds |
 | `stop` | Optional `{"reason": "timestamp", "tip" or "worker_record_cap", "at": integer}`; nonnegative source offset where the stopping rule was reached, at or below the committed offset. `at` is not a timestamp |
 
-Absent `stop` means no saved stop. Zero is a valid offset or time bound. Unknown/duplicate fields, null fields other than window bounds, invalid values, foreign prefixes and unsupported versions are rejected. JSON whitespace and field order do not matter. A format version defines encoding, fields and meaning; any contract change needs a new version. Only version `2` JSON is supported; other encodings require another version.
+Absent `stop` means no saved stop. Zero is a valid offset or time bound. Unknown/duplicate fields, null fields other than window bounds, invalid values, foreign prefixes and unsupported versions are rejected. JSON whitespace and field order do not matter. The prefix selects the decoder. Only version `2` JSON with the fields above is supported.
 
 The initial assignment commit clears the previous stop. A later commit includes it only after every earlier required write succeeds (Kafka acknowledgment or file fsync), including stops at unchanged offsets. Lost assignments never commit. A crash before saving can replay writes.
 
@@ -255,13 +255,13 @@ Auto-commit/reset, group ID/protocol, read isolation, cooperative assignment, au
 | --- | --- |
 | 0 | Status is `stopped`, or the preview printed, or this worker finished its file input or remaining Kafka partitions, or reached its worker record threshold. A signal cleanly stopped a Kafka copy with no end time or worker record threshold. SKIP counts do not change the code |
 | 1 | Copy, inspection, output, cleanup or the shutdown deadline failed, or a signal arrived before completion of startup, a file copy, or a Kafka copy with an end time or worker record threshold. Conflicts after the first consumed record also exit 1 |
-| 2 | Usage/parse/plan/configuration error, or Kafka topic-validation or identity/ownership/self-copy conflict before the first consumed record |
+| 2 | Usage/parse/plan/configuration error, or a validation conflict before the first consumed record (Kafka topic validation, query/source identity, replay checkpoint/lock or self-copy) |
 | 3 | For a Kafka copy with an end time or worker record threshold, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |
-| 4 | Status is `incomplete`: a partition lacks a saved stop, or the source file grew after an EOF stop |
+| 4 | Status is `incomplete`: a partition lacks a saved stop |
 | 5 | Status is `unknown`: progress is absent, invalid or incompatible, or the group has an incompatible active member |
 | 6 | Status is `running`: group activity or a change was observed |
 
-Busy locks and broker/record failures exit 1, except startup Kafka topic-validation conflicts (for example, topic authorization denied), which exit 2. Conflicts include foreign progress/members, changed input and unowned/short/corrupt acknowledged output. The first failure determines the code; cleanup cannot replace it. A second signal or external forced termination can use system signal status.
+A busy replay-group lock exits 2. Errors while writing, publishing or recovering archive data exit 1. Startup Kafka topic-validation conflicts (for example, topic authorization denied) exit 2. The first failure determines the code; cleanup cannot replace it. A second signal or external forced termination can use system signal status.
 
 A cleanup error can occur after all records are copied and progress is saved; the error names the close operation. Resume using the same named group to avoid starting over. `ONE_OFF` always creates a new group, so rerunning it can copy records again.
 

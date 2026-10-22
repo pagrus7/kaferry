@@ -147,7 +147,7 @@ func TestTextExplanationLimitedStopRules(t *testing.T) {
 func TestTextExplanationArchiveProgressAndSelection(t *testing.T) {
 	for _, saved := range []bool{false, true} {
 		t.Run(fmt.Sprint(saved), func(t *testing.T) {
-			// Given a time-filtered file source with 300 encoded bytes after the selected position.
+			// Given a time-filtered archive snapshot and a saved input-record position.
 			report := explanationFixture()
 			position, upper := int64(200), int64(2000)
 			window := plan.Window{Upper: &upper}
@@ -158,7 +158,7 @@ func TestTextExplanationArchiveProgressAndSelection(t *testing.T) {
 				report.Source.File.Checkpoint = "saved.json"
 				report.Destination.File = &inspect.FileSummary{Exists: true, SizeBytes: 120}
 			}
-			// When rendering, then report bytes before filtering and EOF, never a timestamp stop or work estimate.
+			// When rendering, then report the record position, snapshot size and EOF rule, without a work estimate.
 			output := textExplanation(t, report)
 			for _, want := range []string{"Input position: 200 records", "snapshot: 0 completed files, 500 encoded bytes", "Stop: end of this group's fixed selection of completed archive files"} {
 				require.Contains(t, output, want)

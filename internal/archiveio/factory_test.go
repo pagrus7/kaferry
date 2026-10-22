@@ -65,3 +65,36 @@ func TestFactoryOwnsReplayCheckpointAndRejectsUnsafePaths(t *testing.T) {
 	_, err = os.Stat(p.Destination.Name)
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
+
+func TestInvalidCheckpointDirectoryFailsBeforeCreatingReplayState(t *testing.T) {
+	for _, shape := range []string{"missing", "regular file"} {
+		t.Run(shape, func(t *testing.T) {
+			// Given an unusable checkpoint directory and otherwise valid archive paths.
+			root := t.TempDir()
+			directory := filepath.Join(root, "checkpoints")
+			original := []byte("keep this file")
+			if shape == "regular file" {
+				require.NoError(t, os.WriteFile(directory, original, 0600))
+			}
+			limits := config.Defaults("").Worker
+			limits.CheckpointDir = &directory
+			p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "FILE", Format: "avro", Name: filepath.Join(root, "output")}, Group: "g"}
+			factory := NewFactory(core.RealClock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			// When starting replay, then fail as a configuration conflict without creating output or state.
+			_, err := factory.OpenSource(p, "fingerprint", limits)
+			var conflict *Conflict
+			require.ErrorAs(t, err, &conflict)
+			require.Equal(t, 2, conflict.ExitCode())
+			_, err = os.Stat(p.Destination.Name)
+			require.ErrorIs(t, err, os.ErrNotExist)
+			if shape == "regular file" {
+				data, err := os.ReadFile(directory)
+				require.NoError(t, err)
+				require.Equal(t, original, data)
+			} else {
+				_, err = os.Stat(directory)
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
+		})
+	}
+}
