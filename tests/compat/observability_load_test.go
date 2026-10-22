@@ -85,26 +85,10 @@ func TestLoadObservability(t *testing.T) {
 				defer cancel()
 				// When the CLI copies, with CPU and resident memory sampled independently.
 				process := launchCLI(t, ctx, binary, "run", "-f", "-", "-c", config)
-				report.cli = process
-				report.MeasurementMethod = "sql_release_to_exit"
-				stopSampling := watchRSS(t, process)
-				start := time.Now()
-				require.NoError(t, process.send(statement), "release SQL input")
-				err := process.wait()
-				elapsed := time.Since(start)
-				memory := stopSampling()
-				report.ElapsedSeconds = elapsed.Seconds()
-				report.ChildCPUSeconds = process.cpu().Seconds()
-				report.SampledPeakRSSBytes = memory.peak * 1024
-				report.RSSSamples = memory.samples
-				require.NoError(t, err)
-				summary := summaryFrom(t, process.logs())
-				report.Records = summary.Confirmed
-				report.RecordsPerSecond = float64(report.Records) / elapsed.Seconds()
-				report.PeakUncommittedRecords, report.PeakUncommittedBytes = summary.PeakRecords, summary.PeakBytes
+				summary := measureCLI(t, report, process, statement)
 				// Then telemetry availability changes neither counts, caps nor archive record bytes.
 				if summary.Confirmed != count || summary.Submitted != count || summary.PeakRecords > 20000 || summary.PeakBytes > 128<<20 {
-					t.Fatal(summary, memory)
+					t.Fatal(summary, report.SampledPeakRSSBytes)
 				}
 				data, err := os.ReadFile(output)
 				require.NoError(t, err)
@@ -114,7 +98,7 @@ func TestLoadObservability(t *testing.T) {
 					t.Fatal("record bytes changed")
 				}
 				require.Equal(t, (mode == "disabled"), (requests.Load() == 0), "unexpected exporter activity")
-				t.Logf("records/s=%.0f cpu=%.3fs peakRSS=%dKiB requests=%d", report.RecordsPerSecond, report.ChildCPUSeconds, memory.peak, requests.Load())
+				t.Logf("records/s=%.0f cpu=%.3fs peakRSS=%dKiB requests=%d", report.RecordsPerSecond, report.ChildCPUSeconds, report.SampledPeakRSSBytes/1024, requests.Load())
 			})
 		}
 	}

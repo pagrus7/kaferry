@@ -36,11 +36,13 @@ func (p Properties) String() string   { return "[connection properties redacted]
 func (p Properties) GoString() string { return p.String() }
 
 type Endpoint struct {
-	Kind       string
-	Name       string
-	Format     string
-	Alias      string
-	Properties Properties
+	Kind             string
+	Name             string
+	Format           string
+	RotateAfterSize  int64
+	RotateAfterAgeMS int64
+	Alias            string
+	Properties       Properties
 }
 
 type Policies struct {
@@ -74,6 +76,12 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 	plan.Source, err = endpoint(statement.Source, connections, statement.Connections)
 	if err != nil {
 		return Plan{}, sql.At(statement.Source.Position, fmt.Errorf("FROM endpoint: %w", err))
+	}
+	if len(statement.Source.Options) > 0 {
+		return Plan{}, sql.At(statement.Source.Options[0].Position, fmt.Errorf("rotation options require a FILE avro destination"))
+	}
+	if plan.Source.Kind == "FILE" && plan.Destination.Kind == "FILE" && plan.Source.Format != plan.Destination.Format {
+		return Plan{}, sql.At(statement.Destination.Position, fmt.Errorf("file copies require matching formats; CBOR does not retain the source identity needed by Avro"))
 	}
 	plan.Window, err = normalize(statement.Bounds)
 	if err != nil {
@@ -168,12 +176,17 @@ func validAlias(alias string) bool {
 func (p Plan) Fingerprint(sourceClusterID, destinationClusterID string) (string, error) {
 	type identity struct {
 		Kind      string
+		Format    string `json:",omitempty"`
 		ClusterID string
 		Topic     string
 	}
 	endpointIdentity := func(endpoint Endpoint, clusterID string) (identity, error) {
 		if endpoint.Kind == "FILE" {
-			return identity{Kind: "FILE"}, nil
+			format := ""
+			if endpoint.Format == "avro" {
+				format = "avro"
+			}
+			return identity{Kind: "FILE", Format: format}, nil
 		}
 		if clusterID == "" {
 			return identity{}, fmt.Errorf("kafka fingerprint requires verified cluster IDs")

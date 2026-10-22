@@ -9,13 +9,16 @@ import (
 )
 
 type ArchiveInspection struct {
-	Exists bool
-	ID     string
-	Size   int64
+	Exists    bool
+	Directory bool
+	FileCount int
+	ID        string
+	Size      int64
 }
 
 type SourceInspection struct {
 	ArchiveInspection
+	Warnings       []string
 	Position       int64
 	Window         plan.Window
 	Saved          bool

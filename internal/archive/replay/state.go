@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
@@ -18,11 +19,15 @@ type State struct {
 	Position    int64       `json:"position"`
 	Complete    bool        `json:"complete"`
 	Files       []Progress  `json:"files"`
+	Stop        *core.Stop  `json:"stop,omitempty"`
 }
 
 func (s State) validate() error {
 	if s.Version != 1 || !validGroup(s.Group) || s.Fingerprint == "" || len(s.Fingerprint) > 4096 || !utf8.ValidString(s.Fingerprint) || s.Position < 0 || s.Files == nil {
 		return errors.New("invalid or unsupported replay checkpoint")
+	}
+	if s.Stop != nil && (s.Stop.At != s.Position || s.Stop.Reason != "worker_record_cap" && s.Stop.Reason != "eof" || s.Stop.Reason == "eof" && !s.Complete) {
+		return errors.New("invalid replay stop")
 	}
 	if s.Window.Lower != nil && s.Window.Upper != nil && *s.Window.Lower >= *s.Window.Upper {
 		return errors.New("invalid replay time window")
@@ -58,6 +63,9 @@ func validateProgress(files []Progress) error {
 func (s State) clone() State {
 	s.Files = append([]Progress{}, s.Files...)
 	s.Window = cloneWindow(s.Window)
+	if s.Stop != nil {
+		s.Stop = new(*s.Stop)
+	}
 	return s
 }
 func cloneWindow(w plan.Window) plan.Window {

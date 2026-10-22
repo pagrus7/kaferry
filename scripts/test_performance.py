@@ -59,6 +59,26 @@ class PerformanceTest(unittest.TestCase):
                         with self.assertRaises(ValueError):
                             measure(root / 'harness', binary, 'file', destination, {'file': 10, 'kafka': 10})
 
+    def test_archive_measurement_requires_the_requested_format(self):
+        # Given a complete report for a different archive representation.
+        with tempfile.TemporaryDirectory() as name, patch.dict(os.environ):
+            root = Path(name)
+            binary = root / 'binary'
+            binary.write_bytes(b'fixture')
+            result = {'test': 'TestLoadArchiveCopy/file', 'records': 10,
+                      'records_per_second': 100, 'passed': True, 'skipped': False,
+                      'archive_format': 'cbor'}
+            def record(_, command, directory):
+                (directory / 'case.metrics.json').write_text(json.dumps(result))
+                return 0
+            with patch('performance.run', side_effect=record):
+                # When Avro is requested, then CBOR cannot masquerade as an Avro measurement.
+                with self.assertRaisesRegex(ValueError, 'wrong archive format'):
+                    measure(root / 'harness', binary, 'archive_file', root / 'result',
+                            {'file': 10, 'kafka': 10, 'archive_file': 10}, 'avro')
+                self.assertEqual(os.environ['KAFERRY_LOAD_ARCHIVE_RECORDS'], '10')
+                self.assertEqual(os.environ['KAFERRY_ARCHIVE_FORMAT'], 'avro')
+
     def test_pr_comparison_uses_the_merge_base(self):
         # Given a PR whose target has advanced beyond its branch point.
         with tempfile.TemporaryDirectory() as name, patch.dict(os.environ, {

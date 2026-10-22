@@ -26,21 +26,21 @@ Pass SQL with `-f file`, `-f -` (stdin) or `-e "SQL"`.
 ```sh
 mkdir -p archive
 kaferry run -c connections.toml -f - <<'SQL'
-INSERT INTO FILE cbor('archive/orders.cbor')
+INSERT INTO FILE avro('archive/orders')
 SELECT * FROM TOPIC 'orders@prod'
 OPTIONS (GROUP = 'orders-archive', START = EARLIEST);
 SQL
 ```
 
-Stop archiving with Ctrl+C before restoring. Create the default checkpoint directory:
+Replay completed files while capture continues; stop capture first to include its remaining records. Create the checkpoint directory:
 
 ```sh
 mkdir -p ~/.kaferry/checkpoints
 kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM FILE cbor('archive/orders.cbor') OPTIONS (GROUP = 'orders-restore');"
+SELECT * FROM FILE avro('archive/orders') OPTIONS (GROUP = 'orders-restore');"
 ```
 
-Kafka needs `WHERE` or `START`: `EARLIEST` for retained records, `LATEST` for new ones. Saved progress takes precedence. Files read to their opening size. [Examples](../design/grammar.md#valid-examples).
+Kafka needs `WHERE` or `START`: `EARLIEST` for retained records, `LATEST` for new ones. Saved progress takes precedence. Avro pins completed files: the same group resumes them; a new group selects current files. [Examples](../design/grammar.md#valid-examples).
 
 Add `WORKER_STOP_AFTER_RECORDS = 100` to `OPTIONS` to stop each process after accepting 100 records for writing. Each restart gets a fresh allowance. [Counting rules](../design/decisions.md#worker-record-stop).
 
@@ -58,7 +58,7 @@ kaferry status -c connections.toml -f copy.sql --json
 
 Rerun with the same `GROUP`, endpoints, filter, `CUTOFF` and checkpoint directory. Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
 
-Keep output, checkpoints and locks; losing them requires a new group/output. [Recovery rules](../design/decisions.md#output-recovery).
+Keep output, checkpoints and locks. Archive files must stay unchanged until replay completes. [Recovery rules](../design/decisions.md#output-recovery).
 
 ## Errors
 
@@ -66,7 +66,7 @@ Errors stop the copy. `ON_ERROR = SKIP` drops identified records rejected before
 
 ## Workers
 
-For topic-to-topic copies, run identical SQL and a dedicated `GROUP` on each machine. Use fixed timestamps; `NOW()` can differ. Stop workers before upgrading. File queries use one process. Rerun unassigned workers to pick up unfinished work.
+Kafka-source workers use identical SQL and a dedicated `GROUP`. Use fixed timestamps; `NOW()` can differ. Stop workers before upgrading. Avro captures can use local or shared storage. Replay uses one process per group/checkpoint directory. Rerun unassigned workers to pick up unfinished work.
 
 ## Monitoring
 

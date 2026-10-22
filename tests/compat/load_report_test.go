@@ -18,6 +18,11 @@ import (
 // Reports are optional build artifacts, never part of the archive or CLI API.
 type loadReport struct {
 	Test                   string  `json:"test"`
+	ReadySeconds           float64 `json:"ready_seconds,omitempty"`
+	ArchivePayload         string  `json:"archive_payload,omitempty"`
+	ArchiveSourceFiles     int     `json:"archive_source_files,omitempty"`
+	ArchiveReplayBlocks    int     `json:"archive_replay_blocks,omitempty"`
+	ArchiveFormat          string  `json:"archive_format,omitempty"`
 	Kind                   string  `json:"kind"`
 	Passed                 bool    `json:"passed"`
 	Skipped                bool    `json:"skipped"`

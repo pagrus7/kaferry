@@ -103,15 +103,15 @@ func (c *Capture) Flush() error {
 	if err := c.store.Checkpoint(); err != nil {
 		return c.fail(err)
 	}
+
 	now := c.clock.Now()
+	var expired []avro.Source
 	for source, p := range c.active {
 		if c.store.Size(p.segment.ID) >= c.policy.RotateAfterSize || now.Sub(p.opened) >= c.policy.RotateAfterAge {
-			if err := c.publish(source); err != nil {
-				return err
-			}
+			expired = append(expired, source)
 		}
 	}
-	return nil
+	return c.publishMany(expired)
 }
 
 // Finish publishes every remaining nonempty file before the worker succeeds.
@@ -119,10 +119,23 @@ func (c *Capture) Finish() error {
 	if err := c.Flush(); err != nil {
 		return err
 	}
+	sources := make([]avro.Source, 0, len(c.active))
 	for source := range c.active {
-		if err := c.publish(source); err != nil {
-			return err
-		}
+		sources = append(sources, source)
+	}
+	return c.publishMany(sources)
+}
+
+func (c *Capture) publishMany(sources []avro.Source) error {
+	ids := make([]string, len(sources))
+	for i, source := range sources {
+		ids[i] = c.active[source].segment.ID
+	}
+	if err := c.store.PublishMany(ids); err != nil {
+		return c.fail(err)
+	}
+	for _, source := range sources {
+		delete(c.active, source)
 	}
 	return nil
 }

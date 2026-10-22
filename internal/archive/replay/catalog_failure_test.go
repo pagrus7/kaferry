@@ -14,6 +14,25 @@ type faultyFiles struct {
 	start  int64
 	active int
 }
+
+func TestInspectionDoesNotReadPayloadsButExecutionHashesThem(t *testing.T) {
+	// Given a storage port that permits headers but fails every payload read.
+	root := t.TempDir()
+	file := writeFile(t, root, 1, records(42), 0)
+	files := &faultyFiles{Filesystem: NativeFiles{}, fault: "hash", start: file.Start}
+	catalog := NewCatalog(root, codec(t), files)
+	// When previewing a query, then headers and lengths are readable without a full content scan.
+	selection, err := catalog.Inspect()
+	require.NoError(t, err)
+	require.Len(t, selection.Files, 1)
+	require.NoError(t, catalog.ValidateHeaders([]File{file}))
+	require.Zero(t, files.active)
+	// When executing, then the same unreadable payload must fail before the selection is pinned.
+	_, err = catalog.Select()
+	require.ErrorIs(t, err, errDisk)
+	require.Zero(t, files.active)
+}
+
 type faultyInput struct {
 	InputFile
 	owner *faultyFiles

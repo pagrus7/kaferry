@@ -116,7 +116,20 @@ func (j *Journal) Load() (saved *State, result error) {
 	if j.closed {
 		return nil, errors.New("replay checkpoint is closed")
 	}
-	data, err := j.files.Read(j.path, maxCheckpointBytes)
+	return readCheckpoint(j.path, j.group, j.files)
+}
+
+// ReadCheckpoint reads saved progress without acquiring a lock or changing files.
+func ReadCheckpoint(directory, group string, files GroupFiles) (*State, error) {
+	path := checkpoint.Path(directory, group)
+	saved, err := readCheckpoint(path, group, files)
+	if err != nil {
+		return nil, fmt.Errorf("replay checkpoint %s: %w", path, err)
+	}
+	return saved, nil
+}
+func readCheckpoint(path, group string, files GroupFiles) (*State, error) {
+	data, err := files.Read(path, maxCheckpointBytes)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -130,7 +143,7 @@ func (j *Journal) Load() (saved *State, result error) {
 	if err = state.validate(); err != nil {
 		return nil, err
 	}
-	if state.Group != j.group {
+	if state.Group != group {
 		return nil, errors.New("checkpoint belongs to a different replay group")
 	}
 	return &state, nil

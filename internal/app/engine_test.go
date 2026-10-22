@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"slices"
@@ -133,6 +134,58 @@ func (o *engineOutput) Close() {
 	_ = o.fixture.stage("close-output")
 }
 func (*engineOutput) DurableOutput() (string, int64) { return "file-id", 100 }
+
+type archiveEngineFiles struct{ *engineFixture }
+type finalizedOutput struct{ *engineOutput }
+
+func (f archiveEngineFiles) OpenOutput(plan.Plan, string, file.DestinationProgress, config.Worker) (file.OutputSink, error) {
+	return finalizedOutput{f.output}, nil
+}
+func (o finalizedOutput) Finish() error { return o.fixture.stage("publish") }
+
+func TestEngineReportsArchivePublicationFailureBeforeCleanup(t *testing.T) {
+	// Given a runner that saved progress and an archive that fails final publication.
+	f := newEngineFixture()
+	f.fail = "publish"
+	engine := newEngine(f, archiveEngineFiles{f}, f, engineLogger(), nil)
+	// When finishing, then publication cannot be hidden behind the void Close method.
+	err := engine.Run(t.Context(), enginePlan("FILE", "FILE"), config.Defaults(""), noopShutdown{})
+	require.ErrorIs(t, err, f.failure)
+	var exit *core.Exit
+	require.ErrorAs(t, err, &exit)
+	require.Equal(t, 1, exit.Code)
+	require.Less(t, slices.Index(f.trace, "run"), slices.Index(f.trace, "publish"))
+	require.Less(t, slices.Index(f.trace, "publish"), slices.Index(f.trace, "close-output"))
+}
+
+func TestEnginePublishesAfterRunnerCancellationAndPreservesBothErrors(t *testing.T) {
+	for _, publicationFails := range []bool{false, true} {
+		t.Run(fmt.Sprint(publicationFails), func(t *testing.T) {
+			// Given a cancelled runner and, optionally, a separate publication failure.
+			f := newEngineFixture()
+			f.fail = "run"
+			f.failure = context.Canceled
+			publication := errors.New("publication failed")
+			if publicationFails {
+				f.onStage = func(stage string) {
+					if stage == "publish" {
+						f.fail = "publish"
+						f.failure = publication
+					}
+				}
+			}
+			engine := newEngine(f, archiveEngineFiles{f}, f, engineLogger(), nil)
+			// When the runner returns cancellation, then Finish still runs before releasing the output.
+			err := engine.Run(t.Context(), enginePlan("FILE", "FILE"), config.Defaults(""), noopShutdown{})
+			require.ErrorIs(t, err, context.Canceled)
+			if publicationFails {
+				require.ErrorIs(t, err, publication)
+			}
+			require.Less(t, slices.Index(f.trace, "run"), slices.Index(f.trace, "publish"))
+			require.Less(t, slices.Index(f.trace, "publish"), slices.Index(f.trace, "close-output"))
+		})
+	}
+}
 
 func enginePlan(source, destination string) plan.Plan {
 	return plan.Plan{Source: plan.Endpoint{Kind: source, Name: "source"}, Destination: plan.Endpoint{Kind: destination, Name: "destination"}, Group: "group", Start: "EARLIEST"}

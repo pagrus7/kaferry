@@ -26,6 +26,7 @@ type ErrorPolicies struct {
 
 type Endpoint struct {
 	Kind           string       `json:"kind"`
+	Format         string       `json:"format,omitempty"`
 	Name           string       `json:"name"`
 	Connection     string       `json:"connection,omitempty"`
 	ClusterID      string       `json:"cluster_id,omitempty"`
@@ -36,6 +37,9 @@ type Endpoint struct {
 }
 
 type FileSummary struct {
+	Directory          bool         `json:"directory,omitempty"`
+	FileCount          int          `json:"file_count,omitempty"`
+	PositionRecords    *int64       `json:"position_records,omitempty"`
 	Exists             bool         `json:"exists"`
 	ID                 string       `json:"id,omitempty"`
 	SizeBytes          int64        `json:"size_bytes"`

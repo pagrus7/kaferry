@@ -66,7 +66,12 @@ func NewCatalog(root string, codec *avro.Codec, files Filesystem) *Catalog {
 	return &Catalog{root: root, codec: codec, files: files}
 }
 
-func (c *Catalog) Select() (selection Selection, result error) {
+func (c *Catalog) Select() (Selection, error) { return c.selectFiles(true) }
+
+// Inspect describes headers without hashing file contents or validating data blocks.
+func (c *Catalog) Inspect() (Selection, error) { return c.selectFiles(false) }
+
+func (c *Catalog) selectFiles(hashContents bool) (selection Selection, result error) {
 	selection.Files = make([]File, 0)
 	dir, err := c.files.OpenDirectory(c.root)
 	if err != nil {
@@ -86,7 +91,7 @@ func (c *Catalog) Select() (selection Selection, result error) {
 			if !entry.Type().IsRegular() {
 				return selection, errors.New("completed archive input must be a regular file")
 			}
-			file, err := c.describe(entry.Name())
+			file, err := c.describe(entry.Name(), hashContents)
 			if err != nil {
 				return selection, fmt.Errorf("select archive file %s: %w", entry.Name(), err)
 			}
@@ -110,7 +115,7 @@ func (c *Catalog) Select() (selection Selection, result error) {
 	return selection, nil
 }
 
-func (c *Catalog) describe(name string) (descriptor File, result error) {
+func (c *Catalog) describe(name string, hashContents bool) (descriptor File, result error) {
 	f, err := c.files.Open(filepath.Join(c.root, name))
 	if err != nil {
 		return descriptor, err
@@ -123,6 +128,9 @@ func (c *Catalog) describe(name string) (descriptor File, result error) {
 	descriptor = File{Identity: reader.Identity, Size: size, Start: reader.Start}
 	if descriptor.name() != name {
 		return descriptor, errors.New("archive filename disagrees with file identity")
+	}
+	if !hashContents {
+		return descriptor, nil
 	}
 	hash := sha256.New()
 	n, err := io.Copy(hash, io.NewSectionReader(f, 0, size))
@@ -139,7 +147,7 @@ func (c *Catalog) describe(name string) (descriptor File, result error) {
 // Validate checks every selected file, including those already consumed, on resume.
 func (c *Catalog) Validate(files []File) error {
 	for _, file := range files {
-		current, err := c.describe(file.name())
+		current, err := c.describe(file.name(), true)
 		if err != nil {
 			return fmt.Errorf("validate archive file %s: %w", file.name(), err)
 		}
@@ -225,4 +233,19 @@ func compareSource(a, b avro.Source) int {
 		return n
 	}
 	return cmp.Compare(a.Partition, b.Partition)
+}
+
+// ValidateHeaders checks identities and lengths for a read-only preview, without
+// rereading payload bytes. Execution still validates full contents before replay.
+func (c *Catalog) ValidateHeaders(files []File) error {
+	for _, file := range files {
+		h, err := c.Open(file)
+		if err != nil {
+			return fmt.Errorf("inspect archive file %s: %w", file.name(), err)
+		}
+		if err = h.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
 }

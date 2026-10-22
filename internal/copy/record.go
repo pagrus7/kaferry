@@ -13,6 +13,8 @@ type Header struct {
 	Value []byte
 }
 type Provenance struct {
+	Cluster   string
+	TopicID   [16]byte
 	Topic     string
 	Partition int32
 	Offset    int64
@@ -32,7 +34,7 @@ func (r Record) Size() int64 {
 		n += int64(len(h.Name) + len(h.Value) + 24)
 	}
 	if r.Source != nil {
-		n += int64(len(r.Source.Topic) + 24)
+		n += int64(len(r.Source.Cluster) + len(r.Source.Topic) + 40)
 	}
 	return n
 }

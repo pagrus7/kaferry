@@ -8,6 +8,15 @@ on:
         description: 'Optional base revision; use the selected head for A/A calibration'
         type: string
         default: ''
+      archives:
+        description: 'Include Avro capture, replay and file copies'
+        type: boolean
+        default: true
+      archive_base_format:
+        description: 'Baseline archive format (cbor for revisions without Avro CLI support)'
+        type: choice
+        options: [avro, cbor]
+        default: avro
       pairs:
         description: 'Pairs per workload (2, 4, 6, 8 or 10)'
         type: number
@@ -55,7 +64,14 @@ jobs:
           PERF_HEAD: ${{ steps.plan.outputs.head }}
           PERF_PAIRS: ${{ inputs.pairs || 6 }}
           KAFKA_TEST_BROKERS: 127.0.0.1:39092
-        run: python3 scripts/performance.py run "$PERF_BASE" "$PERF_HEAD" --pairs "$PERF_PAIRS"
+          PERF_ARCHIVES: ${{ github.event_name != 'workflow_dispatch' || inputs.archives }}
+          PERF_ARCHIVE_BASE_FORMAT: ${{ inputs.archive_base_format || 'avro' }}
+        run: |
+          if [ "$PERF_ARCHIVES" = true ]; then
+            python3 scripts/performance.py run "$PERF_BASE" "$PERF_HEAD" --pairs "$PERF_PAIRS" --archives --archive-base-format "$PERF_ARCHIVE_BASE_FORMAT"
+          else
+            python3 scripts/performance.py run "$PERF_BASE" "$PERF_HEAD" --pairs "$PERF_PAIRS"
+          fi
       - if: always() && steps.plan.outputs.run == 'true'
         run: |
           mkdir -p build-results

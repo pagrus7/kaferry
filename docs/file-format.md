@@ -1,8 +1,12 @@
-# CBOR archive v1
+# Archive formats
 
-The [file redesign](../design/archive.md) may break backward compatibility.
+`FILE avro('directory')` stores full Kafka records in compressed files. [Format, rotation and recovery](../design/archive.md).
 
-One binary file, in submission order, without compression or segmentation.
+`FILE cbor('path')` retains the single-file format below. CBOR and Avro cannot be mixed in one file-to-file copy.
+
+## CBOR archive v1
+
+One file in submission order, uncompressed.
 
 ## Frames
 
@@ -14,7 +18,7 @@ Magic: eight bytes `4b 46 57 44 32 0d 0a 1a`. Then one framed header and framed 
 | Payload | CBOR map, exactly the declared length; writer uses canonical encoding |
 | CRC | Unsigned 32-bit big-endian CRC32C/Castagnoli of length bytes **and** payload |
 
-Payload limits: 65,536 bytes for the header; `worker.max_frame_bytes` (default 64 MiB) for a record. Reject duplicate/unknown keys, indefinite lengths, tags, nesting above eight. The record's `headers` array limit is `max(16, max_frame_bytes/32)` (integer division); writer and reader enforce it.
+[Validation limits](../design/archive.md#cbor-validation-limits).
 
 ## Maps
 

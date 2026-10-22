@@ -13,17 +13,20 @@ import (
 )
 
 type Worker struct {
-	MaxFrameBytes      int64   `toml:"max_frame_bytes"`
-	PartitionRecordCap int     `toml:"partition_record_cap"`
-	PartitionByteCap   int64   `toml:"partition_byte_cap"`
-	RecordCap          int     `toml:"record_cap"`
-	ByteCap            int64   `toml:"byte_cap"`
-	DeliveryTimeout    string  `toml:"delivery_timeout"`
-	ShutdownTimeout    string  `toml:"shutdown_timeout"`
-	IdleExit           string  `toml:"idle_exit"`
-	TipWait            string  `toml:"tip_wait"`
-	CheckpointDir      *string `toml:"checkpoint_dir"` // Nil selects the default when opening a file source.
-	ProgressInterval   string  `toml:"progress_interval"`
+	ArchiveCaptureOpenFiles int     `toml:"archive_capture_open_files"`
+	ArchiveReplayOpenFiles  int     `toml:"archive_replay_open_files"`
+	ArchiveReplayBlocks     int     `toml:"archive_replay_blocks"`
+	MaxFrameBytes           int64   `toml:"max_frame_bytes"`
+	PartitionRecordCap      int     `toml:"partition_record_cap"`
+	PartitionByteCap        int64   `toml:"partition_byte_cap"`
+	RecordCap               int     `toml:"record_cap"`
+	ByteCap                 int64   `toml:"byte_cap"`
+	DeliveryTimeout         string  `toml:"delivery_timeout"`
+	ShutdownTimeout         string  `toml:"shutdown_timeout"`
+	IdleExit                string  `toml:"idle_exit"`
+	TipWait                 string  `toml:"tip_wait"`
+	CheckpointDir           *string `toml:"checkpoint_dir"` // Nil selects the default when opening a file source.
+	ProgressInterval        string  `toml:"progress_interval"`
 }
 
 type Metrics struct {
@@ -53,7 +56,7 @@ func Defaults(home string) Config {
 		directory := filepath.Join(home, ".kaferry", "checkpoints")
 		checkpointDir = &directory
 	}
-	return Config{Connections: make(plan.Profiles), Worker: Worker{MaxFrameBytes: 64 << 20, PartitionRecordCap: 5000, PartitionByteCap: 16 << 20, RecordCap: 20000, ByteCap: 128 << 20, DeliveryTimeout: "60s", ShutdownTimeout: DefaultShutdownTimeout.String(), IdleExit: "30s", TipWait: "15m", CheckpointDir: checkpointDir, ProgressInterval: "30s"}}
+	return Config{Connections: make(plan.Profiles), Worker: Worker{ArchiveCaptureOpenFiles: 1024, ArchiveReplayOpenFiles: 32, ArchiveReplayBlocks: 8, MaxFrameBytes: 64 << 20, PartitionRecordCap: 5000, PartitionByteCap: 16 << 20, RecordCap: 20000, ByteCap: 128 << 20, DeliveryTimeout: "60s", ShutdownTimeout: DefaultShutdownTimeout.String(), IdleExit: "30s", TipWait: "15m", CheckpointDir: checkpointDir, ProgressInterval: "30s"}}
 }
 
 func (l *Loader) Load(path string) (Config, error) {
@@ -85,6 +88,10 @@ func (l *Loader) Load(path string) (Config, error) {
 }
 
 func (w Worker) Validate() error {
+	if w.ArchiveCaptureOpenFiles <= 0 || w.ArchiveReplayOpenFiles <= 0 || w.ArchiveReplayBlocks <= 0 {
+		return fmt.Errorf("worker archive file and block budgets must be positive")
+	}
+
 	if d, err := time.ParseDuration(w.ProgressInterval); err != nil || d < 0 {
 		return fmt.Errorf("worker.progress_interval must be a nonnegative duration")
 	}

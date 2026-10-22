@@ -20,6 +20,8 @@ from ci import run
 
 CASES = {'kafka': 'TestLoadBoundedKafkaCopy/default',
          'file': 'TestLoadObservability/round-0/disabled'}
+ARCHIVE_CASES = {f'archive_{direction}': f'TestLoadArchiveCopy/{direction}'
+                 for direction in ('capture', 'replay', 'file')}
 
 
 def command(*args, **kwargs):
@@ -95,12 +97,16 @@ def pair_summary(pairs):
             'minimum': min(ratios), 'maximum': max(ratios)}
 
 
-def measure(harness, binary, case, directory, counts):
+def measure(harness, binary, case, directory, counts, archive_format=None):
     directory.mkdir(parents=True, exist_ok=False)
     os.environ.update(KAFERRY_TEST_BINARY=str(binary),
                       KAFERRY_EXPECT_BINARY_SHA256=hashlib.sha256(binary.read_bytes()).hexdigest(),
                       KAFERRY_LOAD_KAFKA_RECORDS=str(counts['kafka']), KAFERRY_LOAD_FILE_RECORDS=str(counts['file']))
-    selector = '/'.join('^' + re.escape(part) + '$' for part in CASES[case].split('/'))
+    if archive_format is not None:
+        os.environ.update(KAFERRY_ARCHIVE_FORMAT=archive_format,
+                          KAFERRY_LOAD_ARCHIVE_RECORDS=str(counts[case]))
+    test = ARCHIVE_CASES.get(case) or CASES[case]
+    selector = '/'.join('^' + re.escape(part) + '$' for part in test.split('/'))
     code = run('copy', [str(harness), '-test.v', '-test.run', selector, '-test.timeout=10m'], directory)
     # Compiled Go test binaries write verbose text, not go test -json events.
     # The report is emitted only by the selected correctness test's cleanup.
@@ -108,13 +114,21 @@ def measure(harness, binary, case, directory, counts):
     if code or len(metrics) != 1:
         raise ValueError(f'{case} workload failed; see {directory}')
     result = json.loads(metrics[0].read_text())
-    if result['test'] != CASES[case] or not result['passed'] or result['skipped'] or result['records'] != counts[case] or result['records_per_second'] <= 0:
+    if result['test'] != test or not result['passed'] or result['skipped'] or result['records'] != counts[case] or result['records_per_second'] <= 0:
         raise ValueError(f'{case} workload has no valid measurement; see {directory}')
+    if archive_format is not None and result.get('archive_format') != archive_format:
+        raise ValueError(f'{case} workload used the wrong archive format; see {directory}')
     return result
 
 
-def execute(base, head, pairs, counts):
+def execute(base, head, pairs, counts, archives=False, archive_base_format="avro", archive_payload="random"):
     base, head = resolve(base), resolve(head)
+    counts = dict(counts)
+    cases = dict(CASES)
+    if archives:
+        os.environ["KAFERRY_ARCHIVE_PAYLOAD"] = archive_payload
+        cases.update(ARCHIVE_CASES)
+        counts.update({case: counts['file'] for case in ARCHIVE_CASES})
     directory = Path('build-results').resolve()
     directory.mkdir(exist_ok=True)
     measurements = Path(tempfile.mkdtemp(prefix='performance-', dir=directory))
@@ -123,17 +137,17 @@ def execute(base, head, pairs, counts):
               'compatible': False, 'counts': counts, 'pairs': pairs, 'binaries': identities,
               'recorded_at': datetime.now(timezone.utc).isoformat(), 'platform': platform.platform(),
               'measurements': measurements.name,
-              'workloads': {}}
+              'archive_base_format': archive_base_format if archives else None, 'archive_payload': archive_payload if archives else None, 'workloads': {}}
     try:
         report['broker_images'] = command('docker', 'compose', '-p', 'kaferry-compat', '--profile', 'cross-cluster', 'images', '--format', 'json')
         for ref in dict.fromkeys([head, base]):
             binaries[ref], identities[ref] = build(ref, Path('.cache/performance').resolve())
         harness = Path('.cache/performance/workload').resolve()
         subprocess.run(['go', 'test', '-c', '-tags=integration,load', '-o', str(harness), './tests/compat'], env=dict(os.environ, CGO_ENABLED='0'), check=True)
-        for case in CASES:
+        for case in cases:
             for side in ('head', 'base'):
                 try:
-                    measure(harness, binaries[head if side == 'head' else base], case, measurements / f'{case}-warmup-{side}', counts)
+                    measure(harness, binaries[head if side == 'head' else base], case, measurements / f'{case}-warmup-{side}', counts, **({'archive_format': 'avro' if side == 'head' else archive_base_format} if case in ARCHIVE_CASES else {}))
                 except ValueError:
                     if side == 'base' and base != head:
                         report['unavailable'] = 'The baseline failed the current workload (incompatibility or a transient failure); comparison is unavailable. See logs.'
@@ -145,7 +159,7 @@ def execute(base, head, pairs, counts):
                 pair = {'first': order[0]}
                 for side in order:
                     pair[side] = measure(harness, binaries[head if side == 'head' else base], case,
-                                         measurements / f'{case}-{index}-{side}', counts)
+                                         measurements / f'{case}-{index}-{side}', counts, **({'archive_format': 'avro' if side == 'head' else archive_base_format} if case in ARCHIVE_CASES else {}))
                 samples.append(pair)
             report['workloads'][case] = {'samples': samples, **pair_summary(samples)}
         report['compatible'] = True
@@ -173,8 +187,11 @@ if __name__ == '__main__':
     measure_parser.add_argument('base')
     measure_parser.add_argument('head')
     measure_parser.add_argument('--pairs', type=int, choices=range(2, 11, 2), default=6)
+    measure_parser.add_argument('--archives', action='store_true')
+    measure_parser.add_argument('--archive-base-format', choices=('cbor', 'avro'), default='avro')
+    measure_parser.add_argument("--archive-payload", choices=("compressible", "random"), default="random")
     args = parser.parse_args()
     if args.command == 'plan':
         plan()
     else:
-        execute(args.base, args.head, args.pairs, {'kafka': 160000, 'file': 200000})
+        execute(args.base, args.head, args.pairs, {'kafka': 160000, 'file': 200000}, args.archives, args.archive_base_format, args.archive_payload)

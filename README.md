@@ -9,9 +9,9 @@
 [![Go coverage](https://codecov.io/gh/pagrus7/kaferry/branch/main/graph/badge.svg?flag=go)](https://codecov.io/gh/pagrus7/kaferry)
 [![Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml/badge.svg?branch=main)](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml)
 
-Copy Kafka records between topics and CBOR files with one SQL-like statement.
+Copy Kafka records between topics and Avro archives with one SQL-like statement.
 
-Kaferry preserves raw key and value bytes, nulls, header order and timestamps where possible. It does not transform data or access Schema Registry.
+Preserves raw bytes, nulls, ordered headers and timestamps where possible. No transformations or Schema Registry access.
 
 Implementation is AI-driven with Codex and Claude Code under human direction.
 
@@ -27,7 +27,7 @@ When Kaferry reads Kafka, franz-go v1.22.2 misreads record timestamps outside ±
 
 ## Quick start
 
-Both topics must exist. Replace the addresses; add [TLS and authentication](#connections) as needed. On one cluster, use different topics.
+Topics must exist. Replace the addresses; add [authentication](#connections) as needed.
 
 **`connections.toml`:**
 
@@ -49,18 +49,16 @@ WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
 OPTIONS (GROUP = 'orders-backfill');
 ```
 
-`@alias` selects a connection; `GROUP` names the consumer group or file checkpoint. Rerun unchanged to resume; use a new group to change the window or `CUTOFF`.
+`@alias` selects a connection; `GROUP` identifies saved progress. Rerun to resume; a new window or `CUTOFF` needs a new group.
 
 ```sh
 bin/kaferry explain --file copy.sql --config connections.toml
 bin/kaferry run --file copy.sql --config connections.toml
 ```
 
-For downloads, use your binary's path instead of `bin/kaferry`.
-
 ## Connections
 
-Quote dotted TOML keys and string values. Only the [listed properties](design/decisions.md#connection-properties) are accepted. SASL/PLAIN over TLS:
+Quote dotted TOML keys. [Supported properties](design/decisions.md#connection-properties); SASL/PLAIN over TLS:
 
 ```toml
 [connections.prod]
@@ -83,8 +81,8 @@ Keep passwords out of SQL literals and shell arguments. [Configuration rules](do
 
 - **Time windows:** The [cutoff rule](design/decisions.md#completion) can miss records within the range, including those present before the run.
 - **Delivery:** at least once; crashes and rebalances can duplicate or reorder writes. Expired offsets or lost checkpoints can start fresh. Kafka input reads committed records.
-- **Destination:** Kafka output chooses a destination partition using the original key bytes; null keys can spread. Source partitions are not copied. Ensure bytes and Schema Registry IDs work there. `LogAppendTime` replaces timestamps; retention may delete old records. [Routing](design/decisions.md#kafka-output).
-- **Files:** one process per query on one machine, on a local filesystem that supports file locks and hard links. [File setup and resume](docs/usage.md#run-a-copy).
+- **Destination:** original keys determine routing; null keys can spread. Ensure bytes and Schema Registry IDs work there. Broker settings can replace timestamps or delete old records. [Routing](design/decisions.md#kafka-output).
+- **Archives:** multiple capture workers; one replay process per group/checkpoint directory. Storage needs durable sync, atomic rename and locks. [File setup and resume](docs/usage.md#run-a-copy).
 - **Permissions:** [Source READ and destination WRITE grants](docs/usage.md#permissions).
 
 [Usage guide](docs/usage.md)

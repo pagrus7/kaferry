@@ -52,7 +52,7 @@ Sampling and timeout logs include H and the stable/consumed positions. H is loca
 
 A timestamp stop commits at the trigger record, so rerunning stops there again. A tip stop commits the next position, so rerunning may copy later arrivals. Without an upper bound, Kafka sources follow until stopped or the worker record threshold is reached.
 
-File sources read from their checkpoint or first frame to the size observed at open. A partial final frame ends input; later appends wait for another run. Files do not use `CUTOFF`.
+Avro sources resume a fixed selection of completed files; a new group selects current files. CBOR sources read from the checkpoint to their opening size; a partial final frame ends input. File sources do not use `CUTOFF`.
 
 ## Worker record stop
 
@@ -89,13 +89,13 @@ Resume requires matching query and endpoint identity:
 
 | Included in query fingerprint | Excluded |
 | --- | --- |
-| Endpoint kinds; Kafka cluster IDs and topics; normalized `WHERE` expressions; `CUTOFF` | Connection aliases/properties, file paths/IDs, `GROUP`, `START`, `WORKER_STOP_AFTER_RECORDS`, error policies and tuning |
+| Endpoint kinds and archive formats; Kafka cluster IDs and topics; normalized `WHERE` expressions; `CUTOFF` | Connection aliases/properties, file paths/IDs, `GROUP`, `START`, `WORKER_STOP_AFTER_RECORDS`, error policies and tuning |
 
 Policies can therefore change to SKIP when resuming a failed record. `NOW()` bounds are fingerprinted as expressions; resolved windows are stored separately.
 
 - Kafka saves each next offset with [commit metadata](#commit-metadata).
 - Startup and assignment reject mismatched fingerprints/topic IDs, foreign metadata and missing saved `NOW()` windows. Topic IDs must be nonzero. Source identity is checked at startup and assignment, without continuous monitoring; destination recreation is not detected.
-- File-source checkpoints store fingerprint, resolved window, source file ID, last-frame CRC, next byte position, opening size and an optional [saved stop](#commit-metadata); file output adds destination ID and acknowledged extent. Output headers store group, file ID and fingerprint.
+- CBOR-source checkpoints store fingerprint, resolved window, source file ID, last-frame CRC, next byte position, opening size and an optional [saved stop](#commit-metadata); file output adds destination ID and acknowledged extent. Output headers store group, file ID and fingerprint.
 
 Before subscribing, group inspection also rejects active members whose client IDs do not start with `kaferry-` or are assigned to another topic. An absent group passes; an unavailable check fails. The topic check sees assigned partitions, so it cannot check subscriptions of members with no partitions.
 
@@ -112,7 +112,7 @@ Kafka stores `kaferry:2;` followed by a UTF-8 JSON object with each committed of
 
 Absent `stop` means no saved stop. Zero is a valid offset or time bound. Unknown/duplicate fields, null fields other than window bounds, invalid values, foreign prefixes and unsupported versions are rejected. JSON whitespace and field order do not matter. A format version defines encoding, fields and meaning; any contract change needs a new version. Only version `2` JSON is supported; other encodings require another version.
 
-The initial assignment commit clears the previous stop. A later commit includes it only after every earlier required write succeeds (Kafka acknowledgment or file fsync), including stops at unchanged offsets. Lost assignments never commit. A crash before saving can replay writes. File checkpoints use version `3` and the same stop shape with reason `eof` or `worker_record_cap`; opening size includes any partial final frame.
+The initial assignment commit clears the previous stop. A later commit includes it only after every earlier required write succeeds (Kafka acknowledgment or file fsync), including stops at unchanged offsets. Lost assignments never commit. A crash before saving can replay writes. CBOR checkpoints use version `3` and the same stop shape with reason `eof` or `worker_record_cap`; opening size includes any partial final frame.
 
 ## Kafka output
 
@@ -132,7 +132,7 @@ The initial assignment commit clears the previous stop. A later commit includes 
 - Batches are bounded and non-atomic. Save a partition's next position only after all earlier consumed records are delivered, filtered or explicitly skipped. Consumed positions account for Kafka offset gaps.
 - A later failure leaves earlier output intact. Restart can duplicate output acknowledged after the last saved position, and revisits the failing record unless conditions or policy change.
 - Default uncommitted caps: 5,000 records / 16 MiB per partition; 20,000 records / 128 MiB per worker. Pause reading at a cap until commit succeeds; a single oversized record may proceed alone. These bound tracked work, not total process memory, which also includes client buffers and overhead.
-- Commit all worker partitions in one request, with at most one request in flight: every second, at 50% of a worker/partition cap, while paused at a cap with confirmed progress, and on shutdown/revocation. Check results per partition.
+- Commit all worker partitions in one request, with at most one request in flight: every second, when a worker or partition cap is reached or the next input cannot fit, while paused at a cap with confirmed progress, and on shutdown/revocation. Check results per partition.
 - Shutdown stops reading, allows ten seconds for outstanding writes, then commits confirmed progress. Synchronous file flush/fsync can block that save until the whole-process deadline. The CLI enforces `worker.shutdown_timeout` (default 30 s) across draining, saving and cleanup, starting when a signal arrives or stopping begins. Expiry exits 1 immediately; unsaved work may replay. A short budget can end before the final save.
 
 ## Errors
@@ -148,11 +148,13 @@ Default FAIL. Choose `ON_ERROR` or the specific timestamp policies; they are mut
 - Async delivery errors, fatal client errors, authentication/authorization, out-of-range positions, framing/CRC corruption and changed source files cannot be skipped.
 - Consumer polling retries classified transient connection/coordinator errors without a total deadline. `worker.tip_wait` bounds only waiting through sampled H, not general outages.
 - Required startup inspection and initial/periodic commits fail on error. Optional destination-config inspection warns. Kafka inspection and commit requests use context deadlines; the CLI shutdown budget also covers client cleanup and blocked filesystem or stdio calls.
-- File input fails if its ID changes, it is shorter than the checkpoint, or the last checkpointed frame's CRC changes. Appends are allowed; earlier frames are not all revalidated on resume. Use a new group for changed input.
+- CBOR input fails if its ID changes, it is shorter than the checkpoint, or the last checkpointed frame's CRC changes. Appends are allowed; earlier frames are not all revalidated on resume. Use a new group for changed input. Avro instead checks every selected file on incomplete restart; see [archive replay](archive.md#replay-and-progress).
 
 ## Files
 
-Any FILE endpoint requires one process per query on one machine, using a local filesystem with locks and hard links. Cross-machine use or copied files cannot be coordinated by these locks and is unsupported.
+`FILE avro('directory')` captures independently recoverable compressed files. Multiple workers can capture to local or shared storage. Replay uses one process per group/checkpoint directory, saves a fixed completed-file selection, and preserves original Kafka identity. Storage needs durable sync, atomic rename and exclusive locks across its users. [Avro contract](archive.md).
+
+The following single-file recovery rules apply to `FILE cbor('path')`. CBOR requires one process per query on one machine, using a local filesystem with locks and hard links. Mixed CBOR/Avro file copies are rejected.
 
 Output holds an exclusive inode lock. A file-source group holds a stable checkpoint lock that atomic checkpoint replacement does not change. Source data is not locked; other groups can read it.
 
@@ -200,7 +202,7 @@ Text sections show endpoints, progress, time windows, behavior and any warnings.
 
 Kafka JSON rows show the selected start and retained/log-end offsets; log end includes open transactions. Offset differences are not record counts or completion evidence. Fresh `NOW()` values are preview-only.
 
-File inspection reads the archive header, checkpoint and last checkpointed frame identity without scanning records or recovering a tail. Text shows encoded input bytes after the selected position before filtering, and whether output would be created or resumed. A run reads existing output frames during recovery; inspection does not verify full archive integrity. `ONE_OFF` never generates a group or reads an existing checkpoint; the preview says a fresh group would be used.
+CBOR inspection reads the archive header, checkpoint and last checkpointed frame identity without scanning records or recovering a tail. Text shows encoded input bytes after the selected position before filtering, and whether output would be created or resumed. A run reads existing output frames during recovery; inspection does not verify full archive integrity. `ONE_OFF` never generates a group or reads an existing checkpoint; the preview says a fresh group would be used.
 
 `--json` emits version 1 with all partitions and warnings. Time bounds use signed Unix milliseconds; byte and offset fields are counts. Connection properties and SQL text are excluded.
 
@@ -223,7 +225,7 @@ Verdicts: invalid/incompatible progress → `unknown`; incompatible active membe
 
 `stopped` means every current partition has a saved stop reason. More source records may remain; the time cutoff can miss records within the range. Workers remain independent: they never wait for other workers' stops.
 
-Text lists up to eight partitions; `--json` includes all. JSON version `1` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `stop`, `window`). File status adds `opening_size_bytes` and current source `file.size_bytes`. Kafka positions are offsets; file positions are bytes. Status does not scan records or verify destination writes.
+Text lists up to eight partitions; `--json` includes all. JSON version `1` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `stop`, `window`). CBOR status adds `opening_size_bytes` and current source `file.size_bytes`. Kafka positions are offsets; CBOR positions are bytes; Avro positions count confirmed input records. Avro `file` includes `directory`, `file_count` and `position_records`; its `size_bytes` and `file_count` describe the saved selection, or current completed files before the first run. Inspection checks selected headers and sizes for incomplete groups, not payload checksums. Status does not scan records or verify destination writes.
 
 ## Configuration and CLI
 
@@ -239,7 +241,10 @@ Optional keys in TOML's `[worker]` table; byte values are integers:
 | --- | --- | --- |
 | `partition_record_cap`, `partition_byte_cap` | 5000, 16777216 (16 MiB) | Unsaved work per partition |
 | `record_cap`, `byte_cap` | 20000, 134217728 (128 MiB) | Unsaved work per worker; also sizes Kafka queues |
-| `max_frame_bytes` | 67108864 (64 MiB) | Maximum encoded archive record, including key, value, headers and metadata; excludes frame length and CRC |
+| `max_frame_bytes` | 67108864 (64 MiB) | Maximum CBOR record or decoded Avro block |
+| `archive_capture_open_files` | 1024 | Open capture files; reaching this budget rotates the least recently used file |
+| `archive_replay_open_files` | 32 | Open replay handles |
+| `archive_replay_blocks` | 8 | Cached replay blocks; overlapping files beyond this budget repeat decoding |
 | `delivery_timeout` | `'60s'` | Delivery deadline and queue-full wait |
 | `shutdown_timeout` | `'30s'` | Whole-process stop deadline |
 | `idle_exit` | `'30s'` | Wait after an empty assignment before exit 3 |

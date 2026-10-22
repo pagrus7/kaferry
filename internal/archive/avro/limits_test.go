@@ -29,6 +29,84 @@ func TestWriterFailuresAtHeaderAndForcedFlush(t *testing.T) {
 	require.ErrorIs(t, w.Flush(), errDisk)
 }
 
+func TestBlockTargetAllowsLargeRecordsWithoutCombiningFullBlocks(t *testing.T) {
+	// Given records just over half the block target and one record larger than the target.
+	c := codec(t, 2*BlockTarget)
+	values := make([]Record, 4)
+	for i := range values {
+		values[i] = records()[0]
+		values[i].Offset += int64(i)
+		values[i].Value = bytes.Repeat([]byte{byte(i)}, BlockTarget/2)
+	}
+	values[2].Value = bytes.Repeat([]byte{2}, BlockTarget+100)
+	// When encoded without explicit intermediate flushes, then each remains in its own readable block.
+	data := write(t, c, values, len(values))
+	require.Equal(t, values, read(t, c, data))
+	r, err := c.Open(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+	blocks := 0
+	for position := r.Start; position < int64(len(data)); blocks++ {
+		block, err := r.Block(position)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, block.Count, "an oversized record stays alone; other records fit the target")
+		position = block.End
+	}
+	require.Len(t, values, blocks)
+}
+
+func TestSparseWriterDoesNotReserveFullBlocks(t *testing.T) {
+	for _, previouslyBusy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cold", true: "after busy block"}[previouslyBusy], func(t *testing.T) {
+			// Given a new writer or one that has just flushed a large block.
+			c := codec(t, 2*BlockTarget)
+			w, err := c.NewWriter(io.Discard, identity())
+			require.NoError(t, err)
+			record := records()[0]
+			if previouslyBusy {
+				record.Value = make([]byte, BlockTarget)
+				require.NoError(t, w.Append(record))
+			}
+			record.Value = make([]byte, 3<<10)
+			// When small records are flushed individually, then the writer releases buffers
+			// and settles to small allocations even after a busy period.
+			for i := range 3 {
+				require.NoError(t, w.Append(record))
+				if !previouslyBusy || i > 0 {
+					require.Less(t, cap(w.pending), BlockTarget/16, "sparse input must not reserve a full block")
+				}
+				require.NoError(t, w.Flush())
+				require.Nil(t, w.pending)
+				require.Nil(t, w.datum)
+			}
+		})
+	}
+}
+
+func TestRejectedEncodedRecordPreservesEarlierAndLaterRecords(t *testing.T) {
+	// Given a valid pending record and a rejection caused by encoded envelope size.
+	c := codec(t, 4096)
+	var output bytes.Buffer
+	w, err := c.NewWriter(&output, identity())
+	require.NoError(t, err)
+	values := records()[:2]
+	require.NoError(t, w.Append(values[0]))
+	before := bytes.Clone(output.Bytes())
+	rejected := values[0]
+	rejected.Key, rejected.Headers = nil, nil
+	rejected.Value = make([]byte, c.limit)
+	// When encoding fails its limit, then no pending data is overwritten or published.
+	var invalid *InvalidRecord
+	require.ErrorAs(t, w.Append(rejected), &invalid)
+	require.Equal(t, before, output.Bytes())
+	require.EqualValues(t, 1, w.Count())
+	// Then a later valid record uses clean scratch space and both admitted records survive.
+	require.NoError(t, w.Append(values[1]))
+	require.NoError(t, w.Flush())
+	require.Nil(t, w.pending)
+	require.Nil(t, w.datum)
+	require.Equal(t, values, read(t, c, output.Bytes()))
+}
+
 func TestHeaderCountLimitMatchesReader(t *testing.T) {
 	// Given a record at the maximum accepted header count.
 	c := codec(t, 2<<20)
