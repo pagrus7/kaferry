@@ -108,7 +108,7 @@ def summarize(directory):
         rows.append(f"| {r['test']} | {status} | {r['records']} | {r['records_per_second']:.0f} | {r['sampled_peak_rss_bytes'] / (1 << 20):.1f} | {r.get('rss_samples', '—')} | {f'{growth:.1f}' if growth is not None else '—'} | {r['peak_uncommitted_records']} / {r['peak_uncommitted_bytes']} | {r.get('max_sampled_commit_lag', '—')} | {shutdown} |")
     benchmark = directory / "benchmark.log"
     if benchmark.exists():
-        rows += ["", "### CBOR microbenchmarks", "", "| Benchmark | ns/op | B/op | allocs/op |",
+        rows += ["", "### Codec microbenchmarks", "", "| Benchmark | ns/op | B/op | allocs/op |",
                  "| --- | ---: | ---: | ---: |"]
         for name, (ns, size, allocations) in benchmarks(benchmark.read_text()).items():
             rows.append(f"| {name} | {ns} | {size} | {allocations} |")

@@ -1,6 +1,6 @@
 # CBOR archive v1
 
-File input and output are planned for redesign, which may break backward compatibility.
+The [file redesign](../design/archive.md) may break backward compatibility.
 
 One binary file, in submission order, without compression or segmentation.
 

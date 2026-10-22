@@ -74,8 +74,8 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 | `make load` | Bounded Kafka-copy caps/fidelity and file-copy metric overhead; start brokers first | Every PR/main, weekly, release |
 | `make soak` | Streaming fidelity, lag, memory and shutdown; start brokers first | Weekly and release, 30 minutes |
 | `make qualification` | Security/ACLs and replicated failover; starts TLS/SASL fixture | Code PRs, nightly, weekly, release |
-| `make fuzz` | SQL parser, frames and decoder; 100,000 iterations per target | Nightly; weekly |
-| `make benchmark` | CBOR framing CPU/allocations | Nightly; weekly |
+| `make fuzz` | SQL parser, CBOR/Avro decoders; 100,000 iterations per target | Nightly; weekly |
+| `make benchmark` | CBOR framing and Avro blocks: CPU/allocations | Nightly; weekly |
 | `make broker-down` | Stop disposable clusters | Fixture cleanup |
 
 Time-window arithmetic, boundaries and overflow use deterministic unit tests in `make check`. Set `FUZZ_ITERATIONS` to change the per-target fuzz budget; failures remain fatal.
@@ -130,7 +130,7 @@ After retargeting a PR to a different base branch, push a new commit so CI compa
 | Static analysis | [Quality workflow](https://github.com/pagrus7/kaferry/actions/workflows/quality.yml): Staticcheck and CodeQL for Go, Python and workflows |
 | Security | govulncheck fails on reachable Go advisories; CodeQL findings and Dependabot alerts appear in GitHub Security. Dependency review checks PRs; updates require review |
 | Complexity / duplication | Quality summary/artifact: gocyclo maximum/top ten, exact clones ≥100 tokens and ≥10 lines. Identical tools scan the PR base; no arbitrary score gates |
-| Extended tests | README badge; load, fault, ACL/failover, fuzz, CBOR benchmarks and a 30-minute soak with destination stalls. Soak duration is configurable on manual dispatch |
+| Extended tests | README badge; load, fault, ACL/failover, fuzz, codec benchmarks and a 30-minute soak with destination stalls. Soak duration is configurable on manual dispatch |
 | Performance | Dated SHA/environment JSON and summaries: throughput, sampled RSS/growth, lag, caps, shutdown, ns/op and allocations. Prior successful measurements compare only matching settings; shared runners provide no regression gate |
 
 Missing measurements are unavailable. Coverage and vulnerability scans describe Go code; badges report only the listed checks.
