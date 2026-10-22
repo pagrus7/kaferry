@@ -134,6 +134,29 @@ func (o *engineOutput) Close() {
 }
 func (*engineOutput) DurableOutput() (string, int64) { return "file-id", 100 }
 
+type archiveEngineFiles struct{ *engineFixture }
+type finalizedOutput struct{ *engineOutput }
+
+func (f archiveEngineFiles) OpenOutput(plan.Plan, string, file.DestinationProgress, config.Worker) (file.OutputSink, error) {
+	return finalizedOutput{f.output}, nil
+}
+func (o finalizedOutput) Finish() error { return o.fixture.stage("publish") }
+
+func TestEngineReportsArchivePublicationFailureBeforeCleanup(t *testing.T) {
+	// Given a runner that saved progress and an archive that fails final publication.
+	f := newEngineFixture()
+	f.fail = "publish"
+	engine := newEngine(f, archiveEngineFiles{f}, f, engineLogger(), nil)
+	// When finishing, then publication cannot be hidden behind the void Close method.
+	err := engine.Run(t.Context(), enginePlan("FILE", "FILE"), config.Defaults(""), noopShutdown{})
+	require.ErrorIs(t, err, f.failure)
+	var exit *core.Exit
+	require.ErrorAs(t, err, &exit)
+	require.Equal(t, 1, exit.Code)
+	require.Less(t, slices.Index(f.trace, "run"), slices.Index(f.trace, "publish"))
+	require.Less(t, slices.Index(f.trace, "publish"), slices.Index(f.trace, "close-output"))
+}
+
 func enginePlan(source, destination string) plan.Plan {
 	return plan.Plan{Source: plan.Endpoint{Kind: source, Name: "source"}, Destination: plan.Endpoint{Kind: destination, Name: "destination"}, Group: "group", Start: "EARLIEST"}
 }

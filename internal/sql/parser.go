@@ -161,12 +161,30 @@ func (p *parser) endpoint() Endpoint {
 		p.fail()
 		return Endpoint{}
 	}
-	p.expect("cbor")
+	format := strings.ToLower(p.oneOf("cbor", "avro"))
 	p.expect("(")
 	position := p.current.Position
 	name := p.text("string")
+	e := Endpoint{Position: position, Kind: "FILE", Name: name, Format: format}
+	for p.take(",") {
+		o := Option{Position: p.current.Position}
+		o.Name = p.oneOf("ROTATE_AFTER_SIZE", "ROTATE_AFTER_AGE")
+		p.expect("=")
+		o.ValuePosition = p.current.Position
+		if o.Name == "ROTATE_AFTER_AGE" {
+			i := p.interval()
+			o.Interval = &i
+		} else {
+			o.Value = p.text("integer")
+			if p.is("k") || p.is("m") || p.is("g") {
+				o.Value += strings.ToLower(p.current.text)
+				p.next()
+			}
+		}
+		e.Options = append(e.Options, o)
+	}
 	p.expect(")")
-	return Endpoint{Position: position, Kind: "FILE", Name: name, Format: "cbor"}
+	return e
 }
 
 func (p *parser) connection() Connection {

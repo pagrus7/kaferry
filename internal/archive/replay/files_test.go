@@ -195,7 +195,7 @@ func TestReplayWritesOnlyToExternalCheckpointDirectory(t *testing.T) {
 	// When replaying and saving, then the input archive remains unchanged.
 	s, _ := diskSession(t, root, checkpoints, query(), Limits{}, 10)
 	require.Equal(t, records(42, 43), drain(t, s, true))
-	after, err := NewCatalog(root, codec(t), NativeFiles{}).describe(f.name())
+	after, err := NewCatalog(root, codec(t), NativeFiles{}).describe(f.name(), true)
 	require.NoError(t, err)
 	require.Equal(t, f, after)
 	_, err = os.Stat(filepath.Join(root, ".kaferry"))

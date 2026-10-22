@@ -69,7 +69,7 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 			return report, err
 		}
 		report.Destination.File = fileSummary(info)
-		if progress.Exists {
+		if progress.Exists && p.Destination.Format != "avro" {
 			report.Destination.File.AcknowledgedExtent = &progress.Extent
 		}
 	}
@@ -78,7 +78,7 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 }
 
 func (s *Service) open(ctx context.Context, endpoint plan.Endpoint, configuration bool, stop core.StopObserver) (kafkaport.InspectionConnection, Endpoint, error) {
-	info := Endpoint{Kind: endpoint.Kind, Name: endpoint.Name, Connection: endpoint.Alias}
+	info := Endpoint{Kind: endpoint.Kind, Name: endpoint.Name, Format: endpoint.Format, Connection: endpoint.Alias}
 	if endpoint.Kind != "TOPIC" {
 		return nil, info, nil
 	}
@@ -107,7 +107,7 @@ func closeConnection(connection kafkaport.InspectionConnection, stop core.StopOb
 }
 
 func fileSummary(info file.ArchiveInspection) *FileSummary {
-	return &FileSummary{Exists: info.Exists, ID: info.ID, SizeBytes: info.Size}
+	return &FileSummary{Exists: info.Exists, ID: info.ID, SizeBytes: info.Size, Directory: info.Directory, FileCount: info.FileCount}
 }
 
 func addWarnings(r *Report) {

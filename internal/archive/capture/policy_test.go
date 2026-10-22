@@ -130,3 +130,12 @@ func TestInvalidRotationPolicy(t *testing.T) {
 		require.Empty(t, store.calls)
 	}
 }
+
+func (m *memorySegments) PublishMany(ids []string) error {
+	for _, id := range ids {
+		if err := m.Publish(id); err != nil {
+			return err
+		}
+	}
+	return nil
+}

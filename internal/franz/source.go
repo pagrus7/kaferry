@@ -27,6 +27,8 @@ type Source struct {
 	pump                 *fetchPump
 	plan                 plan.Plan
 	fingerprint, topicID string
+	clusterID            string
+	originalTopicID      [16]byte
 	query, ctx           context.Context
 	cancel, clientCancel context.CancelFunc
 	life                 core.Lifecycle
@@ -133,7 +135,7 @@ func (s *Source) deliver(r *kgo.Record) (core.Event, error) {
 		cursor.Position++
 		return core.Event{EOF: &cursor}, nil
 	}
-	record := core.Record{Key: r.Key, Value: r.Value, TimestampType: "unknown", Source: &core.Provenance{Topic: r.Topic, Partition: r.Partition, Offset: r.Offset}}
+	record := core.Record{Key: r.Key, Value: r.Value, TimestampType: "unknown", Source: &core.Provenance{Cluster: s.clusterID, TopicID: s.originalTopicID, Topic: r.Topic, Partition: r.Partition, Offset: r.Offset}}
 	if kind := r.Attrs.TimestampType(); kind >= 0 && r.Timestamp.UnixMilli() != -1 {
 		ms := r.Timestamp.UnixMilli()
 		record.TimestampMS = &ms

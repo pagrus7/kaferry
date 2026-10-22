@@ -22,7 +22,10 @@ env         = "ENV" "(" string ")" ;
 insert      = "INSERT" "INTO" endpoint ;
 select      = "SELECT" "*" "FROM" endpoint ;
 endpoint    = "TOPIC" string                       (* 'topic' or 'topic@alias' *)
-            | "FILE" "cbor" "(" string ")" ;       (* path *)
+            | "FILE" "cbor" "(" string ")"
+            | "FILE" "avro" "(" string { "," file_option } ")" ;
+file_option = "ROTATE_AFTER_SIZE" "=" integer [ "k" | "m" | "g" ]
+            | "ROTATE_AFTER_AGE" "=" interval ;    (* destination only *)
 
 where       = "WHERE" ( between | bound [ "AND" bound ] ) ;
 between     = "RECORD_TIMESTAMP" "BETWEEN" time "AND" time ;
@@ -48,6 +51,7 @@ option      = "GROUP" "=" ( string | "ONE_OFF" )
 Planning or startup enforces:
 
 - `GROUP` is required and must not be blank. Options, inline connection aliases and a connection's properties cannot repeat. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name; unquoted `ONE_OFF` generates one.
+- Avro options are optional and destination-only; size is positive bytes, with case-insensitive binary k/m/g suffixes. File-to-file formats must match.
 - A topic source needs exactly one of `WHERE` and `START`; a file source takes no `START`.
 - `ON_ERROR` cannot be combined with any specific error policy.
 - `WORKER_STOP_AFTER_RECORDS` is from 1 to 9,007,199,254,740,992; it caps accepted writes per worker per invocation, not records read or a shared group total.
@@ -80,7 +84,7 @@ OPTIONS (GROUP = 'orders-dr-2026-10-01');
 Topic→file, follow from the earliest retained record, default connection:
 
 ```sql
-INSERT INTO FILE cbor('/data/audit.cbor')
+INSERT INTO FILE avro('/data/audit')
 SELECT * FROM TOPIC 'audit'
 OPTIONS (GROUP = 'audit-archive', START = EARLIEST);
 ```
@@ -89,7 +93,7 @@ File→topic, last seven days, skipping timestamps known to be outside the desti
 
 ```sql
 INSERT INTO TOPIC 'orders@staging'
-SELECT * FROM FILE cbor('/data/orders.cbor')
+SELECT * FROM FILE avro('/data/orders')
 WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '7' DAY
 OPTIONS (GROUP = 'orders-staging-load', ON_REJECTED_TIMESTAMP = SKIP);
 ```
@@ -97,8 +101,8 @@ OPTIONS (GROUP = 'orders-staging-load', ON_REJECTED_TIMESTAMP = SKIP);
 File→file, inclusive range, one-off group (normalizes to `[09:00:00.000, 09:30:00.001)`):
 
 ```sql
-INSERT INTO FILE cbor('/data/incident.cbor')
-SELECT * FROM FILE cbor('/data/orders.cbor')
+INSERT INTO FILE avro('/data/incident')
+SELECT * FROM FILE avro('/data/orders')
 WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z'
                            AND TIMESTAMP '2026-10-01T09:30:00Z'
 OPTIONS (GROUP = ONE_OFF);

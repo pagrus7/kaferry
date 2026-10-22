@@ -6,6 +6,7 @@ type Endpoint struct {
 	Kind     string   // TOPIC or FILE
 	Name     string
 	Format   string
+	Options  []Option
 }
 
 type Property struct {

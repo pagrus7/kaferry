@@ -127,8 +127,14 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 		sink.Close()
 	}()
 	bindOutput(output)
-	if err := e.runner.New(source, sink, store, p, limits, stop, observer).Run(ctx); err != nil {
-		return err
+	runErr := e.runner.New(source, sink, store, p, limits, stop, observer).Run(ctx)
+	if finalizer, ok := sink.(interface{ Finish() error }); ok {
+		stop.Begin()
+		stop.Stage("publishing archive files")
+		runErr = copy.CleanupResult(runErr, "publish archive files", finalizer.Finish())
+	}
+	if runErr != nil {
+		return runErr
 	}
 	if p.OneOff && input != nil && p.WorkerStopAfterRecords == 0 {
 		stop.Begin()
@@ -211,6 +217,9 @@ func (e *runtimeEngine) sourceProgress(ctx context.Context, p plan.Plan, fp stri
 		return nil, file.DestinationProgress{}, err
 	}
 	e.log.Info("source progress inspected", "group", p.Group, "partitions_with_progress", len(saved))
+	if p.Destination.Format == "avro" {
+		return nil, file.DestinationProgress{Exists: len(saved) > 0}, nil
+	}
 	progress, err := destinationProgress(saved)
 	return nil, progress, err
 }
@@ -223,6 +232,9 @@ func destinationProgress(saved map[int32]kafkaport.Progress) (file.DestinationPr
 func (e *runtimeEngine) openSink(ctx context.Context, p plan.Plan, fp string, limits config.Worker, connection kafkaport.Connection, progress file.DestinationProgress) (copy.Sink, copy.OutputProgress, error) {
 	if p.Destination.Kind == "FILE" {
 		output, err := e.files.OpenOutput(p, fp, progress, limits)
+		if p.Destination.Format == "avro" {
+			return output, nil, err
+		}
 		return output, output, err
 	}
 	sink, err := connection.Sink(ctx, limits)

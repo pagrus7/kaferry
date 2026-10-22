@@ -145,7 +145,7 @@ func writeFile(t testing.TB, root string, id int, values []avro.Record, blockRec
 	}
 	require.NoError(t, w.Flush())
 	require.NoError(t, f.Close())
-	result, err := NewCatalog(root, codec(t), NativeFiles{}).describe(meta.name())
+	result, err := NewCatalog(root, codec(t), NativeFiles{}).describe(meta.name(), true)
 	require.NoError(t, err)
 	return result
 }

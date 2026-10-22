@@ -17,7 +17,13 @@ func (s *Service) source(ctx context.Context, p plan.Plan, limits config.Worker,
 			return file.DestinationProgress{}, err
 		}
 		report.Source.File = fileSummary(info.ArchiveInspection)
-		report.Source.File.StartBytes, report.Source.File.Window = &info.Position, &info.Window
+		report.Source.File.Window = &info.Window
+		if info.PositionUnit == "records" {
+			report.Source.File.PositionRecords = &info.Position
+		} else {
+			report.Source.File.StartBytes = &info.Position
+		}
+		report.Warnings = append(report.Warnings, info.Warnings...)
 		report.Source.File.Checkpoint, report.Source.File.CheckpointExists = info.CheckpointPath, &info.Saved
 		report.Source.File.WindowOrigin = "literal"
 		if p.Window.Relative() {
@@ -61,6 +67,9 @@ func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafka
 	var warnings []string
 	report.Partitions, warnings = partitionRows(p, located, saved, metadata)
 	report.Warnings = append(report.Warnings, warnings...)
+	if p.Destination.Format == "avro" {
+		return file.DestinationProgress{Exists: len(metadata) > 0}, nil
+	}
 	id, extent, err := kafkaport.FileExtent(metadata)
 	return file.DestinationProgress{ID: id, Extent: extent, Exists: len(metadata) > 0}, err
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
+	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
@@ -128,7 +129,9 @@ func (s *Session) Next() (item Item, err error) {
 	return item, nil
 }
 
-func (s *Session) Checkpoint(position int64) error {
+func (s *Session) Checkpoint(position int64) error { return s.CheckpointStop(position, nil) }
+
+func (s *Session) CheckpointStop(position int64, stop *core.Stop) error {
 	if s.closed {
 		return errors.New("archive replay session is closed")
 	}
@@ -138,10 +141,14 @@ func (s *Session) Checkpoint(position int64) error {
 	if position < s.saved.Position || position > s.saved.Position+int64(len(s.pending)) {
 		return errors.New("replay checkpoint is not a known confirmed prefix")
 	}
-	if position == s.saved.Position {
+	if position == s.saved.Position && equalStop(stop, s.saved.Stop) {
 		return nil
 	}
 	next := s.saved.clone()
+	next.Stop = nil
+	if stop != nil {
+		next.Stop = new(*stop)
+	}
 	count := int(position - s.saved.Position)
 	for _, d := range s.pending[:count] {
 		next.Files[d.file].Next = d.next
@@ -178,3 +185,5 @@ func (s *Session) Close() error {
 	}
 	return errors.Join(err, s.store.Close())
 }
+
+func equalStop(a, b *core.Stop) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }

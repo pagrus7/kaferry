@@ -36,6 +36,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Kafka commits | [franz](../internal/franz) | Save positions, eligible stops and, for file outputs, file ID and extent; reject commits without a group member ID and generation | offsetCommitter, copy.OutputProgress |
 | Observability | [observability](../internal/observability) | Export immutable copy snapshots and actual save results through OTLP/HTTP; bound cleanup and redact diagnostics | `copy.Observer`, per-query Session/Factory, environment/file ports; SDK stays in adapter |
 | Shutdown budget | [app/shutdown.go](../internal/app/shutdown.go) | Enforce whole-process stop deadline; identify the blocked operation | StopObserver, Shutdown; CLI alone owns termination |
+| Archive adapters | [archiveio](../internal/archiveio) | Convert full provenance, batch confirmations, save replay stops and publish final files | Capture, Replay, LegacyFiles, LegacyInspection; format libraries stay outside copy |
 | File adapters | [file](../internal/file) | Encode/decode frames, snapshot input, recover output, persist checkpoints | ArchiveDecoder, ArchiveEncoder, CheckpointStore, I/O ports |
 | Avro codec | [archive/avro](../internal/archive/avro) | Preserve raw records and source identity in bounded compressed blocks | Standard I/O ports; fixed schema and independent Avro interoperability tests |
 | Archive capture | [archive/capture](../internal/archive/capture) | Route records and rotate by size, age, rewind and file budget | Segments, Clock; no Kafka or copy-loop state |
@@ -76,7 +77,7 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 | `make broker` | Start disposable source/destination Kafka clusters | Fixture setup |
 | `make integration` | Broker/CLI paths, fidelity, resume and rebalances; start brokers first | Every PR/main; release |
 | `make fault` | Outages and ownership loss; start brokers first | Code PRs, nightly, weekly, release |
-| `make load` | Bounded Kafka-copy caps/fidelity and file-copy metric overhead; start brokers first | Every PR/main, weekly, release |
+| `make load` | Bounded Kafka/archive copy caps/fidelity, overlap-cache behavior and file-copy metric overhead; start brokers first | Every PR/main, weekly, release |
 | `make soak` | Streaming fidelity, lag, memory and shutdown; start brokers first | Weekly and release, 30 minutes |
 | `make qualification` | Security/ACLs and replicated failover; starts TLS/SASL fixture | Code PRs, nightly, weekly, release |
 | `make fuzz` | SQL parser, CBOR/Avro decoders and capture/replay state; 100,000 iterations per target | Nightly; weekly |
@@ -142,7 +143,7 @@ Missing measurements are unavailable. Coverage and vulnerability scans describe 
 
 ### Paired performance
 
-[Performance runs](../.github/workflows/performance.yml) are separate from required PR checks. They reuse the Kafka default-copy and disabled-metrics file-copy assertions, with larger inputs, a warm-up per binary and six interleaved pairs, alternating which binary runs first on one runner. Summaries show median head/base throughput and the pair range; raw metrics, binary/toolchain identities and broker images stay in the `performance` artifact for 30 days. Kafka input is capped at 160,000 records; file input at 200,000 records.
+[Performance runs](../.github/workflows/performance.yml) are separate from required PR checks. They reuse Kafka, disabled-metrics CBOR file-copy, and optional archive capture/replay/file-copy assertions, with larger inputs, a warm-up per binary and six interleaved pairs, alternating which binary runs first on one runner. Summaries show median head/base throughput and the pair range; raw metrics, binary/toolchain identities and broker images stay in the `performance` artifact for 30 days. Kafka input is capped at 160,000 records; file/archive input at 200,000. `archive_base_format=cbor` compares a baseline without Avro CLI support against Avro; this measures a format change, not identical archive encoding. Reports identify both formats.
 
 Nightly runs start with A/A calibration (the same binary on both sides). Review at least 20 calibration runs before setting the repository variable `PERFORMANCE_MODE=comparison`; this enables changed-main comparisons against the last retained compatible scheduled measurement. No compatible baseline starts another calibration. Expired data requires a fresh baseline. Manual dispatch accepts a base revision; adding `ci:performance` opts a PR into the configured mode. In comparison mode, PRs compare against the merge base. No performance threshold blocks merging; choose warnings only after measuring A/A noise.
 

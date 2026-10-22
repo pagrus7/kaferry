@@ -30,7 +30,7 @@ func TestFlowAdmissionHonorsEveryCapAndAllowsOversizedAlone(t *testing.T) {
 	input.Record.Headers = []Header{{Name: "name", Value: []byte("header")}}
 	input.Record.Source = &Provenance{Topic: "orders", Partition: 3, Offset: 0}
 	// The estimate includes the envelope, key/value, header and source topic.
-	const size int64 = 64 + 1 + 16 + 24 + 4 + 6 + 24 + 6
+	const size int64 = 64 + 1 + 16 + 24 + 4 + 6 + 40 + 6
 	require.Equal(t, size, input.Record.Size())
 	for _, tc := range []struct {
 		name       string

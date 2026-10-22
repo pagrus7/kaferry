@@ -160,6 +160,10 @@ func (s *Service) fileStatus(p plan.Plan, limits config.Worker, r *StatusReport)
 		return err
 	}
 	r.Source.File = fileSummary(info.ArchiveInspection)
+	if info.PositionUnit == "records" {
+		r.Source.File.PositionRecords = &info.Position
+		r.Meaning = "Stopped means this group saved a stop reason for its fixed selection of archive files. A new group selects current completed files."
+	}
 	r.OpeningSize = info.OpeningSize
 	row := SavedPartition{ID: 0}
 	if info.Saved {

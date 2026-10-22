@@ -25,6 +25,7 @@ type Segments interface {
 	Checkpoint() error
 	Size(string) int64
 	Publish(string) error
+	PublishMany([]string) error
 	Close() error
 }
 
@@ -81,18 +82,18 @@ func (s *Store) Append(id string, record avro.Record) (Segment, error) {
 }
 
 func (s *Store) Checkpoint() error {
-	return s.checkpoint("")
+	return s.checkpoint(nil)
 }
 
-// An empty selection checkpoints every active file.
-func (s *Store) checkpoint(only string) error {
+// A nil selection checkpoints every active file.
+func (s *Store) checkpoint(only map[string]bool) error {
 	if s.failed != nil {
 		return s.failed
 	}
 	next := s.state
 	next.Files = nil
 	for id, f := range s.active {
-		if only != "" && id != only {
+		if only != nil && !only[id] {
 			continue
 		}
 		if f.writer.Count() == s.state.Files[id].Records {
@@ -123,53 +124,71 @@ func (s *Store) checkpoint(only string) error {
 }
 
 // Publish completes a nonempty file; an empty private file is discarded.
-func (s *Store) Publish(id string) error {
+func (s *Store) Publish(id string) error { return s.PublishMany([]string{id}) }
+
+// PublishMany shares directory sync and state replacement across a rotation batch.
+// State keeps every boundary until all renames are durable, so recovery accepts
+// either a private or already-published file after any intermediate failure.
+func (s *Store) PublishMany(ids []string) error {
 	if s.failed != nil {
 		return s.failed
 	}
-	f, ok := s.active[id]
-	if !ok {
-		return s.fail(errors.New("archive segment is not open"))
+	if len(ids) == 0 {
+		return nil
 	}
-	if f.writer.Count() > 0 {
-		if err := s.checkpoint(id); err != nil {
-			return err
+	selected := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if _, ok := s.active[id]; !ok || selected[id] {
+			return s.fail(errors.New("archive segment is not open or repeats in publication"))
 		}
-		info, err := f.file.Stat()
-		if err != nil {
+		selected[id] = true
+	}
+	if err := s.checkpoint(selected); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		f := s.active[id]
+		if f.writer.Count() > 0 {
+			info, err := f.file.Stat()
+			if err != nil {
+				return s.fail(err)
+			}
+			if info.Size() != s.state.Files[id].Extent {
+				return s.fail(errors.New("archive length changed before publication"))
+			}
+		}
+		handle := f.file
+		f.file = nil
+		if err := handle.Close(); err != nil {
 			return s.fail(err)
 		}
-		if info.Size() != s.state.Files[id].Extent {
-			return s.fail(errors.New("archive length changed before publication"))
-		}
-	}
-	handle := f.file
-	f.file = nil
-	if err := handle.Close(); err != nil {
-		return s.fail(err)
-	}
-	identity := f.writer.Identity()
-	private := dataPath(s.root, identity, true)
-	if f.writer.Count() == 0 {
-		if err := s.files.Remove(private); err != nil {
+		identity := f.writer.Identity()
+		private := dataPath(s.root, identity, true)
+		if f.writer.Count() == 0 {
+			if err := s.files.Remove(private); err != nil {
+				return s.fail(err)
+			}
+		} else if err := s.files.RenameExclusive(private, dataPath(s.root, identity, false)); err != nil {
 			return s.fail(err)
 		}
-	} else if err := s.files.RenameExclusive(private, dataPath(s.root, identity, false)); err != nil {
-		return s.fail(err)
 	}
 	if err := s.files.SyncDirectory(s.root); err != nil {
 		return s.fail(err)
 	}
-	if f.writer.Count() > 0 {
-		next := s.state
-		next.Files = maps.Clone(s.state.Files)
+	next := s.state
+	next.Files = maps.Clone(s.state.Files)
+	for _, id := range ids {
 		delete(next.Files, id)
+	}
+	if len(next.Files) != len(s.state.Files) {
 		if err := s.states.Save(s.statePath(), next); err != nil {
 			return s.fail(err)
 		}
 		s.state = next
 	}
-	delete(s.active, id)
+	for _, id := range ids {
+		delete(s.active, id)
+	}
 	return nil
 }
 

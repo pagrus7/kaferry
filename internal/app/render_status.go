@@ -28,6 +28,9 @@ func renderStatus(output io.Writer, r inspect.StatusReport, asJSON bool) error {
 		unit := "offset"
 		if r.Source.Kind == "FILE" {
 			unit = "byte position"
+			if r.Source.File != nil && r.Source.File.Directory {
+				unit = "input records"
+			}
 		}
 		for _, p := range r.Partitions[:min(8, len(r.Partitions))] {
 			if p.Position == nil {
