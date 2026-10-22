@@ -53,6 +53,7 @@ func write(t testing.TB, c *Codec, records []Record, batch int) []byte {
 	}
 	require.NoError(t, w.Flush())
 	require.Nil(t, w.pending, "flush releases retained partition payload memory")
+	require.Nil(t, w.datum, "flush releases record-encoding scratch memory")
 	return output.Bytes()
 }
 

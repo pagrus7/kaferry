@@ -73,12 +73,14 @@ func TestFlowCommitCadenceAndPauseReasons(t *testing.T) {
 	}{
 		{name: "none", total: workCount{1, 100}, partition: workCount{1, 100}},
 		{name: "periodic", total: workCount{1, 100}, partition: workCount{1, 100}, elapsed: time.Second, wantDue: true},
-		{name: "worker records", total: workCount{5, 100}, partition: workCount{1, 100}, wantDue: true},
-		{name: "worker bytes", total: workCount{1, 500}, partition: workCount{1, 100}, wantDue: true},
+		{name: "below worker records", total: workCount{9, 100}, partition: workCount{1, 100}},
+		{name: "below worker bytes", total: workCount{1, 999}, partition: workCount{1, 100}},
 		{name: "worker full records", total: workCount{10, 100}, partition: workCount{1, 100}, wantDue: true, wantPaused: true},
 		{name: "worker full bytes", total: workCount{1, 1000}, partition: workCount{1, 100}, wantDue: true, wantPaused: true},
-		{name: "partition records", total: workCount{4, 100}, partition: workCount{4, 100}, wantDue: true},
-		{name: "partition bytes", total: workCount{1, 400}, partition: workCount{1, 400}, wantDue: true},
+		{name: "below partition records", total: workCount{7, 100}, partition: workCount{7, 100}},
+		{name: "partition records", total: workCount{8, 100}, partition: workCount{8, 100}, wantDue: true},
+		{name: "below partition bytes", total: workCount{1, 799}, partition: workCount{1, 799}},
+		{name: "partition bytes", total: workCount{1, 800}, partition: workCount{1, 800}, wantDue: true},
 		{name: "deferred", total: workCount{1, 100}, partition: workCount{1, 100}, deferred: true, wantDue: true, wantPaused: true},
 		{name: "pending", total: workCount{1, 100}, partition: workCount{1, 100}, pending: true, wantPaused: true},
 	} {
@@ -99,7 +101,7 @@ func TestFlowCommitCadenceAndPauseReasons(t *testing.T) {
 			due := f.commitDue(now.Add(tc.elapsed), work, map[int32]*partition{3: {}}, limits)
 			paused := f.full(work, limits)
 
-			// Then half-caps save; held input pauses; pending alone does not force saves.
+			// Then full budgets save; held input pauses; pending alone does not force saves.
 			require.Equal(t, tc.wantDue, due, "commit due")
 			require.Equal(t, tc.wantPaused, paused, "worker paused")
 		})

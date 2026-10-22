@@ -63,12 +63,12 @@ func (f *flow) commitDue(now time.Time, work workCounts, partitions map[int32]*p
 		return true
 	}
 	n, b := work.Total()
-	if n*2 >= limits.RecordCap || b*2 >= limits.ByteCap {
+	if n >= limits.RecordCap || b >= limits.ByteCap {
 		return true
 	}
 	for id := range partitions {
 		n, b := work.Work(id)
-		if n*2 >= limits.PartitionRecordCap || b*2 >= limits.PartitionByteCap {
+		if n >= limits.PartitionRecordCap || b >= limits.PartitionByteCap {
 			return true
 		}
 	}

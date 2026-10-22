@@ -16,7 +16,7 @@ The [schema](../internal/archive/avro/schema.json) defines the wire fields. OCF 
 
 The codec owns block cuts, counts, checksums and exact block positions. The Avro library encodes/decodes individual records. Encoding finishes before a record changes the pending block. Only format-limit rejections permit skipping; source identity changes or decreasing offsets require rotation, and caller errors stop capture.
 
-The writer records its decoded-block byte limit. Readers use that limit or return `LimitError` when their configured cap is lower. The header-count limit is `max(16, block_limit/32)`; blocks contain at most one million records. Blocks normally target 256 KiB before compression; a single larger record may form a larger block within the limit. Truncated data is an error, never normal EOF. A write error stops the writer permanently. Flushing releases pending payload buffers.
+The writer records its decoded-block byte limit. Readers use that limit or return `LimitError` when their configured cap is lower. The header-count limit is `max(16, block_limit/32)`; blocks contain at most one million records. Blocks normally stay within a 256 KiB target before compression; a single larger record may form a larger block within the limit. Truncated data is an error, never normal EOF. A write error stops the writer permanently. Flushing releases pending payload buffers.
 
 ## Layout and ownership
 

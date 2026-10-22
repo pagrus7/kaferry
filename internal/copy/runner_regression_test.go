@@ -151,10 +151,10 @@ func TestRevokePreservesHeldWorkForRemainingPartition(t *testing.T) {
 	}
 }
 
-func TestHalfCapFlushesAndCommitsBeforePeriodicDeadline(t *testing.T) {
+func TestFullCapFlushesAndCommitsBeforePeriodicDeadline(t *testing.T) {
 	for _, cap := range []string{"total records", "total bytes", "partition records", "partition bytes"} {
 		t.Run(cap, func(t *testing.T) {
-			// Given one record below half the selected cap and no periodic commit due.
+			// Given a four-record budget and no periodic commit due.
 			r, _, sink, store, clock := fixture(t)
 			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 			r.lastCommit = clock.Now()
@@ -176,22 +176,22 @@ func TestHalfCapFlushesAndCommitsBeforePeriodicDeadline(t *testing.T) {
 				}
 				return nil
 			}
-			require.NoError(t, r.input(incoming(0, 0, 1)))
-			if err := r.checkpoint(); err != nil || flushes != 0 || len(store.saves) != 0 {
-				t.Fatal("committed before half the cap", err)
+			// When filling the configured budget, then earlier records cause no disk flush or commit.
+			for i := range 4 {
+				require.NoError(t, r.input(incoming(0, int64(i), 1)))
+				if i < 3 {
+					require.NoError(t, r.checkpoint())
+					require.Zero(t, flushes)
+					require.Empty(t, store.saves)
+				}
 			}
-
-			// When a second record reaches half the cap without advancing time.
-			require.NoError(t, r.input(incoming(0, 1, 1)))
-			err := r.checkpoint()
-
-			// Then the sink flush precedes a confirmed commit and releases accounting.
-			if err != nil || flushes != 1 || len(store.saves) != 1 || store.saves[0][0] != (Cursor{Partition: 0, Position: 2}) {
-				t.Fatalf("err=%v flushes=%d progress=%v", err, flushes, store.saves)
-			}
-			if records, bytes := r.tracker.Total(); records != 0 || bytes != 0 {
-				t.Fatalf("committed work retained: %d/%d", records, bytes)
-			}
+			// Then reaching the cap flushes before committing the confirmed prefix and frees the budget.
+			require.NoError(t, r.checkpoint())
+			require.Equal(t, 1, flushes)
+			require.Equal(t, [][]Cursor{{{Partition: 0, Position: 4}}}, store.saves)
+			records, bytes := r.tracker.Total()
+			require.Zero(t, records)
+			require.Zero(t, bytes)
 		})
 	}
 }

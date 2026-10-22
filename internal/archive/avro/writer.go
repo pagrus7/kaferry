@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 
+	lib "github.com/iskorotkov/avro/v2"
 	"github.com/iskorotkov/avro/v2/ocf"
 )
 
@@ -29,6 +30,7 @@ type Writer struct {
 	identity   Identity
 	output     *countingWriter
 	pending    []byte
+	datum      *lib.Writer
 	blockCount int64
 	sync       [16]byte
 	last       int64
@@ -80,17 +82,28 @@ func (w *Writer) Append(record Record) error {
 		return &InvalidRecord{Err: errors.New("record exceeds Avro block limit")}
 	}
 	// Finish encoding before changing the container; format-limit rejections leave valid pending data intact.
-	data, err := w.codec.api.Marshal(w.codec.schema, record)
-	if err != nil {
+	if w.datum == nil {
+		w.datum = lib.NewWriter(nil, 0, lib.WithWriterConfig(w.codec.api))
+	}
+	w.datum.Reset(nil)
+	w.datum.Error = nil
+	w.datum.WriteVal(w.codec.schema, record)
+	if err := w.datum.Error; err != nil {
+		w.datum = nil
 		return err
 	}
+	data := w.datum.Buffer()
 	if int64(len(data)) > w.codec.limit {
+		w.datum = nil
 		return &InvalidRecord{Err: errors.New("record exceeds Avro block limit")}
 	}
-	if int64(len(w.pending))+int64(len(data)) > w.codec.limit {
+	if int64(len(w.pending))+int64(len(data)) > min(BlockTarget, w.codec.limit) {
 		if err := w.Flush(); err != nil {
 			return err
 		}
+	}
+	if w.pending == nil {
+		w.pending = make([]byte, 0, max(min(BlockTarget, int(w.codec.limit)), len(data)))
 	}
 	w.pending = append(w.pending, data...)
 	w.blockCount++
@@ -127,7 +140,7 @@ func (w *Writer) Flush() error {
 		}
 	}
 	// Release each partition's block capacity after the batch; idle partitions retain no payload buffers.
-	w.pending, w.blockCount = nil, 0
+	w.pending, w.blockCount, w.datum = nil, 0, nil
 	return w.failed
 }
 
