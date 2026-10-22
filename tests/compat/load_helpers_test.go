@@ -207,3 +207,37 @@ func memoryEnvelope(t *testing.T, samples []int64) (warm, final, peak int64) {
 	}
 	return
 }
+
+// measureCLI uses one timing/sampling boundary for all comparable load workloads.
+func measureCLI(t *testing.T, report *loadReport, process *cliProcess, statement string) copySummary {
+	t.Helper()
+	report.cli = process
+	report.MeasurementMethod = "sql_release_to_exit"
+	stopSampling := watchRSS(t, process)
+	start := time.Now()
+	require.NoError(t, process.send(statement))
+	err := process.wait()
+	elapsed := time.Since(start)
+	memory := stopSampling()
+	report.ElapsedSeconds = elapsed.Seconds()
+	report.ChildCPUSeconds = process.cpu().Seconds()
+	report.SampledPeakRSSBytes = memory.peak * 1024
+	report.RSSSamples = memory.samples
+	require.NoError(t, err, process.logs())
+	for _, line := range strings.Split(process.logs(), "\n") {
+		var event struct {
+			Time    time.Time `json:"time"`
+			Message string    `json:"msg"`
+		}
+		if json.Unmarshal([]byte(line), &event) == nil && event.Message == "partition assigned" {
+			report.ReadySeconds = event.Time.Sub(start).Seconds()
+			break
+		}
+	}
+	summary := summaryFrom(t, process.logs())
+	report.Records = summary.Confirmed
+	report.RecordsPerSecond = float64(report.Records) / elapsed.Seconds()
+	report.PeakUncommittedRecords = summary.PeakRecords
+	report.PeakUncommittedBytes = summary.PeakBytes
+	return summary
+}

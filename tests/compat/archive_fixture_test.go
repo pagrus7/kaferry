@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
 	"github.com/pagrus7/kaferry/internal/archive/capture"
@@ -19,7 +20,10 @@ import (
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
 )
+
+var archiveFixtureTimestamp = time.Now().Add(-time.Hour).UnixMilli()
 
 func archiveLoadRecord(id int) core.Record {
 	value := bytes.Repeat([]byte{byte(id % 251)}, 1024+id%4096)
@@ -30,7 +34,7 @@ func archiveLoadRecord(id int) core.Record {
 		}
 	}
 	binary.BigEndian.PutUint32(value, uint32(id))
-	stamp := int64(1700000000000)
+	stamp := archiveFixtureTimestamp
 	key := []byte(fmt.Sprintf("key-%d", id%257))
 	if id%7 == 0 {
 		key = nil
@@ -79,7 +83,7 @@ func seedArchive(t *testing.T, path, format string, count int) {
 	require.NoError(t, writer.Finish())
 }
 
-func verifyArchive(t *testing.T, path, format string, count int) {
+func verifyArchive(t *testing.T, path, format string, count int, original *core.Provenance) {
 	t.Helper()
 	seen := make([]bool, count)
 	verified := 0
@@ -98,8 +102,16 @@ func verifyArchive(t *testing.T, path, format string, count int) {
 		require.Equal(t, expected.TimestampType, record.TimestampType)
 		require.Equal(t, expected.Headers, record.Headers)
 		require.NotNil(t, record.Source)
-		require.Equal(t, expected.Source.Partition, record.Source.Partition)
-		require.Equal(t, expected.Source.Offset, record.Source.Offset)
+		if original != nil {
+			expected.Source.Cluster = original.Cluster
+			expected.Source.TopicID = original.TopicID
+			expected.Source.Topic = original.Topic
+		}
+		if format == "cbor" {
+			expected.Source.Cluster = ""
+			expected.Source.TopicID = [16]byte{}
+		}
+		require.Equal(t, expected.Source, record.Source, "original Kafka identity and offset")
 	}
 	if format == "cbor" {
 		codec, err := file.NewCodec(64 << 20)
@@ -144,7 +156,7 @@ func verifyArchive(t *testing.T, path, format string, count int) {
 			for i, h := range r.Headers {
 				headers[i] = core.Header{Name: string(h.Key), Value: h.Value}
 			}
-			check(core.Record{Source: &core.Provenance{Topic: r.Source.Topic, Partition: r.Source.Partition, Offset: r.Offset}, TimestampMS: r.TimestampMS, TimestampType: r.TimestampKind, Key: r.Key, Value: r.Value, Headers: headers})
+			check(core.Record{Source: &core.Provenance{Cluster: r.Source.Cluster, TopicID: [16]byte(r.Source.TopicID), Topic: r.Source.Topic, Partition: r.Source.Partition, Offset: r.Offset}, TimestampMS: r.TimestampMS, TimestampType: r.TimestampKind, Key: r.Key, Value: r.Value, Headers: headers})
 		}
 	}
 	require.Equal(t, count, verified, "all logical records survive archive copy")
@@ -152,4 +164,15 @@ func verifyArchive(t *testing.T, path, format string, count int) {
 
 func archiveQuery(format, path string) string {
 	return fmt.Sprintf("FILE %s('%s')", format, filepath.ToSlash(path))
+}
+
+func brokerSourceIdentity(t *testing.T, admin *kadm.Client, topic string) *core.Provenance {
+	t.Helper()
+	metadata, err := admin.Metadata(t.Context(), topic)
+	require.NoError(t, err)
+	require.NoError(t, metadata.Topics[topic].Err)
+	require.NotEmpty(t, metadata.Cluster)
+	id := [16]byte(metadata.Topics[topic].ID)
+	require.NotEqual(t, [16]byte{}, id)
+	return &core.Provenance{Cluster: metadata.Cluster, Topic: topic, TopicID: id}
 }

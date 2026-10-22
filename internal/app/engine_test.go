@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"slices"
@@ -155,6 +156,35 @@ func TestEngineReportsArchivePublicationFailureBeforeCleanup(t *testing.T) {
 	require.Equal(t, 1, exit.Code)
 	require.Less(t, slices.Index(f.trace, "run"), slices.Index(f.trace, "publish"))
 	require.Less(t, slices.Index(f.trace, "publish"), slices.Index(f.trace, "close-output"))
+}
+
+func TestEnginePublishesAfterRunnerCancellationAndPreservesBothErrors(t *testing.T) {
+	for _, publicationFails := range []bool{false, true} {
+		t.Run(fmt.Sprint(publicationFails), func(t *testing.T) {
+			// Given a cancelled runner and, optionally, a separate publication failure.
+			f := newEngineFixture()
+			f.fail = "run"
+			f.failure = context.Canceled
+			publication := errors.New("publication failed")
+			if publicationFails {
+				f.onStage = func(stage string) {
+					if stage == "publish" {
+						f.fail = "publish"
+						f.failure = publication
+					}
+				}
+			}
+			engine := newEngine(f, archiveEngineFiles{f}, f, engineLogger(), nil)
+			// When the runner returns cancellation, then Finish still runs before releasing the output.
+			err := engine.Run(t.Context(), enginePlan("FILE", "FILE"), config.Defaults(""), noopShutdown{})
+			require.ErrorIs(t, err, context.Canceled)
+			if publicationFails {
+				require.ErrorIs(t, err, publication)
+			}
+			require.Less(t, slices.Index(f.trace, "run"), slices.Index(f.trace, "publish"))
+			require.Less(t, slices.Index(f.trace, "publish"), slices.Index(f.trace, "close-output"))
+		})
+	}
 }
 
 func enginePlan(source, destination string) plan.Plan {

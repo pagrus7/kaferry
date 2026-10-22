@@ -36,7 +36,6 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result file
 	if err = separatePaths(p, directory); err != nil {
 		return result, err
 	}
-	result.PositionUnit = "records"
 	result.Directory = true
 	result.Exists = true
 	result.CheckpointPath = checkpoint.Path(directory, p.Group)

@@ -47,7 +47,7 @@ func TestAvroCaptureAndReplayCLI(t *testing.T) {
 	// When capturing through the public command, then completed files retain every record.
 	result := run(capture, "")
 	require.Zero(t, result.code, result.detail)
-	verifyArchive(t, archive, "avro", 32)
+	verifyArchive(t, archive, "avro", 32, brokerSourceIdentity(t, a, source))
 	// When replaying through the public command, then destination routing uses keys and preserves bytes.
 	replay := prefix + fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE avro('%s') OPTIONS(GROUP='restore')", destination, archive)
 	settings := fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)

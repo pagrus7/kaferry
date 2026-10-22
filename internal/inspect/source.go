@@ -18,7 +18,7 @@ func (s *Service) source(ctx context.Context, p plan.Plan, limits config.Worker,
 		}
 		report.Source.File = fileSummary(info.ArchiveInspection)
 		report.Source.File.Window = &info.Window
-		if info.PositionUnit == "records" {
+		if info.Directory {
 			report.Source.File.PositionRecords = &info.Position
 		} else {
 			report.Source.File.StartBytes = &info.Position

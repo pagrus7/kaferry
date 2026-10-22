@@ -18,7 +18,6 @@ type ArchiveInspection struct {
 
 type SourceInspection struct {
 	ArchiveInspection
-	PositionUnit   string
 	Warnings       []string
 	Position       int64
 	Window         plan.Window

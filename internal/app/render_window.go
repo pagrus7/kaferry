@@ -79,7 +79,7 @@ func renderWindows(output io.Writer, report inspect.Report) error {
 				fmt.Fprintln(output, "    Fresh start: earliest retained offset; apply the time filter while reading.")
 			}
 		}
-		if err := renderStop(output, report.Source.Kind, group.window, report.CutoffMS, report.WorkerStopAfterRecords); err != nil {
+		if err := renderStop(output, report.Source, group.window, report.CutoffMS, report.WorkerStopAfterRecords); err != nil {
 			return err
 		}
 	}
@@ -111,9 +111,12 @@ func renderBounds(output io.Writer, window plan.Window, origin string) {
 	}
 }
 
-func renderStop(output io.Writer, source string, window plan.Window, cutoff int64, stopAfter uint64) error {
-	if source == "FILE" {
+func renderStop(output io.Writer, source inspect.Endpoint, window plan.Window, cutoff int64, stopAfter uint64) error {
+	if source.Kind == "FILE" {
 		rule := "end of input as observed when the run opens the file"
+		if source.Format == "avro" {
+			rule = "end of this group's fixed selection of completed archive files"
+		}
 		if stopAfter > 0 {
 			rule = "worker record threshold or " + rule + ", whichever comes first"
 		}

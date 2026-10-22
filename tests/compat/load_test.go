@@ -81,23 +81,7 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), copyTimeout)
 			defer cancel()
 			process := launchCLI(t, ctx, binaryPath, args...)
-			report.cli = process
-			report.MeasurementMethod = "sql_release_to_exit"
-			stopSampling := watchRSS(t, process)
-			start := time.Now()
-			require.NoError(t, process.send(statement), "release SQL input")
-			err := process.wait()
-			elapsed := time.Since(start)
-			memory := stopSampling()
-			report.ElapsedSeconds = elapsed.Seconds()
-			report.ChildCPUSeconds = process.cpu().Seconds()
-			report.SampledPeakRSSBytes = memory.peak * 1024
-			report.RSSSamples = memory.samples
-			require.NoError(t, err, "load copy: %v %s", err, process.logs())
-			summary := summaryFrom(t, process.logs())
-			report.Records = summary.Confirmed
-			report.RecordsPerSecond = float64(report.Records) / elapsed.Seconds()
-			report.PeakUncommittedRecords, report.PeakUncommittedBytes = summary.PeakRecords, summary.PeakBytes
+			summary := measureCLI(t, report, process, statement)
 
 			// Then the CLI resolves every record within its work caps and preserves output.
 			require.Equal(t, want, summary.Submitted, "accepted records")
@@ -111,7 +95,7 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			}
 			require.EqualValues(t, want, topicRecordCount(t, a, dst, 5), "destination must not exceed the cap")
 			cpu := process.cpu()
-			t.Logf("records=%d elapsed=%s records/s=%.0f child_cpu=%s sampled_peak_rss_MiB=%.1f peak_uncommitted_records=%d peak_uncommitted_bytes=%d", report.Records, elapsed, report.RecordsPerSecond, cpu, float64(memory.peak)/1024, summary.PeakRecords, summary.PeakBytes)
+			t.Logf("records=%d elapsed=%s records/s=%.0f child_cpu=%s sampled_peak_rss_MiB=%.1f peak_uncommitted_records=%d peak_uncommitted_bytes=%d", report.Records, time.Duration(report.ElapsedSeconds*float64(time.Second)), report.RecordsPerSecond, cpu, float64(report.SampledPeakRSSBytes)/(1<<20), summary.PeakRecords, summary.PeakBytes)
 		})
 	}
 }

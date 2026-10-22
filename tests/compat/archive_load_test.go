@@ -5,15 +5,14 @@ package compat
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
+	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -37,11 +36,13 @@ func TestLoadArchiveCopy(t *testing.T) {
 			options := "GROUP='archive-load'"
 			prefix := ""
 			var destination string
+			var original *core.Provenance
 			if direction != "file" {
 				a := admin(t)
 				name := topic(t, a, 4)
 				prefix = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') ", broker(t))
 				if direction == "capture" {
+					original = brokerSourceIdentity(t, a, name)
 					// A fresh disposable broker may still be creating its group coordinator.
 					warmCtx, warmCancel := context.WithTimeout(t.Context(), 30*time.Second)
 					for {
@@ -104,7 +105,7 @@ func TestLoadArchiveCopy(t *testing.T) {
 					require.EqualValues(t, *expected.TimestampMS, record.Timestamp.UnixMilli())
 				}
 			} else {
-				verifyArchive(t, output, format, count)
+				verifyArchive(t, output, format, count, original)
 			}
 			t.Logf("format=%s direction=%s records=%d elapsed=%s records/s=%.0f cpu=%s peak_RSS_MiB=%.1f", format, direction, count, time.Duration(report.ElapsedSeconds*float64(time.Second)), report.RecordsPerSecond, time.Duration(report.ChildCPUSeconds*float64(time.Second)), float64(report.SampledPeakRSSBytes)/(1<<20))
 		})
@@ -125,35 +126,8 @@ func measureArchiveCLI(t *testing.T, statement, cfg, format string, count int) *
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
 	process := launchCLI(t, ctx, testBinary(t), "run", "-f", "-", "-c", cfg)
-	report.cli = process
-	report.MeasurementMethod = "sql_release_to_exit"
-	stopSampling := watchRSS(t, process)
-	start := time.Now()
-	require.NoError(t, process.send(statement))
-	err := process.wait()
-	elapsed := time.Since(start)
-	memory := stopSampling()
-	report.ElapsedSeconds = elapsed.Seconds()
-	report.ChildCPUSeconds = process.cpu().Seconds()
-	report.SampledPeakRSSBytes = memory.peak * 1024
-	report.RSSSamples = memory.samples
-	require.NoError(t, err, process.logs())
-	for _, line := range strings.Split(process.logs(), "\n") {
-		var event struct {
-			Time    time.Time `json:"time"`
-			Message string    `json:"msg"`
-		}
-		if json.Unmarshal([]byte(line), &event) == nil && event.Message == "partition assigned" {
-			report.ReadySeconds = event.Time.Sub(start).Seconds()
-			break
-		}
-	}
-	summary := summaryFrom(t, process.logs())
-	report.Records = summary.Confirmed
-	report.RecordsPerSecond = float64(report.Records) / elapsed.Seconds()
-	report.PeakUncommittedRecords = summary.PeakRecords
-	report.PeakUncommittedBytes = summary.PeakBytes
+	measureCLI(t, report, process, statement)
 	require.Equal(t, count, report.Records)
-	require.LessOrEqual(t, summary.PeakRecords, 20000)
+	require.LessOrEqual(t, report.PeakUncommittedRecords, 20000)
 	return report
 }

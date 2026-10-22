@@ -109,6 +109,7 @@ func TestArchiveCLIResumeUsesFixedSelectionAndSavesStopReason(t *testing.T) {
 	code, logs = execute("explain", sql+")")
 	require.Zero(t, code, logs)
 	require.Contains(t, logs, "Input position: 5 records")
+	require.Contains(t, logs, "end of this group's fixed selection")
 	after, err := os.ReadFile(checkpoint.Path(root, "resume"))
 	require.NoError(t, err)
 	require.Equal(t, before, after)

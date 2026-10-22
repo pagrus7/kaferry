@@ -112,7 +112,7 @@ Kafka stores `kaferry:2;` followed by a UTF-8 JSON object with each committed of
 
 Absent `stop` means no saved stop. Zero is a valid offset or time bound. Unknown/duplicate fields, null fields other than window bounds, invalid values, foreign prefixes and unsupported versions are rejected. JSON whitespace and field order do not matter. A format version defines encoding, fields and meaning; any contract change needs a new version. Only version `2` JSON is supported; other encodings require another version.
 
-The initial assignment commit clears the previous stop. A later commit includes it only after every earlier required write succeeds (Kafka acknowledgment or file fsync), including stops at unchanged offsets. Lost assignments never commit. A crash before saving can replay writes. File checkpoints use version `3` and the same stop shape with reason `eof` or `worker_record_cap`; opening size includes any partial final frame.
+The initial assignment commit clears the previous stop. A later commit includes it only after every earlier required write succeeds (Kafka acknowledgment or file fsync), including stops at unchanged offsets. Lost assignments never commit. A crash before saving can replay writes. CBOR checkpoints use version `3` and the same stop shape with reason `eof` or `worker_record_cap`; opening size includes any partial final frame.
 
 ## Kafka output
 
@@ -148,7 +148,7 @@ Default FAIL. Choose `ON_ERROR` or the specific timestamp policies; they are mut
 - Async delivery errors, fatal client errors, authentication/authorization, out-of-range positions, framing/CRC corruption and changed source files cannot be skipped.
 - Consumer polling retries classified transient connection/coordinator errors without a total deadline. `worker.tip_wait` bounds only waiting through sampled H, not general outages.
 - Required startup inspection and initial/periodic commits fail on error. Optional destination-config inspection warns. Kafka inspection and commit requests use context deadlines; the CLI shutdown budget also covers client cleanup and blocked filesystem or stdio calls.
-- File input fails if its ID changes, it is shorter than the checkpoint, or the last checkpointed frame's CRC changes. Appends are allowed; earlier frames are not all revalidated on resume. Use a new group for changed input.
+- CBOR input fails if its ID changes, it is shorter than the checkpoint, or the last checkpointed frame's CRC changes. Appends are allowed; earlier frames are not all revalidated on resume. Use a new group for changed input. Avro instead checks every selected file on incomplete restart; see [archive replay](archive.md#replay-and-progress).
 
 ## Files
 
