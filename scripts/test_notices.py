@@ -23,6 +23,23 @@ class NoticesTest(unittest.TestCase):
             for text in texts.values():
                 self.assertIn(text, result)
 
+    def test_british_licence_spelling_preserves_module_and_subpackage_texts(self):
+        # Given a dependency using LICENCE at its root and in a linked subpackage.
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            package = root / 'sub'
+            package.mkdir()
+            (root / 'LICENCE').write_text('module permission\n')
+            (package / 'LICENCE.txt').write_text('subpackage permission\n')
+            fallback = root / 'fallback'
+            fallback.write_text('unrelated fallback')
+            # When collecting, then keep both real grants without substituting the fallback.
+            self.assertNotIn('unrelated fallback', license_text(root, fallback))
+            result = module_text(root, {package})
+            self.assertIn('module permission\n', result)
+            self.assertIn('sub/LICENCE.txt', result)
+            self.assertIn('subpackage permission\n', result)
+
     def test_missing_or_empty_license_blocks_packaging(self):
         # Given only a notice, then an empty license alongside it.
         with tempfile.TemporaryDirectory() as directory:

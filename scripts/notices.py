@@ -7,12 +7,15 @@ import subprocess
 import sys
 
 
+LICENSE_NAMES = ("LICENSE", "LICENCE", "COPYING")
+NOTICE_NAMES = LICENSE_NAMES + ("NOTICE", "PATENTS")
+
 def license_text(directory, fallback=None):
     files = sorted(p for p in directory.iterdir() if p.is_file() and
-                   p.name.upper().startswith(("LICENSE", "COPYING", "NOTICE", "PATENTS")))
-    if fallback and fallback.is_file() and not any(p.name.upper().startswith(("LICENSE", "COPYING")) for p in files):
+                   p.name.upper().startswith(NOTICE_NAMES))
+    if fallback and fallback.is_file() and not any(p.name.upper().startswith(LICENSE_NAMES) for p in files):
         files.append(fallback)
-    if not any(p.name.upper().startswith(("LICENSE", "COPYING")) and p.stat().st_size for p in files):
+    if not any(p.name.upper().startswith(LICENSE_NAMES) and p.stat().st_size for p in files):
         raise ValueError(f"missing license in {directory}")
     return "\n\n".join(f"{p.name}\n\n{p.read_text(encoding='utf-8')}" for p in files)
 
@@ -27,7 +30,7 @@ def module_text(directory, packages):
             package = package.parent
     for parent in sorted(parents):
         for path in sorted(parent.iterdir()):
-            if path.is_file() and path.name.upper().startswith(("LICENSE", "COPYING", "NOTICE", "PATENTS")):
+            if path.is_file() and path.name.upper().startswith(NOTICE_NAMES):
                 result.append(f"{path.relative_to(directory)}\n\n{path.read_text(encoding='utf-8')}")
     return "\n\n".join(result)
 
