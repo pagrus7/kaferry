@@ -5,6 +5,7 @@ package compat
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 	src, dst := topic(t, a, 2), topic(t, a, 2)
 	group := src + "-churn"
 	path := configuration(t, "record_cap=32\npartition_record_cap=8\n")
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", dst, src, group)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", dst, src, group)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	results := make(chan workerResult, 8)
@@ -71,7 +72,11 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 	assign(t, reader, dst, 2)
 	seen := make(map[string]bool)
 	for len(seen) < 288 {
-		seen[string(read(t, reader).Value)] = true
+		record := read(t, reader)
+		id, err := strconv.Atoi(string(record.Value))
+		require.NoError(t, err)
+		require.EqualValues(t, id%2, record.Partition, "preserved routing survives reassignment")
+		seen[string(record.Value)] = true
 	}
 	for id := range 288 {
 		if !seen[fmt.Sprint(id)] {

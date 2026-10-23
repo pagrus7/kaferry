@@ -246,6 +246,7 @@ func TestRoutingMetadataIsFreshCompleteAndDense(t *testing.T) {
 			parts, err := c.Partitions(t.Context())
 			if tc.want != "" {
 				require.ErrorContains(t, err, tc.want)
+				require.ErrorContains(t, c.ValidatePartitions(t.Context(), []int32{0}), tc.want)
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, []int32{0, 1}, parts)
@@ -254,4 +255,19 @@ func TestRoutingMetadataIsFreshCompleteAndDense(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDestinationLayoutAcceptsRecreationAndGrowth(t *testing.T) {
+	// Given a destination whose replacement topic has more usable partitions.
+	response := metadataResponse([16]byte{1})
+	response.Topics[0].Partitions = []kmsg.MetadataResponseTopicPartition{{Partition: 0}, {Partition: 1}}
+	client := &metadataMock{request: func(context.Context, kmsg.Request) (kmsg.Response, error) { return response, nil }}
+	c := &connection{inspector: &Inspector{client: client, topic: "input", log: quietLogger()}}
+	require.NoError(t, c.ValidatePartitions(t.Context(), []int32{1}))
+	response.Topics[0].TopicID = [16]byte{2}
+	response.Topics[0].Partitions = append(response.Topics[0].Partitions, kmsg.MetadataResponseTopicPartition{Partition: 2})
+	// When rechecking assignments, then validate the current layout without applying source identity checks.
+	require.NoError(t, c.ValidatePartitions(t.Context(), []int32{1, 2}))
+	require.Equal(t, [16]byte{2}, c.inspector.topicID)
+	require.ErrorContains(t, c.ValidatePartitions(t.Context(), []int32{3}), "original partition 3")
 }

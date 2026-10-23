@@ -4,6 +4,10 @@
 
 Use `-c connections.toml`; SQL overrides TOML. [Connections](../README.md#connections) · [Settings](../design/decisions.md#configuration-and-cli).
 
+## SQL settings
+
+Use `WITH` on either endpoint: source `GROUP`, `START`, `CUTOFF`; destination `PARTITIONING` or Avro rotation. Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
+
 ## Permissions
 
 Kafka needs source topic/group READ and destination WRITE (including DESCRIBE); some brokers also need cluster IDEMPOTENT_WRITE. For `ONE_OFF`, grant group READ on the `kaferry-` prefix. File-only copies need no Kafka grants. [Optional DESCRIBE_CONFIGS](../design/client-compatibility.md#optional-destination-configuration).
@@ -27,8 +31,7 @@ Pass SQL with `-f file`, `-f -` (stdin) or `-e "SQL"`.
 mkdir -p archive
 kaferry run -c connections.toml -f - <<'SQL'
 INSERT INTO FILE avro('archive/orders')
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive', START = EARLIEST)
-;
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive', START = EARLIEST);
 SQL
 ```
 
@@ -37,7 +40,7 @@ Replay completed files while capture continues; stop capture first to include it
 ```sh
 mkdir -p ~/.kaferry/checkpoints
 kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM FILE avro('archive/orders') WITH (GROUP = 'orders-restore') ;"
+SELECT * FROM FILE avro('archive/orders') WITH (GROUP = 'orders-restore');"
 ```
 
 Kafka needs `WHERE` or `START`: `EARLIEST` for retained records, `LATEST` for new ones. Saved progress takes precedence. Avro pins completed files: the same group resumes them; a new group selects current files. [Examples](../design/grammar.md#valid-examples).
@@ -59,10 +62,6 @@ kaferry status -c connections.toml -f copy.sql --json
 Rerun with the same `GROUP`, endpoints, filter, `CUTOFF`, partitioning mode and checkpoint directory. Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
 
 Keep output, checkpoints and locks. Archive files must stay unchanged until replay completes. [Recovery rules](../design/archive.md#capture-and-recovery).
-
-## SQL settings
-
-Use `WITH` on either endpoint: source `GROUP`, `START`, `CUTOFF`; destination `PARTITIONING` or Avro rotation. Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
 
 ## Errors
 

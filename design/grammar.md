@@ -77,16 +77,14 @@ WITH CONNECTION dr AS (
 INSERT INTO TOPIC 'orders@dr'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-dr-2026-10-01')
 WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z'
-  AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-02T00:00:00Z'
-;
+  AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-02T00:00:00Z';
 ```
 
 Topic→file, follow from the earliest retained record, default connection:
 
 ```sql
 INSERT INTO FILE avro('/data/audit')
-SELECT * FROM TOPIC 'audit' WITH (GROUP = 'audit-archive', START = EARLIEST)
-;
+SELECT * FROM TOPIC 'audit' WITH (GROUP = 'audit-archive', START = EARLIEST);
 ```
 
 File→topic, last seven days, skipping timestamps known to be outside the destination's accepted bounds:
@@ -104,8 +102,7 @@ File→file, inclusive range, one-off group (normalizes to `[09:00:00.000, 09:30
 INSERT INTO FILE avro('/data/incident')
 SELECT * FROM FILE avro('/data/orders') WITH (GROUP = ONE_OFF)
 WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z'
-                           AND TIMESTAMP '2026-10-01T09:30:00Z'
-;
+                           AND TIMESTAMP '2026-10-01T09:30:00Z';
 ```
 
 Topic→topic, relative window with cutoff. Saved progress keeps the resolved `NOW()` window for restarts; workers starting together can resolve different windows ([time window](decisions.md#time-window)):

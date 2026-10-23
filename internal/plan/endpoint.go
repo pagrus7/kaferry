@@ -108,7 +108,7 @@ func (e *Endpoint) destinationOptions(options []sql.Option) error {
 	return applyOptions(options, sql.DestinationSettings, func(o sql.Option) error {
 		if o.Name == "PARTITIONING" {
 			if e.Kind != "TOPIC" {
-				return fmt.Errorf("PARTITIONING requires a topic destination")
+				return sql.At(o.Position, fmt.Errorf("PARTITIONING requires a topic destination"))
 			}
 			if o.Value != Preserve && o.Value != Key {
 				return fmt.Errorf("PARTITIONING must be PRESERVE or KEY")
@@ -117,7 +117,7 @@ func (e *Endpoint) destinationOptions(options []sql.Option) error {
 			return nil
 		}
 		if e.Kind != "FILE" {
-			return fmt.Errorf("%s requires a FILE destination", o.Name)
+			return sql.At(o.Position, fmt.Errorf("%s requires a FILE destination", o.Name))
 		}
 		return e.rotationOption(o)
 	})

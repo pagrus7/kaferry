@@ -92,6 +92,10 @@ func (c *engineConnection) Partitions(context.Context) ([]int32, error) {
 	}
 	return []int32{0}, nil
 }
+func (c *engineConnection) DestinationPartitions(ctx context.Context) (int, error) {
+	parts, err := c.Partitions(ctx)
+	return len(parts), err
+}
 func (c *engineConnection) ValidatePartitions(context.Context, []int32) error { return nil }
 func (c *engineConnection) CheckMembers(context.Context, string) error {
 	return c.fixture.stage("members")

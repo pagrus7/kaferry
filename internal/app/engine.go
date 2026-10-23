@@ -233,7 +233,7 @@ func validateRouting(ctx context.Context, p plan.Plan, source, destination kafka
 	if !p.Destination.PreservesPartitions() {
 		return 0, nil
 	}
-	parts, err := destination.Partitions(ctx)
+	count, err := destination.DestinationPartitions(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -242,9 +242,9 @@ func validateRouting(ctx context.Context, p plan.Plan, source, destination kafka
 		if err != nil {
 			return 0, err
 		}
-		if err = plan.CheckPartitions(ids, len(parts)); err != nil {
+		if err = plan.CheckPartitions(ids, count); err != nil {
 			return 0, &kafkaport.Conflict{Err: err}
 		}
 	}
-	return len(parts), nil
+	return count, nil
 }

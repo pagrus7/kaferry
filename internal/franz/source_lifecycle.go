@@ -24,7 +24,7 @@ func (s *Source) lifecycle(event lifecycleEvent) error {
 	}
 	ctx, cancel := context.WithTimeout(s.query, 10*time.Second)
 	defer cancel()
-	if s.routing != nil {
+	if s.routing != nil && len(event.ids) > 0 {
 		if err := s.routing.ValidatePartitions(ctx, event.ids); err != nil {
 			event.answer <- lifecycleAnswer{err: err}
 			return err

@@ -239,3 +239,13 @@ func TestTextExplanationSummarizesLargePartitionSets(t *testing.T) {
 		})
 	}
 }
+
+func TestTextExplanationStatesPreservedRoutingByDefault(t *testing.T) {
+	// Given a topic destination without an explicit routing option.
+	report := explanationFixture()
+	report.Destination = inspect.Endpoint{Kind: "TOPIC", Name: "out"}
+	// When rendered, then state both original placement and missing-partition failure.
+	output := textExplanation(t, report)
+	require.Contains(t, output, "Routing: preserve original partition numbers; missing partitions fail.")
+	require.NotContains(t, output, "destination key partitioner")
+}

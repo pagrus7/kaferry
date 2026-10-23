@@ -38,6 +38,7 @@ type PartitionValidator interface {
 type Connection interface {
 	ClusterID(context.Context) (string, error)
 	Partitions(context.Context) ([]int32, error)
+	DestinationPartitions(context.Context) (int, error)
 	PartitionValidator
 	CheckMembers(context.Context, string) error
 	ReadProgress(context.Context, string, string, plan.WindowSpec, int64) (map[int32]Progress, error)

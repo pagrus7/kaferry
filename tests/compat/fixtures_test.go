@@ -142,11 +142,15 @@ func read(t *testing.T, client *kgo.Client) *kgo.Record {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	fetches := client.PollRecords(ctx, 1)
-	require.Empty(t, fetches.Errors(), "read fixture record")
-	records := fetches.Records()
-	require.Len(t, records, 1, "expected a fixture record before timeout")
-	return records[0]
+	for {
+		fetches := client.PollRecords(ctx, 1)
+		require.Empty(t, fetches.Errors(), "read fixture record")
+		records := fetches.Records()
+		if len(records) > 0 {
+			return records[0]
+		}
+		require.NoError(t, ctx.Err(), "expected a fixture record before timeout")
+	}
 }
 
 func topicRecordCount(t *testing.T, a *kadm.Client, topic string, partitions int) int64 {

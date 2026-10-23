@@ -101,7 +101,16 @@ func (c *connection) ClusterID(ctx context.Context) (string, error) {
 	return c.inspector.clusterID, nil
 }
 func (c *connection) Partitions(ctx context.Context) ([]int32, error) {
-	if err := c.inspector.Refresh(ctx); err != nil {
+	return c.partitions(ctx, true)
+}
+
+func (c *connection) DestinationPartitions(ctx context.Context) (int, error) {
+	parts, err := c.partitions(ctx, false)
+	return len(parts), err
+}
+
+func (c *connection) partitions(ctx context.Context, source bool) ([]int32, error) {
+	if err := c.inspector.refresh(ctx, source); err != nil {
 		return nil, err
 	}
 	parts := slices.Clone(c.inspector.parts)
@@ -118,11 +127,11 @@ func (c *connection) Partitions(ctx context.Context) ([]int32, error) {
 }
 
 func (c *connection) ValidatePartitions(ctx context.Context, ids []int32) error {
-	parts, err := c.Partitions(ctx)
+	count, err := c.DestinationPartitions(ctx)
 	if err != nil {
 		return err
 	}
-	if err := plan.CheckPartitions(ids, len(parts)); err != nil {
+	if err := plan.CheckPartitions(ids, count); err != nil {
 		return &kafkaport.Conflict{Err: err}
 	}
 	return nil

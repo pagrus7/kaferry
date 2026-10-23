@@ -217,21 +217,11 @@ func TestKafkaSinkPreservesPartitionsUsingTheRealProducer(t *testing.T) {
 	// When submitting null, empty and binary keys, then all retain the original partition 2.
 	for _, key := range [][]byte{nil, {}, {0, 255}} {
 		require.NoError(t, output.Submit(core.Record{Source: &core.Provenance{Partition: 2}, Key: key}, core.Token{Partition: 0}))
-		select {
-		case report := <-output.Deliveries():
-			require.NoError(t, report.Err)
-		case <-time.After(5 * time.Second):
-			t.Fatal("delivery timed out")
-		}
+		require.NoError(t, receiveDelivery(t, output).Err)
 	}
 	// When the layout changes after preflight, then the manual partitioner fails rather than remapping.
 	require.NoError(t, output.Submit(core.Record{Source: &core.Provenance{Partition: 8}}, core.Token{}))
-	select {
-	case report := <-output.Deliveries():
-		require.Error(t, report.Err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("invalid partition was not rejected")
-	}
+	require.Error(t, receiveDelivery(t, output).Err)
 	consumer := componentClient(t, cluster, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"output": {2: kgo.NewOffset().AtStart()}}))
 	for _, key := range [][]byte{nil, {}, {0, 255}} {
 		fetched := consumer.PollRecords(componentContext(t), 1)
@@ -241,4 +231,44 @@ func TestKafkaSinkPreservesPartitionsUsingTheRealProducer(t *testing.T) {
 		require.EqualValues(t, 2, records[0].Partition)
 		require.Equal(t, key, records[0].Key)
 	}
+}
+
+func TestExplicitKeyRoutingMatchesKafkaHashVectors(t *testing.T) {
+	// Given Kafka's reference Murmur2 vectors mapped to five partitions.
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(5, "input", "output"))
+	defer cluster.Close()
+	p := componentPlan(t, cluster)
+	p.Destination.Partitioning = plan.Key
+	connection, err := componentFactory().Open(t.Context(), p.Destination)
+	require.NoError(t, err)
+	defer connection.Close(context.Background())
+	output, err := connection.Sink(t.Context(), config.Defaults("").Worker)
+	require.NoError(t, err)
+	defer output.Close()
+	// Expected values use Kafka UtilsTest.testMurmur2 hashes, masked positive then modulo 5.
+	expected := map[string]int32{"21": 0, "foobar": 1, "abc": 2}
+	for range 2 {
+		for _, key := range []string{"21", "foobar", "abc"} {
+			// When source partition 4 differs from every expected destination, then KEY ignores that source placement.
+			require.NoError(t, output.Submit(core.Record{Source: &core.Provenance{Partition: 4}, Key: []byte(key)}, core.Token{}))
+			require.NoError(t, receiveDelivery(t, output).Err)
+		}
+	}
+	reader := componentClient(t, cluster, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"output": {0: kgo.NewOffset().AtStart(), 1: kgo.NewOffset().AtStart(), 2: kgo.NewOffset().AtStart()}}))
+	ctx := componentContext(t)
+	seen := map[string]int{}
+	for count := 0; count < 6; {
+		fetched := reader.PollRecords(ctx, 6-count)
+		require.NoError(t, fetched.Err())
+		require.NoError(t, ctx.Err())
+		for _, record := range fetched.Records() {
+			// Then the real producer sends repeated keys to their independently fixed destinations.
+			want, known := expected[string(record.Key)]
+			require.True(t, known)
+			require.Equal(t, want, record.Partition)
+			seen[string(record.Key)]++
+			count++
+		}
+	}
+	require.Equal(t, map[string]int{"21": 2, "foobar": 2, "abc": 2}, seen)
 }

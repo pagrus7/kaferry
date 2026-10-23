@@ -3,6 +3,7 @@
 package compat
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,7 +58,9 @@ func TestPreservedPartitionsAndExplicitKeyRouting(t *testing.T) {
 		destination := topic(t, a, 2)
 		group := source + "-reject"
 		query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s',START=EARLIEST) OPTIONS(ON_ERROR=SKIP)", destination, source, group)
-		result := binaryWorker(t, t.Context(), query, config)
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		result := binaryWorker(t, ctx, query, config)
 		require.Equal(t, 2, result.code)
 		require.Contains(t, result.detail, "original partition 2")
 		require.Zero(t, topicRecordCount(t, a, destination, 2))
@@ -91,7 +94,9 @@ func TestPreservedPartitionsAndExplicitKeyRouting(t *testing.T) {
 		// When replaying into too few partitions, then reject before saving the fixed file selection.
 		small := topic(t, a, 2)
 		query = fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE avro('%s') WITH(GROUP='reject-file') OPTIONS(ON_ERROR=SKIP)", small, archive)
-		result := binaryWorker(t, t.Context(), query, cfg)
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		result := binaryWorker(t, ctx, query, cfg)
 		require.Equal(t, 2, result.code)
 		require.Contains(t, result.detail, "original partition 2")
 		_, err := os.Stat(checkpoint.Path(root, "reject-file"))

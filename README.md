@@ -27,7 +27,7 @@ When Kaferry reads Kafka, franz-go v1.22.2 misreads record timestamps outside ±
 
 ## Quick start
 
-Topics must exist. Replace the addresses; add [authentication](#connections) as needed.
+Both topics must exist; the destination needs at least as many partitions as the source. Replace the addresses; add [authentication](#connections) as needed.
 
 **`connections.toml`:**
 
@@ -45,8 +45,7 @@ Topics must exist. Replace the addresses; add [authentication](#connections) as 
 INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-backfill')
 WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
-  AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z'
-;
+  AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
 ```
 
 `@alias` selects a connection; `GROUP` identifies saved progress. Rerun to resume; a new window, `CUTOFF` or partitioning mode needs a new group.

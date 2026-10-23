@@ -113,9 +113,6 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 }
 
 func (q Query) validatePartitions(files []Progress) error {
-	if q.PartitionCount < 0 {
-		return errors.New("partition count must not be negative")
-	}
 	if q.PartitionCount == 0 {
 		return nil
 	}

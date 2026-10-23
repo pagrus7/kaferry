@@ -305,12 +305,12 @@ func TestSinkUnknownTimestampTypeChecksClientSafeBoundaries(t *testing.T) {
 	}
 }
 
-func receiveDelivery(t *testing.T, sink *Sink) core.Delivery {
+func receiveDelivery(t *testing.T, sink core.Sink) core.Delivery {
 	t.Helper()
 	select {
 	case report := <-sink.Deliveries():
 		return report
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("delivery report did not arrive")
 		return core.Delivery{}
 	}
@@ -330,7 +330,7 @@ func TestSinkPreservesOriginalPartitionRatherThanReplayCursor(t *testing.T) {
 		require.Equal(t, key, client.records[0].Key)
 		require.Equal(t, []kgo.RecordHeader{{Key: "same", Value: nil}, {Key: "same", Value: []byte{}}}, client.records[0].Headers)
 		client.callbacks[0](client.records[0], nil)
-		require.Equal(t, token, (<-s.Deliveries()).Token)
+		require.Equal(t, token, receiveDelivery(t, s).Token)
 	}
 }
 

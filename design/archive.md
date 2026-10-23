@@ -52,8 +52,7 @@ Publishing renames synced private files without overwriting conflicting targets,
 
 ```text
 INSERT INTO FILE avro('/archive/orders') WITH (ROTATE_AFTER_SIZE = 512m, ROTATE_AFTER_AGE = INTERVAL '2' HOUR)
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive', START = EARLIEST)
-;
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive', START = EARLIEST);
 ```
 
 Only the path is required. Defaults: 1g compressed container bytes or one elapsed hour. Size suffixes k/m/g are case-insensitive powers of 1024; plain integers are bytes. The complete crossing block may exceed the size target. Check age even when no records arrive.

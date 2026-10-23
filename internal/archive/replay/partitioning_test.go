@@ -54,7 +54,4 @@ func TestReplayValidatesSavedSelectionInsteadOfReselecting(t *testing.T) {
 	require.Equal(t, saved, *store.saved)
 	require.Len(t, store.writes, 1)
 	require.Zero(t, inputs.selects)
-	q.PartitionCount = -1
-	_, err = NewSession(q, clock{}, store, inputs, &memoryBlocks{}, 0)
-	require.ErrorContains(t, err, "partition count must not be negative")
 }

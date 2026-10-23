@@ -4,9 +4,11 @@ package compat
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,13 +26,14 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 		limit          int
 	}{
 		{"default", 16000, 20000, 128 << 20, "", 0},
+		{"preserved partitions", 16000, 20000, 128 << 20, "", 0},
 		{"slow destination small caps", 128, 32, 128 << 10, "[worker]\nrecord_cap=32\nbyte_cap=131072\npartition_record_cap=8\npartition_byte_cap=32768\n", 0},
 		{"record limit", 16000, 20000, 128 << 20, "", 2000},
 	}
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
 			count, recordCap, byteCap, configuration := scenario.count, scenario.records, scenario.bytes, scenario.config
-			if scenario.name == "default" {
+			if scenario.name == "default" || scenario.name == "preserved partitions" {
 				count = loadRecordCount(t, "KAFERRY_LOAD_KAFKA_RECORDS", count, 160000)
 			}
 			report := newLoadReport(t, "load")
@@ -71,6 +74,9 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 				args = append(args, "--config", path)
 				statement = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'), CONNECTION slow AS ('bootstrap.servers'='%s','linger.ms'='100') INSERT INTO TOPIC '%s@slow' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), broker(t), dst, src, src+"-load", stamp.Add(time.Second).Format(time.RFC3339Nano))
 			}
+			if scenario.name == "preserved partitions" {
+				statement = strings.Replace(statement, "WITH (PARTITIONING = KEY)", "", 1)
+			}
 			want := count
 			if scenario.limit > 0 {
 				statement = statement + fmt.Sprintf(" OPTIONS(WORKER_STOP_AFTER_RECORDS=%d)", scenario.limit)
@@ -90,7 +96,11 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			c := consumer(t)
 			assign(t, c, dst, 5)
 			for range want {
-				records.verify(t, read(t, c))
+				record := read(t, c)
+				records.verify(t, record)
+				if scenario.name == "preserved partitions" {
+					require.EqualValues(t, binary.BigEndian.Uint32(record.Value)%4, record.Partition, "preserved source partition")
+				}
 			}
 			require.EqualValues(t, want, topicRecordCount(t, a, dst, 5), "destination must not exceed the cap")
 			cpu := process.cpu()
