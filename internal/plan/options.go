@@ -81,8 +81,6 @@ func (p *Plan) applyOption(option sql.Option) error {
 		p.WorkerStopAfterRecords = value
 	case "ON_ERROR", "ON_MISSING_TIMESTAMP", "ON_REJECTED_TIMESTAMP":
 		return p.policyOption(option)
-	default:
-		return sql.At(option.Position, fmt.Errorf("unsupported copy setting"))
 	}
 	return nil
 }

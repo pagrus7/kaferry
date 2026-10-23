@@ -23,6 +23,7 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 		{"empty group", source(files, "GROUP=''"), "''", "GROUP must not be blank; use a quoted name or ONE_OFF", nil, nil},
 		{"duplicate group", source(files, "GROUP='g', GROUP='h'"), "GROUP='h'", "option GROUP repeats; specify it once; first declaration at line 3, column 6", nil, nil},
 		{"unsupported AST file format", files, "'out'", "INTO endpoint: unsupported file format", func(s *sql.Statement) { s.Destination.Format = "unsupported" }, nil},
+		{"missing age interval", strings.Replace(files, "avro('out')", "avro('private/path') WITH(ROTATE_AFTER_AGE=INTERVAL '1' HOUR)", 1), "INTERVAL", "ROTATE_AFTER_AGE requires a positive interval", func(s *sql.Statement) { s.Destination.Options[0].Interval = nil }, nil},
 		{"invalid AST partitioning", "INSERT INTO TOPIC 'b' WITH(PARTITIONING=KEY) SELECT * FROM FILE avro('in') WITH(GROUP='g')", "KEY", "PARTITIONING must be PRESERVE or KEY", func(s *sql.Statement) { s.Destination.Options[0].Value = "secret-mode" }, nil},
 		{"file partitioning", strings.Replace(files, "avro('out')", "avro('out') WITH(PARTITIONING=KEY)", 1), "PARTITIONING", "PARTITIONING requires a topic destination", nil, nil},
 		{"topic rotation", strings.Replace(topics, "TOPIC 'b'", "TOPIC 'b' WITH(ROTATE_AFTER_SIZE=1k)", 1) + "WHERE RECORD_TIMESTAMP < NOW()", "ROTATE_AFTER_SIZE", "ROTATE_AFTER_SIZE requires a FILE destination", nil, nil},
@@ -77,6 +78,7 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 			require.ErrorAs(t, err, &diagnostic)
 			require.Equal(t, position, diagnostic.Position)
 			require.Equal(t, tc.message, diagnostic.Err.Error())
+			require.NotContains(t, err.Error(), "private/path")
 		})
 	}
 }

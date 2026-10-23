@@ -87,6 +87,9 @@ func (c *engineConnection) ClusterID(context.Context) (string, error) {
 }
 func (c *engineConnection) Partitions(context.Context) ([]int32, error) {
 	c.fixture.partitionReads = append(c.fixture.partitionReads, c.name)
+	if c.fixture.fail == "partitions-"+c.name {
+		return nil, c.fixture.failure
+	}
 	if parts, ok := c.fixture.partitions[c.name]; ok {
 		return parts, nil
 	}
@@ -449,4 +452,29 @@ func TestEngineBindsPreservedLayoutToTheInput(t *testing.T) {
 	require.NoError(t, newEngine(f, f, f, engineLogger(), nil).Run(t.Context(), p, config.Defaults(""), noopShutdown{}))
 	require.Empty(t, f.partitionReads)
 	require.Nil(t, f.routing)
+}
+
+func TestEngineMetadataFailurePrecedesProgressAndOutput(t *testing.T) {
+	for _, tc := range []struct{ name, source, fail string }{{"destination before archive checkpoint", "FILE", "partitions-destination"}, {"source before Kafka progress", "TOPIC", "partitions-input"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given metadata that becomes unavailable after the endpoint connections open.
+			f := newEngineFixture()
+			f.fail = tc.fail
+			p := enginePlan(tc.source, "TOPIC")
+			p.Source.Name = "input"
+			p.Destination.Name = "destination"
+			p.Destination.Partitioning = plan.Preserve
+			// When starting, then preserve the failure and close connections before acquiring input or output.
+			err := newEngine(f, f, f, engineLogger(), nil).Run(t.Context(), p, config.Defaults(""), noopShutdown{})
+			require.ErrorIs(t, err, f.failure)
+			for _, stage := range []string{"members", "progress", "file-input", "topic-input", "topic-output", "runner", "run"} {
+				require.NotContains(t, f.trace, stage)
+			}
+			require.Empty(t, f.groups, "archive selection must not be pinned")
+			require.Contains(t, f.trace, "close-destination")
+			if tc.source == "TOPIC" {
+				require.Contains(t, f.trace, "close-input")
+			}
+		})
+	}
 }
