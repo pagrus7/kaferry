@@ -103,16 +103,18 @@ func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 
 			require.NoError(t, signalErr)
 
-			// When a partition is added while the resumed worker is stopped.
+			// When both topics gain a partition while the resumed worker is stopped.
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			results, err := a.UpdatePartitions(ctx, 2, src)
+			results, err := a.UpdatePartitions(ctx, 2, dst, src)
 			cancel()
 
 			// Then it joins the new assignment after continuing.
-			if err != nil || results[src].Err != nil {
-				t.Fatal("partition expansion", err, results)
+			require.NoError(t, err, "partition expansion")
+			require.Len(t, results, 2)
+			for _, name := range []string{dst, src} {
+				require.NoError(t, results[name].Err, "expand %s", name)
+				waitTopicReady(t, a, name, 2)
 			}
-			waitTopicReady(t, a, src, 2)
 			expanded := producer(t)
 			publish(t, expanded, &kgo.Record{Topic: src, Partition: 1, Value: []byte("new partition before assignment"), Timestamp: time.Now()})
 			require.NoError(t, process.signal(syscall.SIGCONT))
@@ -123,7 +125,7 @@ func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 		for i := range 10 {
 			publish(t, p, &kgo.Record{Topic: src, Partition: 0, Key: []byte("key"), Value: []byte(fmt.Sprintf("run-%d-%d", run, i)), Timestamp: time.Now()})
 		}
-		waitEnd(t, a, dst, int64((run+1)*10+run))
+		waitTopicCount(t, a, dst, run+1, int64((run+1)*10+run))
 		require.NoError(t, process.signal(os.Interrupt))
 		select {
 		case <-process.done:
@@ -146,8 +148,11 @@ func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	result, err := a.ListEndOffsets(ctx, dst)
-	info, ok := result.Lookup(dst, 0)
-	if err != nil || !ok || info.Offset != 21 {
-		t.Fatal("clean restart duplicated output", err, result)
+	require.NoError(t, err)
+	for partition, want := range map[int32]int64{0: 20, 1: 1} {
+		info, ok := result.Lookup(dst, partition)
+		require.True(t, ok, "destination partition %d", partition)
+		require.NoError(t, info.Err)
+		require.Equal(t, want, info.Offset, "clean restart retains original partition without recopying")
 	}
 }

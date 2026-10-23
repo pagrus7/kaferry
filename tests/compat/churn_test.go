@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -81,31 +80,6 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 	for id := range 288 {
 		if !seen[fmt.Sprint(id)] {
 			t.Fatal("record lost through churn", id)
-		}
-	}
-}
-
-func waitTopicCount(t *testing.T, a *kadm.Client, topic string, partitions int, count int64) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	for {
-		result, err := a.ListEndOffsets(ctx, topic)
-		total := int64(0)
-		if err == nil && len(result[topic]) == partitions {
-			for _, info := range result[topic] {
-				require.NoError(t, info.Err)
-				total += int64(info.Offset)
-			}
-			if total >= count {
-				return
-			}
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatal("destination did not catch up", total, count, err)
-		case <-time.After(20 * time.Millisecond):
 		}
 	}
 }

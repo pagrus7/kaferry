@@ -187,10 +187,14 @@ func TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 	if !bytes.Equal(r.Key, []byte{0, 255}) || r.Value == nil || len(r.Value) != 0 || !r.Timestamp.Equal(stamp) || len(r.Headers) != 2 || r.Headers[0].Value != nil || r.Headers[1].Value == nil {
 		t.Fatal("restricted TLS copy changed the record", r)
 	}
-	for _, failure := range []string{"authorization", "password", "trust"} {
-		t.Run(failure, func(t *testing.T) {
+	for _, failure := range []struct {
+		name    string
+		code    int
+		message string
+	}{{"authorization", 2, "authorization"}, {"password", 1, "authentication"}, {"trust", 1, "x509"}} {
+		t.Run(failure.name, func(t *testing.T) {
 			cfg := secureProperties(t, "copier", "fixture-copy-secret")
-			switch failure {
+			switch failure.name {
 			case "authorization":
 				cfg["sasl.username"], cfg["sasl.password"] = "denied", "fixture-denied-secret"
 			case "password":
@@ -201,10 +205,11 @@ func TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			start := time.Now()
-			result := binaryWorker(t, ctx, strings.Replace(statement, "CUTOFF=INTERVAL '0' SECOND", "CUTOFF=INTERVAL '0' SECOND,ON_ERROR=SKIP", 1), secureConfig(t, cfg))
-			if result.code == 0 || time.Since(start) > 14*time.Second || strings.Contains(result.detail, fmt.Sprint(cfg["sasl.password"])) {
-				t.Fatal("security failure was skipped, retried indefinitely or exposed credential", result)
-			}
+			result := binaryWorker(t, ctx, statement+" OPTIONS(ON_ERROR=SKIP)", secureConfig(t, cfg))
+			require.Equal(t, failure.code, result.code, "security failure must reach the broker/client: %s", result.detail)
+			require.Contains(t, strings.ToLower(result.detail), failure.message)
+			require.Less(t, time.Since(start), 14*time.Second, "security failures must stop promptly")
+			require.NotContains(t, result.detail, cfg["sasl.password"], "credentials stay redacted")
 		})
 	}
 }
@@ -239,7 +244,7 @@ func TestSaslTlsScramMechanisms(t *testing.T) {
 			cfg["sasl.password"] = "unique-wrong-scram-secret"
 			failureCtx, failureCancel := context.WithTimeout(t.Context(), 15*time.Second)
 			defer failureCancel()
-			result = binaryWorker(t, failureCtx, strings.Replace(statement, "CUTOFF=", "ON_ERROR=SKIP,CUTOFF=", 1), secureConfig(t, cfg))
+			result = binaryWorker(t, failureCtx, statement+" OPTIONS(ON_ERROR=SKIP)", secureConfig(t, cfg))
 			require.Equal(t, 1, result.code, "wrong SCRAM password must fail: %s", result.detail)
 			require.NotContains(t, result.detail, "unique-wrong-scram-secret", "credentials must stay redacted")
 		})
