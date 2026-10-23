@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,7 +15,7 @@ func TestBatchPublicationRecoversAfterPartialRenames(t *testing.T) {
 			// Given two acknowledged files and a failure during their joint publication.
 			root := t.TempDir()
 			fs := &observedFiles{Filesystem: NativeFiles{}}
-			store := openStore(t, root, fs, file.DurableWriter{})
+			store := openStore(t, root, fs, checkpoint.DurableWriter{})
 			var ids []string
 			for partition := range 2 {
 				record := testRecord(42)
@@ -44,7 +44,7 @@ func TestBatchPublicationRecoversAfterPartialRenames(t *testing.T) {
 			require.ErrorIs(t, store.PublishMany(ids), errDisk)
 			require.Len(t, store.state.Files, 2)
 			require.NoError(t, store.Close())
-			recovered := openStore(t, root, NativeFiles{}, file.DurableWriter{})
+			recovered := openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 			require.Empty(t, recovered.state.Files)
 			require.Len(t, completeFiles(t, root), 2)
 			for _, name := range completeFiles(t, root) {
@@ -82,7 +82,7 @@ func TestBatchPublicationSyncsDirectoryAndSavesStateOnce(t *testing.T) {
 
 type batchWriter struct {
 	saves int
-	file.DurableWriter
+	checkpoint.DurableWriter
 }
 
 func (w *batchWriter) Replace(path string, data []byte) error {

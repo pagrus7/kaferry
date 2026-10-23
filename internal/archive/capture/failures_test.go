@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
-	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/stretchr/testify/require"
 )
 
@@ -173,7 +173,7 @@ func TestCheckpointDurabilityOrderAndQuietFlush(t *testing.T) {
 	// Given one changed file and injected operation tracing around real storage.
 	root := filepath.Join(t.TempDir(), "archive")
 	fs := &observedFiles{Filesystem: NativeFiles{}}
-	w := &observedWriter{AtomicWriter: file.DurableWriter{}, files: fs}
+	w := &observedWriter{AtomicWriter: checkpoint.DurableWriter{}, files: fs}
 	s := openStore(t, root, fs, w)
 	r := testRecord(42)
 	segment, err := s.Create(r.Source, r.Offset)
@@ -199,7 +199,7 @@ func TestCheckpointDurabilityOrderAndQuietFlush(t *testing.T) {
 
 func runLifecycle(t testing.TB, root string, fs *observedFiles, codec *avro.Codec) (acknowledged bool, result error) {
 	t.Helper()
-	w := &observedWriter{AtomicWriter: file.DurableWriter{}, files: fs}
+	w := &observedWriter{AtomicWriter: checkpoint.DurableWriter{}, files: fs}
 	s, err := Open(root, codec, fs, NewJournal(fs, w))
 	if err != nil {
 		return false, err
@@ -251,7 +251,7 @@ func TestEveryCaptureIOCutPreservesAcknowledgedRecords(t *testing.T) {
 			acknowledged, err := runLifecycle(t, root, fs, testCodec(t))
 			require.ErrorIs(t, err, errDisk)
 			// Then healthy restart preserves every record acknowledged before the cut.
-			_ = openStore(t, root, NativeFiles{}, file.DurableWriter{})
+			_ = openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 			paths := completeFiles(t, root)
 			if acknowledged {
 				require.Len(t, paths, 1)
@@ -268,7 +268,7 @@ func TestEveryRecoveryIOCutCanBeRetriedByANewOwner(t *testing.T) {
 	s, _ := savedPrefix(t, baselineRoot)
 	require.NoError(t, s.Close())
 	baseline := &observedFiles{Filesystem: NativeFiles{}}
-	recovered := openStore(t, baselineRoot, baseline, &observedWriter{AtomicWriter: file.DurableWriter{}, files: baseline})
+	recovered := openStore(t, baselineRoot, baseline, &observedWriter{AtomicWriter: checkpoint.DurableWriter{}, files: baseline})
 	for index, event := range baseline.events {
 		t.Run(fmt.Sprintf("%02d_%s", index, event[:strings.IndexByte(event, ':')]), func(t *testing.T) {
 			// Given an acknowledged private prefix and one failed recovery operation.
@@ -285,9 +285,9 @@ func TestEveryRecoveryIOCutCanBeRetriedByANewOwner(t *testing.T) {
 				return nil
 			}
 			// When recovery fails, then a later owner still restores the protected data.
-			_, err := Open(root, testCodec(t), fs, NewJournal(fs, &observedWriter{AtomicWriter: file.DurableWriter{}, files: fs}))
+			_, err := Open(root, testCodec(t), fs, NewJournal(fs, &observedWriter{AtomicWriter: checkpoint.DurableWriter{}, files: fs}))
 			require.ErrorIs(t, err, errDisk)
-			_ = openStore(t, root, NativeFiles{}, file.DurableWriter{})
+			_ = openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 			paths := completeFiles(t, root)
 			require.Len(t, paths, 1)
 			require.Equal(t, []avro.Record{testRecord(42)}, readFile(t, paths[0]))

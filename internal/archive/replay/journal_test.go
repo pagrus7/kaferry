@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/checkpoint"
-	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
@@ -26,7 +25,7 @@ func emptyState() State {
 func TestGroupLockSurvivesCheckpointReplacementAndReleasesOnClose(t *testing.T) {
 	// Given an exclusively locked replay group and an empty pinned selection.
 	directory := t.TempDir()
-	j, err := NewJournal(directory, query().Group, NativeGroupFiles{}, file.DurableWriter{})
+	j, err := NewJournal(directory, query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 	require.NoError(t, err)
 	defer j.Close()
 	before, err := os.Stat(j.path + ".lock")
@@ -34,7 +33,7 @@ func TestGroupLockSurvivesCheckpointReplacementAndReleasesOnClose(t *testing.T) 
 	// When repeated atomic saves replace the checkpoint, then the same stable lock excludes another owner.
 	for range 2 {
 		require.NoError(t, j.Save(emptyState()))
-		_, err := NewJournal(directory, query().Group, NativeGroupFiles{}, file.DurableWriter{})
+		_, err := NewJournal(directory, query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 		require.ErrorIs(t, err, ErrGroupBusy)
 	}
 	after, err := os.Stat(j.path + ".lock")
@@ -43,7 +42,7 @@ func TestGroupLockSurvivesCheckpointReplacementAndReleasesOnClose(t *testing.T) 
 	require.NoError(t, j.Close())
 	require.NoError(t, j.Close())
 	// Then a new owner can acquire and load the pinned state.
-	next, err := NewJournal(directory, query().Group, NativeGroupFiles{}, file.DurableWriter{})
+	next, err := NewJournal(directory, query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 	require.NoError(t, err)
 	defer next.Close()
 	got, err := next.Load()
@@ -60,7 +59,7 @@ func TestCheckpointRejectsCorruptionAmbiguityAndInvalidState(t *testing.T) {
 	for _, kind := range []string{"checksum", "whitespace", "unknown field", "unknown version", "wrong group", "nil files", "completion", "negative sequence", "bad file", "bad digest", "bad start", "bad size", "bad cursor", "duplicate file", "window"} {
 		t.Run(kind, func(t *testing.T) {
 			// Given a corrupt or semantically invalid replay checkpoint.
-			j, err := NewJournal(t.TempDir(), query().Group, NativeGroupFiles{}, file.DurableWriter{})
+			j, err := NewJournal(t.TempDir(), query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 			require.NoError(t, err)
 			defer j.Close()
 			state := emptyState()
@@ -121,7 +120,7 @@ func TestCheckpointReadSizeLimitAndSafeNames(t *testing.T) {
 	// Given an unsafe-looking group name and a checkpoint larger than the read cap.
 	dir := t.TempDir()
 	group := "../../orders/" + strings.Repeat("x", 100)
-	j, err := NewJournal(dir, group, NativeGroupFiles{}, file.DurableWriter{})
+	j, err := NewJournal(dir, group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 	require.NoError(t, err)
 	defer j.Close()
 	require.Equal(t, dir, filepath.Dir(j.path))
@@ -132,7 +131,7 @@ func TestCheckpointReadSizeLimitAndSafeNames(t *testing.T) {
 	// When read, then the size check rejects it before allocating its contents.
 	_, err = j.Load()
 	require.ErrorContains(t, err, "size limit")
-	_, err = NewJournal(dir, "", NativeGroupFiles{}, file.DurableWriter{})
+	_, err = NewJournal(dir, "", NativeGroupFiles{}, checkpoint.DurableWriter{})
 	require.Error(t, err)
 	// A missing checkpoint is distinct from malformed state.
 	require.NoError(t, os.Remove(j.path))
@@ -151,7 +150,7 @@ func TestGroupRefusesSymlinkedCheckpointAndLock(t *testing.T) {
 			path := checkpoint.Path(dir, query().Group)
 			require.NoError(t, os.Symlink(target, path+suffix))
 			// When opening/reading the group, then it fails without following the symlink.
-			j, err := NewJournal(dir, query().Group, NativeGroupFiles{}, file.DurableWriter{})
+			j, err := NewJournal(dir, query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 			if suffix == ".lock" {
 				require.Error(t, err)
 			} else {
@@ -230,7 +229,7 @@ func TestCheckpointWireRoundTripIsCanonical(t *testing.T) {
 
 func TestRejectedSavePreservesExistingCheckpoint(t *testing.T) {
 	// Given a valid checkpoint whose bytes must survive an invalid replacement request.
-	j, err := NewJournal(t.TempDir(), query().Group, NativeGroupFiles{}, file.DurableWriter{})
+	j, err := NewJournal(t.TempDir(), query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, j.Close()) })
 	require.NoError(t, j.Save(emptyState()))

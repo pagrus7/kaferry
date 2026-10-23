@@ -80,9 +80,6 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 	if len(statement.Source.Options) > 0 {
 		return Plan{}, sql.At(statement.Source.Options[0].Position, fmt.Errorf("rotation options require a FILE avro destination"))
 	}
-	if plan.Source.Kind == "FILE" && plan.Destination.Kind == "FILE" && plan.Source.Format != plan.Destination.Format {
-		return Plan{}, sql.At(statement.Destination.Position, fmt.Errorf("file copies require matching formats; CBOR does not retain the source identity needed by Avro"))
-	}
 	plan.Window, err = normalize(statement.Bounds)
 	if err != nil {
 		return Plan{}, sql.At(statement.WherePosition, err)
@@ -182,11 +179,7 @@ func (p Plan) Fingerprint(sourceClusterID, destinationClusterID string) (string,
 	}
 	endpointIdentity := func(endpoint Endpoint, clusterID string) (identity, error) {
 		if endpoint.Kind == "FILE" {
-			format := ""
-			if endpoint.Format == "avro" {
-				format = "avro"
-			}
-			return identity{Kind: "FILE", Format: format}, nil
+			return identity{Kind: "FILE", Format: endpoint.Format}, nil
 		}
 		if clusterID == "" {
 			return identity{}, fmt.Errorf("kafka fingerprint requires verified cluster IDs")

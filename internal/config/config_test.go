@@ -32,7 +32,7 @@ func TestDocumentedConfiguration(t *testing.T) {
 
 func TestConfiguration(t *testing.T) {
 	// Given
-	input := "[connections.prod]\n'bootstrap.servers'='prod:9092'\n'sasl.password'='secret'\n[worker]\npartition_record_cap=100\nidle_exit='5s'\n"
+	input := "[connections.prod]\n'bootstrap.servers'='prod:9092'\n'sasl.password'='secret'\n[worker]\npartition_record_cap=100\nidle_exit='5s'\nmax_frame_bytes=8192\n"
 
 	// When
 	c, err := NewLoader(&readerMock{data: []byte(input)}, "/home/test").Load("config.toml")
@@ -43,6 +43,7 @@ func TestConfiguration(t *testing.T) {
 	require.EqualValues(t, 100, c.Worker.PartitionRecordCap)
 	require.Equal(t, int64(16<<20), c.Worker.PartitionByteCap)
 	require.Equal(t, "5s", c.Worker.IdleExit)
+	require.EqualValues(t, 8192, c.Worker.ArchiveBlockMaxBytes)
 	require.NotNil(t, c.Worker.CheckpointDir)
 	require.Equal(t, filepath.Join("/home/test", ".kaferry", "checkpoints"), *c.Worker.CheckpointDir)
 	for _, input := range []string{"unknown=1", "[worker]\nrecord_cap=0", "[worker]\nidle_exit='0s'", "[worker]\ncheckpoint_dir=''", "[worker]\nunknown=3", "[connections.prod]\n'sasl.password'= 'unique-secret' trailing", "[connections.prod]\n'bootstrap.servers'=123"} {
@@ -176,15 +177,15 @@ func TestLoaderEnforcesConfigurationSizeAtTheReadBoundary(t *testing.T) {
 	}
 }
 
-func TestWorkerFrameSizeBoundaries(t *testing.T) {
+func TestArchiveBlockSizeBoundaries(t *testing.T) {
 	for _, size := range []int64{0, 1, 4294967295, 4294967296} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
-			// Given a frame size at each representable boundary.
+			// Given a decoded block size at each representable boundary.
 			worker := Defaults("home").Worker
-			worker.MaxFrameBytes = size
+			worker.ArchiveBlockMaxBytes = size
 			// When validating the worker.
 			err := worker.Validate()
-			// Then only positive values that fit the frame length are accepted.
+			// Then only positive values that fit the archive block limit are accepted.
 			if size == 0 || size > 4294967295 {
 				require.EqualError(t, err, "worker.max_frame_bytes must be between 1 and 4294967295 bytes")
 			} else {

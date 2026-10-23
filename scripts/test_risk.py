@@ -29,7 +29,7 @@ class RiskTest(unittest.TestCase):
         # Given a full PR diff, including the old name of a moved file.
         base, head = 'a' * 40, 'b' * 40
         event = {'pull_request': {'base': {'sha': base}, 'head': {'sha': head}}}
-        with patch('risk.subprocess.check_output', return_value='internal/file/old.go\ndocs/new.md\n') as git:
+        with patch('risk.subprocess.check_output', return_value='internal/archive/avro/old.go\ndocs/new.md\n') as git:
             # When classifying, then Git cannot hide a deletion behind rename detection.
             self.assertEqual(select(event)['suites'], ['fault', 'qualification'])
             git.assert_called_once_with(['git', 'diff', '--no-renames', '--name-only', f'{base}...{head}'], text=True)

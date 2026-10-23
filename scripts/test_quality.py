@@ -26,11 +26,11 @@ class CoverageTest(unittest.TestCase):
 
     def test_benchmarks_allow_additional_metrics(self):
         # Given Go benchmarks with default, throughput and custom codec metrics.
-        log = "BenchmarkRecordFraming/encode-2 100 42.5 ns/op 120.3 MB/s 8 B/op 1 allocs/op\n" \
+        log = "BenchmarkEncode/normal-2 100 42.5 ns/op 120.3 MB/s 8 B/op 1 allocs/op\n" \
               "BenchmarkOther-4 200 10 ns/op 0 B/op 0 allocs/op\n" \
               "BenchmarkEncode/tiny-14 1352 268976 ns/op 12.49 container-B/record 3717804 records/s 750079 B/op 2036 allocs/op\n"
         # When parsing the report, then all allocation measurements survive.
-        self.assertEqual(benchmarks(log), {"BenchmarkRecordFraming/encode": (42.5, 8, 1),
+        self.assertEqual(benchmarks(log), {"BenchmarkEncode/normal": (42.5, 8, 1),
                                           "BenchmarkOther": (10.0, 0, 0),
                                           "BenchmarkEncode/tiny": (268976.0, 750079, 2036)})
 
@@ -61,7 +61,7 @@ class CoverageTest(unittest.TestCase):
                            "worker_stop_after_records": 10, "records_per_second": 100,
                            "measurement_method": "sql_release_to_exit", "fixture_client": "franz-go"}
             (previous / "load.metrics.json").write_text(json.dumps(measurement))
-            for changes in ({"worker_stop_after_records": 20}, {}, {"client": "new-version"}, {"measurement_method": None}, {"fixture_client": None}):
+            for changes in ({"worker_stop_after_records": 20}, {}, {"client": "new-version"}, {"measurement_method": None}, {"fixture_client": None}, {"archive_format": "avro"}, {"archive_payload": "random"}):
                 with self.subTest(changes=changes):
                     actual = {key: value for key, value in {**measurement, **changes}.items()
                               if value is not None}

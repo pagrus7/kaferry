@@ -3,7 +3,6 @@ module github.com/pagrus7/kaferry
 go 1.26.0
 
 require (
-	github.com/fxamacker/cbor/v2 v2.9.6
 	github.com/go-logr/logr v1.4.4
 	github.com/golang/snappy v1.0.0
 	github.com/iskorotkov/avro/v2 v2.34.0
@@ -39,7 +38,6 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/pierrec/lz4/v4 v4.1.33 // indirect
-	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect

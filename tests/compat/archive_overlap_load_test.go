@@ -41,7 +41,7 @@ func TestLoadArchiveOverlap(t *testing.T) {
 			require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\narchive_replay_blocks=%d\n", directory, blocks)), 0600))
 			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') OPTIONS(GROUP='overlap')", out, src)
 			// When the engine copies the fixed snapshot, measure the bounded-cache behavior.
-			report := measureArchiveCLI(t, query, cfg, "avro", 16000)
+			report := measureArchiveCLI(t, query, cfg, 16000)
 			report.ArchiveSourceFiles = 16
 			report.ArchiveReplayBlocks = blocks
 			// Then every duplicate source offset survives, with its distinct original value.

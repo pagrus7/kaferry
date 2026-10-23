@@ -1,18 +1,19 @@
 package archiveio
 
 import (
-	"github.com/pagrus7/kaferry/internal/archive/avro"
-	"github.com/pagrus7/kaferry/internal/archive/capture"
-	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
-	"github.com/stretchr/testify/require"
 	"path/filepath"
 	"testing"
+
+	"github.com/pagrus7/kaferry/internal/archive/avro"
+	"github.com/pagrus7/kaferry/internal/archive/capture"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
+	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/stretchr/testify/require"
 )
 
 type countingWriter struct {
 	writes int
-	file.DurableWriter
+	checkpoint.DurableWriter
 }
 
 func (w *countingWriter) Replace(path string, data []byte) error {

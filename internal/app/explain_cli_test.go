@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/inspect"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kfake"
@@ -52,14 +51,10 @@ func TestExplainShowsPerInvocationLimit(t *testing.T) {
 func filePreview(t *testing.T) filePreviewFixture {
 	t.Helper()
 	dir := t.TempDir()
-	source, destination, config := filepath.Join(dir, "source.cbor"), filepath.Join(dir, "out.cbor"), filepath.Join(dir, "config.toml")
-	codec, err := file.NewCodec(1 << 20)
-	require.NoError(t, err)
-	header, err := codec.EncodeHeader(file.Header{Version: 1, ID: "source", Group: "fixture", Fingerprint: "fixture"})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(source, header, 0600))
+	source, destination, config := filepath.Join(dir, "source.avro"), filepath.Join(dir, "out.avro"), filepath.Join(dir, "config.toml")
+	require.NoError(t, os.Mkdir(source, 0700))
 	require.NoError(t, os.WriteFile(config, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir = %q\n", dir)), 0600))
-	query := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='preview')", destination, source)
+	query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') OPTIONS(GROUP='preview')", destination, source)
 	return filePreviewFixture{query: query, config: config, directory: dir, destination: destination}
 }
 
@@ -85,13 +80,13 @@ func TestExplainCLIInputFormsLeaveFilesUnchanged(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			// When the real CLI prepares and inspects the selected input form.
 			code := Execute(t.Context(), args, input, &stdout, &stderr)
-			// Then JSON reports the byte start and no filesystem objects were created.
+			// Then JSON reports the record position and no filesystem objects were created.
 			var report inspect.Report
 			require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
 			require.Zero(t, code)
 			require.Zero(t, stderr.Len())
 			require.EqualValues(t, 1, report.Version)
-			require.NotNil(t, report.Source.File.StartBytes)
+			require.NotNil(t, report.Source.File.PositionRecords)
 			require.False(t, report.Destination.File.Exists)
 			after, err := os.ReadDir(fixture.directory)
 			require.NoError(t, err)
@@ -105,22 +100,18 @@ func TestExplainCLIReusesFileProgressAndReportsOutputErrors(t *testing.T) {
 	fixture := filePreview(t)
 	var stderr bytes.Buffer
 	require.Zero(t, Execute(t.Context(), []string{"run", "-e", fixture.query, "-c", fixture.config}, nil, io.Discard, &stderr))
-	before, err := os.ReadFile(fixture.destination)
-	require.NoError(t, err)
+	before := fileTree(t, fixture.directory)
 	var stdout bytes.Buffer
 	stderr.Reset()
 	// When inspecting a rerun.
 	code := Execute(t.Context(), []string{"explain", "-e", fixture.query, "-c", fixture.config, "--json"}, nil, &stdout, &stderr)
-	// Then saved progress and acknowledged output are preserved.
+	// Then saved progress and existing output are preserved.
 	var report inspect.Report
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
 	require.Zero(t, code)
 	require.True(t, *report.Source.File.CheckpointExists)
-	require.NotNil(t, report.Destination.File.AcknowledgedExtent)
-	require.Equal(t, int64(len(before)), *report.Destination.File.AcknowledgedExtent)
-	after, err := os.ReadFile(fixture.destination)
-	require.NoError(t, err)
-	require.Equal(t, before, after)
+	require.True(t, report.Destination.File.Exists)
+	require.Equal(t, before, fileTree(t, fixture.directory))
 	stderr.Reset()
 	require.EqualValues(t, 1, Execute(t.Context(), []string{"explain", "-e", fixture.query, "-c", fixture.config}, nil, closedOutput{}, &stderr))
 	require.Contains(t, stderr.String(), "output closed")
@@ -131,7 +122,7 @@ func TestExplainCLIReportsInputAndIdentityErrorsWithoutPartialOutput(t *testing.
 		t.Run(problem, func(t *testing.T) {
 			// Given invalid input or an archive that cannot be inspected.
 			fixture := filePreview(t)
-			source := filepath.Join(fixture.directory, "source.cbor")
+			source := filepath.Join(fixture.directory, "source.avro")
 			want := 2
 			switch problem {
 			case "SQL":
@@ -140,7 +131,8 @@ func TestExplainCLIReportsInputAndIdentityErrorsWithoutPartialOutput(t *testing.
 				require.NoError(t, os.Remove(source))
 				want = 1
 			case "invalid header":
-				require.NoError(t, os.WriteFile(source, []byte("invalid"), 0600))
+				require.NoError(t, os.WriteFile(filepath.Join(source, "invalid.avro"), []byte("invalid"), 0600))
+				want = 1
 			case "self-copy":
 				fixture.query = strings.Replace(fixture.query, fixture.destination, source, 1)
 			case "empty resolved window":
@@ -190,7 +182,7 @@ func TestExplainUsesOnlyReadOnlyKafkaRequests(t *testing.T) {
 			directory := t.TempDir()
 			destination := "TOPIC 'output'"
 			if output == "FILE" {
-				destination = fmt.Sprintf("FILE cbor('%s')", filepath.Join(directory, "archive.cbor"))
+				destination = fmt.Sprintf("FILE avro('%s')", filepath.Join(directory, "archive.avro"))
 			} else if output == "SELF-COPY" {
 				destination = "TOPIC 'input'"
 			}

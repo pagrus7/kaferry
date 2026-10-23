@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
-	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,7 +69,7 @@ func readFile(t testing.TB, path string) []avro.Record {
 
 func newCapture(t testing.TB, root string, policy Policy) (*Capture, *testClock) {
 	t.Helper()
-	s := openStore(t, root, NativeFiles{}, file.DurableWriter{})
+	s := openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 	clock := &testClock{now: time.Unix(1_000_000, 0)}
 	c, err := New(s, clock, policy)
 	require.NoError(t, err)

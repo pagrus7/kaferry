@@ -22,7 +22,6 @@ env         = "ENV" "(" string ")" ;
 insert      = "INSERT" "INTO" endpoint ;
 select      = "SELECT" "*" "FROM" endpoint ;
 endpoint    = "TOPIC" string                       (* 'topic' or 'topic@alias' *)
-            | "FILE" "cbor" "(" string ")"
             | "FILE" "avro" "(" string { "," file_option } ")" ;
 file_option = "ROTATE_AFTER_SIZE" "=" integer [ "k" | "m" | "g" ]
             | "ROTATE_AFTER_AGE" "=" interval ;    (* destination only *)
@@ -51,13 +50,13 @@ option      = "GROUP" "=" ( string | "ONE_OFF" )
 Planning or startup enforces:
 
 - `GROUP` is required and must not be blank. Options, inline connection aliases and a connection's properties cannot repeat. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name; unquoted `ONE_OFF` generates one.
-- Avro options are optional and destination-only; size is positive bytes, with case-insensitive binary k/m/g suffixes. File-to-file formats must match.
+- Avro options are optional and destination-only; size is positive bytes, with case-insensitive binary k/m/g suffixes.
 - A topic source needs exactly one of `WHERE` and `START`; a file source takes no `START`.
 - `ON_ERROR` cannot be combined with any specific error policy.
 - `WORKER_STOP_AFTER_RECORDS` is from 1 to 9,007,199,254,740,992; it caps accepted writes per worker per invocation, not records read or a shared group total.
 - `CUTOFF` requires a topic source with an upper bound. `ON_REJECTED_TIMESTAMP` requires a topic destination; `ON_MISSING_TIMESTAMP` a `WHERE` clause.
 - At most one lower and one upper bound. Timestamps are RFC 3339 with `Z` or an explicit offset and at most millisecond precision. The normalized `[lo, hi)` must be non-empty.
-- Reject a destination that is the source: the same file (including path aliases), or, at startup, the same Kafka cluster ID and topic.
+- At startup, reject a destination that is the same archive directory (including path aliases) or the same Kafka cluster ID and topic as the source.
 - A topic without `@alias` uses the connection `default`, which must exist.
 
 ## Valid examples
@@ -138,13 +137,13 @@ SQL errors identify the first error found by one-based line and character (code 
 | --- | --- |
 | `... WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` cannot be combined with a time filter |
 | `... WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS (GROUP = 'g', ON_ERROR = SKIP, ON_MISSING_TIMESTAMP = FAIL)` | `ON_ERROR` cannot be mixed with specific error policies |
-| `... FROM FILE cbor('a.cbor') ... OPTIONS (GROUP = 'g', CUTOFF = INTERVAL '1' MINUTE)` | `CUTOFF` applies to topic sources |
-| `... FROM FILE cbor('a.cbor') OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` applies to topic sources |
+| `... FROM FILE avro('archive') ... OPTIONS (GROUP = 'g', CUTOFF = INTERVAL '1' MINUTE)` | `CUTOFF` applies to topic sources |
+| `... FROM FILE avro('archive') OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` applies to topic sources |
 | `... FROM TOPIC 'a' OPTIONS (GROUP = 'g')` | `START` is required without a time filter |
 | `OPTIONS (START = EARLIEST)` | `GROUP` is required |
 | `OPTIONS (GROUP = 'a', GROUP = 'b')` | repeated option `GROUP` |
 | `INSERT INTO TOPIC 'a@x' SELECT * FROM TOPIC 'a@y' ...` where `x` and `y` reach one cluster | destination is the source topic |
-| `INSERT INTO FILE cbor('a.cbor') SELECT * FROM FILE cbor('./a.cbor') ...` | destination is the source file |
+| `INSERT INTO FILE avro('archive') SELECT * FROM FILE avro('./archive') ...` | destination is the source archive |
 | `SELECT key FROM TOPIC 'a' ...` | only `SELECT *` is supported |
 | `WHERE RECORD_TIMESTAMP >= NOW() OR ...` | `OR` is unsupported; bounds combine with `AND` |
 | `WHERE RECORD_TIMESTAMP > TIMESTAMP '...' AND RECORD_TIMESTAMP >= TIMESTAMP '...'` | two lower bounds |

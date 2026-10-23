@@ -22,8 +22,6 @@ type Progress struct {
 	Fingerprint string
 	TopicID     string
 	Window      *plan.Window
-	FileID      string
-	Extent      int64
 	Stop        *core.Stop
 }
 
@@ -45,8 +43,6 @@ type wire struct {
 	Fingerprint string  `json:"fp"`
 	TopicID     string  `json:"tid"`
 	Window      *window `json:"win,omitempty"`
-	FileID      *string `json:"fid,omitempty"`
-	Extent      *int64  `json:"extent,omitempty"`
 	Stop        *stop   `json:"stop,omitempty"`
 }
 type window struct {
@@ -63,9 +59,6 @@ func (JSONCodec) Encode(p Progress) (string, error) {
 		return "", err
 	}
 	w := wire{Fingerprint: p.Fingerprint, TopicID: p.TopicID}
-	if p.FileID != "" {
-		w.FileID, w.Extent = &p.FileID, &p.Extent
-	}
 	if p.Window != nil {
 		w.Window = &window{p.Window.Lower, p.Window.Upper}
 	}
@@ -96,7 +89,7 @@ func (JSONCodec) Decode(encoded string) (Progress, error) {
 		return p, &Error{Kind: "unsupported version of"}
 	}
 	data := []byte(strings.TrimPrefix(encoded, prefix))
-	if !utf8.Valid(data) || checkObject(data, "fp", "tid", "win", "fid", "extent", "stop") != nil {
+	if !utf8.Valid(data) || checkObject(data, "fp", "tid", "win", "stop") != nil {
 		return p, &Error{Kind: "invalid"}
 	}
 	var w wire
@@ -106,15 +99,6 @@ func (JSONCodec) Decode(encoded string) (Progress, error) {
 		return p, &Error{Kind: "invalid"}
 	}
 	p = Progress{Fingerprint: w.Fingerprint, TopicID: w.TopicID}
-	if (w.FileID == nil) != (w.Extent == nil) {
-		return Progress{}, &Error{Kind: "invalid"}
-	}
-	if w.FileID != nil {
-		if *w.FileID == "" {
-			return Progress{}, &Error{Kind: "invalid"}
-		}
-		p.FileID, p.Extent = *w.FileID, *w.Extent
-	}
 	if w.Window != nil {
 		p.Window = &plan.Window{Lower: w.Window.Lower, Upper: w.Window.Upper}
 	}
@@ -131,7 +115,7 @@ func (JSONCodec) Decode(encoded string) (Progress, error) {
 }
 
 func validate(p Progress) error {
-	if p.Fingerprint == "" || p.TopicID == "" || !utf8.ValidString(p.Fingerprint+p.TopicID+p.FileID) || p.Extent < 0 || (p.FileID == "") != (p.Extent == 0) {
+	if p.Fingerprint == "" || p.TopicID == "" || !utf8.ValidString(p.Fingerprint+p.TopicID) {
 		return &Error{Kind: "invalid"}
 	}
 	if p.Window != nil && p.Window.Lower != nil && p.Window.Upper != nil && *p.Window.Lower >= *p.Window.Upper {

@@ -43,6 +43,7 @@ func TestWorkerStopAcrossEndpointDirections(t *testing.T) {
 	a := admin(t)
 	source := topic(t, a, 1)
 	producer := producer(t)
+	identity := brokerSourceIdentity(t, a, source)
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	ms := stamp.UnixMilli()
 	var expected []core.Record
@@ -55,13 +56,13 @@ func TestWorkerStopAcrossEndpointDirections(t *testing.T) {
 		}
 		headers := []kgo.RecordHeader{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}
 		publish(t, producer, &kgo.Record{Topic: source, Partition: 0, Key: key, Value: value, Headers: headers, Timestamp: stamp})
-		expected = append(expected, core.Record{Key: key, Value: value, Headers: []core.Header{{Name: "dup", Value: nil}, {Name: "dup", Value: []byte{}}}, TimestampMS: &ms, TimestampType: "create_time", Source: &core.Provenance{Topic: source, Partition: 0, Offset: int64(i)}})
+		expected = append(expected, core.Record{Key: key, Value: value, Headers: []core.Header{{Name: "dup", Value: nil}, {Name: "dup", Value: []byte{}}}, TimestampMS: &ms, TimestampType: "create_time", Source: &core.Provenance{Cluster: identity.Cluster, TopicID: identity.TopicID, Topic: source, Partition: 0, Offset: int64(i)}})
 	}
 	config := configuration(t)
-	archive := filepath.Join(t.TempDir(), "sample.cbor")
+	archive := filepath.Join(t.TempDir(), "sample.avro")
 
 	// When a topic-to-file copy resumes with a different cap.
-	statement := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", archive, source, source+"-archive-limit")
+	statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", archive, source, source+"-archive-limit")
 	executeWithWorkerStop(t, statement, config, 3)
 	// Then it saves only that record prefix, with unchanged bytes and metadata.
 	require.Equal(t, expected[:3], archiveRecords(t, archive))
@@ -88,7 +89,7 @@ func TestWorkerStopAcrossEndpointDirections(t *testing.T) {
 	t.Run("file to topic", func(t *testing.T) {
 		// Given the five-record sample and a Kafka destination.
 		destination := topic(t, a, 3)
-		statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='restore-limit')", destination, archive)
+		statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE avro('%s') OPTIONS(GROUP='restore-limit')", destination, archive)
 		// When a file checkpoint resumes under a changed cap.
 		executeWithWorkerStop(t, statement, config, 2)
 		// Then progress limits each run, and a later EOF run adds no duplicates.
@@ -103,8 +104,8 @@ func TestWorkerStopAcrossEndpointDirections(t *testing.T) {
 	})
 	t.Run("file to file", func(t *testing.T) {
 		// Given the same sample and a new archive.
-		clone := filepath.Join(t.TempDir(), "clone.cbor")
-		statement := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM FILE cbor('%s') OPTIONS(GROUP='clone-limit')", clone, archive)
+		clone := filepath.Join(t.TempDir(), "clone.avro")
+		statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') OPTIONS(GROUP='clone-limit')", clone, archive)
 		// When reaching the cap and then EOF in separate runs.
 		executeWithWorkerStop(t, statement, config, 4)
 		// Then preserve order and avoid recopying previously saved records.

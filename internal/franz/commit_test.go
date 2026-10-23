@@ -17,38 +17,28 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-type outputProgressMock struct {
-	id     string
-	extent int64
-}
-
-func (o *outputProgressMock) DurableOutput() (string, int64) { return o.id, o.extent }
-func TestCommitMetadataUsesTheCapturedDurableFileSnapshot(t *testing.T) {
-	// Given a confirmed source cursor and a durable output position.
+func TestCommitMetadataUsesTheCapturedProgress(t *testing.T) {
+	// Given a confirmed cursor and the metadata encoded for that commit.
 	id := [16]byte{1}
-	output := &outputProgressMock{id: "archive", extent: 200}
-	c := &Committer{codec: commitmeta.NewCodec(), topic: "input", group: "group", topicID: id, metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: topicID(id)}}, output: output}
-	offsets, encoded, err := c.snapshot([]core.Cursor{{Partition: 0, Position: 42}})
-	if err != nil || offsets["input"][0].Offset != 42 {
-		t.Fatal(err, offsets)
-	}
+	stop := &core.Stop{Reason: "tip", At: 42}
+	c := &Committer{codec: commitmeta.NewCodec(), topic: "input", group: "group", topicID: id, metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: topicID(id)}}}
+	offsets, encoded, err := c.snapshot([]core.Cursor{{Partition: 0, Position: 42, Stop: stop}})
+	require.NoError(t, err)
+	require.EqualValues(t, 42, offsets["input"][0].Offset)
 	hook := c.metadataHook(encoded)
-	// When the output and source state change before the asynchronous hook runs.
-	output.extent = 500
+	// When state changes before the asynchronous hook runs.
+	stop.At = 43
 	c.metadata[0] = kafkaport.Progress{Fingerprint: "other"}
 	req := &kmsg.OffsetCommitRequest{Group: "group", MemberID: "member", Generation: 3, Topics: []kmsg.OffsetCommitRequestTopic{{TopicID: id, Partitions: []kmsg.OffsetCommitRequestTopicPartition{{Partition: 0, Offset: 42}}}}}
 	require.NoError(t, hook(req))
-	// Then the v10 ID-only request carries the original fsync-confirmed extent and identity.
+	// Then the ID-only request carries the originally confirmed position and metadata.
 	got, err := kafkaport.DecodeProgress(commitmeta.NewCodec(), req.Topics[0].Partitions[0].Metadata, "fp", topicID(id), false)
-	if err != nil || got.FileID != "archive" || got.Extent != 200 {
-		t.Fatal("hook read mutable state after snapshot", got, err)
-	}
-	// When the client has lost its generation, then no generationless admin commit can escape.
+	require.NoError(t, err)
+	require.Equal(t, &core.Stop{Reason: "tip", At: 42}, got.Stop)
+	// When group ownership is lost, then no generationless commit can escape.
 	req.Generation = -1
 	var recoverable *core.Recoverable
-	if err := hook(req); !errors.As(err, &recoverable) {
-		t.Fatal("unfenced commit accepted", err)
-	}
+	require.ErrorAs(t, hook(req), &recoverable)
 }
 func TestCommitterPreservesPartitionErrorsAndRejectsUnownedPositions(t *testing.T) {
 	// Given an independently mocked group client and owned progress.

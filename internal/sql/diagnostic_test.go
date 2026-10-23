@@ -9,7 +9,7 @@ import (
 )
 
 func TestParserDiagnosticsLocateTheOffendingToken(t *testing.T) {
-	const prefix = "INSERT INTO FILE cbor('out')\nSELECT * FROM FILE cbor('in')\n"
+	const prefix = "INSERT INTO FILE avro('out')\nSELECT * FROM FILE avro('in')\n"
 	for _, tc := range []struct {
 		name, query, message string
 		position             Position
@@ -30,17 +30,17 @@ func TestParserDiagnosticsLocateTheOffendingToken(t *testing.T) {
 		{"typographic quote", "\u2018secret\u2019", "typographic quotes are not supported; use ASCII single quotes", Position{1, 1}},
 		{"unquoted number", "7", "expected WITH or INSERT; found integer", Position{1, 1}},
 		{"invisible character", "\x00", "unexpected invisible or control character; remove it", Position{1, 1}},
-		{"format", "INSERT INTO FILE cbor('out')\nSELECT * FROM FILE json('in')\nOPTIONS(GROUP='g')", "expected cbor or avro; found identifier", Position{2, 20}},
+		{"format", "INSERT INTO FILE avro('out')\nSELECT * FROM FILE json('in')\nOPTIONS(GROUP='g')", "expected avro; found identifier", Position{2, 20}},
 		{"unit before invalid character", prefix + "WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' WEEK ?", "expected SECOND, MINUTE, HOUR or DAY; found identifier", Position{3, 48}},
 		{"unquoted interval", prefix + "OPTIONS(GROUP='g', CUTOFF=INTERVAL 5 MINUTE)", "expected single-quoted string; found integer", Position{3, 36}},
 		{"option before invalid character", prefix + "OPTIONS(STRAT ?)", "expected GROUP, START, CUTOFF, WORKER_STOP_AFTER_RECORDS, ON_ERROR, ON_MISSING_TIMESTAMP or ON_REJECTED_TIMESTAMP; found identifier", Position{3, 9}},
-		{"projection", "INSERT INTO FILE cbor('out')\nSELECT 'secret' FROM FILE cbor('in') OPTIONS(GROUP='g')", "expected \"*\"; found string literal", Position{2, 8}},
+		{"projection", "INSERT INTO FILE avro('out')\nSELECT 'secret' FROM FILE avro('in') OPTIONS(GROUP='g')", "expected \"*\"; found string literal", Position{2, 8}},
 		{"missing equals", prefix + "OPTIONS(GROUP 'g')", "expected \"=\"; found string literal", Position{3, 15}},
 		{"OR", prefix + "WHERE RECORD_TIMESTAMP >= NOW() OR RECORD_TIMESTAMP < NOW()", "expected \"+\", \"-\", AND or OPTIONS; found identifier", Position{3, 33}},
 		{"EOF", prefix + "OPTIONS(GROUP=", "expected single-quoted string or ONE_OFF; found end of input", Position{3, 15}},
 		{"unterminated string", prefix + "OPTIONS(GROUP='secret", "unterminated string literal; close it with a single quote", Position{3, 15}},
-		{"CRLF and Unicode", "INSERT INTO FILE cbor('源')\r\nSELECT * FROM FILE json('in') OPTIONS(GROUP='g')", "expected cbor or avro; found identifier", Position{2, 20}},
-		{"tabs and Unicode", "INSERT INTO FILE cbor('源')\tSELECT key", "expected \"*\"; found identifier", Position{1, 35}},
+		{"CRLF and Unicode", "INSERT INTO FILE avro('源')\r\nSELECT * FROM FILE json('in') OPTIONS(GROUP='g')", "expected avro; found identifier", Position{2, 20}},
+		{"tabs and Unicode", "INSERT INTO FILE avro('源')\tSELECT key", "expected \"*\"; found identifier", Position{1, 35}},
 		{"invalid UTF8", "-- 源\n\xff", "statement is not valid UTF-8; save it as UTF-8", Position{2, 1}},
 		{"unterminated comment", prefix + "/* private", "unterminated comment; close it with */", Position{3, 1}},
 		{"nested comment", "/* outer /* private */", "nested comments are not supported", Position{1, 10}},
@@ -76,7 +76,7 @@ func TestDiagnosticPreservesCauseAndSpecificLocation(t *testing.T) {
 
 func TestParserDiagnosticsNeverEchoArbitraryInput(t *testing.T) {
 	const secret = "sensitive_SENTINEL_5c27"
-	const base = "WITH CONNECTION prod AS ('sasl.password'='" + secret + "') INSERT INTO FILE cbor('out') SELECT * FROM FILE cbor('in') OPTIONS(GROUP='g'"
+	const base = "WITH CONNECTION prod AS ('sasl.password'='" + secret + "') INSERT INTO FILE avro('out') SELECT * FROM FILE avro('in') OPTIONS(GROUP='g'"
 	for _, query := range []string{base + ", " + secret + "=FAIL)", base + ", START='" + secret + "')", strings.Replace(base+")", "SELECT *", "SELECT "+secret, 1), base + ") " + secret, base + ", ON_ERROR='" + secret} {
 		// Given a secret in a valid property and in malformed SQL.
 		// When reporting the first parse error.
@@ -120,5 +120,19 @@ func TestASTCapturesEachAnchorBeforeAdvancingTokens(t *testing.T) {
 		lines := strings.Split(prefix, "\n")
 		want := Position{Line: len(lines), Column: len([]rune(lines[len(lines)-1])) + 1}
 		require.Equal(t, want, tc.got)
+	}
+}
+
+func TestRemovedArchiveFormatIsRejectedWithoutLeakingPaths(t *testing.T) {
+	for _, endpoints := range [][2]string{{"cbor", "avro"}, {"avro", "cbor"}} {
+		// Given the removed format at either endpoint and a private path.
+		query := "INSERT INTO FILE " + endpoints[0] + "('private/path') SELECT * FROM FILE " + endpoints[1] + "('private/path') OPTIONS(GROUP='g')"
+		// When parsing, then reject the format itself with a precise, redacted diagnostic.
+		_, err := NewParser().Parse(query)
+		var diagnostic *Diagnostic
+		require.ErrorAs(t, err, &diagnostic)
+		require.Equal(t, strings.Index(query, "cbor")+1, diagnostic.Position.Column)
+		require.Equal(t, "expected avro; found identifier", diagnostic.Err.Error())
+		require.NotContains(t, err.Error(), "private/path")
 	}
 }

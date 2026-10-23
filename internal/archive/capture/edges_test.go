@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
-	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,7 +24,7 @@ func TestCloseAbortsWithoutPublishingAndPreventsFurtherAcknowledgements(t *testi
 	require.Error(t, c.Append(testRecord(43)))
 	require.Error(t, c.Finish())
 	// Then releasing the lock permits another owner to recover exactly the saved record.
-	_ = openStore(t, root, NativeFiles{}, file.DurableWriter{})
+	_ = openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 	paths := completeFiles(t, root)
 	require.Len(t, paths, 1)
 	require.Equal(t, []avro.Record{testRecord(42)}, readFile(t, paths[0]))
@@ -69,7 +69,7 @@ func TestAmbiguousStateSaveRetainsDataForAtLeastOnceReplay(t *testing.T) {
 	// Given a state replacement that completes but reports an error afterward.
 	root := t.TempDir()
 	fs := &observedFiles{Filesystem: NativeFiles{}}
-	w := &observedWriter{AtomicWriter: file.DurableWriter{}, files: fs}
+	w := &observedWriter{AtomicWriter: checkpoint.DurableWriter{}, files: fs}
 	s := openStore(t, root, fs, w)
 	r := testRecord(42)
 	part, err := s.Create(r.Source, r.Offset)
@@ -81,7 +81,7 @@ func TestAmbiguousStateSaveRetainsDataForAtLeastOnceReplay(t *testing.T) {
 	require.ErrorIs(t, s.Checkpoint(), errDisk)
 	w.after = nil
 	require.NoError(t, s.Close())
-	_ = openStore(t, root, NativeFiles{}, file.DurableWriter{})
+	_ = openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 	paths := completeFiles(t, root)
 	require.Len(t, paths, 1)
 	require.Equal(t, []avro.Record{r}, readFile(t, paths[0]), "an unacknowledged record may survive and later duplicate")
@@ -120,7 +120,7 @@ func TestJournalReadFailureDoesNotMeanEmptyState(t *testing.T) {
 		s, _ := savedPrefix(t, root)
 		fs := &observedFiles{Filesystem: NativeFiles{}, readError: failure}
 		// When loaded, then neither a disk error nor premature EOF becomes normal completion.
-		_, err := NewJournal(fs, file.DurableWriter{}).Load(s.statePath())
+		_, err := NewJournal(fs, checkpoint.DurableWriter{}).Load(s.statePath())
 		require.Error(t, err)
 		require.NotErrorIs(t, err, io.EOF)
 		if !errors.Is(failure, io.EOF) {
@@ -141,7 +141,7 @@ func TestInvalidFirstSourceStopsWithoutAcknowledging(t *testing.T) {
 	require.False(t, errors.As(err, &invalid), "identity mistakes are not SQL-skippable resource errors")
 	require.ErrorIs(t, c.Flush(), err)
 	require.NoError(t, c.Close())
-	_ = openStore(t, root, NativeFiles{}, file.DurableWriter{})
+	_ = openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 	require.Empty(t, completeFiles(t, root))
 }
 
@@ -150,7 +150,7 @@ func TestAppendIOAndCallerErrorsCannotBeSkipped(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			// Given an open private file and either an I/O failure or invalid caller data.
 			fs := &observedFiles{Filesystem: NativeFiles{}}
-			s := openStore(t, t.TempDir(), fs, file.DurableWriter{})
+			s := openStore(t, t.TempDir(), fs, checkpoint.DurableWriter{})
 			r := testRecord(42)
 			part, err := s.Create(r.Source, r.Offset)
 			require.NoError(t, err)
@@ -199,7 +199,7 @@ func TestOldSegmentHandlesCannotChangeCompletedFiles(t *testing.T) {
 func TestAbandonedPrivateFileCleanupFailuresPreserveTheFile(t *testing.T) {
 	// Given a valid initialized namespace and one file never recorded as acknowledged.
 	root := t.TempDir()
-	s := openStore(t, root, NativeFiles{}, file.DurableWriter{})
+	s := openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 	part, err := s.Create(testRecord(42).Source, 42)
 	require.NoError(t, err)
 	private := filepath.Join(root, "."+s.state.WriterID+"."+part.ID+".partial")
@@ -212,9 +212,9 @@ func TestAbandonedPrivateFileCleanupFailuresPreserveTheFile(t *testing.T) {
 		return nil
 	}
 	// When cleanup fails, then startup reports failure and does not infer successful recovery.
-	_, err = Open(root, testCodec(t), fs, NewJournal(fs, file.DurableWriter{}))
+	_, err = Open(root, testCodec(t), fs, NewJournal(fs, checkpoint.DurableWriter{}))
 	require.ErrorIs(t, err, errDisk)
 	require.FileExists(t, private)
-	_ = openStore(t, root, NativeFiles{}, file.DurableWriter{})
+	_ = openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
 	require.NoFileExists(t, private)
 }

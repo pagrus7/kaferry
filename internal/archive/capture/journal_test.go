@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
-	"github.com/pagrus7/kaferry/internal/file"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,7 +90,7 @@ func TestJournalReadAndWriteSizeBoundsMatch(t *testing.T) {
 		state.Files[id] = Boundary{Identity: identity, Extent: 1000, Records: 1}
 	}
 	fs := &observedFiles{Filesystem: NativeFiles{}}
-	journal := NewJournal(fs, &observedWriter{AtomicWriter: file.DurableWriter{}, files: fs})
+	journal := NewJournal(fs, &observedWriter{AtomicWriter: checkpoint.DurableWriter{}, files: fs})
 	path := filepath.Join(t.TempDir(), "state.json")
 	// When saved, then it is rejected before disk replacement, never creating unrecoverable state.
 	err := journal.Save(path, state)

@@ -6,7 +6,6 @@ import (
 
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/stretchr/testify/require"
 )
@@ -113,33 +112,6 @@ func TestStatusPreservesOperationalFailuresAndRejectsOneOff(t *testing.T) {
 		})
 	}
 }
-func TestFileStatusUsesOpeningSizeNotEOFPosition(t *testing.T) {
-	for _, tc := range []struct {
-		name, reason string
-		size         int64
-		verdict      string
-	}{
-		{"preexisting partial final frame", "eof", 150, "stopped"}, {"appended bytes", "eof", 151, "incomplete"},
-		{"appended after worker threshold", "worker_record_cap", 151, "stopped"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			// Given a saved EOF before a partial final frame that was already present at open.
-			s, p, _, files := fixture()
-			p.Source.Kind = "FILE"
-			p.Source.Name = "input.cbor"
-			opening := int64(150)
-			files.source = file.SourceInspection{ArchiveInspection: file.ArchiveInspection{Exists: true, ID: "source", Size: tc.size}, Saved: true, Position: 100, OpeningSize: &opening, Stop: &core.Stop{Reason: tc.reason, At: 100}}
-			// When checking the saved stop against the current file size.
-			r, err := s.Status(t.Context(), p, config.Worker{}, core.NoopStopObserver{})
-			// Then only growth after opening invalidates that saved stop.
-			require.NoError(t, err)
-			require.Equal(t, tc.verdict, r.Verdict)
-			require.Equal(t, "not checked for files", r.Activity)
-			require.Equal(t, tc.size, r.Source.File.SizeBytes)
-		})
-	}
-}
-
 func TestStatusRejectsStaleStopsAfterFinalObservationFailure(t *testing.T) {
 	for _, failure := range []string{"second membership", "final description", "changed topic identity"} {
 		t.Run(failure, func(t *testing.T) {

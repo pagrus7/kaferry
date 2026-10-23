@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pagrus7/kaferry/internal/archiveio"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/stretchr/testify/require"
@@ -26,7 +26,7 @@ type engineFixture struct {
 	input   *engineInput
 	output  *engineOutput
 	source  *engineSource
-	store   kafkaport.SourceProgress
+	store   core.ProgressStore
 	groups  []string
 	saved   map[int32]kafkaport.Progress
 	onStage func(string)
@@ -55,14 +55,12 @@ func (f *engineFixture) Open(_ context.Context, endpoint plan.Endpoint) (kafkapo
 	}
 	return &engineConnection{fixture: f, name: endpoint.Name}, nil
 }
-func (f *engineFixture) OpenSource(p plan.Plan, _ string, _ config.Worker) (file.Input, error) {
+func (f *engineFixture) OpenSource(p plan.Plan, _ string, _ config.Worker) (archiveio.Input, error) {
 	f.groups = append(f.groups, p.Group)
 	return f.input, f.stage("file-input")
 }
-func (f *engineFixture) OpenOutput(p plan.Plan, _ string, progress file.DestinationProgress, _ config.Worker) (file.OutputSink, error) {
-	f.groups = append(f.groups, p.Group)
-	f.input.progress = progress
-	return f.output, f.stage("file-output")
+func (f *engineFixture) OpenOutput(plan.Endpoint, config.Worker) (archiveio.Output, error) {
+	return finalizedOutput{f.output}, f.stage("file-output")
 }
 func (f *engineFixture) New(source core.Source, sink core.Sink, store core.ProgressStore, p plan.Plan, _ config.Worker, _ core.StopObserver, _ core.Observer) Execution {
 	f.groups = append(f.groups, p.Group)
@@ -88,7 +86,7 @@ func (c *engineConnection) CheckMembers(context.Context, string) error {
 func (c *engineConnection) ReadProgress(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafkaport.Progress, error) {
 	return c.fixture.saved, c.fixture.stage("progress")
 }
-func (c *engineConnection) Source(_ context.Context, _ plan.Plan, _ string, _ config.Worker) (core.Source, kafkaport.SourceProgress, error) {
+func (c *engineConnection) Source(_ context.Context, _ plan.Plan, _ string, _ config.Worker) (core.Source, core.ProgressStore, error) {
 	return c.fixture.source, c.fixture.store, c.fixture.stage("topic-input")
 }
 func (c *engineConnection) Sink(context.Context, config.Worker) (core.Sink, error) {
@@ -112,18 +110,11 @@ func (s *engineSource) Close() error {
 type engineInput struct {
 	core.Source
 	core.ProgressStore
-	fixture  *engineFixture
-	progress file.DestinationProgress
-	output   core.OutputProgress
+	fixture *engineFixture
 }
 
-func (i *engineInput) Close() error { return i.fixture.stage("close-file-input") }
-func (i *engineInput) BindOutput(output core.OutputProgress) {
-	i.output = output
-	_ = i.fixture.stage("bind-output")
-}
-func (i *engineInput) Progress() file.DestinationProgress { return i.progress }
-func (i *engineInput) DeleteCheckpoint() error            { return i.fixture.stage("delete-checkpoint") }
+func (i *engineInput) Close() error            { return i.fixture.stage("close-file-input") }
+func (i *engineInput) DeleteCheckpoint() error { return i.fixture.stage("delete-checkpoint") }
 
 type engineOutput struct {
 	core.Sink
@@ -133,21 +124,16 @@ type engineOutput struct {
 func (o *engineOutput) Close() {
 	_ = o.fixture.stage("close-output")
 }
-func (*engineOutput) DurableOutput() (string, int64) { return "file-id", 100 }
 
-type archiveEngineFiles struct{ *engineFixture }
 type finalizedOutput struct{ *engineOutput }
 
-func (f archiveEngineFiles) OpenOutput(plan.Plan, string, file.DestinationProgress, config.Worker) (file.OutputSink, error) {
-	return finalizedOutput{f.output}, nil
-}
 func (o finalizedOutput) Finish() error { return o.fixture.stage("publish") }
 
 func TestEngineReportsArchivePublicationFailureBeforeCleanup(t *testing.T) {
 	// Given a runner that saved progress and an archive that fails final publication.
 	f := newEngineFixture()
 	f.fail = "publish"
-	engine := newEngine(f, archiveEngineFiles{f}, f, engineLogger(), nil)
+	engine := newEngine(f, f, f, engineLogger(), nil)
 	// When finishing, then publication cannot be hidden behind the void Close method.
 	err := engine.Run(t.Context(), enginePlan("FILE", "FILE"), config.Defaults(""), noopShutdown{})
 	require.ErrorIs(t, err, f.failure)
@@ -174,7 +160,7 @@ func TestEnginePublishesAfterRunnerCancellationAndPreservesBothErrors(t *testing
 					}
 				}
 			}
-			engine := newEngine(f, archiveEngineFiles{f}, f, engineLogger(), nil)
+			engine := newEngine(f, f, f, engineLogger(), nil)
 			// When the runner returns cancellation, then Finish still runs before releasing the output.
 			err := engine.Run(t.Context(), enginePlan("FILE", "FILE"), config.Defaults(""), noopShutdown{})
 			require.ErrorIs(t, err, context.Canceled)
@@ -213,20 +199,6 @@ func TestRuntimeCompositionAcceptsReplacementFactories(t *testing.T) {
 
 			// Then
 			require.NoError(t, runErr)
-			if kinds[0] == "TOPIC" && kinds[1] == "FILE" {
-				require.Same(t, f.output, f.input.output)
-			}
-			if kinds[0] == "FILE" {
-				var wanted core.OutputProgress
-				if kinds[1] == "FILE" {
-					wanted = f.output
-				}
-				if wanted == nil {
-					require.Nil(t, f.input.output)
-				} else {
-					require.Same(t, wanted, f.input.output)
-				}
-			}
 			output := "topic-output"
 			if kinds[1] == "FILE" {
 				output = "file-output"
@@ -384,21 +356,6 @@ func TestOneOffUsesOneGroupAndDeletesOnlyOnSuccess(t *testing.T) {
 			require.Equal(t, (fail != "run"), deleted)
 		})
 	}
-}
-
-func TestDestinationProgressRequiresConsistentFileIdentity(t *testing.T) {
-	// Given
-	saved := map[int32]kafkaport.Progress{0: {FileID: "archive", Extent: 100}, 1: {FileID: "archive", Extent: 200}}
-
-	// When
-	progress, err := destinationProgress(saved)
-
-	// Then
-	require.NoError(t, err)
-	require.Equal(t, (file.DestinationProgress{ID: "archive", Extent: 200, Exists: true}), progress)
-	saved[1] = kafkaport.Progress{FileID: "other", Extent: 200}
-	_, err = destinationProgress(saved)
-	require.Error(t, err)
 }
 
 func TestCleanupFailurePreservesTheFirstExitCode(t *testing.T) {

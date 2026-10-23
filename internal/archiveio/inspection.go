@@ -3,32 +3,24 @@ package archiveio
 import (
 	"errors"
 	"fmt"
+	"os"
+
 	"github.com/pagrus7/kaferry/internal/archive/avro"
 	"github.com/pagrus7/kaferry/internal/archive/replay"
 	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/plan"
-	"os"
 )
 
-type LegacyInspection interface {
-	Source(plan.Plan, string, config.Worker) (file.SourceInspection, error)
-	Destination(plan.Plan, string, file.DestinationProgress, config.Worker) (file.ArchiveInspection, error)
-}
 type Inspector struct {
-	legacy LegacyInspection
-	clock  core.Clock
+	clock core.Clock
 }
 
-func NewInspector(legacy LegacyInspection, clock core.Clock) *Inspector {
-	return &Inspector{legacy: legacy, clock: clock}
+func NewInspector(clock core.Clock) *Inspector {
+	return &Inspector{clock: clock}
 }
-func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result file.SourceInspection, err error) {
-	if p.Source.Format != "avro" {
-		return i.legacy.Source(p, fp, w)
-	}
+func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result SourceInspection, err error) {
 	directory, err := checkpointDirectory(w)
 	if err != nil {
 		return result, err
@@ -36,17 +28,16 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result file
 	if err = separatePaths(p, directory); err != nil {
 		return result, err
 	}
-	result.Directory = true
 	result.Exists = true
 	var saved *replay.State
 	if !p.OneOff {
 		result.CheckpointPath = checkpoint.Path(directory, p.Group)
 		saved, err = replay.ReadCheckpoint(directory, p.Group, replay.NativeGroupFiles{})
 		if err != nil {
-			return result, &file.Conflict{Err: err}
+			return result, &Conflict{Err: err}
 		}
 	}
-	codec, err := avro.New(w.MaxFrameBytes)
+	codec, err := avro.New(w.ArchiveBlockMaxBytes)
 	if err != nil {
 		return result, err
 	}
@@ -54,10 +45,10 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result file
 	var files []replay.File
 	if saved != nil {
 		if saved.Fingerprint != fp {
-			return result, &file.Conflict{Err: errors.New("replay checkpoint query identity mismatch")}
+			return result, &Conflict{Err: errors.New("replay checkpoint query identity mismatch")}
 		}
 		if err = p.Window.ValidateStored(saved.Window, 0); err != nil {
-			return result, &file.Conflict{Err: err}
+			return result, &Conflict{Err: err}
 		}
 		result.Saved = true
 		result.Position = saved.Position
@@ -68,7 +59,7 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result file
 		}
 		if !saved.Complete {
 			if err = catalog.ValidateHeaders(files); err != nil {
-				return result, &file.Conflict{Err: err}
+				return result, &Conflict{Err: err}
 			}
 		}
 	} else {
@@ -82,7 +73,7 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result file
 		}
 		result.Window, err = p.Window.Resolve(i.clock.Now())
 		if err != nil {
-			return result, err
+			return result, &Conflict{Err: err}
 		}
 	}
 	result.FileCount = len(files)
@@ -91,19 +82,16 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result file
 	}
 	return result, nil
 }
-func (i *Inspector) Destination(p plan.Plan, fp string, progress file.DestinationProgress, w config.Worker) (file.ArchiveInspection, error) {
-	if p.Destination.Format != "avro" {
-		return i.legacy.Destination(p, fp, progress, w)
-	}
-	info, err := os.Stat(p.Destination.Name)
+func (i *Inspector) Destination(path string) (ArchiveInspection, error) {
+	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return file.ArchiveInspection{Directory: true}, nil
+		return ArchiveInspection{}, nil
 	}
 	if err != nil {
-		return file.ArchiveInspection{}, err
+		return ArchiveInspection{}, err
 	}
 	if !info.IsDir() {
-		return file.ArchiveInspection{}, &file.Conflict{Err: errors.New("avro destination must be a directory")}
+		return ArchiveInspection{}, &Conflict{Err: errors.New("avro destination must be a directory")}
 	}
-	return file.ArchiveInspection{Exists: true, Directory: true}, nil
+	return ArchiveInspection{Exists: true}, nil
 }

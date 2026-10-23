@@ -17,7 +17,7 @@ func TestPlanningComposition(t *testing.T) {
 	var loader config.Reader
 	app := fx.New(fx.NopLogger, PlanningModules, fx.Populate(&parser, &planner, &loader))
 	require.NoError(t, app.Err())
-	statement, err := parser.Parse("INSERT INTO FILE cbor('b') SELECT * FROM FILE cbor('a') OPTIONS(GROUP='g')")
+	statement, err := parser.Parse("INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') OPTIONS(GROUP='g')")
 	require.NoError(t, err)
 	cfg, err := loader.Load("")
 	require.NoError(t, err)

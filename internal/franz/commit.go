@@ -22,10 +22,7 @@ type Committer struct {
 	topic, group string
 	topicID      [16]byte
 	metadata     map[int32]kafkaport.Progress
-	output       core.OutputProgress
 }
-
-func (c *Committer) BindOutput(output core.OutputProgress) { c.output = output }
 
 func (c *Committer) Save(ctx context.Context, cursors []core.Cursor) (map[int32]error, error) {
 	if err := ctx.Err(); err != nil {
@@ -80,14 +77,6 @@ func (c *Committer) snapshot(cursors []core.Cursor) (map[string]map[int32]kgo.Ep
 		progress, owned := c.metadata[cursor.Partition]
 		if !owned {
 			return nil, nil, fmt.Errorf("cannot commit unowned partition %d", cursor.Partition)
-		}
-		if c.output != nil {
-			id, extent := c.output.DurableOutput()
-			if progress.FileID != "" && progress.FileID != id {
-				return nil, nil, conflict("destination file identity mismatch")
-			}
-			progress.FileID, progress.Extent = id, extent
-			c.metadata[cursor.Partition] = progress
 		}
 		progress.Stop = cursor.Stop
 		if cursor.Stop != nil && cursor.Stop.At > cursor.Position {

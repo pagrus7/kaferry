@@ -73,25 +73,11 @@ func TestStatusOutputFailuresRemainErrors(t *testing.T) {
 	}
 }
 
-func TestFileStatusTextReportsBytePositionStopAndCurrentSize(t *testing.T) {
-	// Given saved EOF progress and the current source archive size.
-	position := int64(120)
-	report := inspect.StatusReport{Verdict: "stopped", Group: "restore", Source: inspect.Endpoint{Kind: "FILE", Name: "in.cbor", File: &inspect.FileSummary{SizeBytes: 150}}, Destination: inspect.Endpoint{Kind: "FILE", Name: "out.cbor"}, Partitions: []inspect.SavedPartition{{ID: 0, Position: &position, Stop: &core.Stop{Reason: "eof", At: 120}}}}
-	var output bytes.Buffer
-	// When rendering status as text.
-	err := renderStatus(&output, report, false)
-	// Then file cursor and stop are explicit and source size uses bytes.
-	require.NoError(t, err)
-	require.Contains(t, output.String(), "Partition 0: byte position 120; file end reached at 120")
-	require.Contains(t, output.String(), "Current source size: 150 bytes")
-}
-
 func TestArchiveStatusTextReportsSavedSnapshot(t *testing.T) {
 	// Given an Avro group's selected files, which may differ from current directory contents.
-	report := inspect.StatusReport{Source: inspect.Endpoint{Kind: "FILE", File: &inspect.FileSummary{Directory: true, FileCount: 3, SizeBytes: 150}}}
+	report := inspect.StatusReport{Source: inspect.Endpoint{Kind: "FILE", File: &inspect.FileSummary{FileCount: 3, SizeBytes: 150}}}
 	var output bytes.Buffer
 	// When rendering status, then bytes describe that snapshot rather than the current directory.
 	require.NoError(t, renderStatus(&output, report, false))
 	require.Contains(t, output.String(), "Snapshot: 3 completed files, 150 encoded bytes.")
-	require.NotContains(t, output.String(), "Current source size")
 }

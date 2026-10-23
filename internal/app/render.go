@@ -67,18 +67,9 @@ func renderProgress(output io.Writer, report inspect.Report) {
 		if *file.CheckpointExists {
 			fmt.Fprintln(output, "  Resume: saved file checkpoint.")
 		} else {
-			if file.Directory {
-				fmt.Fprintln(output, "  Start: current completed files; no saved checkpoint.")
-			} else {
-				fmt.Fprintln(output, "  Start: beginning of record frames; no saved checkpoint.")
-			}
+			fmt.Fprintln(output, "  Start: current completed files; no saved checkpoint.")
 		}
-		if file.Directory {
-			fmt.Fprintf(output, "  Input position: %d records; snapshot: %d completed files, %d encoded bytes.\n", *file.PositionRecords, file.FileCount, file.SizeBytes)
-		} else {
-			fmt.Fprintf(output, "  Input position: %d bytes.\n", *file.StartBytes)
-			fmt.Fprintf(output, "  Encoded input after position: %d bytes (before filtering).\n", file.SizeBytes-*file.StartBytes)
-		}
+		fmt.Fprintf(output, "  Input position: %d records; snapshot: %d completed files, %d encoded bytes.\n", *file.PositionRecords, file.FileCount, file.SizeBytes)
 		if file.Checkpoint != "" {
 			fmt.Fprintf(output, "  Checkpoint: %q\n", file.Checkpoint)
 		}
@@ -94,16 +85,8 @@ func renderProgress(output io.Writer, report inspect.Report) {
 			fmt.Fprintf(output, "  Without saved offsets: %d partitions; %s\n", fresh, startRule(report.StartRule))
 		}
 	}
-	if file := report.Destination.File; file != nil {
-		if file.Directory {
-			fmt.Fprintln(output, "  Output: independent Avro files; worker completion publishes remaining files.")
-		} else if file.Exists {
-			fmt.Fprintf(output, "  Output: resume existing file (%d bytes).\n", file.SizeBytes)
-			fmt.Fprintf(output, "  Acknowledged output: %d bytes.\n", *file.AcknowledgedExtent)
-			fmt.Fprintln(output, "  A run reads every existing output frame before copying.")
-		} else {
-			fmt.Fprintln(output, "  Output: create a new file.")
-		}
+	if report.Destination.File != nil {
+		fmt.Fprintln(output, "  Output: independent Avro files; worker completion publishes remaining files.")
 	}
 }
 

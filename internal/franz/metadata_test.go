@@ -5,7 +5,6 @@ import (
 	"errors"
 	"math"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -175,8 +174,8 @@ func TestSavedProgressRequiresEveryPartitionAndExactMetadata(t *testing.T) {
 	}
 }
 
-func TestSavedWindowsAndFileExtentsNeverBecomeAStartFallback(t *testing.T) {
-	for _, scenario := range []string{"valid", "fingerprint", "topic identity", "file extent", "missing relative window", "stop beyond commit", "window shape", "literal mismatch", "cutoff overflow"} {
+func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
+	for _, scenario := range []string{"valid", "fingerprint", "topic identity", "missing relative window", "stop beyond commit", "window shape", "literal mismatch", "cutoff overflow"} {
 		t.Run(scenario, func(t *testing.T) {
 			// Given committed progress whose query, window or output may be incompatible.
 			id := [16]byte{1}
@@ -189,8 +188,6 @@ func TestSavedWindowsAndFileExtentsNeverBecomeAStartFallback(t *testing.T) {
 				progress.Fingerprint = "other"
 			case "topic identity":
 				progress.TopicID = "other"
-			case "file extent":
-				progress.FileID, progress.Extent = "archive", 1
 			case "stop beyond commit":
 				progress.Stop = &core.Stop{Reason: "tip", At: 43}
 			case "missing relative window":
@@ -207,9 +204,6 @@ func TestSavedWindowsAndFileExtentsNeverBecomeAStartFallback(t *testing.T) {
 				cutoff = 1
 			}
 			text := encodeMetadata(progress)
-			if scenario == "file extent" {
-				text = strings.Replace(text, `"extent":1`, `"extent":-1`, 1)
-			}
 			inspector := &Inspector{codec: commitmeta.NewCodec(), topicID: id, parts: []int32{0}}
 			// When startup or assignment validates saved progress through their common path.
 			positions, metadata, err := inspector.decodeSaved(map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 42, Metadata: &text}}, "fp", spec, cutoff)

@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/pagrus7/kaferry/internal/archiveio"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/file"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 )
@@ -15,8 +15,8 @@ type KafkaFactory interface {
 	OpenInspection(context.Context, plan.Endpoint) (kafkaport.InspectionConnection, error)
 }
 type Files interface {
-	Source(plan.Plan, string, config.Worker) (file.SourceInspection, error)
-	Destination(plan.Plan, string, file.DestinationProgress, config.Worker) (file.ArchiveInspection, error)
+	Source(plan.Plan, string, config.Worker) (archiveio.SourceInspection, error)
+	Destination(string) (archiveio.ArchiveInspection, error)
 }
 type Explainer interface {
 	Explain(context.Context, plan.Plan, config.Worker, core.StopObserver) (Report, error)
@@ -58,20 +58,17 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 		return report, &kafkaport.Conflict{Err: err}
 	}
 	stop.Stage("inspecting saved progress")
-	progress, err := s.source(ctx, p, limits, source, &report)
+	err = s.source(ctx, p, limits, source, &report)
 	if err != nil {
 		return report, err
 	}
 	stop.Stage("inspecting destination archive")
 	if p.Destination.Kind == "FILE" {
-		info, err := s.files.Destination(p, report.Fingerprint, progress, limits)
+		info, err := s.files.Destination(p.Destination.Name)
 		if err != nil {
 			return report, err
 		}
 		report.Destination.File = fileSummary(info)
-		if progress.Exists && p.Destination.Format != "avro" {
-			report.Destination.File.AcknowledgedExtent = &progress.Extent
-		}
 	}
 	addWarnings(&report)
 	return report, ctx.Err()
@@ -106,8 +103,8 @@ func closeConnection(connection kafkaport.InspectionConnection, stop core.StopOb
 	*result = core.CleanupResult(*result, "close inspection connection", connection.Close(ctx))
 }
 
-func fileSummary(info file.ArchiveInspection) *FileSummary {
-	return &FileSummary{Exists: info.Exists, ID: info.ID, SizeBytes: info.Size, Directory: info.Directory, FileCount: info.FileCount}
+func fileSummary(info archiveio.ArchiveInspection) *FileSummary {
+	return &FileSummary{Exists: info.Exists, SizeBytes: info.Size, FileCount: info.FileCount}
 }
 
 func addWarnings(r *Report) {

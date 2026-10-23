@@ -67,4 +67,3 @@ func (s *Sink) Finish() error {
 }
 func (s *Sink) Close()                           { _ = s.capture.Close() }
 func (s *Sink) Deliveries() <-chan core.Delivery { return s.reports }
-func (s *Sink) DurableOutput() (string, int64)   { return "", 0 }

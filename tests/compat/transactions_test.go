@@ -44,10 +44,10 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 			require.NoError(t, p.BeginTransaction())
 			stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 			publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte("transactional"), Timestamp: stamp})
-			path := filepath.Join(t.TempDir(), "out.cbor")
+			path := filepath.Join(t.TempDir(), "out.avro")
 			group := src + "-copy"
 			cfg := configuration(t)
-			statement := fmt.Sprintf("INSERT INTO FILE cbor('%s') SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", path, src, stamp.Add(-time.Second).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano), group)
+			statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", path, src, stamp.Add(-time.Second).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano), group)
 			result := make(chan workerResult, 1)
 			samples := make(chan int64, 1)
 			go func() {

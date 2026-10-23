@@ -22,35 +22,33 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Command | [app](../internal/app) | Order planning stages; classify failures | Parser, Reader, Builder, Engine |
 | Engine | [app](../internal/app) | Validate endpoints/progress; acquire and close query resources | KafkaFactory, FileFactory, RunnerFactory |
 | Copy inspection | [inspect](../internal/inspect) | Preview endpoints, progress and starting positions without writes | KafkaFactory, Files, PositionerFactory |
-| Archive inspection | [file/inspection.go](../internal/file/inspection.go) | Read headers and checkpoint identity without locks or recovery | inspect.Files |
+| Archive inspection | [archiveio/inspection.go](../internal/archiveio/inspection.go) | Read archive headers, sizes and replay checkpoints without locks or recovery | inspect.Files |
 | Runner | [copy](../internal/copy) | Consume, filter, submit, process outcomes/lifecycle events | Source, Sink, ProgressStore, ProgressTracker, Clock |
 | Partition completion | [copy/partition.go](../internal/copy/partition.go) | Decide timestamp stops, tip sampling and waits for a fixed sampled end | Pure assignment state; runner performs I/O and logs outcomes |
 | Flow control | [copy/flow.go](../internal/copy/flow.go) | Hold unsent input; decide admission, worker-wide pause and commit cadence | Narrow work-count port; runner pauses full partitions and checkpoints at a record/byte cap, after one second or when the next input cannot fit |
 | Progress tracker | [copy](../internal/copy) | Track consumed/resolved prefixes, ownership and caps | ProgressTracker, fresh instance through ProgressFactory |
 | Kafka metadata | [franz](../internal/franz) | Inspect identities, offsets and optional destination config | sourceMetadata, destinationMetadata, MetadataClient |
-| Kafka contracts | [kafkaport](../internal/kafkaport) | Endpoint interfaces and saved-progress identity checks | Connection, SourceProgress; client libraries stay in adapters |
+| Kafka contracts | [kafkaport](../internal/kafkaport) | Endpoint interfaces and saved-progress identity checks | Connection, copy.ProgressStore; client libraries stay in adapters |
 | Commit metadata codec | [commitmeta](../internal/commitmeta) | Encode/decode the versioned commit format, without Kafka I/O | `commitmeta.Codec`; private wire types, independent golden/invalid-input tests |
 | Kafka positioning | [kafkaport](../internal/kafkaport) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetReader, TimeReader; client conversions in franz |
 | Kafka input | [franz](../internal/franz) | Hand off callbacks/fetches to the core loop; position, pause and prove gaps | ConsumerClient, sourceMetadata, gapReader, rebalanceBridge |
 | Kafka output | [franz](../internal/franz) | Validate records, bound admission and report asynchronous deliveries | ProducerClient, destinationMetadata, Clock |
-| Kafka commits | [franz](../internal/franz) | Save positions, eligible stops and, for file outputs, file ID and extent; reject commits without a group member ID and generation | offsetCommitter, copy.OutputProgress |
+| Kafka commits | [franz](../internal/franz) | Save positions and eligible stops; reject commits without a group member ID and generation | offsetCommitter, copy.ProgressStore |
 | Observability | [observability](../internal/observability) | Export immutable copy snapshots and actual save results through OTLP/HTTP; bound cleanup and redact diagnostics | `copy.Observer`, per-query Session/Factory, environment/file ports; SDK stays in adapter |
 | Shutdown budget | [app/shutdown.go](../internal/app/shutdown.go) | Enforce whole-process stop deadline; identify the blocked operation | StopObserver, Shutdown; CLI alone owns termination |
-| Archive adapters | [archiveio](../internal/archiveio) | Convert full provenance, batch confirmations, save replay stops and publish final files | Capture, Replay, LegacyFiles, LegacyInspection; format libraries stay outside copy |
-| File adapters | [file](../internal/file) | Encode/decode frames, snapshot input, recover output, persist checkpoints | ArchiveDecoder, ArchiveEncoder, CheckpointStore, I/O ports |
+| Archive adapters | [archiveio](../internal/archiveio) | Convert full provenance, batch confirmations, save replay stops and publish final files | Input, Output, Capture, Replay; format libraries stay outside copy |
 | Avro codec | [archive/avro](../internal/archive/avro) | Preserve raw records and source identity in bounded compressed blocks | Standard I/O ports; fixed schema and independent Avro interoperability tests |
 | Archive capture | [archive/capture](../internal/archive/capture) | Route records and rotate by size, age, rewind and file budget | Segments, Clock; no Kafka or copy-loop state |
 | Archive storage | [archive/capture](../internal/archive/capture) | Lock writer namespaces, save durable boundaries, publish and recover files | Filesystem/DataFile, StateStore; Journal uses AtomicWriter for synced replacement |
 | Archive replay | [archive/replay](../internal/archive/replay) | Pin completed inputs, merge source offsets and save confirmed physical cursors | Snapshot, Blocks, Checkpoints; bounded Pool and read-only Catalog |
-| Checkpoint encoding | [checkpoint](../internal/checkpoint) | Derive safe group filenames and encode bounded canonical JSON with checksums | Pure functions; owners validate their state |
-| File publication | [file](../internal/file) | Publish a durable header without replacing another creator | Publisher, private filesystem port |
+| Checkpoint encoding | [checkpoint](../internal/checkpoint) | Derive safe group filenames, encode bounded canonical JSON with checksums and replace files durably | AtomicWriter, private filesystem port; owners validate their state |
 | CLI | [cmd](../cmd/kaferry), [app](../internal/app) | Parse flags, compose components and handle signals | Command/Engine; Fx at composition only |
 
 ## Ownership
 
 - Factories create fresh mutable runner/progress/adapter state for each query; assignment state is generation-specific.
 - The engine manages each query's resources. Adapters manage Kafka clients, files and locks.
-- [Endpoint creation](decisions.md#creation) defines validation, output ownership and progress-save order. Adapters close after the runner saves confirmed progress; Kafka source close performs no saves.
+- [Archive capture](decisions.md#files) defines validation, output ownership and progress-save order. Adapters close after the runner saves confirmed progress; Kafka source close performs no saves.
 - Runner mutates progress in one event loop. Late outcomes from an old assignment cannot advance current progress.
 - Sources provide owned record buffers; sinks retain them until the corresponding write outcome.
 - Source cursors are distinct from record provenance. Progress persists confirmed next positions and identity metadata.
@@ -60,7 +58,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 
 - Priorities: correctness, simplicity, throughput, CI duration, binary size.
 - Single-purpose structs behind narrow interfaces; keep core logic Fx-free. Lines of code and cyclomatic complexity are signals, not targets.
-- Keep user documentation example-based. CI caps [README](../README.md) at 5,500 characters and enforces fewer than 10,000 across README, [usage](../docs/usage.md) and [file format](../docs/file-format.md). Grammar tests parse and plan the fenced SQL examples; invalid examples use inline code.
+- Keep user documentation example-based. CI caps [README](../README.md) at 5,500 characters and enforces fewer than 10,000 across README and [usage](../docs/usage.md). Grammar tests parse and plan the fenced SQL examples; invalid examples use inline code.
 
 ## Tests
 
@@ -80,8 +78,8 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 | `make load` | Bounded Kafka/archive copy caps/fidelity, overlap-cache behavior and file-copy metric overhead; start brokers first | Every PR/main, weekly, release |
 | `make soak` | Streaming fidelity, lag, memory and shutdown; start brokers first | Weekly and release, 30 minutes |
 | `make qualification` | Security/ACLs and replicated failover; starts TLS/SASL fixture | Code PRs, nightly, weekly, release |
-| `make fuzz` | SQL parser, CBOR/Avro decoders and capture/replay state; 100,000 iterations per target | Nightly; weekly |
-| `make benchmark` | CBOR framing, Avro blocks and overlapping replay: CPU/allocations | Nightly; weekly |
+| `make fuzz` | SQL parser, Avro decoder and capture/replay state; 100,000 iterations per target | Nightly; weekly |
+| `make benchmark` | Avro blocks and overlapping replay: CPU/allocations | Nightly; weekly |
 | `make broker-down` | Stop disposable clusters | Fixture cleanup |
 
 Time-window arithmetic, boundaries and overflow use deterministic unit tests in `make check`. Set `FUZZ_ITERATIONS` to change the per-target fuzz budget; failures remain fatal.
@@ -143,7 +141,7 @@ Missing measurements are unavailable. Coverage and vulnerability scans describe 
 
 ### Paired performance
 
-[Performance runs](../.github/workflows/performance.yml) are separate from required PR checks. They reuse Kafka, disabled-metrics CBOR file-copy, and optional archive capture/replay/file-copy assertions, with larger inputs, a warm-up per binary and six interleaved pairs, alternating which binary runs first on one runner. Summaries show median head/base throughput and the pair range; raw metrics, binary/toolchain identities and broker images stay in the `performance` artifact for 30 days. Kafka input is capped at 160,000 records; file/archive input at 200,000. `archive_base_format=cbor` compares a baseline without Avro CLI support against Avro; this measures a format change, not identical archive encoding. Reports identify both formats.
+[Performance runs](../.github/workflows/performance.yml) are separate from required PR checks. They reuse Kafka, disabled-metrics Avro file-copy, and optional archive capture/replay/file-copy assertions, with larger inputs, a warm-up per binary and six interleaved pairs, alternating which binary runs first on one runner. Summaries show median head/base throughput and the pair range; raw metrics, binary/toolchain identities and broker images stay in the `performance` artifact for 30 days. Kafka input is capped at 160,000 records; file/archive input at 200,000. Archive comparisons require Avro support in both revisions.
 
 Nightly runs start with A/A calibration (the same binary on both sides). Review at least 20 calibration runs before setting the repository variable `PERFORMANCE_MODE=comparison`; this enables changed-main comparisons against the last retained compatible scheduled measurement. No compatible baseline starts another calibration. Expired data requires a fresh baseline. Manual dispatch accepts a base revision; adding `ci:performance` opts a PR into the configured mode. In comparison mode, PRs compare against the merge base. No performance threshold blocks merging; choose warnings only after measuring A/A noise.
 
