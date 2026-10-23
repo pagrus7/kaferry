@@ -10,7 +10,7 @@ Use `-c connections.toml`; SQL overrides TOML. [Connections](../README.md#connec
 
 ## Permissions
 
-Kafka needs source topic/group READ and destination WRITE (including DESCRIBE); some brokers also need cluster IDEMPOTENT_WRITE. For `ONE_OFF`, grant group READ on the `kaferry-` prefix. File-only copies need no Kafka grants. [Optional DESCRIBE_CONFIGS](../design/client-compatibility.md#optional-destination-configuration).
+Kafka needs source topic/group READ and destination WRITE (including DESCRIBE); some brokers also need cluster IDEMPOTENT_WRITE. Without a named `GROUP`, grant group READ on the `kaferry-` prefix. File-only copies need no Kafka grants. [Optional DESCRIBE_CONFIGS](../design/client-compatibility.md#optional-destination-configuration).
 
 ## Preview a copy
 
@@ -45,7 +45,7 @@ SELECT * FROM FILE avro('archive/orders') WITH (GROUP = 'orders-restore');"
 
 Without `WHERE`, Kafka starts at the earliest retained record; `START = LATEST` selects new ones. Saved progress takes precedence. Without an end time, Kafka follows. Avro selects current completed files and exits; the same group retains its selection. [Examples](../design/grammar.md#valid-examples).
 
-Omitting `GROUP` creates a fresh logged group each run. Reruns and concurrent unnamed runs copy independently. Use a named group to resume or share Kafka work.
+Omitting `GROUP` means `ONE_OFF`: each run logs a fresh group. Reruns and concurrent unnamed runs copy independently. Use a shared named group for Kafka workers.
 
 Add `OPTIONS (WORKER_STOP_AFTER_RECORDS = 100)` before the final `;` to stop each process after accepting 100 records for writing. Each restart gets a fresh allowance. [Counting rules](../design/decisions.md#worker-record-stop).
 

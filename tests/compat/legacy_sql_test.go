@@ -24,6 +24,9 @@ func legacySQL(input string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if statement.Source.OptionsPosition.Line == 0 {
+		return "", fmt.Errorf("legacy test binary requires explicit source settings")
+	}
 	type edit struct {
 		start, end int
 		text       string
@@ -108,6 +111,13 @@ func TestLegacyBinarySQLKeepsTheWorkloadAndScope(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, strings.Fields(tc.want), strings.Fields(got))
 	}
-	_, err := legacySQL("INSERT INTO TOPIC 'out' SELECT * FROM FILE avro('in') WITH(GROUP='g')")
-	require.ErrorContains(t, err, "explicit KEY")
+	for _, tc := range []struct{ input, message string }{
+		{"INSERT INTO TOPIC 'out' SELECT * FROM FILE avro('in') WITH(GROUP='g')", "explicit KEY"},
+		{"INSERT INTO FILE avro('out') SELECT * FROM FILE avro('in')", "explicit source settings"},
+		{"INSERT INTO TOPIC 'out' WITH(PARTITIONING=KEY) SELECT * FROM TOPIC 'in'", "explicit source settings"},
+	} {
+		// Given a workload the old syntax cannot represent, when adapting, then fail clearly without panicking.
+		_, err := legacySQL(tc.input)
+		require.ErrorContains(t, err, tc.message)
+	}
 }

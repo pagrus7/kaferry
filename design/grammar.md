@@ -50,7 +50,7 @@ copy_option = "WORKER_STOP_AFTER_RECORDS" "=" integer
 Planning or startup enforces:
 
 - Both endpoint `WITH` clauses and final `OPTIONS` are optional; if present, each must contain a setting. Omitted `GROUP` means `ONE_OFF`: generate and log a fresh group for each run. Explicit group names must be nonblank. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name. Settings, inline connection aliases and a connection's properties cannot repeat.
-- Destination `WITH` is optional. Avro rotation uses positive bytes (case-insensitive binary k/m/g suffixes) and positive intervals; defaults are 1g and one hour. `avro(...)` takes only the directory.
+- Avro rotation uses positive bytes (case-insensitive binary k/m/g suffixes) and positive intervals; defaults are 1g and one hour. `avro(...)` takes only the directory.
 - Source `WITH` precedes `WHERE`. Without `WHERE`, topic sources default to `START = EARLIEST`; `LATEST` reads new records. `WHERE` supplies the starting rule and cannot be combined with explicit `START`. Saved progress takes precedence. File sources take no `START`. `CUTOFF` belongs to source `WITH`; record-error policies and worker stops belong to final `OPTIONS`.
 - `ON_ERROR` cannot be combined with any specific error policy.
 - `WORKER_STOP_AFTER_RECORDS` is from 1 to 9,007,199,254,740,992; it caps accepted writes per worker per invocation, not records read or a shared group total.
