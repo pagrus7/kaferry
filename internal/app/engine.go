@@ -22,7 +22,7 @@ type KafkaFactory interface {
 	Open(context.Context, plan.Endpoint) (kafkaport.Connection, error)
 }
 type FileFactory interface {
-	OpenSource(plan.Plan, string, config.Worker) (archiveio.Input, error)
+	OpenSource(plan.Plan, string, config.Worker, int) (archiveio.Input, error)
 	OpenOutput(plan.Endpoint, config.Worker) (archiveio.Output, error)
 }
 type Execution interface{ Run(context.Context) error }
@@ -81,7 +81,11 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 	if err != nil {
 		return &kafkaport.Conflict{Err: err}
 	}
-	input, err := e.prepareSource(ctx, p, fp, limits, sourceEndpoint.connection)
+	partitionCount, err := validateRouting(ctx, p, sourceEndpoint.connection, destinationEndpoint.connection)
+	if err != nil {
+		return err
+	}
+	input, err := e.prepareSource(ctx, p, fp, limits, sourceEndpoint.connection, partitionCount)
 	if err != nil {
 		return err
 	}
@@ -101,7 +105,7 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 			e.log.Warn("bounded copy can omit late and out-of-order timestamps after a cutoff stop")
 		}
 		var sourceProgress copy.ProgressStore
-		source, sourceProgress, err = sourceEndpoint.connection.Source(ctx, p, fp, limits)
+		source, sourceProgress, err = sourceEndpoint.connection.Source(ctx, p, fp, limits, routingValidator(p, destinationEndpoint.connection))
 		if err != nil {
 			return err
 		}
@@ -196,9 +200,9 @@ func (e *inspectedEndpoint) close(stop copy.StopObserver) error {
 	return nil
 }
 
-func (e *runtimeEngine) prepareSource(ctx context.Context, p plan.Plan, fp string, limits config.Worker, connection kafkaport.Connection) (archiveio.Input, error) {
+func (e *runtimeEngine) prepareSource(ctx context.Context, p plan.Plan, fp string, limits config.Worker, connection kafkaport.Connection, partitionCount int) (archiveio.Input, error) {
 	if p.Source.Kind == "FILE" {
-		return e.files.OpenSource(p, fp, limits)
+		return e.files.OpenSource(p, fp, limits, partitionCount)
 	}
 	if err := connection.CheckMembers(ctx, p.Group); err != nil {
 		return nil, err
@@ -216,4 +220,31 @@ func (e *runtimeEngine) openSink(ctx context.Context, p plan.Plan, limits config
 		return e.files.OpenOutput(p.Destination, limits)
 	}
 	return connection.Sink(ctx, limits)
+}
+
+func routingValidator(p plan.Plan, destination kafkaport.Connection) kafkaport.PartitionValidator {
+	if p.Destination.PreservesPartitions() {
+		return destination
+	}
+	return nil
+}
+
+func validateRouting(ctx context.Context, p plan.Plan, source, destination kafkaport.Connection) (int, error) {
+	if !p.Destination.PreservesPartitions() {
+		return 0, nil
+	}
+	parts, err := destination.Partitions(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if p.Source.Kind == "TOPIC" {
+		ids, err := source.Partitions(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if err = plan.CheckPartitions(ids, len(parts)); err != nil {
+			return 0, &kafkaport.Conflict{Err: err}
+		}
+	}
+	return len(parts), nil
 }

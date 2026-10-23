@@ -8,11 +8,12 @@ import (
 	"github.com/pagrus7/kaferry/internal/sql"
 )
 
-func (p *Plan) options(options []sql.Option, position sql.Position) error {
-	p.Policies = Policies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}
-	p.CutoffMS = 60000
+func applyOptions(options []sql.Option, scope sql.Scope, apply func(sql.Option) error) error {
 	seen := make(map[string]sql.Position)
 	for _, option := range options {
+		if err := sql.CheckScope(option.Name, scope); err != nil {
+			return sql.At(option.Position, err)
+		}
 		if first, exists := seen[option.Name]; exists {
 			return sql.At(option.Position, fmt.Errorf("option %s repeats; specify it once%s", option.Name, sql.Related(first, "first declaration")))
 		}
@@ -20,15 +21,19 @@ func (p *Plan) options(options []sql.Option, position sql.Position) error {
 			return sql.At(option.Position, fmt.Errorf("ON_ERROR cannot be combined with specific error policies; choose ON_ERROR or the specific policies%s", sql.Related(first, "conflicting declaration")))
 		}
 		seen[option.Name] = option.Position
-		if err := p.applyOption(option); err != nil {
+		if err := apply(option); err != nil {
 			return sql.At(option.ValuePosition, err)
 		}
 	}
-	if _, exists := seen["GROUP"]; !exists {
-		return sql.At(position, fmt.Errorf("GROUP is required; add GROUP = 'name' or GROUP = ONE_OFF to OPTIONS"))
+	return nil
+}
+
+func (p *Plan) sourceOptions(options []sql.Option, position sql.Position) error {
+	if err := applyOptions(options, sql.SourceSettings, p.applyOption); err != nil {
+		return err
 	}
-	if p.Source.Kind != "TOPIC" || p.Window.Upper == nil {
-		p.CutoffMS = 0
+	if p.Group == "" {
+		return sql.At(position, fmt.Errorf("GROUP is required; add GROUP = 'name' or GROUP = ONE_OFF to WITH after the FROM endpoint"))
 	}
 	return nil
 }
@@ -77,7 +82,7 @@ func (p *Plan) applyOption(option sql.Option) error {
 	case "ON_ERROR", "ON_MISSING_TIMESTAMP", "ON_REJECTED_TIMESTAMP":
 		return p.policyOption(option)
 	default:
-		return sql.At(option.Position, fmt.Errorf("unsupported option; use GROUP, START, CUTOFF, WORKER_STOP_AFTER_RECORDS, ON_ERROR, ON_MISSING_TIMESTAMP, or ON_REJECTED_TIMESTAMP"))
+		return sql.At(option.Position, fmt.Errorf("unsupported copy setting"))
 	}
 	return nil
 }

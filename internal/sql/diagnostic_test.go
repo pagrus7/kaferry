@@ -9,7 +9,8 @@ import (
 )
 
 func TestParserDiagnosticsLocateTheOffendingToken(t *testing.T) {
-	const prefix = "INSERT INTO FILE avro('out')\nSELECT * FROM FILE avro('in')\n"
+	const bare = "INSERT INTO FILE avro('out')\nSELECT * FROM FILE avro('in')\n"
+	const prefix = "INSERT INTO FILE avro('out')\nSELECT * FROM FILE avro('in') WITH(GROUP='g')\n"
 	for _, tc := range []struct {
 		name, query, message string
 		position             Position
@@ -17,29 +18,29 @@ func TestParserDiagnosticsLocateTheOffendingToken(t *testing.T) {
 		{"unquoted endpoint", "INSERT INTO TOPIC sensitive_SENTINEL_5c27", "expected single-quoted string; found identifier", Position{1, 19}},
 		{"invalid time operand", prefix + "WHERE RECORD_TIMESTAMP >= sensitive_SENTINEL_5c27", "expected NOW or TIMESTAMP; found identifier", Position{3, 27}},
 		{"empty input", "", "expected WITH or INSERT; found end of input", Position{1, 1}},
-		{"group name needs quotes", prefix + "OPTIONS(GROUP=orders)", "expected single-quoted string or ONE_OFF; found identifier", Position{3, 15}},
-		{"quoted start", prefix + "OPTIONS(GROUP='g', START='EARLIEST')", "expected EARLIEST or LATEST; found string literal", Position{3, 26}},
-		{"bad start before character", prefix + "OPTIONS(GROUP='g', START=BEGIN ?)", "expected EARLIEST or LATEST; found identifier", Position{3, 26}},
-		{"quoted policy", prefix + "OPTIONS(GROUP='g', ON_ERROR='SKIP')", "expected FAIL or SKIP; found string literal", Position{3, 29}},
-		{"bad policy before character", prefix + "OPTIONS(GROUP='g', ON_ERROR=RETRY ?)", "expected FAIL or SKIP; found identifier", Position{3, 29}},
-		{"missing comma", prefix + "OPTIONS(GROUP='g' START=EARLIEST)", "expected \",\" or \")\"; found identifier", Position{3, 19}},
-		{"missing WHERE", prefix + "WHER RECORD_TIMESTAMP < NOW()", "expected WHERE or OPTIONS; found identifier", Position{3, 1}},
+		{"group name needs quotes", bare + "WITH(GROUP=orders)", "expected single-quoted string or ONE_OFF; found identifier", Position{3, 12}},
+		{"quoted start", bare + "WITH(GROUP='g', START='EARLIEST')", "expected EARLIEST or LATEST; found string literal", Position{3, 23}},
+		{"bad start before character", bare + "WITH(GROUP='g', START=BEGIN ?)", "expected EARLIEST or LATEST; found identifier", Position{3, 23}},
+		{"quoted policy", prefix + "OPTIONS(ON_ERROR='SKIP')", "expected FAIL or SKIP; found string literal", Position{3, 18}},
+		{"bad policy before character", prefix + "OPTIONS(ON_ERROR=RETRY ?)", "expected FAIL or SKIP; found identifier", Position{3, 18}},
+		{"missing comma", bare + "WITH(GROUP='g' START=EARLIEST)", "expected \",\" or \")\"; found identifier", Position{3, 16}},
+		{"missing WHERE", prefix + "WHER RECORD_TIMESTAMP < NOW()", "expected WHERE, OPTIONS, \";\" or end of input; found identifier", Position{3, 1}},
 		{"BOM", "\uFEFFINSERT", "UTF-8 byte-order mark is not supported; save without a BOM", Position{1, 1}},
 		{"interior FEFF", "INSERT\uFEFF INTO", "unexpected invisible or control character; remove it", Position{1, 7}},
 		{"double quote", "INSERT INTO TOPIC \"b\"", "double quotes are not supported; use ASCII single quotes for strings", Position{1, 19}},
 		{"typographic quote", "\u2018secret\u2019", "typographic quotes are not supported; use ASCII single quotes", Position{1, 1}},
 		{"unquoted number", "7", "expected WITH or INSERT; found integer", Position{1, 1}},
 		{"invisible character", "\x00", "unexpected invisible or control character; remove it", Position{1, 1}},
-		{"format", "INSERT INTO FILE avro('out')\nSELECT * FROM FILE json('in')\nOPTIONS(GROUP='g')", "expected avro; found identifier", Position{2, 20}},
+		{"format", "INSERT INTO FILE avro('out')\nSELECT * FROM FILE json('in')", "expected avro; found identifier", Position{2, 20}},
 		{"unit before invalid character", prefix + "WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' WEEK ?", "expected SECOND, MINUTE, HOUR or DAY; found identifier", Position{3, 48}},
-		{"unquoted interval", prefix + "OPTIONS(GROUP='g', CUTOFF=INTERVAL 5 MINUTE)", "expected single-quoted string; found integer", Position{3, 36}},
-		{"option before invalid character", prefix + "OPTIONS(STRAT ?)", "expected GROUP, START, CUTOFF, WORKER_STOP_AFTER_RECORDS, ON_ERROR, ON_MISSING_TIMESTAMP or ON_REJECTED_TIMESTAMP; found identifier", Position{3, 9}},
-		{"projection", "INSERT INTO FILE avro('out')\nSELECT 'secret' FROM FILE avro('in') OPTIONS(GROUP='g')", "expected \"*\"; found string literal", Position{2, 8}},
-		{"missing equals", prefix + "OPTIONS(GROUP 'g')", "expected \"=\"; found string literal", Position{3, 15}},
-		{"OR", prefix + "WHERE RECORD_TIMESTAMP >= NOW() OR RECORD_TIMESTAMP < NOW()", "expected \"+\", \"-\", AND or OPTIONS; found identifier", Position{3, 33}},
-		{"EOF", prefix + "OPTIONS(GROUP=", "expected single-quoted string or ONE_OFF; found end of input", Position{3, 15}},
-		{"unterminated string", prefix + "OPTIONS(GROUP='secret", "unterminated string literal; close it with a single quote", Position{3, 15}},
-		{"CRLF and Unicode", "INSERT INTO FILE avro('源')\r\nSELECT * FROM FILE json('in') OPTIONS(GROUP='g')", "expected avro; found identifier", Position{2, 20}},
+		{"unquoted interval", bare + "WITH(GROUP='g', CUTOFF=INTERVAL 5 MINUTE)", "expected single-quoted string; found integer", Position{3, 33}},
+		{"option before invalid character", prefix + "OPTIONS(STRAT ?)", "expected WORKER_STOP_AFTER_RECORDS, ON_ERROR, ON_MISSING_TIMESTAMP or ON_REJECTED_TIMESTAMP; found identifier", Position{3, 9}},
+		{"projection", "INSERT INTO FILE avro('out')\nSELECT 'secret' FROM FILE avro('in')", "expected \"*\"; found string literal", Position{2, 8}},
+		{"missing equals", bare + "WITH(GROUP 'g')", "expected \"=\"; found string literal", Position{3, 12}},
+		{"OR", prefix + "WHERE RECORD_TIMESTAMP >= NOW() OR RECORD_TIMESTAMP < NOW()", "expected \"+\", \"-\", AND, OPTIONS, \";\" or end of input; found identifier", Position{3, 33}},
+		{"EOF", bare + "WITH(GROUP=", "expected single-quoted string or ONE_OFF; found end of input", Position{3, 12}},
+		{"unterminated string", bare + "WITH(GROUP='secret", "unterminated string literal; close it with a single quote", Position{3, 12}},
+		{"CRLF and Unicode", "INSERT INTO FILE avro('源')\r\nSELECT * FROM FILE json('in')", "expected avro; found identifier", Position{2, 20}},
 		{"tabs and Unicode", "INSERT INTO FILE avro('源')\tSELECT key", "expected \"*\"; found identifier", Position{1, 35}},
 		{"invalid UTF8", "-- 源\n\xff", "statement is not valid UTF-8; save it as UTF-8", Position{2, 1}},
 		{"unterminated comment", prefix + "/* private", "unterminated comment; close it with */", Position{3, 1}},
@@ -49,7 +50,7 @@ func TestParserDiagnosticsLocateTheOffendingToken(t *testing.T) {
 			// Given malformed SQL with a known offending token.
 			// When parsing without accessing endpoints.
 			_, err := NewParser().Parse(tc.query)
-			// Then identify that token and give a precise, redacted explanation.
+			// Then locate that token and give a redacted explanation.
 			var diagnostic *Diagnostic
 			require.ErrorAs(t, err, &diagnostic)
 			require.Equal(t, tc.position, diagnostic.Position)
@@ -76,8 +77,8 @@ func TestDiagnosticPreservesCauseAndSpecificLocation(t *testing.T) {
 
 func TestParserDiagnosticsNeverEchoArbitraryInput(t *testing.T) {
 	const secret = "sensitive_SENTINEL_5c27"
-	const base = "WITH CONNECTION prod AS ('sasl.password'='" + secret + "') INSERT INTO FILE avro('out') SELECT * FROM FILE avro('in') OPTIONS(GROUP='g'"
-	for _, query := range []string{base + ", " + secret + "=FAIL)", base + ", START='" + secret + "')", strings.Replace(base+")", "SELECT *", "SELECT "+secret, 1), base + ") " + secret, base + ", ON_ERROR='" + secret} {
+	const base = "WITH CONNECTION prod AS ('sasl.password'='" + secret + "') INSERT INTO FILE avro('out') SELECT * FROM FILE avro('in') WITH(GROUP='g') OPTIONS("
+	for _, query := range []string{base + secret + "=FAIL)", strings.Replace(base, "WITH(GROUP='g') OPTIONS(", "WITH(GROUP='g', START='"+secret+"')", 1), strings.Replace(base+")", "SELECT *", "SELECT "+secret, 1), base + "ON_ERROR=FAIL) " + secret, base + "ON_ERROR='" + secret} {
 		// Given a secret in a valid property and in malformed SQL.
 		// When reporting the first parse error.
 		_, err := NewParser().Parse(query)
@@ -91,9 +92,9 @@ func TestParserDiagnosticsNeverEchoArbitraryInput(t *testing.T) {
 func TestASTCapturesEachAnchorBeforeAdvancingTokens(t *testing.T) {
 	// Given one statement exercising every source-location field.
 	input := "WITH CONNECTION prod AS ('sasl.password'=ENV('PASSWORD'), 'bootstrap.servers'='broker')\n" +
-		"INSERT INTO TOPIC 'out@prod'\nSELECT * FROM TOPIC 'in@prod'\n" +
+		"INSERT INTO TOPIC 'out@prod'\nSELECT * FROM TOPIC 'in@prod' WITH (GROUP='g', CUTOFF=INTERVAL '3' MINUTE)\n" +
 		"WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' + INTERVAL '1' HOUR\n" +
-		"AND RECORD_TIMESTAMP < NOW() - INTERVAL '2' SECOND\nOPTIONS(GROUP='g', CUTOFF=INTERVAL '3' MINUTE)"
+		"AND RECORD_TIMESTAMP < NOW() - INTERVAL '2' SECOND\nOPTIONS(ON_ERROR=FAIL)"
 	// When parsing while preserving transient locations.
 	statement, err := NewParser().Parse(input)
 	require.NoError(t, err)
@@ -111,9 +112,9 @@ func TestASTCapturesEachAnchorBeforeAdvancingTokens(t *testing.T) {
 		{statement.Bounds[0].Time.Adjustments[0].Position, "'1'"},
 		{statement.Bounds[1].Position, "< NOW"}, {statement.Bounds[1].Time.Position, "NOW"},
 		{statement.Bounds[1].Time.Adjustments[0].Position, "'2'"},
-		{statement.Options[0].Position, "GROUP"}, {statement.Options[0].ValuePosition, "'g'"},
-		{statement.Options[1].Position, "CUTOFF"}, {statement.Options[1].ValuePosition, "INTERVAL '3'"},
-		{statement.Options[1].Interval.Position, "'3'"},
+		{statement.Source.Options[0].Position, "GROUP"}, {statement.Source.Options[0].ValuePosition, "'g'"},
+		{statement.Source.Options[1].Position, "CUTOFF"}, {statement.Source.Options[1].ValuePosition, "INTERVAL '3'"},
+		{statement.Source.Options[1].Interval.Position, "'3'"},
 	} {
 		// Then each anchor points to its own token, never the following token.
 		prefix := input[:strings.Index(input, tc.marker)]
@@ -126,7 +127,7 @@ func TestASTCapturesEachAnchorBeforeAdvancingTokens(t *testing.T) {
 func TestRemovedArchiveFormatIsRejectedWithoutLeakingPaths(t *testing.T) {
 	for _, endpoints := range [][2]string{{"cbor", "avro"}, {"avro", "cbor"}} {
 		// Given the removed format at either endpoint and a private path.
-		query := "INSERT INTO FILE " + endpoints[0] + "('private/path') SELECT * FROM FILE " + endpoints[1] + "('private/path') OPTIONS(GROUP='g')"
+		query := "INSERT INTO FILE " + endpoints[0] + "('private/path') SELECT * FROM FILE " + endpoints[1] + "('private/path') WITH(GROUP='g')"
 		// When parsing, then reject the format itself with a precise, redacted diagnostic.
 		_, err := NewParser().Parse(query)
 		var diagnostic *Diagnostic

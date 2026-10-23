@@ -13,13 +13,13 @@ func TestArchiveOptionsValidateAndKeepOperationalSettingsOutOfFingerprint(t *tes
 	// Given optional rotation settings and equivalent query identity.
 	build := func(t *testing.T, options string) Plan {
 		t.Helper()
-		statement, err := sql.NewParser().Parse(fmt.Sprintf("INSERT INTO FILE avro('out'%s) SELECT * FROM FILE avro('in') OPTIONS(GROUP='g')", options))
+		statement, err := sql.NewParser().Parse(fmt.Sprintf("INSERT INTO FILE avro('out') %s SELECT * FROM FILE avro('in') WITH (GROUP='g') ", options))
 		require.NoError(t, err)
 		p, err := NewPlanner(nil).Build(statement, nil)
 		require.NoError(t, err)
 		return p
 	}
-	p := build(t, ",ROTATE_AFTER_SIZE=2G,ROTATE_AFTER_AGE=INTERVAL '3' MINUTE")
+	p := build(t, "WITH(ROTATE_AFTER_SIZE=2G,ROTATE_AFTER_AGE=INTERVAL '3' MINUTE)")
 	require.EqualValues(t, 2<<30, p.Destination.RotateAfterSize)
 	require.EqualValues(t, 180000, p.Destination.RotateAfterAgeMS)
 	// When fingerprinting, then rotation tuning is excluded while Avro query identity stays stable.
@@ -38,7 +38,7 @@ func TestArchiveOptionDiagnosticsLocateValuesWithoutLeakingPaths(t *testing.T) {
 	} {
 		t.Run(tc.options, func(t *testing.T) {
 			// Given a malformed file option containing a private endpoint path.
-			query := "INSERT INTO FILE avro('private/path'" + tc.options + ") SELECT * FROM FILE avro('in') OPTIONS(GROUP='g')"
+			query := "INSERT INTO FILE avro('private/path') WITH(" + strings.TrimPrefix(tc.options, ",") + ") SELECT * FROM FILE avro('in') WITH(GROUP='g')"
 			ast, err := sql.NewParser().Parse(query)
 			require.NoError(t, err)
 			// When planning, then the diagnostic identifies the option without echoing SQL values.
@@ -54,12 +54,10 @@ func TestArchiveOptionDiagnosticsLocateValuesWithoutLeakingPaths(t *testing.T) {
 
 func TestSourceRotationDiagnosticLocatesOptionWithoutLeakingPaths(t *testing.T) {
 	// Given rotation on a source endpoint with a private path.
-	query := "INSERT INTO FILE avro('private/output') SELECT * FROM FILE avro('private/input', ROTATE_AFTER_SIZE=1k) OPTIONS(GROUP='g')"
-	ast, err := sql.NewParser().Parse(query)
-	require.NoError(t, err)
-	// When planning, then locate the invalid source option without echoing paths.
-	_, err = NewPlanner(nil).Build(ast, nil)
-	require.ErrorContains(t, err, "rotation options require a FILE avro destination")
+	query := "INSERT INTO FILE avro('private/output') SELECT * FROM FILE avro('private/input') WITH(GROUP='g', ROTATE_AFTER_SIZE=1k)"
+	_, err := sql.NewParser().Parse(query)
+	// When parsing, then locate a destination setting in the source clause.
+	require.ErrorContains(t, err, "put it in WITH after the INTO endpoint")
 	require.NotContains(t, err.Error(), "private/")
 	var diagnostic *sql.Diagnostic
 	require.ErrorAs(t, err, &diagnostic)

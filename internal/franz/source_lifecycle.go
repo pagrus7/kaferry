@@ -24,6 +24,12 @@ func (s *Source) lifecycle(event lifecycleEvent) error {
 	}
 	ctx, cancel := context.WithTimeout(s.query, 10*time.Second)
 	defer cancel()
+	if s.routing != nil {
+		if err := s.routing.ValidatePartitions(ctx, event.ids); err != nil {
+			event.answer <- lifecycleAnswer{err: err}
+			return err
+		}
+	}
 	saved, metadata, err := s.inspector.Saved(ctx, s.plan.Group, s.fingerprint, s.plan.Window, s.plan.CutoffMS)
 	if err != nil {
 		event.answer <- lifecycleAnswer{err: err}

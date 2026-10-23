@@ -89,9 +89,9 @@ Resume requires matching query and endpoint identity:
 
 | Included in query fingerprint | Excluded |
 | --- | --- |
-| Endpoint kinds and archive formats; Kafka cluster IDs and topics; normalized `WHERE` expressions; `CUTOFF` | Connection aliases/properties, file paths/IDs, `GROUP`, `START`, `WORKER_STOP_AFTER_RECORDS`, error policies and tuning |
+| Endpoint kinds and archive formats; Kafka cluster IDs and topics; normalized `WHERE` expressions; `CUTOFF`; Kafka output partitioning mode | Connection aliases/properties, file paths/IDs, `GROUP`, `START`, `WORKER_STOP_AFTER_RECORDS`, error policies and tuning |
 
-Policies can therefore change to SKIP when resuming a failed record. `NOW()` bounds are fingerprinted as expressions; resolved windows are stored separately.
+Policies can therefore change to SKIP when resuming a failed record. Changing partitioning mode requires a new group. Explicit `KEY` retains the existing key-routing fingerprint; file-output fingerprints are unchanged. `NOW()` bounds are fingerprinted as expressions; resolved windows are stored separately.
 
 - Kafka saves each next offset with [commit metadata](#commit-metadata).
 - Startup and assignment reject mismatched fingerprints/topic IDs, foreign metadata and missing saved `NOW()` windows. Topic IDs must be nonzero. Source identity is checked at startup and assignment, without continuous monitoring; destination recreation is not detected.
@@ -116,8 +116,10 @@ The initial assignment commit clears the previous stop. A later commit includes 
 ## Kafka output
 
 - One asynchronous idempotent producer per worker, with delivery reports and client batching.
-- Send original key bytes with partition unset. Java-compatible Murmur2 routing is fixed; `partitioner=murmur2_random` is the only accepted setting. Equal non-null keys stay together with a stable partitioner/count. Source partitions/offsets are never routing instructions. Topics must exist; destination partition-count changes are logged.
-- Submission order is preserved for records from one source partition routed to one destination partition during an uninterrupted producer session with stable routing. Null keys can spread. Replay and rebalances can duplicate and reorder output; there is no cross-partition order guarantee.
+- Default `PARTITIONING = PRESERVE`: write original partition N to destination partition N, keeping original key bytes, including nulls. Check all input partition IDs before output; Kafka assignments recheck the destination. Avro uses the fixed selection's original IDs, never its replay cursor. This includes partitions whose records the filter excludes. Destination counts may be larger; missing IDs fail under every policy. Topics must exist.
+- `WITH (PARTITIONING = KEY)` on the destination selects Java-compatible Murmur2 key routing; null keys use sticky routing. Equal non-null keys stay together with a stable partitioner/count. Preserved placement can differ from other destination producers' key routing. Destination partition-count changes are logged. Source offsets are never copied; destination offsets are new.
+- Layout checks are not atomic with publishing. Topic recreation or partition changes during a copy can fail after partial output; missing partitions never fall back to key routing.
+- Submission order is preserved for records from one source partition routed to one destination partition during an uninterrupted producer session with stable routing. With `KEY`, null keys can spread. Replay and rebalances can duplicate and reorder output; there is no cross-partition order guarantee.
 - Client delivery retries default to `worker.delivery_timeout` (60 s). Connection `message.timeout.ms` / `delivery.timeout.ms` overrides it; values must be positive and conflicting aliases fail. Deadlines start at submission, independently of record timestamps. Exhausted delivery fails the run.
 - Queue-full refusal pauses reading and retries the same record first, up to `worker.delivery_timeout`. Accepted records are not submitted again within that assignment.
 - Optional destination configuration supports size/timestamp preflight; denial logs a warning. [Checks and fallbacks](client-compatibility.md#optional-destination-configuration). Preflight cannot guarantee broker acceptance: clocks, settings, framing and compression may differ.
@@ -172,7 +174,7 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 | `version`, `fingerprint`, `group`, `one_off`, `cutoff_ms` | Report format and query identity; one-off group is `ONE_OFF` |
 | `start_rule` | Kafka fallback for partitions without progress: `WINDOW`, `EARLIEST` or `LATEST`; absent for file sources |
 | `record_errors` | Effective `FAIL`/`SKIP` policies: `missing_timestamp`, `rejected_timestamp`, `other_record`; SKIP applies before writing, not to delivery failures |
-| `source`, `destination` | `kind`, `name`, optional connection alias, cluster/topic IDs, partition count, destination timestamp type |
+| `source`, `destination` | `kind`, `name`, optional connection alias, cluster/topic IDs, partition count, destination timestamp type and `partitioning` (`PRESERVE` or `KEY` for a Kafka destination) |
 | Endpoint `file` | `exists`; source adds `size_bytes`, `file_count`, `position_records`, `window`, `window_origin`, `checkpoint`, `checkpoint_exists`. Destination `size_bytes` is zero; destination size and file count are not inspected |
 | `partitions` | Sorted `partition`, `start`, `log_start`, `log_end`, `saved`, `window`, `window_origin` |
 | `window` | Inclusive `lower`, exclusive `upper`; null means unbounded. `window_origin`: `literal`, `saved`, `adopted` or `resolved` for preview-only NOW |
@@ -190,7 +192,7 @@ Text lists up to eight partitions; `--json` includes all. JSON version `1` conta
 
 ## Configuration and CLI
 
-Connections use TOML profiles or `WITH CONNECTION`; SQL keys override TOML. `ENV('NAME')` resolves at startup, fails if unset and is redacted. Worker settings are in TOML.
+Connections use TOML profiles or `WITH CONNECTION`; SQL keys override TOML. Endpoint `WITH` configures source progress/start rules or destination rotation/partitioning; optional final `OPTIONS` holds worker stops and all record-error policies. `ENV('NAME')` resolves at startup, fails if unset and is redacted. Worker settings are in TOML.
 
 Profiles can be shared by sources and destinations. Supported connection keys are mapped to franz-go options; other keys fail before endpoints are opened, without displaying property values. A property name does not imply full librdkafka compatibility.
 
@@ -231,7 +233,6 @@ Values are strings in TOML and SQL. Unknown keys, unsupported values and contrad
 | `ssl.endpoint.identification.algorithm` | `https` (default) or `none`; `none` disables hostname checks but retains CA-chain checks |
 | `client.id` | Optional suffix; source ID is `kaferry-<group>-<suffix>`, other clients `kaferry-<suffix>` |
 | `compression.type` | `none` (default), gzip, snappy, lz4, zstd |
-| `partitioner` | Only `murmur2_random`; Java-compatible Murmur2 for non-null keys, sticky routing for null keys |
 | `message.max.bytes` | Client batch ceiling including 4–5 bytes of outer framing, 1,000–1,000,000,000 bytes; default 1,000,000, adjusted by readable destination config |
 | `message.timeout.ms`, `delivery.timeout.ms` | Submission deadline; positive milliseconds, aliases must agree; default worker delivery timeout |
 | `queue.buffering.max.messages`, `queue.buffering.max.kbytes` | Sink admission bounds: at most worker records / the larger of worker bytes or the message limit (rounded up to KiB) |
@@ -245,7 +246,7 @@ Values are strings in TOML and SQL. Unknown keys, unsupported values and contrad
 
 Queue/fetch overrides must be positive. Byte queue settings use KiB. Large or compressed batches can exceed fetch ceilings; these do not cap total client memory. The ordinary consumer runs one fetch request at a time; separate requests checking offset gaps can overlap it. Kaferry's uncommitted-work caps remain independent.
 
-Auto-commit/reset, group ID/protocol, read isolation, cooperative assignment, auto topic creation, idempotence, acknowledgements and delivery handling are owned by Kaferry. Kaferry sets these; the corresponding property names are rejected as unsupported. Sources use the SQL group, classic protocol, read-committed and no automatic offset reset. Producers use idempotence and all-ISR acknowledgements. Topic auto-creation is disabled.
+`partitioner` is unsupported; select the copy's placement with destination `WITH (PARTITIONING = PRESERVE|KEY)`. Auto-commit/reset, group ID/protocol, read isolation, cooperative assignment, auto topic creation, idempotence, acknowledgements and delivery handling are owned by Kaferry. Kaferry sets these; the corresponding property names are rejected as unsupported. Sources use the SQL group, classic protocol, read-committed and no automatic offset reset. Producers use idempotence and all-ISR acknowledgements. Topic auto-creation is disabled.
 
 ### CLI and exit codes
 

@@ -20,7 +20,7 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 	src, dst := topic(t, a, 2), topic(t, a, 2)
 	group := src + "-churn"
 	path := configuration(t, "record_cap=32\npartition_record_cap=8\n")
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", dst, src, group)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", dst, src, group)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	results := make(chan workerResult, 8)

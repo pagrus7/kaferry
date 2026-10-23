@@ -27,8 +27,8 @@ Pass SQL with `-f file`, `-f -` (stdin) or `-e "SQL"`.
 mkdir -p archive
 kaferry run -c connections.toml -f - <<'SQL'
 INSERT INTO FILE avro('archive/orders')
-SELECT * FROM TOPIC 'orders@prod'
-OPTIONS (GROUP = 'orders-archive', START = EARLIEST);
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive', START = EARLIEST)
+;
 SQL
 ```
 
@@ -37,12 +37,12 @@ Replay completed files while capture continues; stop capture first to include it
 ```sh
 mkdir -p ~/.kaferry/checkpoints
 kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM FILE avro('archive/orders') OPTIONS (GROUP = 'orders-restore');"
+SELECT * FROM FILE avro('archive/orders') WITH (GROUP = 'orders-restore') ;"
 ```
 
 Kafka needs `WHERE` or `START`: `EARLIEST` for retained records, `LATEST` for new ones. Saved progress takes precedence. Avro pins completed files: the same group resumes them; a new group selects current files. [Examples](../design/grammar.md#valid-examples).
 
-Add `WORKER_STOP_AFTER_RECORDS = 100` to `OPTIONS` to stop each process after accepting 100 records for writing. Each restart gets a fresh allowance. [Counting rules](../design/decisions.md#worker-record-stop).
+Add `OPTIONS (WORKER_STOP_AFTER_RECORDS = 100)` before the final `;` to stop each process after accepting 100 records for writing. Each restart gets a fresh allowance. [Counting rules](../design/decisions.md#worker-record-stop).
 
 ## Stop and check results
 
@@ -56,9 +56,13 @@ kaferry status -c connections.toml -f copy.sql --json
 
 ## Resume or start over
 
-Rerun with the same `GROUP`, endpoints, filter, `CUTOFF` and checkpoint directory. Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
+Rerun with the same `GROUP`, endpoints, filter, `CUTOFF`, partitioning mode and checkpoint directory. Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
 
 Keep output, checkpoints and locks. Archive files must stay unchanged until replay completes. [Recovery rules](../design/archive.md#capture-and-recovery).
+
+## SQL settings
+
+Use `WITH` on either endpoint: source `GROUP`, `START`, `CUTOFF`; destination `PARTITIONING` or Avro rotation. Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
 
 ## Errors
 

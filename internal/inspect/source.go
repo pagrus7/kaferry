@@ -9,11 +9,11 @@ import (
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
-func (s *Service) source(ctx context.Context, p plan.Plan, limits config.Worker, connection kafkaport.InspectionConnection, report *Report) error {
+func (s *Service) source(ctx context.Context, p plan.Plan, limits config.Worker, connection kafkaport.InspectionConnection, report *Report) ([]int32, error) {
 	if p.Source.Kind == "FILE" {
 		info, err := s.files.Source(p, report.Fingerprint, limits)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		report.Source.File = fileSummary(info.ArchiveInspection)
 		report.Source.File.Window = &info.Window
@@ -27,9 +27,16 @@ func (s *Service) source(ctx context.Context, p plan.Plan, limits config.Worker,
 				report.Source.File.WindowOrigin = "saved"
 			}
 		}
-		return nil
+		return info.Partitions, nil
 	}
-	return s.topicSource(ctx, p, connection, report)
+	if err := s.topicSource(ctx, p, connection, report); err != nil {
+		return nil, err
+	}
+	ids := make([]int32, len(report.Partitions))
+	for i, row := range report.Partitions {
+		ids[i] = row.ID
+	}
+	return ids, nil
 }
 
 func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafkaport.InspectionConnection, report *Report) error {

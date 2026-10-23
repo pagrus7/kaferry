@@ -53,7 +53,7 @@ func TestLoadObservability(t *testing.T) {
 				config := filepath.Join(caseDir, mode+".toml")
 				settings := fmt.Sprintf("[worker]\ncheckpoint_dir=%q\nprogress_interval='0'\n[metrics]\nenabled=%t\n", caseDir, mode != "disabled")
 				require.NoError(t, os.WriteFile(config, []byte(settings), 0600))
-				statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') OPTIONS(GROUP='%s')", output, source, mode)
+				statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='%s') ", output, source, mode)
 				report := newLoadReport(t, "observability")
 				report.ArchiveFormat = "avro"
 				report.WorkerRecordCap = 20000

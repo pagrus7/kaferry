@@ -20,6 +20,7 @@ type destinationMetadata interface {
 }
 type Sink struct {
 	client         ProducerClient
+	preserve       bool
 	topic          string
 	settings       settings
 	configuration  map[string]string
@@ -39,6 +40,9 @@ type Sink struct {
 }
 
 func (s *Sink) Submit(record core.Record, token core.Token) error {
+	if s.preserve && (record.Source == nil || record.Source.Partition < 0) {
+		return fmt.Errorf("partition preservation requires valid original source partition metadata")
+	}
 	if err := s.validate(record); err != nil {
 		return err
 	}
@@ -48,6 +52,9 @@ func (s *Sink) Submit(record core.Record, token core.Token) error {
 	}
 	s.inspectRouting()
 	r := &kgo.Record{Topic: s.topic, Key: record.Key, Value: record.Value}
+	if s.preserve {
+		r.Partition = record.Source.Partition
+	}
 	if record.TimestampMS != nil && s.configuration["message.timestamp.type"] != "LogAppendTime" {
 		r.Timestamp = time.UnixMilli(*record.TimestampMS)
 	}
@@ -118,7 +125,7 @@ func (s *Sink) inspectRouting() {
 		return
 	}
 	if count != s.partitionCount {
-		s.log.Warn("destination partition count changed; key routing may change", "topic", s.topic, "previous", s.partitionCount, "current", count)
+		s.log.Warn("destination partition count changed", "topic", s.topic, "previous", s.partitionCount, "current", count)
 		s.partitionCount = count
 	}
 }

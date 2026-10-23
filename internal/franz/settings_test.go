@@ -26,7 +26,7 @@ func testPlan(t *testing.T, properties map[string]string) plan.Plan {
 	for key, value := range properties {
 		values[key] = value
 	}
-	statement, err := sql.NewParser().Parse("INSERT INTO TOPIC 'output' SELECT * FROM TOPIC 'input' OPTIONS(GROUP='test',START=EARLIEST)")
+	statement, err := sql.NewParser().Parse("INSERT INTO TOPIC 'output' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'input' WITH (GROUP='test', START=EARLIEST) ")
 	require.NoError(t, err)
 	p, err := plan.NewPlanner(noEnvironment{}).Build(statement, plan.Profiles{"default": values})
 	require.NoError(t, err)
@@ -176,4 +176,12 @@ func TestFactoryOpenRedactsMalformedBrokerPort(t *testing.T) {
 	require.ErrorAs(t, err, &conflict)
 	require.EqualError(t, err, "invalid Kafka connection configuration")
 	require.NotContains(t, err.Error(), "private-port")
+}
+
+func TestPartitionerPropertyPointsToSQLWithoutEchoingItsValue(t *testing.T) {
+	// Given the retired connection property, when validating, then show the endpoint clause that replaces it.
+	p := testPlan(t, map[string]string{"partitioner": "secret-value"})
+	_, err := parseSettings(p.Destination.Properties)
+	require.ErrorContains(t, err, "use WITH (PARTITIONING = PRESERVE) or WITH (PARTITIONING = KEY) after the INTO endpoint")
+	require.NotContains(t, err.Error(), "secret-value")
 }

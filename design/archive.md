@@ -10,7 +10,7 @@ Each completed file is a Snappy-compressed Avro object container for one origina
 - Nullable raw key/value bytes and an ordered array of binary header names and nullable values.
 - Nullable signed 64-bit millisecond timestamp and its kind: unknown, CreateTime or LogAppendTime.
 
-Null differs from empty. Duplicate headers and offsets survive. Payloads remain opaque; Kafka destinations use their own partition routing. Topic IDs distinguish deleted and recreated topics.
+Null differs from empty. Duplicate headers and offsets survive. Payloads remain opaque. Kafka destinations preserve original partition numbers by default; explicit key routing can repartition them. Topic IDs distinguish deleted and recreated topics.
 
 The [schema](../internal/archive/avro/schema.json) defines the wire fields. OCF metadata `kaferry` contains canonical JSON, with these fields in order: `version`, `writer_id`, `file_id`, `source`, `first_offset`, `block_limit`. Version is `1`; writer/file IDs are 32 lowercase hexadecimal characters. The nested `source` fields are `cluster`, `topic`, `topic_id`, `partition`, in that order. JSON topic IDs use 32 lowercase hexadecimal characters; Avro records store 16 bytes. No whitespace, duplicate/unknown fields or alternate key spellings are accepted. Readers permit equivalent Avro schema representations.
 
@@ -51,11 +51,9 @@ Publishing renames synced private files without overwriting conflicting targets,
 ## Rotation
 
 ```text
-INSERT INTO FILE avro('/archive/orders',
-    ROTATE_AFTER_SIZE = 512m,
-    ROTATE_AFTER_AGE = INTERVAL '2' HOUR)
-SELECT * FROM TOPIC 'orders@prod'
-OPTIONS (GROUP = 'orders-archive', START = EARLIEST);
+INSERT INTO FILE avro('/archive/orders') WITH (ROTATE_AFTER_SIZE = 512m, ROTATE_AFTER_AGE = INTERVAL '2' HOUR)
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive', START = EARLIEST)
+;
 ```
 
 Only the path is required. Defaults: 1g compressed container bytes or one elapsed hour. Size suffixes k/m/g are case-insensitive powers of 1024; plain integers are bytes. The complete crossing block may exceed the size target. Check age even when no records arrive.

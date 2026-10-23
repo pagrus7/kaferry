@@ -75,12 +75,6 @@ func (s *settings) rules() map[string]propertyRule {
 		"request.timeout.ms": durationProperty(&s.request, 100), "socket.timeout.ms": durationBetween(&s.overhead, 100, 900000), "linger.ms": durationBetween(&s.linger, 0, 60000),
 		"metadata.max.age.ms": durationBetween(&s.metadata, 10, 3600000), "topic.metadata.refresh.interval.ms": durationBetween(&s.metadata, 10, 3600000),
 		"compression.type": choiceProperty(&s.compression, "none", "gzip", "snappy", "lz4", "zstd"),
-		"partitioner": func(v string) error {
-			if v != "murmur2_random" {
-				return fmt.Errorf("must be murmur2_random")
-			}
-			return nil
-		},
 	}
 }
 
@@ -174,6 +168,9 @@ func (s settings) validate(values map[string]string, keys []string) error {
 }
 
 func unsupportedProperty(key string, rules map[string]propertyRule) error {
+	if key == "partitioner" {
+		return invalidProperty(key, "unsupported; use WITH (PARTITIONING = PRESERVE) or WITH (PARTITIONING = KEY) after the INTO endpoint")
+	}
 	keys := make([]string, 0, len(rules))
 	for name := range rules {
 		keys = append(keys, name)

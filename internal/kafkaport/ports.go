@@ -29,12 +29,19 @@ type RetentionCheck struct {
 	Lower int64
 }
 
+// PartitionValidator checks new source assignments against the destination layout.
+type PartitionValidator interface {
+	ValidatePartitions(context.Context, []int32) error
+}
+
 // Connection owns endpoint metadata and creates one query's source or sink.
 type Connection interface {
 	ClusterID(context.Context) (string, error)
+	Partitions(context.Context) ([]int32, error)
+	PartitionValidator
 	CheckMembers(context.Context, string) error
 	ReadProgress(context.Context, string, string, plan.WindowSpec, int64) (map[int32]Progress, error)
-	Source(context.Context, plan.Plan, string, config.Worker) (core.Source, core.ProgressStore, error)
+	Source(context.Context, plan.Plan, string, config.Worker, PartitionValidator) (core.Source, core.ProgressStore, error)
 	Sink(context.Context, config.Worker) (core.Sink, error)
 	Close(context.Context) error
 }

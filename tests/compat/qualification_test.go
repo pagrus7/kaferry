@@ -172,7 +172,7 @@ func TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 	_, p, src, dst, group := secureFixture(t)
 	stamp := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
 	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Key: []byte{0, 255}, Value: []byte{}, Headers: []kgo.RecordHeader{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, Timestamp: stamp})
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), group)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", dst, src, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
@@ -219,7 +219,7 @@ func TestSaslTlsScramMechanisms(t *testing.T) {
 			cfg := secureProperties(t, "copier", "fixture-copy-secret")
 			cfg["sasl.mechanism"] = mechanism
 			waitScramReady(t, cfg, src)
-			statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), group)
+			statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", dst, src, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
 			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 			defer cancel()
 
@@ -268,7 +268,7 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	if err != nil || strings.TrimSpace(string(label)) != "kaferry-qualification" {
 		t.Fatal("failover target is not the disposable qualification broker", err)
 	}
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", dst, src, group)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", dst, src, group)
 	properties := secureProperties(t, "copier", "fixture-copy-secret")
 	properties["socket.timeout.ms"] = "5000"
 	properties["session.timeout.ms"] = "6000"

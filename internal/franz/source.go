@@ -20,6 +20,7 @@ type sourceMetadata interface {
 }
 type Source struct {
 	client               ConsumerClient
+	routing              kafkaport.PartitionValidator
 	inspector            sourceMetadata
 	positioning          kafkaport.PositionerFactory
 	store                *Committer

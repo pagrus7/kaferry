@@ -20,16 +20,20 @@ import (
 )
 
 type engineFixture struct {
-	trace   []string
-	fail    string
-	failure error
-	input   *engineInput
-	output  *engineOutput
-	source  *engineSource
-	store   core.ProgressStore
-	groups  []string
-	saved   map[int32]kafkaport.Progress
-	onStage func(string)
+	trace          []string
+	fail           string
+	failure        error
+	input          *engineInput
+	output         *engineOutput
+	source         *engineSource
+	store          core.ProgressStore
+	groups         []string
+	saved          map[int32]kafkaport.Progress
+	onStage        func(string)
+	partitions     map[string][]int32
+	partitionReads []string
+	partitionCount int
+	routing        kafkaport.PartitionValidator
 }
 
 func newEngineFixture() *engineFixture {
@@ -55,7 +59,8 @@ func (f *engineFixture) Open(_ context.Context, endpoint plan.Endpoint) (kafkapo
 	}
 	return &engineConnection{fixture: f, name: endpoint.Name}, nil
 }
-func (f *engineFixture) OpenSource(p plan.Plan, _ string, _ config.Worker) (archiveio.Input, error) {
+func (f *engineFixture) OpenSource(p plan.Plan, _ string, _ config.Worker, count int) (archiveio.Input, error) {
+	f.partitionCount = count
 	f.groups = append(f.groups, p.Group)
 	return f.input, f.stage("file-input")
 }
@@ -80,13 +85,22 @@ type engineConnection struct {
 func (c *engineConnection) ClusterID(context.Context) (string, error) {
 	return c.name + "-cluster", c.fixture.stage("cluster-" + c.name)
 }
+func (c *engineConnection) Partitions(context.Context) ([]int32, error) {
+	c.fixture.partitionReads = append(c.fixture.partitionReads, c.name)
+	if parts, ok := c.fixture.partitions[c.name]; ok {
+		return parts, nil
+	}
+	return []int32{0}, nil
+}
+func (c *engineConnection) ValidatePartitions(context.Context, []int32) error { return nil }
 func (c *engineConnection) CheckMembers(context.Context, string) error {
 	return c.fixture.stage("members")
 }
 func (c *engineConnection) ReadProgress(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafkaport.Progress, error) {
 	return c.fixture.saved, c.fixture.stage("progress")
 }
-func (c *engineConnection) Source(_ context.Context, _ plan.Plan, _ string, _ config.Worker) (core.Source, core.ProgressStore, error) {
+func (c *engineConnection) Source(_ context.Context, _ plan.Plan, _ string, _ config.Worker, routing kafkaport.PartitionValidator) (core.Source, core.ProgressStore, error) {
+	c.fixture.routing = routing
 	return c.fixture.source, c.fixture.store, c.fixture.stage("topic-input")
 }
 func (c *engineConnection) Sink(context.Context, config.Worker) (core.Sink, error) {
@@ -385,4 +399,50 @@ func TestCleanupFailurePreservesTheFirstExitCode(t *testing.T) {
 			require.Contains(t, err.Error(), "close Kafka input")
 		})
 	}
+}
+
+func TestEngineRejectsPartitionMismatchBeforeProgressOrOutput(t *testing.T) {
+	// Given filtered Kafka input with a source partition absent from its destination.
+	f := newEngineFixture()
+	f.partitions = map[string][]int32{"input": {0, 1}, "output": {0}}
+	p := enginePlan("TOPIC", "TOPIC")
+	p.Source.Name = "input"
+	p.Destination.Name = "output"
+	p.Destination.Partitioning = plan.Preserve
+	// When running, then fail before reading group progress, constructing the consumer or opening output.
+	err := newEngine(f, f, f, engineLogger(), nil).Run(t.Context(), p, config.Defaults(""), noopShutdown{})
+	require.ErrorContains(t, err, "original partition 1")
+	require.NotContains(t, f.trace, "progress")
+	require.NotContains(t, f.trace, "topic-input")
+	require.NotContains(t, f.trace, "topic-output")
+	require.NotContains(t, f.trace, "run")
+}
+
+func TestEngineBindsPreservedLayoutToTheInput(t *testing.T) {
+	for _, kind := range []string{"FILE", "TOPIC"} {
+		t.Run(kind, func(t *testing.T) {
+			// Given a destination with room for every source partition.
+			f := newEngineFixture()
+			f.store = f.input
+			f.partitions = map[string][]int32{"output": {0, 1, 2, 3}}
+			p := enginePlan(kind, "TOPIC")
+			p.Destination.Name = "output"
+			p.Destination.Partitioning = plan.Preserve
+			// When starting, then archive selection gets the layout bound or Kafka assignments get the validator.
+			require.NoError(t, newEngine(f, f, f, engineLogger(), nil).Run(t.Context(), p, config.Defaults(""), noopShutdown{}))
+			if kind == "FILE" {
+				require.Equal(t, 4, f.partitionCount)
+			} else {
+				require.NotNil(t, f.routing)
+			}
+		})
+	}
+	// Given explicit key routing, when starting, then no preservation-only metadata check is required.
+	f := newEngineFixture()
+	f.store = f.input
+	p := enginePlan("TOPIC", "TOPIC")
+	p.Destination.Partitioning = plan.Key
+	require.NoError(t, newEngine(f, f, f, engineLogger(), nil).Run(t.Context(), p, config.Defaults(""), noopShutdown{}))
+	require.Empty(t, f.partitionReads)
+	require.Nil(t, f.routing)
 }

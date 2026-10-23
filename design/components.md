@@ -31,7 +31,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Kafka contracts | [kafkaport](../internal/kafkaport) | Endpoint interfaces and saved-progress identity checks | Connection, copy.ProgressStore; client libraries stay in adapters |
 | Commit metadata codec | [commitmeta](../internal/commitmeta) | Encode/decode the versioned commit format, without Kafka I/O | `commitmeta.Codec`; private wire types, independent golden/invalid-input tests |
 | Kafka positioning | [kafkaport](../internal/kafkaport) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetReader, TimeReader; client conversions in franz |
-| Kafka input | [franz](../internal/franz) | Hand off callbacks/fetches to the core loop; position, pause and prove gaps | ConsumerClient, sourceMetadata, gapReader, rebalanceBridge |
+| Kafka input | [franz](../internal/franz) | Hand off callbacks/fetches to the core loop; position, pause and prove gaps | ConsumerClient, sourceMetadata, gapReader, rebalanceBridge, PartitionValidator |
 | Kafka output | [franz](../internal/franz) | Validate records, bound admission and report asynchronous deliveries | ProducerClient, destinationMetadata, Clock |
 | Kafka commits | [franz](../internal/franz) | Save positions and eligible stops; reject commits without a group member ID and generation | offsetCommitter, copy.ProgressStore |
 | Observability | [observability](../internal/observability) | Export immutable copy snapshots and actual save results through OTLP/HTTP; bound cleanup and redact diagnostics | `copy.Observer`, per-query Session/Factory, environment/file ports; SDK stays in adapter |
@@ -51,7 +51,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 - [Archive capture](decisions.md#files) defines validation, output ownership and progress-save order. Adapters close after the runner saves confirmed progress; Kafka source close performs no saves.
 - Runner mutates progress in one event loop. Late outcomes from an old assignment cannot advance current progress.
 - Sources provide owned record buffers; sinks retain them until the corresponding write outcome.
-- Source cursors are distinct from record provenance. Progress persists confirmed next positions and identity metadata.
+- Source cursors are distinct from record provenance. Preserved Kafka routing uses provenance; archive replay cursors use one virtual partition. The engine checks layouts before progress saves; Kafka assignments recheck through `PartitionValidator`. Replay validates its fixed selection before its initial checkpoint. Progress persists confirmed next positions and identity metadata.
 - Output confirmation precedes progress persistence: Kafka delivery or file fsync. No component saves past unresolved work.
 
 ## Conventions

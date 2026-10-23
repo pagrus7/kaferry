@@ -12,19 +12,22 @@ Syntax reference. See [copy behavior](decisions.md) for completion and restart r
 ## EBNF
 
 ```ebnf
-statement   = [ connections ] insert select [ where ] options [ ";" ] ;
-
+statement   = [ connections ] insert select [ where ] [ options ] [ ";" ] ;
 connections = "WITH" connection { "," connection } ;
 connection  = "CONNECTION" alias "AS" "(" property { "," property } ")" ;
-property    = string "=" ( string | env ) ;        (* supported connection key and value *)
+property    = string "=" ( string | env ) ;
 env         = "ENV" "(" string ")" ;
 
-insert      = "INSERT" "INTO" endpoint ;
-select      = "SELECT" "*" "FROM" endpoint ;
+insert      = "INSERT" "INTO" endpoint [ "WITH" "(" sink_option { "," sink_option } ")" ] ;
+select      = "SELECT" "*" "FROM" endpoint "WITH" "(" source_option { "," source_option } ")" ;
 endpoint    = "TOPIC" string                       (* 'topic' or 'topic@alias' *)
-            | "FILE" "avro" "(" string { "," file_option } ")" ;
-file_option = "ROTATE_AFTER_SIZE" "=" integer [ "k" | "m" | "g" ]
-            | "ROTATE_AFTER_AGE" "=" interval ;    (* destination only *)
+            | "FILE" "avro" "(" string ")" ;       (* archive directory *)
+source_option = "GROUP" "=" ( string | "ONE_OFF" )
+            | "START" "=" ( "EARLIEST" | "LATEST" )
+            | "CUTOFF" "=" interval ;
+sink_option = "PARTITIONING" "=" ( "PRESERVE" | "KEY" )
+            | "ROTATE_AFTER_SIZE" "=" integer [ "k" | "m" | "g" ]
+            | "ROTATE_AFTER_AGE" "=" interval ;
 
 where       = "WHERE" ( between | bound [ "AND" bound ] ) ;
 between     = "RECORD_TIMESTAMP" "BETWEEN" time "AND" time ;
@@ -32,14 +35,11 @@ bound       = "RECORD_TIMESTAMP" compare time ;
 compare     = ">=" | ">" | "<" | "<=" ;
 time        = instant { ( "+" | "-" ) interval } ;
 instant     = "TIMESTAMP" string | "NOW" "(" ")" ;
-interval    = "INTERVAL" string unit ;             (* non-negative integer; DAY = 86,400 s *)
+interval    = "INTERVAL" string unit ;
 unit        = "SECOND" | "MINUTE" | "HOUR" | "DAY" ;
 
-options     = "OPTIONS" "(" option { "," option } ")" ;
-option      = "GROUP" "=" ( string | "ONE_OFF" )
-            | "START" "=" ( "EARLIEST" | "LATEST" )
-            | "CUTOFF" "=" interval
-            | "WORKER_STOP_AFTER_RECORDS" "=" integer  (* unquoted positive decimal *)
+options     = "OPTIONS" "(" copy_option { "," copy_option } ")" ;
+copy_option = "WORKER_STOP_AFTER_RECORDS" "=" integer
             | "ON_ERROR" "=" ( "FAIL" | "SKIP" )
             | "ON_MISSING_TIMESTAMP" "=" ( "FAIL" | "SKIP" )
             | "ON_REJECTED_TIMESTAMP" "=" ( "FAIL" | "SKIP" ) ;
@@ -49,12 +49,13 @@ option      = "GROUP" "=" ( string | "ONE_OFF" )
 
 Planning or startup enforces:
 
-- `GROUP` is required and must not be blank. Options, inline connection aliases and a connection's properties cannot repeat. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name; unquoted `ONE_OFF` generates one.
-- Avro options are optional and destination-only; size is positive bytes, with case-insensitive binary k/m/g suffixes.
-- A topic source needs exactly one of `WHERE` and `START`; a file source takes no `START`.
+- Source `WITH` is required and must contain a nonblank `GROUP`. Options, inline connection aliases and a connection's properties cannot repeat. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name; unquoted `ONE_OFF` generates one.
+- Destination `WITH` is optional. Avro rotation uses positive bytes (case-insensitive binary k/m/g suffixes) and positive intervals; defaults are 1g and one hour. `avro(...)` takes only the directory.
+- Source `WITH` precedes `WHERE`. A topic source needs exactly one of `WHERE` and `START`; a file source takes no `START`. `CUTOFF` belongs to source `WITH`; all record-error policies and worker stops belong to optional final `OPTIONS`.
 - `ON_ERROR` cannot be combined with any specific error policy.
 - `WORKER_STOP_AFTER_RECORDS` is from 1 to 9,007,199,254,740,992; it caps accepted writes per worker per invocation, not records read or a shared group total.
-- `CUTOFF` requires a topic source with an upper bound. `ON_REJECTED_TIMESTAMP` requires a topic destination; `ON_MISSING_TIMESTAMP` a `WHERE` clause.
+- `PARTITIONING` requires a topic destination and defaults to `PRESERVE`: original partition N goes to destination N. Every input partition ID must exist, including IDs whose records the filter excludes. Counts need not match. `KEY` uses original key bytes and the destination key partitioner. Missing partitions fail under every error policy.
+- Intervals use nonnegative integers; `DAY` is 86,400 seconds. `CUTOFF` requires a topic source with an upper bound. `ON_REJECTED_TIMESTAMP` requires a topic destination; `ON_MISSING_TIMESTAMP` a `WHERE` clause.
 - At most one lower and one upper bound. Timestamps are RFC 3339 with `Z` or an explicit offset and at most millisecond precision. The normalized `[lo, hi)` must be non-empty.
 - At startup, reject a destination that is the same archive directory (including path aliases) or the same Kafka cluster ID and topic as the source.
 - A topic without `@alias` uses the connection `default`, which must exist.
@@ -74,55 +75,55 @@ WITH CONNECTION dr AS (
   'sasl.password'     = ENV('DR_PASSWORD')
 )
 INSERT INTO TOPIC 'orders@dr'
-SELECT * FROM TOPIC 'orders@prod'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-dr-2026-10-01')
 WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-02T00:00:00Z'
-OPTIONS (GROUP = 'orders-dr-2026-10-01');
+;
 ```
 
 Topic→file, follow from the earliest retained record, default connection:
 
 ```sql
 INSERT INTO FILE avro('/data/audit')
-SELECT * FROM TOPIC 'audit'
-OPTIONS (GROUP = 'audit-archive', START = EARLIEST);
+SELECT * FROM TOPIC 'audit' WITH (GROUP = 'audit-archive', START = EARLIEST)
+;
 ```
 
 File→topic, last seven days, skipping timestamps known to be outside the destination's accepted bounds:
 
 ```sql
-INSERT INTO TOPIC 'orders@staging'
-SELECT * FROM FILE avro('/data/orders')
+INSERT INTO TOPIC 'orders@staging' WITH (PARTITIONING = KEY)
+SELECT * FROM FILE avro('/data/orders') WITH (GROUP = 'orders-staging-load')
 WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '7' DAY
-OPTIONS (GROUP = 'orders-staging-load', ON_REJECTED_TIMESTAMP = SKIP);
+OPTIONS (ON_REJECTED_TIMESTAMP = SKIP);
 ```
 
 File→file, inclusive range, one-off group (normalizes to `[09:00:00.000, 09:30:00.001)`):
 
 ```sql
 INSERT INTO FILE avro('/data/incident')
-SELECT * FROM FILE avro('/data/orders')
+SELECT * FROM FILE avro('/data/orders') WITH (GROUP = ONE_OFF)
 WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z'
                            AND TIMESTAMP '2026-10-01T09:30:00Z'
-OPTIONS (GROUP = ONE_OFF);
+;
 ```
 
 Topic→topic, relative window with cutoff. Saved progress keeps the resolved `NOW()` window for restarts; workers starting together can resolve different windows ([time window](decisions.md#time-window)):
 
 ```sql
 INSERT INTO TOPIC 'clicks@analytics'
-SELECT * FROM TOPIC 'clicks@prod'
+SELECT * FROM TOPIC 'clicks@prod' WITH (GROUP = 'clicks-backfill-1', CUTOFF = INTERVAL '5' MINUTE)
 WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR
   AND RECORD_TIMESTAMP <  NOW()
-OPTIONS (GROUP = 'clicks-backfill-1', CUTOFF = INTERVAL '5' MINUTE, ON_ERROR = SKIP);
+OPTIONS (ON_ERROR = SKIP);
 ```
 
 Topic→topic, stop each worker after accepting 100 records for writing:
 
 ```sql
 INSERT INTO TOPIC 'orders@staging'
-SELECT * FROM TOPIC 'orders@prod'
-OPTIONS (GROUP = 'orders-sample', START = EARLIEST, WORKER_STOP_AFTER_RECORDS = 100);
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-sample', START = EARLIEST)
+OPTIONS (WORKER_STOP_AFTER_RECORDS = 100);
 ```
 
 ## Invalid examples
@@ -135,21 +136,24 @@ SQL errors identify the first error found by one-based line and character (code 
 
 | Statement or fragment | Rejected because |
 | --- | --- |
-| `... WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` cannot be combined with a time filter |
-| `... WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS (GROUP = 'g', ON_ERROR = SKIP, ON_MISSING_TIMESTAMP = FAIL)` | `ON_ERROR` cannot be mixed with specific error policies |
-| `... FROM FILE avro('archive') ... OPTIONS (GROUP = 'g', CUTOFF = INTERVAL '1' MINUTE)` | `CUTOFF` applies to topic sources |
-| `... FROM FILE avro('archive') OPTIONS (GROUP = 'g', START = EARLIEST)` | `START` applies to topic sources |
-| `... FROM TOPIC 'a' OPTIONS (GROUP = 'g')` | `START` is required without a time filter |
-| `OPTIONS (START = EARLIEST)` | `GROUP` is required |
-| `OPTIONS (GROUP = 'a', GROUP = 'b')` | repeated option `GROUP` |
-| `INSERT INTO TOPIC 'a@x' SELECT * FROM TOPIC 'a@y' ...` where `x` and `y` reach one cluster | destination is the source topic |
+| `OPTIONS (GROUP = 'g')` | `GROUP` belongs in source `WITH` |
+| `FROM TOPIC 'a' WITH (GROUP='g', ON_ERROR=SKIP)` | error policies belong in final `OPTIONS` |
+| `FROM FILE avro('archive') WITH (GROUP='g', START=EARLIEST)` | `START` requires a topic source |
+| `FROM FILE avro('archive') WITH (GROUP='g', CUTOFF=INTERVAL '1' MINUTE)` | `CUTOFF` requires a topic source |
+| `FROM TOPIC 'a' WITH (GROUP='g', START=EARLIEST) WHERE RECORD_TIMESTAMP < NOW()` | `START` cannot be combined with `WHERE` |
+| `FROM TOPIC 'a' WITH (GROUP='g')` | `START` is required without `WHERE` |
+| `WITH (START=EARLIEST)` on a source | `GROUP` is required |
+| `WITH (GROUP='a', GROUP='b')` on a source | duplicate `GROUP` |
+| `OPTIONS (ON_ERROR=SKIP, ON_MISSING_TIMESTAMP=FAIL)` | broad and specific policies cannot be mixed |
+| `INSERT INTO FILE avro('out') WITH (PARTITIONING=KEY)` | partitioning requires a topic destination |
+| `INSERT INTO TOPIC 'a@x' SELECT * FROM TOPIC 'a@y' ...` where both aliases reach one cluster | destination is the source topic |
 | `INSERT INTO FILE avro('archive') SELECT * FROM FILE avro('./archive') ...` | destination is the source archive |
 | `SELECT key FROM TOPIC 'a' ...` | only `SELECT *` is supported |
-| `WHERE RECORD_TIMESTAMP >= NOW() OR ...` | `OR` is unsupported; bounds combine with `AND` |
+| `WHERE RECORD_TIMESTAMP >= NOW() OR ...` | bounds combine only with `AND` |
 | `WHERE RECORD_TIMESTAMP > TIMESTAMP '...' AND RECORD_TIMESTAMP >= TIMESTAMP '...'` | two lower bounds |
-| `RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP < NOW() - INTERVAL '1' HOUR` | empty time range |
-| `TIMESTAMP '2026-10-01T00:00:00'` | timestamp needs `Z` or a UTC offset |
+| `RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP < NOW() - INTERVAL '1' HOUR` | empty range |
+| `TIMESTAMP '2026-10-01T00:00:00'` | timestamp needs a zone |
 | `TIMESTAMP '2026-10-01T00:00:00.0005Z'` | sub-millisecond precision |
 | `INTERVAL '1' MONTH` | unsupported interval unit |
-| `TOPIC 'orders'` with no `default` connection | no connection for `orders` |
+| `TOPIC 'orders'` without a defined `default` connection | no connection |
 | two statements separated by `;` | exactly one statement |

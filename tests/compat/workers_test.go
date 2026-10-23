@@ -60,7 +60,7 @@ func TestDistributedWorkersFinishIndependently(t *testing.T) {
 	destination := topic(t, a, 3)
 	group := source + "-workers"
 	end := time.Now().Add(time.Hour).Truncate(time.Millisecond)
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", broker(t), destination, source, end.Format(time.RFC3339Nano), group)
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), destination, source, group, end.Format(time.RFC3339Nano))
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 	results := make(chan workerResult, 2)
@@ -127,7 +127,7 @@ func TestWorkerRecordThresholdAcrossTenPartitionsAndThreeWorkers(t *testing.T) {
 	source, destination := topic(t, a, 10), topic(t, a, 3)
 	group := source + "-worker-stop"
 	config := configuration(t)
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST,WORKER_STOP_AFTER_RECORDS=100)", destination, source, group)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) OPTIONS (WORKER_STOP_AFTER_RECORDS=100)", destination, source, group)
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 	results := make(chan workerResult, 3)

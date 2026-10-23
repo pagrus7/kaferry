@@ -19,7 +19,7 @@ func TestPlannerRejectsInvalidKafkaTopicEndpoints(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given valid SQL with an invalid destination topic or connection suffix.
-			query := "INSERT INTO TOPIC '" + tc.name + "' SELECT * FROM TOPIC 'orders' OPTIONS(GROUP='g', START=EARLIEST)"
+			query := "INSERT INTO TOPIC '" + tc.name + "' SELECT * FROM TOPIC 'orders' WITH(GROUP='g', START=EARLIEST)"
 			statement, err := sql.NewParser().Parse(query)
 			require.NoError(t, err)
 

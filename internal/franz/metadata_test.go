@@ -218,3 +218,40 @@ func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
 		})
 	}
 }
+
+func TestRoutingMetadataIsFreshCompleteAndDense(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		ids     []int32
+		failure error
+		want    string
+	}{
+		{"sorted", []int32{1, 0}, nil, ""},
+		{"no partitions", nil, nil, "no partitions"},
+		{"gap", []int32{0, 2}, nil, "invalid partition IDs"},
+		{"duplicate", []int32{0, 0}, nil, "invalid partition IDs"},
+		{"unavailable", nil, errors.New("metadata unavailable"), "metadata unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given broker metadata that may be unavailable or malformed.
+			response := metadataResponse([16]byte{1})
+			response.Topics[0].Partitions = nil
+			for _, id := range tc.ids {
+				response.Topics[0].Partitions = append(response.Topics[0].Partitions, kmsg.MetadataResponseTopicPartition{Partition: id})
+			}
+			calls := 0
+			client := &metadataMock{request: func(context.Context, kmsg.Request) (kmsg.Response, error) { calls++; return response, tc.failure }}
+			c := &connection{inspector: &Inspector{client: client, topic: "input", log: quietLogger()}}
+			// When retrieving routing IDs, then reject incomplete layouts and never use stale cached metadata.
+			parts, err := c.Partitions(t.Context())
+			if tc.want != "" {
+				require.ErrorContains(t, err, tc.want)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, []int32{0, 1}, parts)
+				require.NoError(t, c.ValidatePartitions(t.Context(), []int32{1}))
+				require.Equal(t, 2, calls)
+			}
+		})
+	}
+}

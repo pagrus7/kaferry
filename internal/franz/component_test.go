@@ -69,7 +69,7 @@ func TestConsumerConstructionDoesNotJoinBeforeStartAndCanClose(t *testing.T) {
 	connection, err := factory.Open(t.Context(), p.Source)
 	require.NoError(t, err)
 	defer connection.Close(context.Background())
-	input, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker)
+	input, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker, nil)
 	require.NoError(t, err)
 	source := input.(*Source)
 	require.NotEqual(t, "", source.topicID, "source constructed without topic identity")
@@ -114,7 +114,7 @@ func TestCorePositioningPrecedesClientOffsetAdjustment(t *testing.T) {
 	p.Start = ""
 	p.Window.Lower = &plan.Expression{LiteralMS: stamp.Add(2 * time.Millisecond).UnixMilli()}
 	_, connection := componentConnection(t, p)
-	input, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker)
+	input, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker, nil)
 	require.NoError(t, err)
 	defer input.Close()
 	life := &lifecycleMock{}
@@ -167,7 +167,7 @@ func TestProductionAdaptersPreserveRawRecordsAndZeroNegativeTimestamps(t *testin
 		t.Fatal(err)
 	}
 	limits := config.Defaults("").Worker
-	source, store, err := sourceConnection.Source(t.Context(), p, "fp", limits)
+	source, store, err := sourceConnection.Source(t.Context(), p, "fp", limits, nil)
 	require.NoError(t, err)
 	defer source.Close()
 	sink, err := destination.Sink(t.Context(), limits)
@@ -197,3 +197,48 @@ type saveObserver struct{ saves []core.SaveResult }
 
 func (*saveObserver) Publish(core.Snapshot)          {}
 func (o *saveObserver) Saved(result core.SaveResult) { o.saves = append(o.saves, result) }
+
+func TestKafkaSinkPreservesPartitionsUsingTheRealProducer(t *testing.T) {
+	// Given a three-partition destination and records replayed through a virtual partition-zero cursor.
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(3, "input", "output"))
+	defer cluster.Close()
+	p := componentPlan(t, cluster)
+	p.Destination.Partitioning = plan.Preserve
+	connection, err := componentFactory().Open(t.Context(), p.Destination)
+	require.NoError(t, err)
+	defer connection.Close(context.Background())
+	require.NoError(t, connection.ValidatePartitions(t.Context(), []int32{0, 2}))
+	require.ErrorContains(t, connection.ValidatePartitions(t.Context(), []int32{3}), "original partition 3")
+	output, err := connection.Sink(t.Context(), config.Defaults("").Worker)
+	require.NoError(t, err)
+	defer output.Close()
+	actual := output.(*Sink).client.(*kgo.Client).OptValue(kgo.RecordPartitioner).(kgo.Partitioner).ForTopic("output")
+	require.True(t, actual.RequiresConsistency(&kgo.Record{}), "leaderless partitions must not renumber the layout")
+	// When submitting null, empty and binary keys, then all retain the original partition 2.
+	for _, key := range [][]byte{nil, {}, {0, 255}} {
+		require.NoError(t, output.Submit(core.Record{Source: &core.Provenance{Partition: 2}, Key: key}, core.Token{Partition: 0}))
+		select {
+		case report := <-output.Deliveries():
+			require.NoError(t, report.Err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("delivery timed out")
+		}
+	}
+	// When the layout changes after preflight, then the manual partitioner fails rather than remapping.
+	require.NoError(t, output.Submit(core.Record{Source: &core.Provenance{Partition: 8}}, core.Token{}))
+	select {
+	case report := <-output.Deliveries():
+		require.Error(t, report.Err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("invalid partition was not rejected")
+	}
+	consumer := componentClient(t, cluster, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"output": {2: kgo.NewOffset().AtStart()}}))
+	for _, key := range [][]byte{nil, {}, {0, 255}} {
+		fetched := consumer.PollRecords(componentContext(t), 1)
+		require.NoError(t, fetched.Err())
+		records := fetched.Records()
+		require.Len(t, records, 1)
+		require.EqualValues(t, 2, records[0].Partition)
+		require.Equal(t, key, records[0].Key)
+	}
+}

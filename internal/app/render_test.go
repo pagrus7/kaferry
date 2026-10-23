@@ -100,11 +100,11 @@ func TestTextExplanationFollowingRoutingAndSkipPolicies(t *testing.T) {
 			report := explanationFixture()
 			report.Partitions[0].Window, report.Partitions[0].Saved = plan.Window{}, false
 			report.StartRule = "LATEST"
-			report.Destination = inspect.Endpoint{Kind: "TOPIC", Name: "output", Connection: "backup", ClusterID: "other-cluster", PartitionCount: 3, TimestampType: policy}
+			report.Destination = inspect.Endpoint{Kind: "TOPIC", Name: "output", Connection: "backup", ClusterID: "other-cluster", PartitionCount: 3, TimestampType: policy, Partitioning: plan.Key}
 			report.RecordErrors.RejectedTimestamp = "SKIP"
 			// When rendering, then state continuous follow, dropped-record scope, and whether the timestamp policy is known.
 			output := textExplanation(t, report)
-			for _, want := range []string{"current read-committed end", "Filter: none", "no end time; follow", "original key bytes; destination partitioner", "Skip before writing: rejected timestamps (records dropped)", "Delivery and unclassified errors: stop"} {
+			for _, want := range []string{"current read-committed end", "Filter: none", "no end time; follow", "original key bytes; destination key partitioner", "Skip before writing: rejected timestamps (records dropped)", "Delivery and unclassified errors: stop"} {
 				require.Contains(t, output, want)
 			}
 			if policy == "" {

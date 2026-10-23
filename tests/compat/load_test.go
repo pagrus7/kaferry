@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -64,17 +63,17 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			}
 			seedCancel()
 			binaryPath := testBinary(t)
-			statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", broker(t), dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), src+"-load")
+			statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), dst, src, src+"-load", stamp.Add(time.Second).Format(time.RFC3339Nano))
 			args := []string{"run", "--file", "-"}
 			if configuration != "" {
 				path := filepath.Join(t.TempDir(), "worker.toml")
 				require.NoError(t, os.WriteFile(path, []byte(configuration), 0600))
 				args = append(args, "--config", path)
-				statement = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'), CONNECTION slow AS ('bootstrap.servers'='%s','linger.ms'='100') INSERT INTO TOPIC '%s@slow' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", broker(t), broker(t), dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), src+"-load")
+				statement = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'), CONNECTION slow AS ('bootstrap.servers'='%s','linger.ms'='100') INSERT INTO TOPIC '%s@slow' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), broker(t), dst, src, src+"-load", stamp.Add(time.Second).Format(time.RFC3339Nano))
 			}
 			want := count
 			if scenario.limit > 0 {
-				statement = strings.Replace(statement, "OPTIONS(", fmt.Sprintf("OPTIONS(WORKER_STOP_AFTER_RECORDS=%d,", scenario.limit), 1)
+				statement = statement + fmt.Sprintf(" OPTIONS(WORKER_STOP_AFTER_RECORDS=%d)", scenario.limit)
 				want = min(count, scenario.limit)
 			}
 			// When executing the bounded copy and sampling its memory.

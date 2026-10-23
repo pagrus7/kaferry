@@ -58,9 +58,14 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 		return report, &kafkaport.Conflict{Err: err}
 	}
 	stop.Stage("inspecting saved progress")
-	err = s.source(ctx, p, limits, source, &report)
+	ids, err := s.source(ctx, p, limits, source, &report)
 	if err != nil {
 		return report, err
+	}
+	if p.Destination.PreservesPartitions() {
+		if err = plan.CheckPartitions(ids, report.Destination.PartitionCount); err != nil {
+			return report, &kafkaport.Conflict{Err: err}
+		}
 	}
 	stop.Stage("inspecting destination archive")
 	if p.Destination.Kind == "FILE" {
@@ -87,6 +92,12 @@ func (s *Service) open(ctx context.Context, endpoint plan.Endpoint, configuratio
 	if err != nil {
 		closeConnection(connection, stop, &err)
 		return nil, info, err
+	}
+	if configuration {
+		info.Partitioning = endpoint.Partitioning
+		if endpoint.PreservesPartitions() {
+			info.Partitioning = plan.Preserve
+		}
 	}
 	info.ClusterID, info.TopicID, info.PartitionCount, info.TimestampType = topic.ClusterID, topic.TopicID, len(topic.Partitions), topic.TimestampType
 	return connection, info, nil

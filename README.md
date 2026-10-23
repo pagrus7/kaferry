@@ -43,13 +43,13 @@ Topics must exist. Replace the addresses; add [authentication](#connections) as 
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM TOPIC 'orders@prod'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-backfill')
 WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z'
-OPTIONS (GROUP = 'orders-backfill');
+;
 ```
 
-`@alias` selects a connection; `GROUP` identifies saved progress. Rerun to resume; a new window or `CUTOFF` needs a new group.
+`@alias` selects a connection; `GROUP` identifies saved progress. Rerun to resume; a new window, `CUTOFF` or partitioning mode needs a new group.
 
 ```sh
 bin/kaferry explain --file copy.sql --config connections.toml
@@ -81,7 +81,7 @@ Keep passwords out of SQL literals and shell arguments. [Configuration rules](do
 
 - **Time windows:** The [cutoff rule](design/decisions.md#completion) can miss records within the range, including those present before the run.
 - **Delivery:** at least once; crashes and rebalances can duplicate or reorder writes. Expired offsets or lost checkpoints can start fresh. Kafka input reads committed records.
-- **Destination:** original keys determine routing; null keys can spread. Ensure bytes and Schema Registry IDs work there. Broker settings can replace timestamps or delete old records. [Routing](design/decisions.md#kafka-output).
+- **Destination:** original partition numbers are preserved; use `PARTITIONING = KEY` to repartition. Ensure bytes and Schema Registry IDs work there. Broker settings can replace timestamps or delete old records. [Routing](design/decisions.md#kafka-output).
 - **Archives:** multiple capture workers; one replay process per group/checkpoint directory. Storage needs durable sync, atomic rename and locks. [File setup and resume](docs/usage.md#run-a-copy).
 - **Permissions:** [Source READ and destination WRITE grants](docs/usage.md#permissions).
 

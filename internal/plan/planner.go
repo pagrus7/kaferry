@@ -35,10 +35,16 @@ func (p Properties) Values() map[string]string {
 func (p Properties) String() string   { return "[connection properties redacted]" }
 func (p Properties) GoString() string { return p.String() }
 
+const (
+	Preserve = "PRESERVE"
+	Key      = "KEY"
+)
+
 type Endpoint struct {
 	Kind             string
 	Name             string
 	Format           string
+	Partitioning     string
 	RotateAfterSize  int64
 	RotateAfterAgeMS int64
 	Alias            string
@@ -68,7 +74,7 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 	if err != nil {
 		return Plan{}, err
 	}
-	var plan Plan
+	plan := Plan{Policies: Policies{"FAIL", "FAIL", "FAIL"}}
 	plan.Destination, err = endpoint(statement.Destination, connections, statement.Connections)
 	if err != nil {
 		return Plan{}, sql.At(statement.Destination.Position, fmt.Errorf("INTO endpoint: %w", err))
@@ -77,30 +83,39 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 	if err != nil {
 		return Plan{}, sql.At(statement.Source.Position, fmt.Errorf("FROM endpoint: %w", err))
 	}
-	if len(statement.Source.Options) > 0 {
-		return Plan{}, sql.At(statement.Source.Options[0].Position, fmt.Errorf("rotation options require a FILE avro destination"))
-	}
 	plan.Window, err = normalize(statement.Bounds)
 	if err != nil {
 		return Plan{}, sql.At(statement.WherePosition, err)
 	}
-	if err = plan.options(statement.Options, statement.OptionsPosition); err != nil {
+	if plan.Destination.Kind == "TOPIC" {
+		plan.Destination.Partitioning = Preserve
+	}
+	if plan.Source.Kind == "TOPIC" && plan.Window.Upper != nil {
+		plan.CutoffMS = 60000
+	}
+	if err = plan.Destination.destinationOptions(statement.Destination.Options); err != nil {
+		return Plan{}, err
+	}
+	if err = plan.sourceOptions(statement.Source.Options, statement.Source.OptionsPosition); err != nil {
+		return Plan{}, err
+	}
+	if err = applyOptions(statement.Options, sql.CopySettings, plan.applyOption); err != nil {
 		return Plan{}, err
 	}
 	if hi := plan.Window.Upper; hi != nil && !hi.Now {
 		if _, err := checkedAdd(hi.LiteralMS, plan.CutoffMS); err != nil {
-			return Plan{}, sql.At(optionPosition(statement.Options, "CUTOFF", statement.WherePosition), fmt.Errorf("upper bound plus CUTOFF: %w", err))
+			return Plan{}, sql.At(optionPosition(statement.Source.Options, "CUTOFF", statement.WherePosition), fmt.Errorf("upper bound plus CUTOFF: %w", err))
 		}
 	}
 	if plan.Source.Kind == "TOPIC" {
 		if len(statement.Bounds) == 0 && plan.Start == "" {
-			return Plan{}, sql.At(statement.OptionsPosition, fmt.Errorf("topic sources require WHERE or START; add START = EARLIEST or START = LATEST to OPTIONS"))
+			return Plan{}, sql.At(statement.Source.OptionsPosition, fmt.Errorf("topic sources require WHERE or START; add START = EARLIEST or START = LATEST to source WITH"))
 		}
 		if len(statement.Bounds) > 0 && plan.Start != "" {
-			return Plan{}, sql.At(optionPosition(statement.Options, "START", statement.OptionsPosition), fmt.Errorf("START cannot be combined with WHERE; remove START"))
+			return Plan{}, sql.At(optionPosition(statement.Source.Options, "START", statement.Source.OptionsPosition), fmt.Errorf("START cannot be combined with WHERE; remove START"))
 		}
 	} else if plan.Start != "" {
-		return Plan{}, sql.At(optionPosition(statement.Options, "START", statement.OptionsPosition), fmt.Errorf("START requires a topic source; remove START for FILE sources"))
+		return Plan{}, sql.At(optionPosition(statement.Source.Options, "START", statement.Source.OptionsPosition), fmt.Errorf("START requires a topic source; remove START for FILE sources"))
 	}
 	return plan, nil
 }
@@ -171,6 +186,9 @@ func validAlias(alias string) bool {
 // Fingerprint receives verified cluster IDs at startup. File identities stay in
 // progress metadata; moving a file must not change the query identity.
 func (p Plan) Fingerprint(sourceClusterID, destinationClusterID string) (string, error) {
+	if p.Destination.Partitioning != "" && p.Destination.Partitioning != Preserve && p.Destination.Partitioning != Key {
+		return "", fmt.Errorf("PARTITIONING must be PRESERVE or KEY")
+	}
 	type identity struct {
 		Kind      string
 		Format    string `json:",omitempty"`
@@ -198,12 +216,16 @@ func (p Plan) Fingerprint(sourceClusterID, destinationClusterID string) (string,
 		return "", fmt.Errorf("source and destination are the same Kafka topic")
 	}
 	canonical := struct {
-		Version     int
-		Source      identity
-		Destination identity
-		Window      WindowSpec
-		CutoffMS    int64
-	}{1, source, destination, p.Window, p.CutoffMS}
+		Version      int
+		Source       identity
+		Destination  identity
+		Window       WindowSpec
+		CutoffMS     int64
+		Partitioning string `json:",omitempty"`
+	}{Version: 1, Source: source, Destination: destination, Window: p.Window, CutoffMS: p.CutoffMS}
+	if p.Destination.PreservesPartitions() {
+		canonical.Partitioning = Preserve
+	}
 	encoded, err := json.Marshal(canonical)
 	if err != nil {
 		return "", err

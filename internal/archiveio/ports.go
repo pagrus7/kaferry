@@ -25,6 +25,7 @@ type ArchiveInspection struct {
 
 type SourceInspection struct {
 	ArchiveInspection
+	Partitions     []int32
 	Warnings       []string
 	Position       int64
 	Window         plan.Window

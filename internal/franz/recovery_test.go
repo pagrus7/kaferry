@@ -38,7 +38,7 @@ func runComponentCopy(ctx context.Context, p plan.Plan, limits config.Worker) (e
 	if _, err = destination.ClusterID(ctx); err != nil {
 		return err
 	}
-	source, store, err := sourceConnection.Source(ctx, p, "component-fingerprint", limits)
+	source, store, err := sourceConnection.Source(ctx, p, "component-fingerprint", limits, nil)
 	if err != nil {
 		return err
 	}

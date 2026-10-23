@@ -29,7 +29,7 @@ func TestExplainBinaryResumesWithoutChangingKafkaOrCreatingFiles(t *testing.T) {
 		publish(t, producer, &kgo.Record{Topic: source, Partition: partition, Timestamp: stamp, Value: []byte("record")})
 	}
 	group := source + "-explain"
-	query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", destination, source, stamp.Add(time.Minute).Format(time.RFC3339Nano), group)
+	query := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", destination, source, group, stamp.Add(time.Minute).Format(time.RFC3339Nano))
 	config := configuration(t)
 	execute(t, query, config)
 	before, err := a.FetchOffsets(t.Context(), group)
@@ -64,7 +64,7 @@ func TestExplainBinaryResumesWithoutChangingKafkaOrCreatingFiles(t *testing.T) {
 	// Given a fresh query into a file, when explaining, then no output or lock is created.
 	directory := t.TempDir()
 	archive := filepath.Join(directory, "out.avro")
-	query = fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' OPTIONS(GROUP=ONE_OFF,START=EARLIEST)", archive, source)
+	query = fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP=ONE_OFF, START=EARLIEST) ", archive, source)
 	command = exec.CommandContext(ctx, binary, "explain", "-e", query, "-c", config)
 	output, err := command.CombinedOutput()
 	if err != nil || !bytes.Contains(output, []byte("ONE_OFF")) {

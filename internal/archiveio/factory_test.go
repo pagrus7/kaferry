@@ -35,29 +35,29 @@ func TestFactoryOwnsReplayCheckpointAndRejectsUnsafePaths(t *testing.T) {
 	// When one process owns a replay group, then another process cannot acquire it.
 	fp, err := p.Fingerprint("", "")
 	require.NoError(t, err)
-	source, err := factory.OpenSource(p, fp, limits)
+	source, err := factory.OpenSource(p, fp, limits, 0)
 	require.NoError(t, err)
-	_, err = factory.OpenSource(p, fp, limits)
+	_, err = factory.OpenSource(p, fp, limits, 0)
 	require.ErrorIs(t, err, replay.ErrGroupBusy)
 	require.NoError(t, source.Close())
-	source, err = factory.OpenSource(p, fp, limits)
+	source, err = factory.OpenSource(p, fp, limits, 0)
 	require.NoError(t, err)
 	require.NoError(t, source.Close())
 	// When checkpoint storage is inside the input or output aliases the input, fail before output creation.
 	inside := p.Source.Name
 	limits.CheckpointDir = &inside
-	_, err = factory.OpenSource(p, fp, limits)
+	_, err = factory.OpenSource(p, fp, limits, 0)
 	require.ErrorContains(t, err, "outside")
 	limits.CheckpointDir = &root
 	alias := filepath.Join(root, "alias")
 	require.NoError(t, os.Symlink(p.Source.Name, alias))
 	p.Destination.Name = alias
-	_, err = factory.OpenSource(p, fp, limits)
+	_, err = factory.OpenSource(p, fp, limits, 0)
 	require.ErrorContains(t, err, "same archive")
 	p.Source.Name = filepath.Join(root, "missing")
 	p.Destination.Name = filepath.Join(root, "new-output")
 	p.Group = "missing"
-	_, err = factory.OpenSource(p, fp, limits)
+	_, err = factory.OpenSource(p, fp, limits, 0)
 	require.Error(t, err)
 	journal, err := replay.NewJournal(root, p.Group, replay.NativeGroupFiles{}, checkpoint.DurableWriter{})
 	require.NoError(t, err, "failed construction releases checkpoint ownership")
@@ -81,7 +81,7 @@ func TestInvalidCheckpointDirectoryFailsBeforeCreatingReplayState(t *testing.T) 
 			p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "FILE", Format: "avro", Name: filepath.Join(root, "output")}, Group: "g"}
 			factory := NewFactory(core.RealClock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			// When starting replay, then fail as a configuration conflict without creating output or state.
-			_, err := factory.OpenSource(p, "fingerprint", limits)
+			_, err := factory.OpenSource(p, "fingerprint", limits, 0)
 			var conflict *Conflict
 			require.ErrorAs(t, err, &conflict)
 			require.Equal(t, 2, conflict.ExitCode())
