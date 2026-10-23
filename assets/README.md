@@ -14,4 +14,4 @@ Palette: navy `#0E2A47`, orange `#E8662E`, teal `#1B8A8F`; reversed artwork uses
 
 Lettering is outlined from [Space Grotesk](https://github.com/floriankarsten/space-grotesk) 700 and [IBM Plex Mono](https://github.com/IBM/plex) 400. SVGs need no installed fonts, scripts or network requests. To change lettering, use those fonts in a vector editor and outline it again before export.
 
-Keep the social-card query valid; `GROUP` is required.
+Keep the social-card query valid. Use a named `GROUP` when showing a resumable copy.

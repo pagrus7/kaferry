@@ -61,7 +61,7 @@ func TestWorkerStopAcrossEndpointDirections(t *testing.T) {
 	archive := filepath.Join(t.TempDir(), "sample.avro")
 
 	// When a topic-to-file copy resumes with a different cap.
-	statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", archive, source, source+"-archive-limit")
+	statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s') ", archive, source, source+"-archive-limit")
 	executeWithWorkerStop(t, statement, config, 3)
 	// Then it saves only that record prefix, with unchanged bytes and metadata.
 	require.Equal(t, expected[:3], archiveRecords(t, archive))

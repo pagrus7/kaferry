@@ -47,7 +47,7 @@ func TestInvalidStatements(t *testing.T) {
 }
 
 func FuzzParse(f *testing.F) {
-	for _, seed := range []string{"", "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') WITH (GROUP=ONE_OFF) ", "/*", "'", "NOW()", "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') WITH (GROUP=ONE_OFF) OPTIONS (WORKER_STOP_AFTER_RECORDS=5)"} {
+	for _, seed := range []string{"", "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a')", "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' WHERE RECORD_TIMESTAMP < NOW()", "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') WITH (GROUP=ONE_OFF) ", "/*", "'", "NOW()", "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') OPTIONS (WORKER_STOP_AFTER_RECORDS=5)"} {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, input string) {

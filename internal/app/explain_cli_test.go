@@ -61,8 +61,9 @@ func filePreview(t *testing.T) filePreviewFixture {
 func TestExplainCLIInputFormsLeaveFilesUnchanged(t *testing.T) {
 	for _, form := range []string{"inline", "file", "stdin"} {
 		t.Run(form, func(t *testing.T) {
-			// Given a valid file query with no output, checkpoint or locks.
+			// Given bare file-copy SQL with no output, checkpoint or locks.
 			fixture := filePreview(t)
+			fixture.query = strings.Replace(fixture.query, " WITH (GROUP='preview')", "", 1)
 			args := []string{"explain", "-c", fixture.config, "--json"}
 			var input io.Reader
 			switch form {
@@ -86,6 +87,8 @@ func TestExplainCLIInputFormsLeaveFilesUnchanged(t *testing.T) {
 			require.Zero(t, code)
 			require.Zero(t, stderr.Len())
 			require.EqualValues(t, 1, report.Version)
+			require.True(t, report.OneOff)
+			require.Equal(t, "ONE_OFF", report.Group, "preview must not generate a run's group")
 			require.NotNil(t, report.Source.File.PositionRecords)
 			require.False(t, report.Destination.File.Exists)
 			after, err := os.ReadDir(fixture.directory)

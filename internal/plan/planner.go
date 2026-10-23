@@ -74,7 +74,7 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 	if err != nil {
 		return Plan{}, err
 	}
-	plan := Plan{Policies: Policies{"FAIL", "FAIL", "FAIL"}}
+	plan := Plan{Group: "ONE_OFF", OneOff: true, Policies: Policies{"FAIL", "FAIL", "FAIL"}}
 	plan.Destination, err = endpoint(statement.Destination, connections, statement.Connections)
 	if err != nil {
 		return Plan{}, sql.At(statement.Destination.Position, fmt.Errorf("INTO endpoint: %w", err))
@@ -96,7 +96,7 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 	if err = plan.Destination.destinationOptions(statement.Destination.Options); err != nil {
 		return Plan{}, err
 	}
-	if err = plan.sourceOptions(statement.Source.Options, statement.Source.OptionsPosition); err != nil {
+	if err = applyOptions(statement.Source.Options, sql.SourceSettings, plan.applyOption); err != nil {
 		return Plan{}, err
 	}
 	if err = applyOptions(statement.Options, sql.CopySettings, plan.applyOption); err != nil {
@@ -109,7 +109,7 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 	}
 	if plan.Source.Kind == "TOPIC" {
 		if len(statement.Bounds) == 0 && plan.Start == "" {
-			return Plan{}, sql.At(statement.Source.OptionsPosition, fmt.Errorf("topic sources require WHERE or START; add START = EARLIEST or START = LATEST to source WITH"))
+			plan.Start = "EARLIEST"
 		}
 		if len(statement.Bounds) > 0 && plan.Start != "" {
 			return Plan{}, sql.At(optionPosition(statement.Source.Options, "START", statement.Source.OptionsPosition), fmt.Errorf("START cannot be combined with WHERE; remove START"))

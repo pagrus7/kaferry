@@ -18,7 +18,6 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 		mutate                       func(*sql.Statement)
 		connections                  Profiles
 	}{
-		{"missing group", source(files, "START=EARLIEST"), "WITH(", "GROUP is required; add GROUP = 'name' or GROUP = ONE_OFF to WITH after the FROM endpoint", nil, nil},
 		{"whitespace group", source(files, "GROUP=' '"), "' '", "GROUP must not be blank; use a quoted name or ONE_OFF", nil, nil},
 		{"empty group", source(files, "GROUP=''"), "''", "GROUP must not be blank; use a quoted name or ONE_OFF", nil, nil},
 		{"duplicate group", source(files, "GROUP='g', GROUP='h'"), "GROUP='h'", "option GROUP repeats; specify it once; first declaration at line 3, column 6", nil, nil},
@@ -32,7 +31,6 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 		{"invalid policy", files + "OPTIONS(ON_ERROR=FAIL)", "FAIL", "ON_ERROR must be FAIL or SKIP", func(s *sql.Statement) { s.Options[0].Value = "RETRY" }, nil},
 		{"invalid start", source(topics, "GROUP='g', START=EARLIEST"), "EARLIEST", "START must be EARLIEST or LATEST", func(s *sql.Statement) { s.Source.Options[1].Value = "BEGIN" }, nil},
 		{"file start", source(files, "GROUP='g', START=EARLIEST"), "START", "START requires a topic source; remove START for FILE sources", nil, nil},
-		{"missing start", topics, "WITH(", "topic sources require WHERE or START; add START = EARLIEST or START = LATEST to source WITH", nil, nil},
 		{"WHERE and START", source(topics, "GROUP='g', START=EARLIEST") + "WHERE RECORD_TIMESTAMP < NOW()", "START", "START cannot be combined with WHERE; remove START", nil, nil},
 		{"CUTOFF file", source(files, "GROUP='g', CUTOFF=INTERVAL '1' MINUTE"), "CUTOFF", "CUTOFF requires a topic source; remove CUTOFF for FILE sources", nil, nil},
 		{"CUTOFF no upper", source(topics, "GROUP='g', CUTOFF=INTERVAL '1' MINUTE") + "WHERE RECORD_TIMESTAMP >= NOW()", "CUTOFF", "CUTOFF requires an upper timestamp bound in WHERE", nil, nil},

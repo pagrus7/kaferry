@@ -44,7 +44,7 @@ func fileTree(t *testing.T, directory string) map[string]string {
 }
 
 func TestStatusRejectsOneOffAndCorruptFileProgress(t *testing.T) {
-	for _, mode := range []string{"ONE_OFF", "corrupt"} {
+	for _, mode := range []string{"default", "ONE_OFF", "corrupt"} {
 		t.Run(mode, func(t *testing.T) {
 			// Given an anonymous group or corrupt saved progress.
 			f := filePreview(t)
@@ -52,6 +52,8 @@ func TestStatusRejectsOneOffAndCorruptFileProgress(t *testing.T) {
 			want := 2
 			if mode == "ONE_OFF" {
 				query = strings.Replace(query, "'preview'", "ONE_OFF", 1)
+			} else if mode == "default" {
+				query = strings.Replace(query, " WITH (GROUP='preview')", "", 1)
 			} else {
 				var diagnostics bytes.Buffer
 				require.Zero(t, Execute(t.Context(), []string{"run", "-e", query, "-c", f.config}, nil, io.Discard, &diagnostics))
@@ -66,7 +68,7 @@ func TestStatusRejectsOneOffAndCorruptFileProgress(t *testing.T) {
 			// When inspecting, then ONE_OFF is rejected with an actionable hint; corrupt state is unknown.
 			code := Execute(t.Context(), []string{"status", "-e", query, "-c", f.config}, nil, &out, &errout)
 			require.Equal(t, want, code)
-			if mode == "ONE_OFF" {
+			if mode != "corrupt" {
 				require.Contains(t, errout.String(), "logged group name")
 			} else {
 				require.Contains(t, out.String(), "Status: unknown")

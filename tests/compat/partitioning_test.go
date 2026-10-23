@@ -21,9 +21,10 @@ func TestPreservedPartitionsAndExplicitKeyRouting(t *testing.T) {
 	a := admin(t)
 	source := topic(t, a, 3)
 	p := producer(t)
+	stamp := time.Now().Add(-2 * time.Minute).Truncate(time.Millisecond)
 	keys := [][]byte{nil, {}, {0, 255}, nil, {}, {3, 0}}
 	for id, key := range keys {
-		publish(t, p, &kgo.Record{Topic: source, Partition: int32(id % 3), Key: key, Value: []byte{byte(id)}, Timestamp: time.Now()})
+		publish(t, p, &kgo.Record{Topic: source, Partition: int32(id % 3), Key: key, Value: []byte{byte(id)}, Timestamp: stamp})
 	}
 	config := configuration(t)
 	verify := func(t *testing.T, destination string, parts int, preserve bool) {
@@ -49,9 +50,12 @@ func TestPreservedPartitionsAndExplicitKeyRouting(t *testing.T) {
 	t.Run("default preserves into a larger topic", func(t *testing.T) {
 		// When copying with the default, then each original ID remains unchanged despite different counts.
 		destination := topic(t, a, 5)
-		query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s-preserve',START=EARLIEST) OPTIONS(WORKER_STOP_AFTER_RECORDS=6)", destination, source, source)
+		query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s'", destination, source, stamp.Add(time.Second).Format(time.RFC3339Nano))
 		execute(t, query, config)
 		verify(t, destination, 5, true)
+		// When bare SQL is rerun, then its fresh group copies the source again.
+		execute(t, query, config)
+		require.EqualValues(t, 2*len(keys), topicRecordCount(t, a, destination, 5))
 	})
 	t.Run("missing partition is fatal before progress", func(t *testing.T) {
 		// When the destination is too small, then ON_ERROR=SKIP cannot suppress the layout error or create progress.
@@ -84,10 +88,10 @@ func TestPreservedPartitionsAndExplicitKeyRouting(t *testing.T) {
 		archive := filepath.Join(root, "archive")
 		cfg := filepath.Join(root, "worker.toml")
 		require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[connections.default]\n'bootstrap.servers'=%q\n[worker]\ncheckpoint_dir=%q\n", broker(t), root)), 0600))
-		capture := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH(GROUP='%s-capture',START=EARLIEST) OPTIONS(WORKER_STOP_AFTER_RECORDS=6)", archive, source, source)
+		capture := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' OPTIONS(WORKER_STOP_AFTER_RECORDS=6)", archive, source)
 		execute(t, capture, cfg)
 		destination := topic(t, a, 5)
-		query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE avro('%s') WITH(GROUP='restore')", destination, archive)
+		query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE avro('%s')", destination, archive)
 		// When replaying, then routing uses original partitions rather than the file's virtual cursor.
 		execute(t, query, cfg)
 		verify(t, destination, 5, true)

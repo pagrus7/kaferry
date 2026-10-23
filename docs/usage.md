@@ -6,7 +6,7 @@ Use `-c connections.toml`; SQL overrides TOML. [Connections](../README.md#connec
 
 ## SQL settings
 
-Use `WITH` on either endpoint: source `GROUP`, `START`, `CUTOFF`; destination `PARTITIONING` or Avro rotation. Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
+`WITH` and `OPTIONS` are optional. Source `WITH` overrides `GROUP`, `START`, `CUTOFF`; destination `WITH` overrides partitioning or Avro rotation. Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
 
 ## Permissions
 
@@ -31,7 +31,7 @@ Pass SQL with `-f file`, `-f -` (stdin) or `-e "SQL"`.
 mkdir -p archive
 kaferry run -c connections.toml -f - <<'SQL'
 INSERT INTO FILE avro('archive/orders')
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive', START = EARLIEST);
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive');
 SQL
 ```
 
@@ -43,7 +43,9 @@ kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM FILE avro('archive/orders') WITH (GROUP = 'orders-restore');"
 ```
 
-Kafka needs `WHERE` or `START`: `EARLIEST` for retained records, `LATEST` for new ones. Saved progress takes precedence. Avro pins completed files: the same group resumes them; a new group selects current files. [Examples](../design/grammar.md#valid-examples).
+Without `WHERE`, Kafka starts at the earliest retained record; `START = LATEST` selects new ones. Saved progress takes precedence. Without an end time, Kafka follows. Avro selects current completed files and exits; the same group retains its selection. [Examples](../design/grammar.md#valid-examples).
+
+Omitting `GROUP` creates a fresh logged group each run. Reruns and concurrent unnamed runs copy independently. Use a named group to resume or share Kafka work.
 
 Add `OPTIONS (WORKER_STOP_AFTER_RECORDS = 100)` before the final `;` to stop each process after accepting 100 records for writing. Each restart gets a fresh allowance. [Counting rules](../design/decisions.md#worker-record-stop).
 

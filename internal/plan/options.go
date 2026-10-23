@@ -28,16 +28,6 @@ func applyOptions(options []sql.Option, scope sql.Scope, apply func(sql.Option) 
 	return nil
 }
 
-func (p *Plan) sourceOptions(options []sql.Option, position sql.Position) error {
-	if err := applyOptions(options, sql.SourceSettings, p.applyOption); err != nil {
-		return err
-	}
-	if p.Group == "" {
-		return sql.At(position, fmt.Errorf("GROUP is required; add GROUP = 'name' or GROUP = ONE_OFF to WITH after the FROM endpoint"))
-	}
-	return nil
-}
-
 func conflictingPolicy(name string, seen map[string]sql.Position) (sql.Position, bool) {
 	switch name {
 	case "ON_ERROR":

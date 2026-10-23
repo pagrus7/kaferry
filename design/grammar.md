@@ -19,7 +19,7 @@ property    = string "=" ( string | env ) ;
 env         = "ENV" "(" string ")" ;
 
 insert      = "INSERT" "INTO" endpoint [ "WITH" "(" sink_option { "," sink_option } ")" ] ;
-select      = "SELECT" "*" "FROM" endpoint "WITH" "(" source_option { "," source_option } ")" ;
+select      = "SELECT" "*" "FROM" endpoint [ "WITH" "(" source_option { "," source_option } ")" ] ;
 endpoint    = "TOPIC" string                       (* 'topic' or 'topic@alias' *)
             | "FILE" "avro" "(" string ")" ;       (* archive directory *)
 source_option = "GROUP" "=" ( string | "ONE_OFF" )
@@ -49,9 +49,9 @@ copy_option = "WORKER_STOP_AFTER_RECORDS" "=" integer
 
 Planning or startup enforces:
 
-- Source `WITH` is required and must contain a nonblank `GROUP`. Options, inline connection aliases and a connection's properties cannot repeat. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name; unquoted `ONE_OFF` generates one.
+- Both endpoint `WITH` clauses and final `OPTIONS` are optional; if present, each must contain a setting. Omitted `GROUP` means `ONE_OFF`: generate and log a fresh group for each run. Explicit group names must be nonblank. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name. Settings, inline connection aliases and a connection's properties cannot repeat.
 - Destination `WITH` is optional. Avro rotation uses positive bytes (case-insensitive binary k/m/g suffixes) and positive intervals; defaults are 1g and one hour. `avro(...)` takes only the directory.
-- Source `WITH` precedes `WHERE`. A topic source needs exactly one of `WHERE` and `START`; a file source takes no `START`. `CUTOFF` belongs to source `WITH`; all record-error policies and worker stops belong to optional final `OPTIONS`.
+- Source `WITH` precedes `WHERE`. Without `WHERE`, topic sources default to `START = EARLIEST`; `LATEST` reads new records. `WHERE` supplies the starting rule and cannot be combined with explicit `START`. Saved progress takes precedence. File sources take no `START`. `CUTOFF` belongs to source `WITH`; record-error policies and worker stops belong to final `OPTIONS`.
 - `ON_ERROR` cannot be combined with any specific error policy.
 - `WORKER_STOP_AFTER_RECORDS` is from 1 to 9,007,199,254,740,992; it caps accepted writes per worker per invocation, not records read or a shared group total.
 - `PARTITIONING` requires a topic destination and defaults to `PRESERVE`: original partition N goes to destination N. Every input partition ID must exist, including IDs whose records the filter excludes. Counts need not match. `KEY` uses original key bytes and the destination key partitioner. Missing partitions fail under every error policy.
@@ -63,6 +63,20 @@ Planning or startup enforces:
 ## Valid examples
 
 Aliases not defined inline need TOML profiles; `ENV` variables must be set. TLS connections need a trusted broker CA; set `ssl.ca.location` if system roots do not include it.
+
+Minimal topic copy: start a fresh group from earliest retained records, then follow. Rerunning copies them again; use a named `GROUP` to resume or share work:
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod';
+```
+
+Minimal archive replay: copy the current completed files and exit:
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM FILE avro('/data/orders');
+```
 
 Topic→topic, fixed window, inline PLAIN over TLS connection:
 
@@ -84,7 +98,7 @@ Topic→file, follow from the earliest retained record, default connection:
 
 ```sql
 INSERT INTO FILE avro('/data/audit')
-SELECT * FROM TOPIC 'audit' WITH (GROUP = 'audit-archive', START = EARLIEST);
+SELECT * FROM TOPIC 'audit' WITH (GROUP = 'audit-archive');
 ```
 
 File→topic, last seven days, skipping timestamps known to be outside the destination's accepted bounds:
@@ -100,7 +114,7 @@ File→file, inclusive range, one-off group (normalizes to `[09:00:00.000, 09:30
 
 ```sql
 INSERT INTO FILE avro('/data/incident')
-SELECT * FROM FILE avro('/data/orders') WITH (GROUP = ONE_OFF)
+SELECT * FROM FILE avro('/data/orders')
 WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z'
                            AND TIMESTAMP '2026-10-01T09:30:00Z';
 ```
@@ -138,8 +152,8 @@ SQL errors identify the first error found by one-based line and character (code 
 | `FROM FILE avro('archive') WITH (GROUP='g', START=EARLIEST)` | `START` requires a topic source |
 | `FROM FILE avro('archive') WITH (GROUP='g', CUTOFF=INTERVAL '1' MINUTE)` | `CUTOFF` requires a topic source |
 | `FROM TOPIC 'a' WITH (GROUP='g', START=EARLIEST) WHERE RECORD_TIMESTAMP < NOW()` | `START` cannot be combined with `WHERE` |
-| `FROM TOPIC 'a' WITH (GROUP='g')` | `START` is required without `WHERE` |
-| `WITH (START=EARLIEST)` on a source | `GROUP` is required |
+| `FROM TOPIC 'a' WITH ()` | present clauses need at least one setting |
+| `FROM TOPIC 'a' WITH (GROUP='')` | explicit group names must be nonblank |
 | `WITH (GROUP='a', GROUP='b')` on a source | duplicate `GROUP` |
 | `OPTIONS (ON_ERROR=SKIP, ON_MISSING_TIMESTAMP=FAIL)` | broad and specific policies cannot be mixed |
 | `INSERT INTO FILE avro('out') WITH (PARTITIONING=KEY)` | partitioning requires a topic destination |

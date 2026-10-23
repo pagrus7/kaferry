@@ -48,7 +48,7 @@ WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
 ```
 
-`@alias` selects a connection; `GROUP` identifies saved progress. Rerun to resume; a new window, `CUTOFF` or partitioning mode needs a new group.
+`@alias` selects a connection; named `GROUP` saves progress for reruns. Omitting `GROUP` starts a fresh copy each run. A new window, `CUTOFF` or partitioning mode needs a new group.
 
 ```sh
 bin/kaferry explain --file copy.sql --config connections.toml

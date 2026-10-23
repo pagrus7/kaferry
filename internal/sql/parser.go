@@ -134,9 +134,11 @@ func (p *parser) statement() Statement {
 	p.expect("*")
 	p.expect("FROM")
 	s.Source = p.endpoint()
-	s.Source.OptionsPosition = p.current.Position
-	p.expect("WITH")
-	s.Source.Options = p.settings(SourceSettings)
+	if p.is("WITH") {
+		s.Source.OptionsPosition = p.current.Position
+		p.next()
+		s.Source.Options = p.settings(SourceSettings)
+	}
 	if p.is("WHERE") {
 		s.WherePosition = p.current.Position
 		p.next()

@@ -25,6 +25,7 @@ func TestParserDiagnosticsLocateTheOffendingToken(t *testing.T) {
 		{"bad policy before character", prefix + "OPTIONS(ON_ERROR=RETRY ?)", "expected FAIL or SKIP; found identifier", Position{3, 18}},
 		{"missing comma", bare + "WITH(GROUP='g' START=EARLIEST)", "expected \",\" or \")\"; found identifier", Position{3, 16}},
 		{"missing WHERE", prefix + "WHER RECORD_TIMESTAMP < NOW()", "expected WHERE, OPTIONS, \";\" or end of input; found identifier", Position{3, 1}},
+		{"bare source unknown clause", bare + "private_SENTINEL RECORD_TIMESTAMP < NOW()", "expected WITH, WHERE, OPTIONS, \";\" or end of input; found identifier", Position{3, 1}},
 		{"BOM", "\uFEFFINSERT", "UTF-8 byte-order mark is not supported; save without a BOM", Position{1, 1}},
 		{"interior FEFF", "INSERT\uFEFF INTO", "unexpected invisible or control character; remove it", Position{1, 7}},
 		{"double quote", "INSERT INTO TOPIC \"b\"", "double quotes are not supported; use ASCII single quotes for strings", Position{1, 19}},

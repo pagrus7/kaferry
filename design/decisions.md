@@ -24,7 +24,7 @@ Saved commits take precedence. Without a commit:
 | --- | --- |
 | `WHERE` with positive lower bound | First offset returned by timestamp lookup for `lo` |
 | Non-positive lower bound or upper-only filter | Earliest retained offset |
-| No `WHERE`, group has no valid progress | `START = EARLIEST` or `LATEST` |
+| No `WHERE`, group has no valid progress | Earliest retained offset by default; `START = LATEST` uses the stable end |
 | No `WHERE`, group already has valid progress | Earliest retained offset for the uncommitted partition |
 
 `LATEST` and a timestamp lookup with no match use the read-committed end (last stable offset, LSO), so records in open transactions remain eligible. Initial positions are committed before copying. Every partition is positioned explicitly; automatic offset reset is disabled. Out-of-range positions follow the rules below.
@@ -67,7 +67,7 @@ File sources resume a fixed selection of completed Avro files; a new group selec
 
 ### Group names
 
-- `GROUP` identifies a Kafka consumer group or a file-source checkpoint. `GROUP = ONE_OFF` generates and logs `kaferry-<hex>` for a single worker. Successful file-source ONE_OFF runs without `WORKER_STOP_AFTER_RECORDS` delete the checkpoint but retain its lock. Runs with a worker threshold keep the checkpoint, even at EOF, so the logged group can resume. Kafka progress expires under broker offset retention.
+- `GROUP` identifies a Kafka consumer group or a file-source checkpoint. Omitting it means `GROUP = ONE_OFF`: generate and log `kaferry-<hex>` for a single worker. Repeated or concurrent unnamed runs independently copy the source. Resume an unfinished one-off run with its logged group name; use a shared named group for cooperating Kafka workers. Successful file-source ONE_OFF runs without `WORKER_STOP_AFTER_RECORDS` delete the checkpoint but retain its lock. Runs with a worker threshold keep the checkpoint, even at EOF. Kafka progress expires under broker offset retention.
 - Topic→topic workers share a named group and progress independently using classic `cooperative-sticky` assignment. There is no group-wide done marker or external coordinator.
 
 ### When a worker exits

@@ -79,7 +79,7 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 			cpdir := t.TempDir()
 			cfg := filepath.Join(dir, "config.toml")
 			require.NoError(t, os.WriteFile(cfg, []byte("[worker]\ncheckpoint_dir = '"+cpdir+"'\n"), 0600))
-			statement := "INSERT INTO FILE avro('" + dst + "') SELECT * FROM FILE avro('" + src + "') WITH(GROUP=ONE_OFF)"
+			statement := "INSERT INTO FILE avro('" + dst + "') SELECT * FROM FILE avro('" + src + "')"
 			var out bytes.Buffer
 
 			inputPath := "-"
@@ -94,6 +94,10 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 
 			// Then
 			require.Zero(t, executeCode)
+			copied := archiveRecords(t, dst)
+			require.Len(t, copied, 1)
+			require.Equal(t, []byte{}, copied[0].Key, "empty keys must survive the default copy")
+			require.Nil(t, copied[0].Value, "null values must survive the default copy")
 			files, err := filepath.Glob(filepath.Join(cpdir, "*.json"))
 			require.NoError(t, err)
 			require.Len(t, files, 0)
@@ -165,7 +169,7 @@ func TestCLISQLDiagnosticsIdentifyInputWithoutCreatingOutput(t *testing.T) {
 			if input == "file validation" {
 				query = strings.Replace(query, "'sensitive_SENTINEL_5c27'", "*", 1)
 				query = strings.Replace(query, "GROUP='g'", "START=EARLIEST", 1)
-				want = "line 3, column 1: GROUP is required; add GROUP = 'name' or GROUP = ONE_OFF to WITH after the FROM endpoint"
+				want = "line 3, column 6: START requires a topic source; remove START for FILE sources"
 			}
 			config := filepath.Join(dir, "config.toml")
 			require.NoError(t, os.WriteFile(config, []byte("[worker]\ncheckpoint_dir = '"+dir+"'\n"), 0600))
