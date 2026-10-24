@@ -21,7 +21,7 @@ Implementation is AI-driven with Codex and Claude Code under human direction.
 
 Homebrew: [pagrus7/tap](https://github.com/pagrus7/homebrew-tap).
 
-From source: `make build` with Go 1.26+, then `bin/kaferry --version`. No C compiler is needed.
+From source (Go 1.26+, no C compiler): `CGO_ENABLED=0 go install github.com/pagrus7/kaferry/cmd/kaferry@latest`. Add `$(go env GOPATH)/bin` to `PATH` if `GOBIN` is unset. For a checkout, use `make build`. [Source builds and redistribution](releases/README.md#source-installation).
 
 ## Known issues
 

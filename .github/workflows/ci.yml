@@ -54,6 +54,8 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: python3 scripts/notices.py bin/kaferry bin/THIRD_PARTY_NOTICES.txt
+      - name: Verify source installation
+        run: python3 scripts/ci.py source-install python3 scripts/install_smoke.py
       - name: Publish Go coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
