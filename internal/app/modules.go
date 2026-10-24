@@ -52,7 +52,7 @@ var ArchiveModule = fx.Module("archive", fx.Provide(func(clock copy.Clock, write
 }))
 var RunnerModule = fx.Module("runner", fx.Provide(newRunnerFactory))
 var ObservabilityModule = fx.Module("observability", fx.Provide(func(env *system, log *slog.Logger) MetricsFactory {
-	return observability.NewFactory(env, log, version)
+	return observability.NewFactory(env, log, currentBuild().version)
 }))
 var EngineModule = fx.Module("engine", fx.Provide(newEngine))
 var FileInspectionModule = fx.Module("file-inspection", fx.Provide(func(clock copy.Clock) inspect.Files { return archiveio.NewInspector(clock) }))

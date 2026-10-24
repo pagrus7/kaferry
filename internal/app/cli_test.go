@@ -34,10 +34,13 @@ func TestCLIInputsAndExitCodes(t *testing.T) {
 }
 
 func TestCLIVersionWithoutConfigurationOrInput(t *testing.T) {
-	// Given no home directory and a reader that cannot supply SQL.
+	// Given release metadata, no home directory and a reader that cannot supply SQL.
+	originalVersion, originalRevision := version, revision
+	t.Cleanup(func() { version, revision = originalVersion, originalRevision })
+	version, revision = "v0.2.3", "release-commit"
 	t.Setenv("HOME", "")
 	var stdout, stderr bytes.Buffer
-	want := "kaferry " + version + " (commit " + revision + "; " + runtime.Version() + "; franz-go "
+	want := "kaferry v0.2.3 (commit release-commit; " + runtime.Version() + "; franz-go "
 
 	// When requesting build information.
 	code := Execute(t.Context(), []string{"--version"}, forbiddenInput{}, &stdout, &stderr)
