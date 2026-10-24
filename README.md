@@ -15,11 +15,9 @@ Preserves raw bytes, nulls, ordered headers and timestamps where possible. No tr
 
 ## Install
 
-[Download](https://github.com/pagrus7/kaferry/releases/latest), verify `SHA256SUMS`, extract and run `kaferry`.
+[Download a release](https://github.com/pagrus7/kaferry/releases/latest), verify `SHA256SUMS`, extract and put `kaferry` on `PATH`.
 
-Homebrew: [pagrus7/tap](https://github.com/pagrus7/homebrew-tap).
-
-From source (Go 1.26+, no C compiler): `CGO_ENABLED=0 go install github.com/pagrus7/kaferry/cmd/kaferry@latest`. Add `$(go env GOPATH)/bin` to `PATH` if `GOBIN` is unset. For a checkout, use `make build`. [Installation, containers and redistribution](docs/install.md).
+Homebrew: `brew install pagrus7/tap/kaferry`. [Source builds, containers and redistribution](docs/install.md).
 
 ## Known issues
 
@@ -27,69 +25,22 @@ When Kaferry reads Kafka, franz-go v1.22.2 misreads record timestamps outside ±
 
 ## Quick start
 
-For a controlled first run with three known records and no broker, use the [archive tutorial](docs/usage.md#first-copy-without-kafka).
-
-Both topics must exist; the destination needs at least as many partitions as the source. Replace the addresses; add [authentication](#connections) as needed.
-
-**`connections.toml`:**
-
-```toml
-[connections.prod]
-'bootstrap.servers' = 'source.example:9092'
-
-[connections.backup]
-'bootstrap.servers' = 'destination.example:9092'
-```
-
-**`copy.sql`:** filter Kafka record timestamps, not payload times, from 09:00 inclusive to 10:00 exclusive (UTC).
-
-```sql
-INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-backfill')
-WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
-  AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
-```
-
-`@alias` selects a connection; named `GROUP` saves progress for reruns. Omitting `GROUP` starts a fresh copy each run. A new window, `CUTOFF` or partitioning mode needs a new group.
+[Download and unpack the tutorial](docs/usage.md#first-copy-without-kafka) for three known records and no broker. From its `archive-demo` directory:
 
 ```sh
-kaferry explain --file copy.sql --config connections.toml
-kaferry run --file copy.sql --config connections.toml
+mkdir -p checkpoints
+kaferry run -c tutorial.toml -f copy.sql
+kaferry status -c tutorial.toml -f copy.sql --json
 ```
 
-## Connections
-
-Quote dotted TOML keys. [Supported properties](docs/reference.md#connection-properties); SASL/PLAIN over TLS:
-
-```toml
-[connections.prod]
-'bootstrap.servers' = 'source.example:9093'
-'security.protocol' = 'SASL_SSL'
-'sasl.mechanism' = 'PLAIN'
-'sasl.username' = 'copier'
-'ssl.ca.location' = '/etc/kafka/ca.pem'
-```
-
-Set `PROD_PASSWORD` in the environment, then prefix the SQL statement with:
-
-```sql
-WITH CONNECTION prod AS ('sasl.password' = ENV('PROD_PASSWORD'))
-```
-
-Keep passwords out of SQL literals and shell arguments. [Configuration rules](docs/usage.md#configuration).
+The first run confirms three records; rerunning the same named group confirms zero. [Kafka setup and copying](docs/usage.md#copy-between-kafka-topics) · [Authentication](docs/usage.md#connections).
 
 ## Before you run
 
 - **Time windows:** The [cutoff rule](design/decisions.md#completion) can miss records within the range, including those present before the run.
 - **Delivery:** at least once; crashes and rebalances can duplicate or reorder writes. Expired offsets or lost checkpoints can start fresh. Kafka input reads committed records.
-- **Destination:** original partition numbers are preserved; use `PARTITIONING = KEY` to repartition. Ensure bytes and Schema Registry IDs work there. Broker settings can replace timestamps or delete old records. [Routing](design/decisions.md#kafka-output).
+- **Destination:** original partition numbers are preserved. Ensure bytes and Schema Registry IDs work there. Broker settings can replace timestamps or delete old records. [Routing](design/decisions.md#kafka-output).
 - **Archives:** multiple capture workers; one replay process per group/checkpoint directory. Storage needs durable sync, atomic rename and locks. [File setup and resume](docs/usage.md#run-a-copy).
 - **Permissions:** [Source READ and destination WRITE grants](docs/usage.md#permissions).
 
-[Documentation index](docs/README.md) · [Usage guide](docs/usage.md)
-
-## Development
-
-Implementation is AI-driven with Codex and Claude Code under human direction.
-
-[Tests](design/components.md#test-targets) · [MIT license](LICENSE); dependencies retain their licenses · [Security](SECURITY.md)
+[Documentation index](docs/README.md) · [Settings and results](docs/reference.md) · [Tests and contributing](design/components.md) · [Security](SECURITY.md) · [MIT license](LICENSE); dependencies retain their licenses.

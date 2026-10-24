@@ -51,7 +51,58 @@ A worker record threshold applies afresh to each invocation. A new archive group
 
 ## Configuration
 
-Use `-c connections.toml`; SQL overrides TOML. [Connections](../README.md#connections) · [Settings](reference.md#configuration-and-cli).
+Use `-c connections.toml`; SQL overrides TOML. [Settings](reference.md#configuration-and-cli).
+
+## Copy between Kafka topics
+
+Both topics must exist; the destination needs at least as many partitions as the source. Replace the addresses; add [authentication](#connections) as needed.
+
+**`connections.toml`:**
+
+```toml
+[connections.prod]
+'bootstrap.servers' = 'source.example:9092'
+
+[connections.backup]
+'bootstrap.servers' = 'destination.example:9092'
+```
+
+**`copy.sql`:** filter Kafka record timestamps, not payload times, from 09:00 inclusive to 10:00 exclusive (UTC).
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-backfill')
+WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
+  AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
+```
+
+`@alias` selects a connection; named `GROUP` saves progress for reruns. Omitting `GROUP` starts a fresh copy each run. A new window, `CUTOFF` or partitioning mode needs a new group.
+
+```sh
+kaferry explain --file copy.sql --config connections.toml
+kaferry run --file copy.sql --config connections.toml
+```
+
+## Connections
+
+Quote dotted TOML keys. [Supported properties](reference.md#connection-properties); SASL/PLAIN over TLS:
+
+```toml
+[connections.prod]
+'bootstrap.servers' = 'source.example:9093'
+'security.protocol' = 'SASL_SSL'
+'sasl.mechanism' = 'PLAIN'
+'sasl.username' = 'copier'
+'ssl.ca.location' = '/etc/kafka/ca.pem'
+```
+
+Set `PROD_PASSWORD` in the environment, then prefix the SQL statement with:
+
+```sql
+WITH CONNECTION prod AS ('sasl.password' = ENV('PROD_PASSWORD'))
+```
+
+Keep passwords out of SQL literals and shell arguments. [Configuration rules](#configuration).
 
 ## SQL settings
 

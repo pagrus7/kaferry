@@ -13,20 +13,18 @@ import (
 
 func TestDocumentedConfiguration(t *testing.T) {
 	// Given published TOML snippets, including partial overrides.
-	for _, name := range []string{"../../README.md", "../../docs/usage.md"} {
-		data, err := os.ReadFile(name)
-		require.NoError(t, err)
-		examples := strings.Split(string(data), "```toml\n")[1:]
-		require.NotEmpty(t, examples, "no TOML examples in %s", name)
-		for index, part := range examples {
-			t.Run(fmt.Sprintf("%s/%d", name, index), func(t *testing.T) {
-				// When loading with the production decoder and defaults.
-				input := strings.SplitN(part, "```", 2)[0]
-				_, err := NewLoader(&readerMock{data: []byte(input)}, "/home/example").Load("example.toml")
-				// Then invalid keys, types or worker settings fail the docs check.
-				require.NoError(t, err)
-			})
-		}
+	data, err := os.ReadFile("../../docs/usage.md")
+	require.NoError(t, err)
+	examples := strings.Split(string(data), "```toml\n")[1:]
+	require.NotEmpty(t, examples, "usage guide must contain TOML examples")
+	for index, part := range examples {
+		t.Run(fmt.Sprint(index), func(t *testing.T) {
+			// When loading with the production decoder and defaults.
+			input := strings.SplitN(part, "```", 2)[0]
+			_, err := NewLoader(&readerMock{data: []byte(input)}, "/home/example").Load("example.toml")
+			// Then invalid keys, types or worker settings fail the docs check.
+			require.NoError(t, err)
+		})
 	}
 }
 
