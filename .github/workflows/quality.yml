@@ -25,16 +25,16 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.10'
+          go-version: '1.27.3'
           cache: true
       - name: Install pinned analyzers
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
-          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           go install github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0
           mkdir -p .cache/quality-tools
-          curl --fail --location --retry 3 https://github.com/kucherenko/jscpd/releases/download/v5.4.1/jscpd-linux-x64-gnu.tar.gz -o .cache/quality-tools/jscpd.tar.gz
-          echo 'f2017a17de2a8d5708f8354c6e7223f82da3dc6489675bce543ba00d9d529468  .cache/quality-tools/jscpd.tar.gz' | sha256sum --check
+          curl --fail --location --retry 3 https://github.com/kucherenko/jscpd/releases/download/v5.4.2/jscpd-linux-x64-gnu.tar.gz -o .cache/quality-tools/jscpd.tar.gz
+          echo '216bae5de2b30c57f893286585c7a348e8af7cd36810949831f569d29f495a3b  .cache/quality-tools/jscpd.tar.gz' | sha256sum --check
           tar -xzf .cache/quality-tools/jscpd.tar.gz -C .cache/quality-tools
       - name: Script tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
@@ -54,7 +54,7 @@ jobs:
         run: govulncheck -format sarif ./... > build-results/govulncheck.sarif
       - name: Upload Go findings
         if: (success() || failure()) && steps.vulnerabilities.outcome != 'skipped'
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: build-results/govulncheck.sarif
           category: govulncheck-go
@@ -81,15 +81,15 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         if: matrix.language == 'go'
         with:
-          go-version: '1.26.10'
+          go-version: '1.27.3'
           cache: true
-      - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.language == 'go' && 'manual' || 'none' }}
       - if: matrix.language == 'go'
         run: make build
-      - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           category: codeql-${{ matrix.language }}
   dependencies:
