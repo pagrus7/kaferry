@@ -32,6 +32,7 @@ type Endpoint struct {
 	ClusterID      string       `json:"cluster_id,omitempty"`
 	TopicID        string       `json:"topic_id,omitempty"`
 	PartitionCount int          `json:"partition_count,omitempty"`
+	Partitioning   string       `json:"partitioning,omitempty"`
 	TimestampType  string       `json:"timestamp_type,omitempty"`
 	File           *FileSummary `json:"file,omitempty"`
 }

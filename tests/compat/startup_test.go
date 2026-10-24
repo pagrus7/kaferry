@@ -25,7 +25,7 @@ func TestConsumerConfigurationFailureDoesNotCreateArchiveOrBlockRetry(t *testing
 			path := filepath.Join(t.TempDir(), "out.avro")
 			end := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 			query := func(properties string) string {
-				return fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'%s) INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", broker(t), properties, path, src, end.Format(time.RFC3339Nano), src+"-copy")
+				return fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'%s) INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), properties, path, src, src+"-copy", end.Format(time.RFC3339Nano))
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 			defer cancel()

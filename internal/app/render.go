@@ -107,7 +107,11 @@ func renderBehavior(output io.Writer, report inspect.Report) {
 		fmt.Fprintf(output, "  Worker stop: after %d records accepted for writing. Resuming gets a fresh allowance.\n", report.WorkerStopAfterRecords)
 	}
 	if report.Destination.Kind == "TOPIC" {
-		fmt.Fprintln(output, "  Routing: original key bytes; destination partitioner.")
+		if report.Destination.Partitioning == "KEY" {
+			fmt.Fprintln(output, "  Routing: original key bytes; destination key partitioner.")
+		} else {
+			fmt.Fprintln(output, "  Routing: preserve original partition numbers; missing partitions fail.")
+		}
 		if report.Destination.TimestampType != "" {
 			fmt.Fprintf(output, "  Destination timestamp policy: %q.\n", report.Destination.TimestampType)
 		} else {

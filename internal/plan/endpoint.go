@@ -19,9 +19,6 @@ func endpoint(source sql.Endpoint, profiles Profiles, inline []sql.Connection) (
 		if e.Format != "avro" {
 			return Endpoint{}, fmt.Errorf("unsupported file format")
 		}
-		if err := e.fileOptions(source.Options); err != nil {
-			return Endpoint{}, err
-		}
 		return e, nil
 	case "TOPIC":
 		name, alias, err := topicEndpoint(e.Name)
@@ -107,47 +104,53 @@ func validTopicName(name string) bool {
 	return true
 }
 
-func (e *Endpoint) fileOptions(options []sql.Option) error {
-	seen := map[string]bool{}
-	for _, o := range options {
-		if seen[o.Name] {
-			return sql.At(o.Position, fmt.Errorf("file option %s repeats; specify it once", o.Name))
+func (e *Endpoint) destinationOptions(options []sql.Option) error {
+	return applyOptions(options, sql.DestinationSettings, func(o sql.Option) error {
+		if o.Name == "PARTITIONING" {
+			if e.Kind != "TOPIC" {
+				return sql.At(o.Position, fmt.Errorf("PARTITIONING requires a topic destination"))
+			}
+			if o.Value != Preserve && o.Value != Key {
+				return fmt.Errorf("PARTITIONING must be PRESERVE or KEY")
+			}
+			e.Partitioning = o.Value
+			return nil
 		}
-		seen[o.Name] = true
-		switch o.Name {
-		case "ROTATE_AFTER_SIZE":
-			text := o.Value
-			multiplier := int64(1)
-			if len(text) > 0 {
-				switch text[len(text)-1] {
-				case 'k':
-					multiplier = 1 << 10
-					text = text[:len(text)-1]
-				case 'm':
-					multiplier = 1 << 20
-					text = text[:len(text)-1]
-				case 'g':
-					multiplier = 1 << 30
-					text = text[:len(text)-1]
-				}
-			}
-			n, err := strconv.ParseInt(text, 10, 64)
-			if err != nil || n <= 0 || n > math.MaxInt64/multiplier {
-				return sql.At(o.ValuePosition, fmt.Errorf("ROTATE_AFTER_SIZE requires positive bytes, optionally suffixed k, m or g"))
-			}
-			e.RotateAfterSize = n * multiplier
-		case "ROTATE_AFTER_AGE":
-			if o.Interval == nil {
-				return sql.At(o.ValuePosition, fmt.Errorf("ROTATE_AFTER_AGE requires a positive interval"))
-			}
-			n, err := intervalMS(*o.Interval)
-			if err != nil || n <= 0 || n > math.MaxInt64/1000000 {
-				return sql.At(o.ValuePosition, fmt.Errorf("ROTATE_AFTER_AGE requires a positive interval within the duration limit"))
-			}
-			e.RotateAfterAgeMS = n
-		default:
-			return sql.At(o.Position, fmt.Errorf("unsupported file option; use ROTATE_AFTER_SIZE or ROTATE_AFTER_AGE"))
+		if e.Kind != "FILE" {
+			return sql.At(o.Position, fmt.Errorf("%s requires a FILE destination", o.Name))
 		}
+		return e.rotationOption(o)
+	})
+}
+
+func (e *Endpoint) rotationOption(o sql.Option) error {
+	if o.Name == "ROTATE_AFTER_SIZE" {
+		text := o.Value
+		multiplier := int64(1)
+		if len(text) > 0 {
+			switch text[len(text)-1] {
+			case 'k':
+				multiplier, text = 1<<10, text[:len(text)-1]
+			case 'm':
+				multiplier, text = 1<<20, text[:len(text)-1]
+			case 'g':
+				multiplier, text = 1<<30, text[:len(text)-1]
+			}
+		}
+		n, err := strconv.ParseInt(text, 10, 64)
+		if err != nil || n <= 0 || n > math.MaxInt64/multiplier {
+			return fmt.Errorf("ROTATE_AFTER_SIZE requires positive bytes, optionally suffixed k, m or g")
+		}
+		e.RotateAfterSize = n * multiplier
+		return nil
 	}
+	if o.Interval == nil {
+		return fmt.Errorf("ROTATE_AFTER_AGE requires a positive interval")
+	}
+	n, err := intervalMS(*o.Interval)
+	if err != nil || n <= 0 || n > math.MaxInt64/1000000 {
+		return fmt.Errorf("ROTATE_AFTER_AGE requires a positive interval within the duration limit")
+	}
+	e.RotateAfterAgeMS = n
 	return nil
 }

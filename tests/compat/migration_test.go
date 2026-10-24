@@ -40,9 +40,9 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			clone := filepath.Join(t.TempDir(), "clone")
 			config := configuration(t, "max_frame_bytes=8192")
 			group := source + "-migration"
-			sql := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s', CUTOFF=INTERVAL '0' SECOND)", archive, source, stamp.Add(time.Second).Format(time.RFC3339Nano), group)
+			sql := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", archive, source, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
 			limited := func(query string) string {
-				return strings.Replace(query, "OPTIONS(", "OPTIONS(WORKER_STOP_AFTER_RECORDS=1,", 1)
+				return query + " OPTIONS(WORKER_STOP_AFTER_RECORDS=1)"
 			}
 			runMigrationBinary(t, direction.first, limited(sql), config)
 			first := archiveRecords(t, archive)
@@ -62,7 +62,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			require.Equal(t, int64(2), committedPartitions(t, admin, group, source, 1)[0].At)
 
 			// Given a partially replayed archive with a saved record cursor.
-			cloneSQL := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') OPTIONS(GROUP='file-migration')", clone, archive)
+			cloneSQL := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='file-migration') ", clone, archive)
 			runMigrationBinary(t, direction.first, limited(cloneSQL), config)
 			require.Equal(t, complete[:1], archiveRecords(t, clone))
 			state := migrationCheckpoint(t, config, "file-migration")
@@ -93,7 +93,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 
 			// When a fresh group reads the archive, then it sees the same full records.
 			fresh := filepath.Join(t.TempDir(), "read")
-			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') OPTIONS(GROUP='archive-read')", fresh, archive)
+			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='archive-read') ", fresh, archive)
 			runMigrationBinary(t, direction.second, query, config)
 			require.Equal(t, complete, archiveRecords(t, fresh))
 		})

@@ -47,7 +47,7 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "out.avro")
 			group := src + "-copy"
 			cfg := configuration(t)
-			statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", path, src, stamp.Add(-time.Second).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano), group)
+			statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' ", path, src, group, stamp.Add(-time.Second).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano))
 			result := make(chan workerResult, 1)
 			samples := make(chan int64, 1)
 			go func() {
@@ -139,7 +139,7 @@ func TestOpenTransactionReachesTipWaitInsteadOfSuccessfulCompletion(t *testing.T
 	}()
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte("transactional"), Timestamp: stamp})
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", dst, src, stamp.Add(-time.Second).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano), src+"-wait")
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' ", dst, src, src+"-wait", stamp.Add(-time.Second).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano))
 	cfg := configuration(t, "tip_wait='100ms'\n")
 
 	// When the worker drains toward the sampled log end without a transaction commit.

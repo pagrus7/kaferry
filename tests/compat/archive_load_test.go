@@ -28,7 +28,8 @@ func TestLoadArchiveCopy(t *testing.T) {
 			cfg := filepath.Join(root, "worker.toml")
 			require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\nprogress_interval='0'\n", root)), 0600))
 			inputSQL, outputSQL := archiveQuery(source), archiveQuery(output)
-			options := "GROUP='archive-load'"
+			sourceOptions := "GROUP='archive-load'"
+			copyOptions := ""
 			prefix := ""
 			var destination string
 			var original *core.Provenance
@@ -70,16 +71,17 @@ func TestLoadArchiveCopy(t *testing.T) {
 							t.Fatal(seedCtx.Err())
 						}
 					}
-					options += fmt.Sprintf(",WORKER_STOP_AFTER_RECORDS=%d,START=EARLIEST", count)
+					sourceOptions += ",START=EARLIEST"
+					copyOptions = fmt.Sprintf(" OPTIONS(WORKER_STOP_AFTER_RECORDS=%d)", count)
 				} else {
-					outputSQL = fmt.Sprintf("TOPIC '%s'", name)
+					outputSQL = fmt.Sprintf("TOPIC '%s' WITH(PARTITIONING=KEY)", name)
 					destination = name
 				}
 			}
 			if direction != "capture" {
 				seedArchive(t, source, count)
 			}
-			statement := fmt.Sprintf("%sINSERT INTO %s SELECT * FROM %s OPTIONS(%s)", prefix, outputSQL, inputSQL, options)
+			statement := fmt.Sprintf("%sINSERT INTO %s SELECT * FROM %s WITH (%s)%s", prefix, outputSQL, inputSQL, sourceOptions, copyOptions)
 			report := measureArchiveCLI(t, statement, cfg, count)
 
 			// Then verify every output after the timed region, so measurements cannot hide data loss.

@@ -230,7 +230,7 @@ func TestSinkRefreshesRoutingOnIntervalWithoutBlockingOnMetadataFailure(t *testi
 			t.Fatal("delivery outcome missing")
 		}
 	}
-	if strings.Count(logs.String(), "destination partition count changed;") != 1 || strings.Count(logs.String(), "destination partition count check failed") != 1 {
+	if strings.Count(logs.String(), "destination partition count changed") != 1 || strings.Count(logs.String(), "destination partition count check failed") != 1 {
 		t.Fatal("routing change or metadata failure was not logged once", logs.String())
 	}
 }
@@ -305,13 +305,46 @@ func TestSinkUnknownTimestampTypeChecksClientSafeBoundaries(t *testing.T) {
 	}
 }
 
-func receiveDelivery(t *testing.T, sink *Sink) core.Delivery {
+func receiveDelivery(t *testing.T, sink core.Sink) core.Delivery {
 	t.Helper()
 	select {
 	case report := <-sink.Deliveries():
 		return report
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("delivery report did not arrive")
 		return core.Delivery{}
+	}
+}
+
+func TestSinkPreservesOriginalPartitionRatherThanReplayCursor(t *testing.T) {
+	for _, key := range [][]byte{nil, {}, {0, 255}} {
+		// Given archive provenance from partition 5, but a replay cursor in virtual partition 0.
+		s, client := sinkFixture(t)
+		s.preserve = true
+		token := core.Token{Partition: 0}
+		record := core.Record{Source: &core.Provenance{Partition: 5}, Key: key, Headers: []core.Header{{Name: "same", Value: nil}, {Name: "same", Value: []byte{}}}}
+		// When sending, then choose the original partition and retain raw key and header nulls.
+		require.NoError(t, s.Submit(record, token))
+		require.Len(t, client.records, 1)
+		require.EqualValues(t, 5, client.records[0].Partition)
+		require.Equal(t, key, client.records[0].Key)
+		require.Equal(t, []kgo.RecordHeader{{Key: "same", Value: nil}, {Key: "same", Value: []byte{}}}, client.records[0].Headers)
+		client.callbacks[0](client.records[0], nil)
+		require.Equal(t, token, receiveDelivery(t, s).Token)
+	}
+}
+
+func TestSinkCannotSkipMissingPartitionProvenance(t *testing.T) {
+	for _, source := range []*core.Provenance{nil, {Partition: -1}} {
+		// Given invalid provenance and preserved partition routing.
+		s, client := sinkFixture(t)
+		s.preserve = true
+		// When submitting, then fail without a skippable record error or a producer call.
+		err := s.Submit(core.Record{Source: source}, core.Token{})
+		require.ErrorContains(t, err, "valid original source partition")
+		var recordError *core.RecordError
+		require.NotErrorAs(t, err, &recordError)
+		require.Empty(t, client.records)
+		require.Zero(t, s.records.Load())
 	}
 }

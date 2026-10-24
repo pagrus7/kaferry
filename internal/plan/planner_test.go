@@ -39,7 +39,7 @@ func TestDocumentedExamples(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%d", name, index), func(t *testing.T) {
 				input := strings.SplitN(part, "```", 2)[0]
 				if !strings.Contains(input, "INSERT INTO") {
-					input += " INSERT INTO TOPIC 'b@prod' SELECT * FROM TOPIC 'a@prod' OPTIONS(GROUP='example',START=EARLIEST);"
+					input += " INSERT INTO TOPIC 'b@prod' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='example', START=EARLIEST) ;"
 				}
 				// When parsing and planning without opening endpoints.
 				statement, err := sql.NewParser().Parse(input)
@@ -75,7 +75,7 @@ func TestUsageCommandSQL(t *testing.T) {
 
 func TestWindowBoundaries(t *testing.T) {
 	// Given
-	p := build(t, "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z' AND TIMESTAMP '2026-10-01T09:30:00Z' OPTIONS(GROUP=ONE_OFF)")
+	p := build(t, "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') WITH (GROUP=ONE_OFF) WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z' AND TIMESTAMP '2026-10-01T09:30:00Z' ")
 	w, err := p.Window.Resolve(time.Time{})
 	require.NoError(t, err)
 	lo := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
@@ -96,7 +96,7 @@ func TestWindowBoundaries(t *testing.T) {
 
 func TestNowRemainsSymbolicAndUsesOneInstant(t *testing.T) {
 	// Given
-	p := build(t, "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' WHERE RECORD_TIMESTAMP > NOW() - INTERVAL '1' HOUR AND RECORD_TIMESTAMP <= NOW() OPTIONS(GROUP='g', CUTOFF=INTERVAL '0' SECOND)")
+	p := build(t, "INSERT INTO TOPIC 'b' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a' WITH (GROUP='g', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP > NOW() - INTERVAL '1' HOUR AND RECORD_TIMESTAMP <= NOW() ")
 	require.True(t, p.Window.Relative())
 	require.Zero(t, p.CutoffMS)
 	now := time.Date(2026, 10, 3, 0, 0, 0, 123000000, time.UTC)
@@ -128,7 +128,7 @@ func TestInvalidTimeExpressions(t *testing.T) {
 		{"RECORD_TIMESTAMP >= TIMESTAMP '2026-10-02T00:00:00Z' AND RECORD_TIMESTAMP < TIMESTAMP '2026-10-01T00:00:00Z'", "empty"},
 	}
 	for _, tc := range filters {
-		statement, err := sql.NewParser().Parse("INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') WHERE " + tc.filter + " OPTIONS(GROUP='g')")
+		statement, err := sql.NewParser().Parse("INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') WITH(GROUP='g') WHERE " + tc.filter)
 		require.NoError(t, err)
 
 		// When
@@ -142,7 +142,7 @@ func TestInvalidTimeExpressions(t *testing.T) {
 
 func TestPlannerRejectsOverflowingCutoff(t *testing.T) {
 	// Given valid SQL whose upper timestamp plus cutoff exceeds int64 milliseconds.
-	statement, err := sql.NewParser().Parse("INSERT INTO TOPIC 'b@staging' SELECT * FROM TOPIC 'a@prod' WHERE RECORD_TIMESTAMP < TIMESTAMP '9999-12-31T23:59:59Z' OPTIONS(GROUP='g', CUTOFF=INTERVAL '9223372036854775' SECOND)")
+	statement, err := sql.NewParser().Parse("INSERT INTO TOPIC 'b@staging' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='g', CUTOFF=INTERVAL '9223372036854775' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '9999-12-31T23:59:59Z' ")
 	require.NoError(t, err)
 
 	// When compiling the copy plan, before any endpoint is opened.
@@ -155,7 +155,7 @@ func TestPlannerRejectsOverflowingCutoff(t *testing.T) {
 
 func TestInlinePrecedenceAndSecretRedaction(t *testing.T) {
 	// Given
-	statement, err := sql.NewParser().Parse("WITH CONNECTION prod AS ('bootstrap.servers'='override:9092', 'sasl.password'=ENV('PASSWORD')) INSERT INTO TOPIC 'b@prod' SELECT * FROM TOPIC 'a@prod' OPTIONS(GROUP='g', START=EARLIEST)")
+	statement, err := sql.NewParser().Parse("WITH CONNECTION prod AS ('bootstrap.servers'='override:9092', 'sasl.password'=ENV('PASSWORD')) INSERT INTO TOPIC 'b@prod' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='g', START=EARLIEST) ")
 	require.NoError(t, err)
 	secret := "unique-secret-marker"
 
@@ -182,7 +182,7 @@ func TestInlinePrecedenceAndSecretRedaction(t *testing.T) {
 
 func TestFingerprintIdentity(t *testing.T) {
 	// Given
-	base := "INSERT INTO TOPIC 'b@staging' SELECT * FROM TOPIC 'a@prod' WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' OPTIONS(GROUP='g')"
+	base := "INSERT INTO TOPIC 'b@staging' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='g') WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' "
 	p := build(t, base)
 
 	// When
@@ -190,7 +190,7 @@ func TestFingerprintIdentity(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	q := build(t, strings.Replace(base, "GROUP='g'", "GROUP='h', ON_ERROR=SKIP", 1))
+	q := build(t, strings.Replace(base, "GROUP='g'", "GROUP='h'", 1)+" OPTIONS(ON_ERROR=SKIP)")
 	got, err := q.Fingerprint("source-cluster", "destination-cluster")
 	require.NoError(t, err)
 	require.Equal(t, want, got)
@@ -207,7 +207,7 @@ func TestFingerprintIdentity(t *testing.T) {
 	require.NotEqual(t, want, got)
 	_, err = p.Fingerprint("", "destination-cluster")
 	require.Error(t, err)
-	self := build(t, "INSERT INTO TOPIC 'a@staging' SELECT * FROM TOPIC 'a@prod' OPTIONS(GROUP='g', START=EARLIEST)")
+	self := build(t, "INSERT INTO TOPIC 'a@staging' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='g', START=EARLIEST) ")
 	_, err = self.Fingerprint("same", "same")
 	require.Error(t, err)
 }
@@ -249,7 +249,7 @@ func TestQuotedOneOffGroupRemainsNamed(t *testing.T) {
 				group = "'ONE_OFF'"
 			}
 			// When building the copy plan.
-			p := build(t, "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') OPTIONS(GROUP="+group+")")
+			p := build(t, "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') WITH(GROUP="+group+")")
 			// Then quoting selects a named group that can resume.
 			require.Equal(t, !quoted, p.OneOff)
 			if quoted {

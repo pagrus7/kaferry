@@ -94,7 +94,7 @@ func TestArchiveCLIResumeUsesFixedSelectionAndSavesStopReason(t *testing.T) {
 	archiveFixture(t, src, 1, records)
 	cfg := filepath.Join(root, "worker.toml")
 	require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\nrecord_cap=2\npartition_record_cap=2\n", root)), 0600))
-	sql := fmt.Sprintf("INSERT INTO FILE avro('%s', ROTATE_AFTER_SIZE=1m, ROTATE_AFTER_AGE=INTERVAL '2' HOUR) SELECT * FROM FILE avro('%s') OPTIONS(GROUP='resume'", dst, src)
+	sql := fmt.Sprintf("INSERT INTO FILE avro('%s') WITH(ROTATE_AFTER_SIZE=1m, ROTATE_AFTER_AGE=INTERVAL '2' HOUR) SELECT * FROM FILE avro('%s') WITH(GROUP='resume')", dst, src)
 	execute := func(command, statement string) (int, string) {
 		t.Helper()
 		var out bytes.Buffer
@@ -102,14 +102,14 @@ func TestArchiveCLIResumeUsesFixedSelectionAndSavesStopReason(t *testing.T) {
 		return code, out.String()
 	}
 	// When the worker stops at its requested cap, then status reports that stop.
-	code, logs := execute("run", sql+",WORKER_STOP_AFTER_RECORDS=2)")
+	code, logs := execute("run", sql+" OPTIONS(WORKER_STOP_AFTER_RECORDS=2)")
 	require.Zero(t, code, logs)
 	state, err := replay.ReadCheckpoint(root, "resume", replay.NativeGroupFiles{})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, state.Position)
 	require.False(t, state.Complete)
 	require.Equal(t, "worker_record_cap", state.Stop.Reason)
-	code, logs = execute("status", sql+")")
+	code, logs = execute("status", sql)
 	require.Zero(t, code, logs)
 	require.Contains(t, logs, "worker record threshold reached")
 	require.Contains(t, logs, "input records 2")
@@ -117,24 +117,24 @@ func TestArchiveCLIResumeUsesFixedSelectionAndSavesStopReason(t *testing.T) {
 	extra.Offset = 10
 	archiveFixture(t, src, 2, []avro.Record{extra})
 	// When more files appear, then status still describes the saved selection.
-	code, logs = execute("status", sql+")")
+	code, logs = execute("status", sql)
 	require.Zero(t, code, logs)
 	require.Contains(t, logs, fmt.Sprintf("Snapshot: 1 completed files, %d encoded bytes.", state.Files[0].File.Size))
 	// When the same group resumes, then it finishes only the originally selected file.
-	code, logs = execute("run", sql+")")
+	code, logs = execute("run", sql)
 	require.Zero(t, code, logs)
 	require.Equal(t, records, archiveRecords(t, dst), "portable records and physical duplicates survive resume")
 	state, err = replay.ReadCheckpoint(root, "resume", replay.NativeGroupFiles{})
 	require.NoError(t, err)
 	require.True(t, state.Complete)
 	require.Equal(t, "eof", state.Stop.Reason)
-	code, logs = execute("run", sql+")")
+	code, logs = execute("run", sql)
 	require.Zero(t, code, logs)
 	require.Equal(t, records, archiveRecords(t, dst), "completed group copies nothing more")
 	// When explaining, then positions are records and no lock or data file changes are made.
 	before, err := os.ReadFile(checkpoint.Path(root, "resume"))
 	require.NoError(t, err)
-	code, logs = execute("explain", sql+")")
+	code, logs = execute("explain", sql)
 	require.Zero(t, code, logs)
 	require.Contains(t, logs, "Input position: 5 records")
 	require.Contains(t, logs, "end of this group's fixed selection")
@@ -156,7 +156,7 @@ func TestArchiveCLIAllFilteredRecordsCanExceedPendingCap(t *testing.T) {
 	archiveFixture(t, src, 1, records)
 	cfg := filepath.Join(root, "worker.toml")
 	require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\nrecord_cap=2\npartition_record_cap=2\n", root)), 0600))
-	query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WHERE RECORD_TIMESTAMP >= TIMESTAMP '2000-01-01T00:00:00Z' OPTIONS(GROUP='filtered')", dst, src)
+	query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='filtered') WHERE RECORD_TIMESTAMP >= TIMESTAMP '2000-01-01T00:00:00Z' ", dst, src)
 	// When copying through the real engine, then it checkpoints filtered inputs and reaches EOF.
 	var out bytes.Buffer
 	require.Zero(t, Execute(t.Context(), []string{"run", "-e", query, "-c", cfg}, nil, &out, &out), out.String())
@@ -176,7 +176,7 @@ func TestArchiveCLIFreshPreviewDoesNotCreateRunState(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(src, "capture.partial"), nil, 0600))
 	cfg := filepath.Join(root, "worker.toml")
 	require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)), 0600))
-	query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WHERE RECORD_TIMESTAMP < NOW() OPTIONS(GROUP='preview')", dst, src)
+	query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='preview') WHERE RECORD_TIMESTAMP < NOW() ", dst, src)
 	before := time.Now().UnixMilli()
 	var stdout, diagnostics bytes.Buffer
 	// When explaining a query that has never run, then describe the current files without pinning them.
@@ -214,7 +214,7 @@ func TestArchiveCLIInspectionRejectsChangedSavedInputs(t *testing.T) {
 			archiveFixture(t, src, 1, []avro.Record{record, record})
 			cfg := filepath.Join(root, "worker.toml")
 			require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)), 0600))
-			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') OPTIONS(GROUP='saved',WORKER_STOP_AFTER_RECORDS=1)", dst, src)
+			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='saved') OPTIONS (WORKER_STOP_AFTER_RECORDS=1)", dst, src)
 			var output bytes.Buffer
 			require.Zero(t, Execute(t.Context(), []string{"run", "-e", query, "-c", cfg}, nil, &output, &output), output.String())
 			files, err := filepath.Glob(filepath.Join(src, "*.avro"))
@@ -223,7 +223,7 @@ func TestArchiveCLIInspectionRejectsChangedSavedInputs(t *testing.T) {
 			message := "selected archive input changed"
 			switch change {
 			case "query":
-				query = fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WHERE RECORD_TIMESTAMP < NOW() OPTIONS(GROUP='saved')", dst, src)
+				query = fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='saved') WHERE RECORD_TIMESTAMP < NOW() ", dst, src)
 				message = "query identity mismatch"
 			case "missing":
 				require.NoError(t, os.Remove(files[0]))
@@ -251,11 +251,11 @@ func TestArchiveCLIOneOffDeletesOnlyCompletedProgress(t *testing.T) {
 			archiveFixture(t, src, 1, []avro.Record{record, record})
 			cfg := filepath.Join(root, "worker.toml")
 			require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)), 0600))
-			options := "GROUP=ONE_OFF"
+			options := ""
 			if capped {
-				options += ",WORKER_STOP_AFTER_RECORDS=1"
+				options = " OPTIONS (WORKER_STOP_AFTER_RECORDS=1)"
 			}
-			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') OPTIONS(%s)", dst, src, options)
+			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP=ONE_OFF)%s", dst, src, options)
 			var output bytes.Buffer
 			// When previewing, then no checkpoint path is invented for the generated group.
 			require.Zero(t, Execute(t.Context(), []string{"explain", "--json", "-e", query, "-c", cfg}, nil, &output, &output), output.String())

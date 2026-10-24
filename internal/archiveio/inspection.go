@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
 	"github.com/pagrus7/kaferry/internal/archive/replay"
@@ -77,9 +78,16 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result Sour
 		}
 	}
 	result.FileCount = len(files)
+	seen := map[int32]bool{}
 	for _, f := range files {
 		result.Size += f.Size
+		id := f.Identity.Source.Partition
+		if !seen[id] {
+			result.Partitions = append(result.Partitions, id)
+			seen[id] = true
+		}
 	}
+	slices.Sort(result.Partitions)
 	return result, nil
 }
 func (i *Inspector) Destination(path string) (ArchiveInspection, error) {

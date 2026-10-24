@@ -88,7 +88,8 @@ def build(ref, root):
         subprocess.run(['go', 'build', '-buildvcs=false', '-trimpath', '-o', str(binary), './cmd/kaferry'],
                        cwd=source, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
     return binary, {'sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
-                    'build_info': command('go', 'version', '-m', str(binary))}
+                    'build_info': command('go', 'version', '-m', str(binary)),
+                    'scoped_sql': (source / 'internal/sql/options.go').exists()}
 
 
 def pair_summary(pairs):
@@ -141,6 +142,10 @@ def execute(base, head, pairs, counts, archives=False, archive_payload="random")
         report['broker_images'] = command('docker', 'compose', '-p', 'kaferry-compat', '--profile', 'cross-cluster', 'images', '--format', 'json')
         for ref in dict.fromkeys([head, base]):
             binaries[ref], identities[ref] = build(ref, Path('.cache/performance').resolve())
+        legacy = [str(binaries[ref]) for ref in binaries if not identities[ref].get('scoped_sql', True)]
+        if len(legacy) > 1:
+            raise ValueError('comparison needs a current SQL workload on at least one side')
+        os.environ['KAFERRY_LEGACY_SQL_BINARY'] = legacy[0] if legacy else ''
         harness = Path('.cache/performance/workload').resolve()
         subprocess.run(['go', 'test', '-c', '-tags=integration,load', '-o', str(harness), './tests/compat'], env=dict(os.environ, CGO_ENABLED='0'), check=True)
         for case in cases:

@@ -70,7 +70,7 @@ func (i *Inspector) refresh(parent context.Context, preserveIdentity bool) error
 		return conflict("broker did not provide a topic identity")
 	}
 	if preserveIdentity && i.topicID != ([16]byte{}) && i.topicID != t.TopicID {
-		return conflict("source topic identity changed")
+		return conflict("topic identity changed")
 	}
 	if response.ClusterID == nil || *response.ClusterID == "" {
 		return conflict("broker did not provide a cluster identity")
@@ -83,7 +83,7 @@ func (i *Inspector) refresh(parent context.Context, preserveIdentity bool) error
 		parts[n] = p.Partition
 	}
 	if preserveIdentity && i.parts != nil && len(i.parts) != len(parts) {
-		i.log.Info("source partition count changed", "topic", i.topic, "previous", len(i.parts), "current", len(parts))
+		i.log.Info("topic partition count changed", "topic", i.topic, "previous", len(i.parts), "current", len(parts))
 	}
 	i.parts, i.topicID, i.clusterID = parts, t.TopicID, *response.ClusterID
 	return nil

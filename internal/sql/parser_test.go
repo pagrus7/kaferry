@@ -11,7 +11,7 @@ import (
 
 func TestLexicalRules(t *testing.T) {
 	// Given
-	input := "-- header\ninsert /* block */ into file AvRo('a''b.avro') select * from file avro('源.avro') options(group='ONE_OFF'); -- tail"
+	input := "-- header\ninsert /* block */ into file AvRo('a''b.avro') select * from file avro('源.avro') WITH (group='ONE_OFF') ; -- tail"
 
 	// When
 	s, err := NewParser().Parse(input)
@@ -20,21 +20,21 @@ func TestLexicalRules(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "a'b.avro", s.Destination.Name)
 	require.Equal(t, "源.avro", s.Source.Name)
-	require.True(t, s.Options[0].Quoted)
+	require.True(t, s.Source.Options[0].Quoted)
 }
 
 func TestInvalidStatements(t *testing.T) {
 	// Given
-	base := "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') OPTIONS (GROUP = 'g')"
+	base := "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') WITH (GROUP = 'g') "
 	cases := []string{
 		"", base + ";" + base, base + ";;", strings.Replace(base, "SELECT *", "SELECT key", 1),
-		strings.Replace(base, "OPTIONS", "WHERE RECORD_TIMESTAMP >= NOW() OR RECORD_TIMESTAMP < NOW() OPTIONS", 1),
+		base + " WHERE RECORD_TIMESTAMP >= NOW() OR RECORD_TIMESTAMP < NOW()",
 		strings.Replace(base, "GROUP = 'g'", "GROUP = 'g',", 1), strings.Replace(base, "avro('a')", "json('a')", 1),
 		base + " /* unfinished", "/* nested /* comment */ */ " + base, base + " '\n", base + " \x00", base + "\xff",
 		strings.Replace(base, "GROUP = 'g'", "ON_SOURCE_FILE_CHANGED = CONTINUE", 1),
 		strings.Replace(base, "GROUP = 'g'", "CUTOFF = INTERVAL '1' WEEK", 1),
-		strings.Replace(base, "OPTIONS", "WHERE RECORD_TIMESTAMP '>=' NOW() OPTIONS", 1),
-		strings.Replace(base, "OPTIONS", "WHERE RECORD_TIMESTAMP '<' NOW() OPTIONS", 1),
+		base + " WHERE RECORD_TIMESTAMP '>=' NOW()",
+		base + " WHERE RECORD_TIMESTAMP '<' NOW()",
 	}
 	for _, input := range cases {
 
@@ -47,7 +47,7 @@ func TestInvalidStatements(t *testing.T) {
 }
 
 func FuzzParse(f *testing.F) {
-	for _, seed := range []string{"", "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') OPTIONS(GROUP=ONE_OFF)", "/*", "'", "NOW()", "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') OPTIONS(GROUP=ONE_OFF,WORKER_STOP_AFTER_RECORDS=5)"} {
+	for _, seed := range []string{"", "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a')", "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' WHERE RECORD_TIMESTAMP < NOW()", "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') WITH (GROUP=ONE_OFF) ", "/*", "'", "NOW()", "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') OPTIONS (WORKER_STOP_AFTER_RECORDS=5)"} {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, input string) {

@@ -35,7 +35,7 @@ func TestTimeBoundariesOutOfOrderAndTriggerReplay(t *testing.T) {
 	}{{"halfopen", fmt.Sprintf("RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s'", lo.Format(time.RFC3339Nano), hi.Format(time.RFC3339Nano)), []string{"1", "2", "3"}}, {"between", fmt.Sprintf("RECORD_TIMESTAMP BETWEEN TIMESTAMP '%s' AND TIMESTAMP '%s'", lo.Format(time.RFC3339Nano), hi.Format(time.RFC3339Nano)), []string{"1", "2", "3", "4"}}} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "out.avro")
-			statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WHERE %s OPTIONS(GROUP='%s-%s',CUTOFF=INTERVAL '0' SECOND)", path, src, test.filter, src, test.name)
+			statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s-%s', CUTOFF=INTERVAL '0' SECOND) WHERE %s ", path, src, src, test.name, test.filter)
 
 			// When
 			execute(t, statement, cfg)
@@ -63,7 +63,7 @@ func TestForeignProgressAndSelfCopyFailBeforeJoining(t *testing.T) {
 	if err != nil || result.Error() != nil {
 		t.Fatal("fixture offsets", err)
 	}
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", broker(t), dst, src, group)
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", broker(t), dst, src, group)
 	var out bytes.Buffer
 
 	// When
@@ -76,7 +76,7 @@ func TestForeignProgressAndSelfCopyFailBeforeJoining(t *testing.T) {
 	require.NoError(t, description.Error())
 	require.Contains(t, description, group)
 	require.Len(t, description[group].Members, 0, "foreign group joined before validation")
-	statement = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s-self',START=EARLIEST)", broker(t), src, src, src)
+	statement = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s-self', START=EARLIEST) ", broker(t), src, src, src)
 	if code := app.Execute(ctx, []string{"run", "-e", statement}, nil, io.Discard, &out); code != 2 {
 		t.Fatal("Kafka self-copy permitted")
 	}
@@ -94,7 +94,7 @@ func TestExpiredAndAboveEndCommits(t *testing.T) {
 	cfg := configuration(t)
 	path := filepath.Join(t.TempDir(), "out.avro")
 	group := src + "-expired"
-	statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s',CUTOFF=INTERVAL '0' SECOND)", path, src, stamp.Add(-time.Millisecond).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano), group)
+	statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' ", path, src, group, stamp.Add(-time.Millisecond).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano))
 
 	// When
 	execute(t, statement, cfg)

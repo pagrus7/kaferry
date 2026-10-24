@@ -15,6 +15,9 @@ type Clock interface{ Now() time.Time }
 type Query struct {
 	Group, Fingerprint string
 	Window             plan.WindowSpec
+	// PartitionCount bounds original IDs when replay requires an existing layout.
+	// Zero leaves IDs unrestricted; the constraint is not persisted.
+	PartitionCount int
 }
 type Item struct {
 	Position, Next int64
@@ -70,6 +73,9 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 		if err = s.saved.validate(); err != nil {
 			return nil, err
 		}
+		if err = query.validatePartitions(s.saved.Files); err != nil {
+			return nil, err
+		}
 		if err = store.Save(s.saved.clone()); err != nil {
 			return nil, err
 		}
@@ -82,6 +88,9 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 			return nil, errors.New("replay checkpoint query identity mismatch")
 		}
 		if err = query.Window.ValidateStored(s.saved.Window, 0); err != nil {
+			return nil, err
+		}
+		if err = query.validatePartitions(s.saved.Files); err != nil {
 			return nil, err
 		}
 		if !s.saved.Complete {
@@ -101,6 +110,18 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 		}
 	}
 	return s, nil
+}
+
+func (q Query) validatePartitions(files []Progress) error {
+	if q.PartitionCount == 0 {
+		return nil
+	}
+	for _, file := range files {
+		if err := plan.CheckPartition(file.File.Identity.Source.Partition, q.PartitionCount); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Session) Next() (item Item, err error) {

@@ -25,7 +25,7 @@ type filePreviewFixture struct{ query, config, directory, destination string }
 func TestExplainShowsPerInvocationLimit(t *testing.T) {
 	// Given a limited file copy with no output or checkpoint.
 	fixture := filePreview(t)
-	query := strings.Replace(fixture.query, "OPTIONS(", "OPTIONS(WORKER_STOP_AFTER_RECORDS=5,", 1)
+	query := strings.TrimSuffix(strings.TrimSpace(fixture.query), ";") + " OPTIONS(WORKER_STOP_AFTER_RECORDS=5)"
 	for _, asJSON := range []bool{false, true} {
 		args := []string{"explain", "-e", query, "-c", fixture.config}
 		if asJSON {
@@ -54,15 +54,16 @@ func filePreview(t *testing.T) filePreviewFixture {
 	source, destination, config := filepath.Join(dir, "source.avro"), filepath.Join(dir, "out.avro"), filepath.Join(dir, "config.toml")
 	require.NoError(t, os.Mkdir(source, 0700))
 	require.NoError(t, os.WriteFile(config, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir = %q\n", dir)), 0600))
-	query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') OPTIONS(GROUP='preview')", destination, source)
+	query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='preview') ", destination, source)
 	return filePreviewFixture{query: query, config: config, directory: dir, destination: destination}
 }
 
 func TestExplainCLIInputFormsLeaveFilesUnchanged(t *testing.T) {
 	for _, form := range []string{"inline", "file", "stdin"} {
 		t.Run(form, func(t *testing.T) {
-			// Given a valid file query with no output, checkpoint or locks.
+			// Given bare file-copy SQL with no output, checkpoint or locks.
 			fixture := filePreview(t)
+			fixture.query = strings.Replace(fixture.query, " WITH (GROUP='preview')", "", 1)
 			args := []string{"explain", "-c", fixture.config, "--json"}
 			var input io.Reader
 			switch form {
@@ -86,6 +87,8 @@ func TestExplainCLIInputFormsLeaveFilesUnchanged(t *testing.T) {
 			require.Zero(t, code)
 			require.Zero(t, stderr.Len())
 			require.EqualValues(t, 1, report.Version)
+			require.True(t, report.OneOff)
+			require.Equal(t, "ONE_OFF", report.Group, "preview must not generate a run's group")
 			require.NotNil(t, report.Source.File.PositionRecords)
 			require.False(t, report.Destination.File.Exists)
 			after, err := os.ReadDir(fixture.directory)
@@ -136,7 +139,7 @@ func TestExplainCLIReportsInputAndIdentityErrorsWithoutPartialOutput(t *testing.
 			case "self-copy":
 				fixture.query = strings.Replace(fixture.query, fixture.destination, source, 1)
 			case "empty resolved window":
-				fixture.query = strings.Replace(fixture.query, " OPTIONS(", " WHERE RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP < TIMESTAMP '2000-01-01T00:00:00Z' OPTIONS(", 1)
+				fixture.query = strings.TrimSuffix(strings.TrimSpace(fixture.query), ";") + " WHERE RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP < TIMESTAMP '2000-01-01T00:00:00Z'"
 			}
 			var stdout, stderr bytes.Buffer
 			// When explaining, then errors preserve their exit class and never print a partial report.
@@ -186,7 +189,7 @@ func TestExplainUsesOnlyReadOnlyKafkaRequests(t *testing.T) {
 			} else if output == "SELF-COPY" {
 				destination = "TOPIC 'input'"
 			}
-			query := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='secret_SENTINEL_415') INSERT INTO %s SELECT * FROM TOPIC 'input' WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='preview',CUTOFF=INTERVAL '0' SECOND,ON_ERROR=SKIP)", strings.Join(cluster.ListenAddrs(), ","), destination, stamp.Format(time.RFC3339Nano), stamp.Add(time.Minute).Format(time.RFC3339Nano))
+			query := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='secret_SENTINEL_415') INSERT INTO %s SELECT * FROM TOPIC 'input' WITH (GROUP='preview', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS (ON_ERROR=SKIP)", strings.Join(cluster.ListenAddrs(), ","), destination, stamp.Format(time.RFC3339Nano), stamp.Add(time.Minute).Format(time.RFC3339Nano))
 			var stdout, stderr bytes.Buffer
 			// When the full Fx-composed command explains the copy.
 			code := Execute(ctx, []string{"explain", "-e", query, "--json"}, nil, &stdout, &stderr)

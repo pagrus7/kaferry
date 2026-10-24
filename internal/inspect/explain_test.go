@@ -126,7 +126,7 @@ func (f *filesMock) Destination(string) (archiveio.ArchiveInspection, error) {
 }
 
 func fixture() (*Service, plan.Plan, *factoryMock, *filesMock) {
-	p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC", Name: "input"}, Destination: plan.Endpoint{Kind: "TOPIC", Name: "output"}, Group: "g", Policies: plan.Policies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}, Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 100}, Upper: &plan.Expression{LiteralMS: 1000}}, CutoffMS: 20}
+	p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC", Name: "input"}, Destination: plan.Endpoint{Kind: "TOPIC", Name: "output", Partitioning: plan.Key}, Group: "g", Policies: plan.Policies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}, Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 100}, Upper: &plan.Expression{LiteralMS: 1000}}, CutoffMS: 20}
 	topic := func(name string) *topicMock {
 		return &topicMock{info: kafkaport.TopicDescription{ClusterID: "cluster", TopicID: name, Partitions: []int32{1, 0}, TimestampType: "CreateTime"}, positions: map[int32]int64{}, metadata: map[int32]kafkaport.Progress{}, low: map[int32]int64{0: 0, 1: 0}, high: map[int32]int64{0: 10, 1: 11}, stable: map[int32]int64{0: 9, 1: 10}, failure: errors.New("injected"), times: func(queries map[int32]int64) map[int32]int64 {
 			found := make(map[int32]int64)
@@ -392,4 +392,32 @@ func TestFreshTimeWindowWarnsWhenEarlierOffsetsAreNotRetained(t *testing.T) {
 	require.False(t, report.Partitions[0].Saved)
 	require.Len(t, report.Warnings, 1)
 	require.Contains(t, report.Warnings[0], "start of the requested window may be unavailable")
+}
+
+func TestExplainChecksEverySourcePartitionForPreservedRouting(t *testing.T) {
+	// Given a time-filtered topic with partition 1 absent from the destination.
+	service, p, factory, _ := fixture()
+	p.Destination.Partitioning = plan.Preserve
+	factory.connections["output"].info.Partitions = []int32{0}
+	// When explaining, then reject missing IDs even though the filter could exclude their records.
+	_, err := service.Explain(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
+	require.ErrorContains(t, err, "original partition 1")
+	require.EqualValues(t, 1, factory.connections["input"].closed)
+	require.EqualValues(t, 1, factory.connections["output"].closed)
+}
+
+func TestExplainUsesArchiveProvenanceAndReportsDestinationRouting(t *testing.T) {
+	// Given a fixed archive selection originally captured from partition 5.
+	service, p, factory, files := fixture()
+	p.Source.Kind = "FILE"
+	p.Source.Format = "avro"
+	p.Destination.Partitioning = plan.Preserve
+	files.source.Partitions = []int32{0, 5}
+	_, err := service.Explain(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
+	require.ErrorContains(t, err, "original partition 5")
+	// When expanded, then preview succeeds and identifies preserved routing only on the sink.
+	factory.connections["output"].info.Partitions = []int32{0, 1, 2, 3, 4, 5}
+	report := preview(t, service, p)
+	require.Equal(t, plan.Preserve, report.Destination.Partitioning)
+	require.Empty(t, report.Source.Partitioning)
 }

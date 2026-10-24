@@ -2,11 +2,12 @@
 package sql
 
 type Endpoint struct {
-	Position Position `json:"-"`
-	Kind     string   // TOPIC or FILE
-	Name     string
-	Format   string
-	Options  []Option
+	Position        Position `json:"-"`
+	OptionsPosition Position `json:"-"`
+	Kind            string   // TOPIC or FILE
+	Name            string
+	Format          string
+	Options         []Option
 }
 
 type Property struct {

@@ -33,7 +33,7 @@ func TestCopyDestinationAcceptableRecordAboveProducerDefault(t *testing.T) {
 	payload := bytes.Repeat([]byte{0, 255}, 505000)
 	headers := []kgo.RecordHeader{{Key: "duplicate", Value: nil}, {Key: "duplicate", Value: []byte{}}}
 	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Key: []byte("large"), Value: payload, Headers: headers, Timestamp: stamp})
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS(GROUP='%s-large',CUTOFF=INTERVAL '0' SECOND)", dst, src, stamp.Add(time.Second).Format(time.RFC3339Nano), src)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s-large', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", dst, src, src, stamp.Add(time.Second).Format(time.RFC3339Nano))
 
 	// When copying with no explicit producer size setting.
 	execute(t, statement, configuration(t))
@@ -60,7 +60,7 @@ func TestLegacyTimestampLimitSkipsOnlyRejectedRecord(t *testing.T) {
 		records = append(records, core.Record{Key: []byte("same"), Value: []byte(fmt.Sprint(i)), TimestampMS: &ts, TimestampType: "create_time"})
 	}
 	writeArchiveRecords(t, path, records)
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM FILE avro('%s') OPTIONS(GROUP='%s-legacy',ON_REJECTED_TIMESTAMP=SKIP)", dst, path, dst)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM FILE avro('%s') WITH (GROUP='%s-legacy') OPTIONS (ON_REJECTED_TIMESTAMP=SKIP)", dst, path, dst)
 
 	// When restoring mixed valid and rejected timestamps into a producer batch.
 	execute(t, statement, configuration(t))
@@ -102,7 +102,7 @@ func probeSource(t *testing.T, name, group string) *adapter.Source {
 }
 func probeSourceProgress(t *testing.T, name, group string) (*adapter.Source, core.ProgressStore) {
 	t.Helper()
-	statement, err := sql.NewParser().Parse(fmt.Sprintf("INSERT INTO TOPIC 'unused' SELECT * FROM TOPIC '%s' OPTIONS(GROUP='%s',START=EARLIEST)", name, group))
+	statement, err := sql.NewParser().Parse(fmt.Sprintf("INSERT INTO TOPIC 'unused' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", name, group))
 	require.NoError(t, err)
 	p, err := plan.NewPlanner(nil).Build(statement, plan.Profiles{"default": {"bootstrap.servers": broker(t)}})
 	require.NoError(t, err)
@@ -115,7 +115,7 @@ func probeSourceProgress(t *testing.T, name, group string) (*adapter.Source, cor
 	if _, err = connection.ClusterID(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	input, store, err := connection.Source(context.Background(), p, "pause-probe", config.Defaults(t.TempDir()).Worker)
+	input, store, err := connection.Source(context.Background(), p, "pause-probe", config.Defaults(t.TempDir()).Worker, nil)
 	require.NoError(t, err)
 	source := input.(*adapter.Source)
 	t.Cleanup(func() { _ = source.Close() })

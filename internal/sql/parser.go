@@ -125,25 +125,30 @@ func (p *parser) statement() Statement {
 	p.expect("INSERT")
 	p.expect("INTO")
 	s.Destination = p.endpoint()
+	if p.is("WITH") {
+		s.Destination.OptionsPosition = p.current.Position
+		p.next()
+		s.Destination.Options = p.settings(DestinationSettings)
+	}
 	p.expect("SELECT")
 	p.expect("*")
 	p.expect("FROM")
 	s.Source = p.endpoint()
+	if p.is("WITH") {
+		s.Source.OptionsPosition = p.current.Position
+		p.next()
+		s.Source.Options = p.settings(SourceSettings)
+	}
 	if p.is("WHERE") {
 		s.WherePosition = p.current.Position
 		p.next()
 		s.Bounds = p.bounds()
 	}
-	s.OptionsPosition = p.current.Position
-	p.expect("OPTIONS")
-	p.expect("(")
-	for p.err == nil {
-		s.Options = append(s.Options, p.option())
-		if !p.take(",") {
-			break
-		}
+	if p.is("OPTIONS") {
+		s.OptionsPosition = p.current.Position
+		p.next()
+		s.Options = p.settings(CopySettings)
 	}
-	p.expect(")")
 	p.take(";")
 	if p.err == nil && p.current.kind != "end of input" {
 		p.want("end of input")
@@ -166,23 +171,6 @@ func (p *parser) endpoint() Endpoint {
 	position := p.current.Position
 	name := p.text("string")
 	e := Endpoint{Position: position, Kind: "FILE", Name: name, Format: "avro"}
-	for p.take(",") {
-		o := Option{Position: p.current.Position}
-		o.Name = p.oneOf("ROTATE_AFTER_SIZE", "ROTATE_AFTER_AGE")
-		p.expect("=")
-		o.ValuePosition = p.current.Position
-		if o.Name == "ROTATE_AFTER_AGE" {
-			i := p.interval()
-			o.Interval = &i
-		} else {
-			o.Value = p.text("integer")
-			if p.is("k") || p.is("m") || p.is("g") {
-				o.Value += strings.ToLower(p.current.text)
-				p.next()
-			}
-		}
-		e.Options = append(e.Options, o)
-	}
 	p.expect(")")
 	return e
 }
@@ -273,15 +261,33 @@ func (p *parser) interval() Interval {
 	return i
 }
 
-func (p *parser) option() Option {
+func (p *parser) settings(scope Scope) []Option {
+	p.expect("(")
+	var options []Option
+	for p.err == nil {
+		options = append(options, p.option(scope))
+		if !p.take(",") {
+			break
+		}
+	}
+	p.expect(")")
+	return options
+}
+
+func (p *parser) option(scope Scope) Option {
 	o := Option{Position: p.current.Position}
-	if o.Name = p.oneOf("GROUP", "START", "CUTOFF", "WORKER_STOP_AFTER_RECORDS", "ON_ERROR", "ON_MISSING_TIMESTAMP", "ON_REJECTED_TIMESTAMP"); o.Name == "" {
+	name := strings.ToUpper(p.current.text)
+	if actual := SettingScope(name); p.current.kind == "identifier" && actual != "" && actual != scope {
+		p.err = At(o.Position, CheckScope(name, scope))
+		return o
+	}
+	if o.Name = p.oneOf(scope.Names()...); o.Name == "" {
 		return o
 	}
 	p.expect("=")
 	o.ValuePosition = p.current.Position
 	switch o.Name {
-	case "CUTOFF":
+	case "CUTOFF", "ROTATE_AFTER_AGE":
 		i := p.interval()
 		o.Interval = &i
 	case "GROUP":
@@ -295,8 +301,14 @@ func (p *parser) option() Option {
 		}
 	case "START":
 		o.Value = p.oneOf("EARLIEST", "LATEST")
-	case "WORKER_STOP_AFTER_RECORDS":
+	case "PARTITIONING":
+		o.Value = p.oneOf("PRESERVE", "KEY")
+	case "WORKER_STOP_AFTER_RECORDS", "ROTATE_AFTER_SIZE":
 		o.Value = p.text("integer")
+		if o.Name == "ROTATE_AFTER_SIZE" && (p.is("k") || p.is("m") || p.is("g")) {
+			o.Value += strings.ToLower(p.current.text)
+			p.next()
+		}
 	default:
 		o.Value = p.oneOf("FAIL", "SKIP")
 	}

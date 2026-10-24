@@ -142,11 +142,15 @@ func read(t *testing.T, client *kgo.Client) *kgo.Record {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	fetches := client.PollRecords(ctx, 1)
-	require.Empty(t, fetches.Errors(), "read fixture record")
-	records := fetches.Records()
-	require.Len(t, records, 1, "expected a fixture record before timeout")
-	return records[0]
+	for {
+		fetches := client.PollRecords(ctx, 1)
+		require.Empty(t, fetches.Errors(), "read fixture record")
+		records := fetches.Records()
+		if len(records) > 0 {
+			return records[0]
+		}
+		require.NoError(t, ctx.Err(), "expected a fixture record before timeout")
+	}
 }
 
 func topicRecordCount(t *testing.T, a *kadm.Client, topic string, partitions int) int64 {
@@ -169,6 +173,31 @@ func deliveryReporter(ctx context.Context, results chan<- kgo.ProduceResult) fun
 		select {
 		case results <- kgo.ProduceResult{Record: record, Err: err}:
 		case <-ctx.Done():
+		}
+	}
+}
+
+func waitTopicCount(t *testing.T, a *kadm.Client, topic string, partitions int, count int64) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	for {
+		result, err := a.ListEndOffsets(ctx, topic)
+		total := int64(0)
+		if err == nil && len(result[topic]) == partitions {
+			for _, info := range result[topic] {
+				require.NoError(t, info.Err)
+				total += int64(info.Offset)
+			}
+			if total >= count {
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("destination did not catch up", total, count, err)
+		case <-time.After(20 * time.Millisecond):
 		}
 	}
 }

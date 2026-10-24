@@ -50,6 +50,7 @@ type sourceMetadataMock struct {
 	saved             map[int32]int64
 	progress          map[int32]kafkaport.Progress
 	err               error
+	savedReads        int
 }
 
 func (m *sourceMetadataMock) Offsets(_ context.Context, ids []int32, kind kafkaport.OffsetKind, committed bool) (map[int32]int64, error) {
@@ -70,6 +71,7 @@ func (m *sourceMetadataMock) OffsetsForTimes(context.Context, map[int32]int64) (
 	return map[int32]int64{0: 0}, m.err
 }
 func (m *sourceMetadataMock) Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {
+	m.savedReads++
 	return m.saved, m.progress, m.err
 }
 
@@ -223,5 +225,57 @@ func TestSourceDropsStaleRecordsAndRecognizesMissingTimestamps(t *testing.T) {
 	event, err = s.deliver(&kgo.Record{Partition: 0, Offset: 10, Timestamp: time.UnixMilli(-1)})
 	if err != nil || event.Input == nil || event.Input.Record.TimestampMS != nil || event.Input.Record.TimestampType != "unknown" {
 		t.Fatal("missing timestamp treated as an event time", event, err)
+	}
+}
+
+type routingMock struct {
+	calls int
+	ids   []int32
+	err   error
+}
+
+func (m *routingMock) ValidatePartitions(_ context.Context, ids []int32) error {
+	m.calls++
+	m.ids = append([]int32{}, ids...)
+	return m.err
+}
+
+func TestAssignmentRejectsNewMissingPartitionBeforeInitialCommit(t *testing.T) {
+	// Given a rebalance adding a partition absent from the destination.
+	s, client := sourceFixture(t)
+	failure := errors.New("destination has no partition 5")
+	routing := &routingMock{err: failure}
+	s.routing = routing
+	event := lifecycleEvent{ids: []int32{5}, answer: make(chan lifecycleAnswer, 1)}
+	// When processing the assignment, then the callback receives the failure before any initial commit or assignment.
+	require.ErrorIs(t, s.lifecycle(event), failure)
+	select {
+	case answer := <-event.answer:
+		require.ErrorIs(t, answer.err, failure)
+	case <-time.After(time.Second):
+		t.Fatal("assignment error was not returned to callback")
+	}
+	require.Equal(t, []int32{5}, routing.ids)
+	require.Nil(t, client.committed)
+	require.Zero(t, s.inspector.(*sourceMetadataMock).savedReads)
+	require.Empty(t, s.life.(*lifecycleMock).assignments)
+	require.NotContains(t, s.positions, int32(5))
+}
+
+func TestEmptyAssignmentDoesNotInspectDestination(t *testing.T) {
+	// Given a rebalance notification with no newly assigned partitions.
+	s, _ := sourceFixture(t)
+	routing := &routingMock{err: errors.New("destination unavailable")}
+	s.routing = routing
+	event := lifecycleEvent{answer: make(chan lifecycleAnswer, 1)}
+	// When processing it, then an idle worker needs no destination request and still receives its assignment result.
+	require.NoError(t, s.lifecycle(event))
+	require.Zero(t, routing.calls)
+	select {
+	case answer := <-event.answer:
+		require.NoError(t, answer.err)
+		require.Empty(t, answer.assignments)
+	case <-time.After(time.Second):
+		t.Fatal("empty assignment was not returned to callback")
 	}
 }

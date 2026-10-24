@@ -28,6 +28,7 @@ func TestFileWorkerStopResumeAndSavedStatus(t *testing.T) {
 		steps       []step
 	}{
 		{"named group", "'preview'", resume},
+		{"default group resumed by saved name", "", resume},
 		{"one-off resumed by logged group", "ONE_OFF", resume},
 		{"one-off reaches EOF before cap", "ONE_OFF", []step{{10, 5, "eof"}}},
 	} {
@@ -41,8 +42,11 @@ func TestFileWorkerStopResumeAndSavedStatus(t *testing.T) {
 			}
 			writeArchiveRecords(t, source, records)
 			query := strings.Replace(fixture.query, "'preview'", scenario.group, 1)
+			if scenario.group == "" {
+				query = strings.Replace(fixture.query, " WITH (GROUP='preview')", "", 1)
+			}
 			for _, step := range scenario.steps {
-				limited := strings.Replace(query, "OPTIONS(", fmt.Sprintf("OPTIONS(WORKER_STOP_AFTER_RECORDS=%d,", step.stopAfter), 1)
+				limited := strings.TrimSuffix(strings.TrimSpace(query), ";") + fmt.Sprintf(" OPTIONS(WORKER_STOP_AFTER_RECORDS=%d)", step.stopAfter)
 				var diagnostics bytes.Buffer
 				// When running or resuming with a fresh cap, possibly a different one.
 				code := Execute(t.Context(), []string{"run", "-e", limited, "-c", fixture.config}, nil, io.Discard, &diagnostics)

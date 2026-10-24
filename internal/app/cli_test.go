@@ -79,7 +79,7 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 			cpdir := t.TempDir()
 			cfg := filepath.Join(dir, "config.toml")
 			require.NoError(t, os.WriteFile(cfg, []byte("[worker]\ncheckpoint_dir = '"+cpdir+"'\n"), 0600))
-			statement := "INSERT INTO FILE avro('" + dst + "') SELECT * FROM FILE avro('" + src + "') OPTIONS(GROUP=ONE_OFF)"
+			statement := "INSERT INTO FILE avro('" + dst + "') SELECT * FROM FILE avro('" + src + "')"
 			var out bytes.Buffer
 
 			inputPath := "-"
@@ -94,10 +94,14 @@ func TestFileCLIAndOneOffCleanup(t *testing.T) {
 
 			// Then
 			require.Zero(t, executeCode)
+			copied := archiveRecords(t, dst)
+			require.Len(t, copied, 1)
+			require.Equal(t, []byte{}, copied[0].Key, "empty keys must survive the default copy")
+			require.Nil(t, copied[0].Value, "null values must survive the default copy")
 			files, err := filepath.Glob(filepath.Join(cpdir, "*.json"))
 			require.NoError(t, err)
 			require.Len(t, files, 0)
-			statement = "INSERT INTO FILE avro('" + src + "') SELECT * FROM FILE avro('" + src + "') OPTIONS(GROUP='self')"
+			statement = "INSERT INTO FILE avro('" + src + "') SELECT * FROM FILE avro('" + src + "') WITH(GROUP='self')"
 			require.EqualValues(t, 2, Execute(context.Background(), []string{"run", "-e", statement, "-c", cfg}, nil, io.Discard, &out))
 		})
 	}
@@ -109,7 +113,7 @@ func TestCLIMissingHomeReportsConfigurationErrors(t *testing.T) {
 			t.Run(command+"/"+map[bool]string{false: "default directory", true: "missing configuration"}[configured], func(t *testing.T) {
 				// Given a valid file-copy statement and no home directory.
 				t.Setenv("HOME", "")
-				statement := "INSERT INTO FILE avro('/unused-output.avro') SELECT * FROM FILE avro('/unused-source.avro') OPTIONS(GROUP='restore')"
+				statement := "INSERT INTO FILE avro('/unused-output.avro') SELECT * FROM FILE avro('/unused-source.avro') WITH (GROUP='restore') "
 				args := []string{command, "--sql", statement}
 				want := "set HOME or worker.checkpoint_dir"
 				if configured {
@@ -160,12 +164,12 @@ func TestCLISQLDiagnosticsIdentifyInputWithoutCreatingOutput(t *testing.T) {
 			t.Setenv("HOME", "")
 			dir := t.TempDir()
 			destination := filepath.Join(dir, "output.avro")
-			query := "INSERT INTO FILE avro('" + destination + "')\nSELECT 'sensitive_SENTINEL_5c27' FROM FILE avro('missing.avro')\nOPTIONS(GROUP='g')"
+			query := "INSERT INTO FILE avro('" + destination + "')\nSELECT 'sensitive_SENTINEL_5c27' FROM FILE avro('missing.avro')\nWITH(GROUP='g')"
 			want := "line 2, column 8: expected \"*\"; found string literal"
 			if input == "file validation" {
 				query = strings.Replace(query, "'sensitive_SENTINEL_5c27'", "*", 1)
-				query = strings.Replace(query, "GROUP='g'", "ON_ERROR=SKIP", 1)
-				want = "line 3, column 1: GROUP is required; add GROUP = 'name' or GROUP = ONE_OFF to OPTIONS"
+				query = strings.Replace(query, "GROUP='g'", "START=EARLIEST", 1)
+				want = "line 3, column 6: START requires a topic source; remove START for FILE sources"
 			}
 			config := filepath.Join(dir, "config.toml")
 			require.NoError(t, os.WriteFile(config, []byte("[worker]\ncheckpoint_dir = '"+dir+"'\n"), 0600))

@@ -30,14 +30,14 @@ func TestMissingTimestampSkipAndResumeWithDifferentPolicy(t *testing.T) {
 	writeArchiveRecords(t, src, records)
 	cfg := filepath.Join(dir, "config.toml")
 	require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir = %q\n", dir)), 0600))
-	prefix := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' ", dst, src, stamp.Add(-time.Second).Format(time.RFC3339Nano))
+	prefix := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH(GROUP='missing') WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' ", dst, src, stamp.Add(-time.Second).Format(time.RFC3339Nano))
 	var output bytes.Buffer
 
 	// When copying with the default policy, then the missing timestamp fails the run.
-	require.EqualValues(t, 1, Execute(t.Context(), []string{"run", "-e", prefix + "OPTIONS(GROUP='missing')", "-c", cfg}, nil, io.Discard, &output))
+	require.EqualValues(t, 1, Execute(t.Context(), []string{"run", "-e", prefix, "-c", cfg}, nil, io.Discard, &output))
 	output.Reset()
 	// When resuming the same group with SKIP, then copying succeeds.
-	require.Zero(t, Execute(t.Context(), []string{"run", "-e", prefix + "OPTIONS(GROUP='missing',ON_MISSING_TIMESTAMP=SKIP)", "-c", cfg}, nil, io.Discard, &output))
+	require.Zero(t, Execute(t.Context(), []string{"run", "-e", prefix + " OPTIONS(ON_MISSING_TIMESTAMP=SKIP)", "-c", cfg}, nil, io.Discard, &output))
 
 	// Then both valid records remain in order, without loss or duplication.
 	var values []string

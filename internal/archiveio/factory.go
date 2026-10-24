@@ -27,7 +27,7 @@ type Factory struct {
 func NewFactory(clock core.Clock, writer checkpoint.AtomicWriter, log *slog.Logger) *Factory {
 	return &Factory{clock: clock, writer: writer, log: log}
 }
-func (f *Factory) OpenSource(p plan.Plan, fp string, w config.Worker) (Input, error) {
+func (f *Factory) OpenSource(p plan.Plan, fp string, w config.Worker, partitionCount int) (Input, error) {
 	directory, err := checkpointDirectory(w)
 	if err != nil {
 		return nil, err
@@ -49,7 +49,7 @@ func (f *Factory) OpenSource(p plan.Plan, fp string, w config.Worker) (Input, er
 		_ = pool.Close()
 		return nil, &Conflict{Err: err}
 	}
-	session, err := replay.NewSession(replay.Query{Group: p.Group, Fingerprint: fp, Window: p.Window}, f.clock, journal, catalog, pool, w.RecordCap)
+	session, err := replay.NewSession(replay.Query{Group: p.Group, Fingerprint: fp, Window: p.Window, PartitionCount: partitionCount}, f.clock, journal, catalog, pool, w.RecordCap)
 	if err != nil {
 		return nil, &Conflict{Err: errors.Join(err, pool.Close(), journal.Close())}
 	}
