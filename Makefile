@@ -31,6 +31,7 @@ fast: check
 	$(GO) test -run '^$$' -tags=integration,load,fault,qualification,migration ./tests/compat
 	$(MAKE) build
 	python3 scripts/notices.py bin/kaferry bin/THIRD_PARTY_NOTICES.txt
+	python3 scripts/install_smoke.py
 	$(MAKE) smoke KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry
 smoke: $(TEST_BINARY_PREREQUISITE)
 	python3 scripts/ci.py smoke $(GO) test -count=1 -json -tags=integration,load -run '^TestLoadObservability$$/^round-0$$/^disabled$$' ./tests/compat
