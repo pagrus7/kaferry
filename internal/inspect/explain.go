@@ -46,6 +46,7 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 	}
 	defer closeConnection(source, stop, &result)
 	report.Source = sourceInfo
+	report.Source.PartitionFilter = p.Partitions
 	stop.Stage("inspecting destination metadata")
 	destination, destinationInfo, err := s.open(ctx, p.Destination, true, stop)
 	if err != nil {

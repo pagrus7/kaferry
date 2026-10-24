@@ -16,6 +16,13 @@ Completion, delivery and restart contracts. See the [usage guide](../docs/usage.
 - A partition without progress adopts the lowest-numbered partition's valid saved window. If none exists, its worker resolves `NOW()`. Concurrent workers may resolve different windows; use literal bounds for a consistent group-wide range.
 - Changed filters require a new `GROUP`. If all group offsets expire or a checkpoint is lost, the job starts fresh and resolves `NOW()` again. Kafka startup logs how many partitions have saved progress.
 
+## Source partitions
+
+- `WHERE PARTITION IN (0, 2)` selects fixed source IDs. `NOT IN` selects all others, including additions discovered while workers run. Omission selects all partitions. Each listed ID must exist at startup; lists are nonempty, sorted and deduplicated. Partition predicates require a topic source.
+- Kafka assigns only selected partitions through cooperative sticky balancing. Excluded partitions are never fetched or committed and do not count toward completion or destination layout checks. Saved metadata on all source partitions is still checked for query compatibility.
+- All workers in a group use the same predicate and query identity. Selected copies advertise a query-specific group protocol, without a fallback for older or differently configured members. Changing the predicate requires a new group.
+- Partition-only `WHERE` keeps the default EARLIEST/follow behavior; explicit `START = LATEST` is allowed without timestamp bounds. Empty assignments follow the existing worker idle rules; they do not establish group completion. Workers that exited do not discover additions.
+
 ## Kafka start positions
 
 Saved commits take precedence. Without a commit:
@@ -24,8 +31,8 @@ Saved commits take precedence. Without a commit:
 | --- | --- |
 | `WHERE` with positive lower bound | First offset returned by timestamp lookup for `lo` |
 | Non-positive lower bound or upper-only filter | Earliest retained offset |
-| No `WHERE`, group has no valid progress | Earliest retained offset by default; `START = LATEST` uses the stable end |
-| No `WHERE`, group already has valid progress | Earliest retained offset for the uncommitted partition |
+| No timestamp bounds, group has no valid progress | Earliest retained offset by default; `START = LATEST` uses the stable end |
+| No timestamp bounds, group already has valid progress | Earliest retained offset for the uncommitted partition |
 
 `LATEST` and a timestamp lookup with no match use the read-committed end (last stable offset, LSO), so records in open transactions remain eligible. Initial positions are committed before copying. Every partition is positioned explicitly; automatic offset reset is disabled. Out-of-range positions follow the rules below.
 
@@ -89,7 +96,7 @@ Resume requires matching query and endpoint identity:
 
 | Included in query fingerprint | Excluded |
 | --- | --- |
-| Endpoint kinds and archive formats; Kafka cluster IDs and topics; normalized `WHERE` expressions; `CUTOFF`; Kafka output partitioning mode | Connection aliases/properties, file paths/IDs, `GROUP`, `START`, `WORKER_STOP_AFTER_RECORDS`, error policies and tuning |
+| Endpoint kinds and archive formats; Kafka cluster IDs and topics; normalized timestamp and partition predicates; `CUTOFF`; Kafka output partitioning mode | Connection aliases/properties, file paths/IDs, `GROUP`, `START`, `WORKER_STOP_AFTER_RECORDS`, error policies and tuning |
 
 Policies can therefore change to SKIP when resuming a failed record. Changing partitioning mode requires a new group. `NOW()` bounds are fingerprinted as expressions; resolved windows are stored separately.
 
@@ -116,14 +123,14 @@ The initial assignment commit clears the previous stop. A later commit includes 
 ## Kafka output
 
 - One asynchronous idempotent producer per worker, with delivery reports and client batching.
-- Default `PARTITIONING = PRESERVE`: write original partition N to destination partition N, keeping original key bytes, including nulls. Check all input partition IDs before output; Kafka assignments recheck the destination. Avro uses the fixed selection's original IDs, never its replay cursor. This includes partitions whose records the filter excludes. Destination counts may be larger; missing IDs fail under every policy. Topics must exist.
+- Default `PARTITIONING = PRESERVE`: write original partition N to destination partition N, keeping original key bytes, including nulls. Check all selected input partition IDs before output; Kafka assignments recheck the destination. Avro uses the fixed selection's original IDs, never its replay cursor. This includes selected partitions whose records the timestamp filter excludes. Destination counts may be larger; missing IDs fail under every policy. Topics must exist.
 - `WITH (PARTITIONING = KEY)` on the destination selects Java-compatible Murmur2 key routing; null keys use sticky routing. Equal non-null keys stay together with a stable partitioner/count. Preserved placement can differ from other destination producers' key routing. Destination partition-count changes are logged. Source offsets are never copied; destination offsets are new.
 - Layout checks are not atomic with publishing. Topic recreation or partition changes during a copy can fail after partial output; missing partitions never fall back to key routing.
 - Submission order is preserved for records from one source partition routed to one destination partition during an uninterrupted producer session with stable routing. With `KEY`, null keys can spread. Replay and rebalances can duplicate and reorder output; there is no cross-partition order guarantee.
 - Client delivery retries default to `worker.delivery_timeout` (60 s). Connection `message.timeout.ms` / `delivery.timeout.ms` overrides it; values must be positive and conflicting aliases fail. Deadlines start at submission, independently of record timestamps. Exhausted delivery fails the run.
 - Queue-full refusal pauses reading and retries the same record first, up to `worker.delivery_timeout`. Accepted records are not submitted again within that assignment.
 - Optional destination configuration supports size/timestamp preflight; denial logs a warning. [Checks and fallbacks](client-compatibility.md#optional-destination-configuration). Preflight cannot guarantee broker acceptance: clocks, settings, framing and compression may differ.
-- The destination determines timestamp type. Known LogAppendTime restamps records. Otherwise timestamps outside ±9,223,372,036,854 Unix milliseconds cannot be published; apply the timestamp policy. Zero and negative timestamps are supported; Kafka uses −1 for a missing timestamp. [Source decoding limit](client-compatibility.md#known-issues). A missing timestamp without `WHERE` gets producer time, counted and warned about.
+- The destination determines timestamp type. Known LogAppendTime restamps records. Otherwise timestamps outside ±9,223,372,036,854 Unix milliseconds cannot be published; apply the timestamp policy. Zero and negative timestamps are supported; Kafka uses −1 for a missing timestamp. [Source decoding limit](client-compatibility.md#known-issues). A missing timestamp without timestamp bounds gets producer time, counted and warned about.
 - Destination retention is not checked; old CreateTime records may be deleted soon after copying.
 - Async delivery errors fail under every policy. A rejected batch does not identify the offending record, so SKIP cannot isolate it. No batch splitting or error-string parsing is attempted. Outcomes after revocation are discarded.
 
@@ -142,7 +149,7 @@ Default FAIL. Choose `ON_ERROR` or the specific timestamp policies; they are mut
 
 | Skippable failure | Policy |
 | --- | --- |
-| Missing timestamp required by `WHERE` | `ON_MISSING_TIMESTAMP` or `ON_ERROR` |
+| Missing timestamp required by timestamp bounds in `WHERE` | `ON_MISSING_TIMESTAMP` or `ON_ERROR` |
 | Timestamp outside known destination bounds or client range | `ON_REJECTED_TIMESTAMP` or `ON_ERROR` |
 | Synchronous size refusal or supported record validation failure | `ON_ERROR` |
 
@@ -176,6 +183,7 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 | `record_errors` | Effective `FAIL`/`SKIP` policies: `missing_timestamp`, `rejected_timestamp`, `other_record`; SKIP applies before writing, not to delivery failures |
 | `source`, `destination` | `kind`, `name`, optional connection alias, cluster/topic IDs, partition count, destination timestamp type and `partitioning` (`PRESERVE` or `KEY` for a Kafka destination) |
 | Endpoint `file` | `exists`; source adds `size_bytes`, `file_count`, `position_records`, `window`, `window_origin`, `checkpoint`, `checkpoint_exists`. Destination `size_bytes` is zero; destination size and file count are not inspected |
+| `source.partition_filter` | Optional `{exclude, ids}` predicate; `exclude=true` means NOT IN, so added partitions are eligible |
 | `partitions` | Sorted `partition`, `start`, `log_start`, `log_end`, `saved`, `window`, `window_origin` |
 | `window` | Inclusive `lower`, exclusive `upper`; null means unbounded. `window_origin`: `literal`, `saved`, `adopted` or `resolved` for preview-only NOW |
 | `warnings` | Detected retention gaps and unavailable/changed destination timestamp behavior; may be empty |
@@ -184,9 +192,9 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 
 `kaferry status` accepts the same query and configuration as `run`; a named `GROUP` is required. It reads saved progress without joining, consuming, producing, committing, creating files or taking locks. It needs no permissions beyond existing source/group DESCRIBE and endpoint metadata access. `ONE_OFF` requires the actual logged group name; a deleted file checkpoint has no saved status.
 
-Verdicts: invalid/incompatible progress → `unknown`; incompatible active members → `unknown`; active members, unsettled group state or changed membership → `running`; no saved progress → `unknown`; any current partition without a saved stop → `incomplete`; otherwise → `stopped`. Added partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. New archive files do not expand a saved replay selection. Status reports `unknown` (5) when a checkpoint or saved selection cannot be validated; other operational read failures exit 1 without a verdict.
+Verdicts: invalid/incompatible progress → `unknown`; incompatible active members → `unknown`; active members, unsettled group state or changed membership → `running`; no saved progress → `unknown`; any current partition without a saved stop → `incomplete`; otherwise → `stopped`. Added eligible partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. New archive files do not expand a saved replay selection. Status reports `unknown` (5) when a checkpoint or saved selection cannot be validated; other operational read failures exit 1 without a verdict.
 
-`stopped` means every current partition has a saved stop reason. More source records may remain; the time cutoff can miss records within the range. Workers remain independent: they never wait for other workers' stops.
+`stopped` means every currently selected partition has a saved stop reason. More source records may remain; the time cutoff can miss records within the range. Workers remain independent: they never wait for other workers' stops.
 
 Text lists up to eight partitions; `--json` includes all. JSON version `1` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `stop`, `window`). Kafka positions are offsets; file positions count confirmed input records. File `size_bytes` and `file_count` describe the saved selection, or current completed files before the first run. Inspection checks selected headers and sizes for incomplete groups, not payload checksums. Status does not scan records or verify destination writes.
 

@@ -60,7 +60,19 @@ type Statement struct {
 	Source          Endpoint
 	Destination     Endpoint
 	Bounds          []Bound
+	Partitions      *PartitionFilter
 	Options         []Option
+}
+
+type PartitionID struct {
+	Position Position `json:"-"`
+	Value    string
+}
+
+type PartitionFilter struct {
+	Position Position `json:"-"`
+	Exclude  bool
+	IDs      []PartitionID
 }
 
 type Parser interface {

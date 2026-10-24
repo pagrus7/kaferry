@@ -249,3 +249,28 @@ func TestTextExplanationStatesPreservedRoutingByDefault(t *testing.T) {
 	require.Contains(t, output, "Routing: preserve original partition numbers; missing partitions fail.")
 	require.NotContains(t, output, "destination key partitioner")
 }
+
+func TestExplanationStatesPartitionScopeAndBoundsOnlyTheTextList(t *testing.T) {
+	for _, tc := range []struct {
+		filter *plan.PartitionFilter
+		text   string
+		more   bool
+	}{
+		{&plan.PartitionFilter{IDs: []int32{0, 2}}, "PARTITION IN [0 2]. Added partitions are excluded.", false},
+		{&plan.PartitionFilter{Exclude: true, IDs: []int32{0, 2}}, "PARTITION NOT IN [0 2]. Added partitions are eligible while workers run.", false},
+		{&plan.PartitionFilter{Exclude: true, IDs: []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}}, "PARTITION NOT IN [0 1 2 3 4 5 6 7]. Added partitions are eligible while workers run.", true},
+	} {
+		// Given a source predicate whose full list must remain available in JSON.
+		report := explanationFixture()
+		report.Source.PartitionFilter = tc.filter
+		// When rendering, then text explains future additions and limits only its displayed IDs.
+		text := textExplanation(t, report)
+		require.Contains(t, text, "Source selection: "+tc.text)
+		require.Equal(t, tc.more, strings.Contains(text, "2 more listed IDs; see --json."))
+		var raw bytes.Buffer
+		require.NoError(t, renderExplanation(&raw, report, true))
+		var decoded inspect.Report
+		require.NoError(t, json.Unmarshal(raw.Bytes(), &decoded))
+		require.Equal(t, tc.filter, decoded.Source.PartitionFilter)
+	}
+}

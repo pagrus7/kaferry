@@ -51,13 +51,13 @@ func TestGroupInspectionAllowsCompatibleWorkersAndRejectsConflicts(t *testing.T)
 					return nil, tc.failure
 				}
 				return &kmsg.DescribeGroupsResponse{Groups: []kmsg.DescribeGroupsResponseGroup{{
-					Group: "group", ErrorCode: tc.code,
+					Group: "group", Protocol: "cooperative-sticky", ErrorCode: tc.code,
 					Members: tc.members,
 				}}}, nil
 			}}
 			inspector := &Inspector{codec: commitmeta.NewCodec(), client: client, topic: "input"}
 			// When deciding whether this query may join the group.
-			err := inspector.CheckMembers(t.Context(), "group")
+			err := inspector.CheckMembers(t.Context(), "group", "cooperative-sticky")
 			// Then only an absent group or compatible members pass; inspection failures remain errors.
 			var conflict *kafkaport.Conflict
 			if tc.conflict {
@@ -155,17 +155,46 @@ func TestMembershipObservesActivityAndCompatibility(t *testing.T) {
 				if req := r.(*kmsg.DescribeGroupsRequest); !reflect.DeepEqual(req.Groups, []string{"group"}) {
 					t.Fatal(req)
 				}
-				return &kmsg.DescribeGroupsResponse{Groups: []kmsg.DescribeGroupsResponseGroup{{Group: "group", State: tc.state, Members: members}}}, nil
+				return &kmsg.DescribeGroupsResponse{Groups: []kmsg.DescribeGroupsResponseGroup{{Group: "group", Protocol: "cooperative-sticky", State: tc.state, Members: members}}}, nil
 			}}
 			inspector := &Inspector{client: client, topic: "input"}
 			// When deriving an observation for the status service.
-			got, err := inspector.Membership(t.Context(), "group")
+			got, err := inspector.Membership(t.Context(), "group", "cooperative-sticky")
 			// Then active, foreign and unsettled empty groups cannot be mistaken for idle groups.
 			if err != nil || got.State != tc.state || got.Idle != tc.idle || got.Foreign != tc.foreign {
 				t.Fatal(got, err)
 			}
 		})
 	}
+}
+
+func TestGroupInspectionRejectsDifferentSelectionsEvenBeforeAssignment(t *testing.T) {
+	for _, actual := range []string{"cooperative-sticky", "kaferry-partitions-v1-other"} {
+		// Given a Kaferry worker waiting for assignment under another protocol.
+		client := &metadataMock{request: func(context.Context, kmsg.Request) (kmsg.Response, error) {
+			return &kmsg.DescribeGroupsResponse{Groups: []kmsg.DescribeGroupsResponseGroup{{Group: "group", State: "Stable", Protocol: actual, Members: []kmsg.DescribeGroupsResponseGroupMember{{ClientID: "kaferry-worker"}}}}}, nil
+		}}
+		i := &Inspector{client: client, topic: "input"}
+		// When checking run admission or status, then protocol mismatch is incompatible without needing assigned partitions.
+		require.ErrorContains(t, i.CheckMembers(t.Context(), "group", "kaferry-partitions-v1-expected"), "incompatible partition selection")
+		membership, err := i.Membership(t.Context(), "group", "kaferry-partitions-v1-expected")
+		require.NoError(t, err)
+		require.True(t, membership.Foreign)
+	}
+}
+
+func TestPreparingGroupCanAdmitWorkersBeforeItsProtocolIsElected(t *testing.T) {
+	// Given a new group with waiting Kaferry members and no elected protocol yet.
+	client := &metadataMock{request: func(context.Context, kmsg.Request) (kmsg.Response, error) {
+		return &kmsg.DescribeGroupsResponse{Groups: []kmsg.DescribeGroupsResponseGroup{{Group: "group", State: "PreparingRebalance", Members: []kmsg.DescribeGroupsResponseGroupMember{{ClientID: "kaferry-worker"}}}}}, nil
+	}}
+	i := &Inspector{client: client, topic: "input"}
+	// When inspecting, then defer protocol compatibility to the coordinator's fenced join and report activity.
+	require.NoError(t, i.CheckMembers(t.Context(), "group", "kaferry-partitions-v1-expected"))
+	m, err := i.Membership(t.Context(), "group", "kaferry-partitions-v1-expected")
+	require.NoError(t, err)
+	require.False(t, m.Foreign)
+	require.False(t, m.Idle)
 }
 
 func TestSavedOffsetsRejectFailedMetadataWithoutChangingCachedIdentity(t *testing.T) {

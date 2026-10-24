@@ -142,7 +142,7 @@ func (p *parser) statement() Statement {
 	if p.is("WHERE") {
 		s.WherePosition = p.current.Position
 		p.next()
-		s.Bounds = p.bounds()
+		p.predicates(&s)
 	}
 	if p.is("OPTIONS") {
 		s.OptionsPosition = p.current.Position
@@ -204,20 +204,45 @@ func (p *parser) connection() Connection {
 	return c
 }
 
+func (p *parser) predicates(s *Statement) {
+	for p.err == nil {
+		if p.is("PARTITION") {
+			position := p.current.Position
+			if s.Partitions != nil {
+				p.err = At(position, fmt.Errorf("PARTITION predicate repeats; specify it once%s", Related(s.Partitions.Position, "first declaration")))
+				return
+			}
+			p.next()
+			filter := &PartitionFilter{Position: position, Exclude: p.take("NOT")}
+			p.expect("IN")
+			p.expect("(")
+			for p.err == nil {
+				position := p.current.Position
+				filter.IDs = append(filter.IDs, PartitionID{Position: position, Value: p.text("integer")})
+				if !p.take(",") {
+					break
+				}
+			}
+			p.expect(")")
+			s.Partitions = filter
+		} else {
+			p.expect("RECORD_TIMESTAMP")
+			s.Bounds = append(s.Bounds, p.bounds()...)
+		}
+		if !p.take("AND") {
+			return
+		}
+	}
+}
+
 func (p *parser) bounds() []Bound {
-	p.expect("RECORD_TIMESTAMP")
 	if p.take("BETWEEN") {
 		lo := p.time()
 		p.expect("AND")
 		hi := p.time()
 		return []Bound{{Position: lo.Position, Operator: ">=", Time: lo}, {Position: hi.Position, Operator: "<=", Time: hi}}
 	}
-	bounds := []Bound{p.bound()}
-	if p.take("AND") {
-		p.expect("RECORD_TIMESTAMP")
-		bounds = append(bounds, p.bound())
-	}
-	return bounds
+	return []Bound{p.bound()}
 }
 
 func (p *parser) bound() Bound {

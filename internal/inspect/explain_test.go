@@ -57,11 +57,11 @@ func (m *topicMock) Describe(context.Context, bool) (kafkaport.TopicDescription,
 	info.Partitions = slices.Clone(info.Partitions)
 	return info, m.err("describe")
 }
-func (m *topicMock) CheckMembers(context.Context, string) error {
+func (m *topicMock) CheckMembers(context.Context, string, string) error {
 	m.memberChecks++
 	return m.err("members")
 }
-func (m *topicMock) Membership(context.Context, string) (kafkaport.Membership, error) {
+func (m *topicMock) Membership(context.Context, string, string) (kafkaport.Membership, error) {
 	m.observations = append(m.observations, "members")
 	observation := kafkaport.Membership{Idle: true}
 	if len(m.memberships) > 0 {
