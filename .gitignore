@@ -4,3 +4,4 @@ coverage.out
 design/debates/
 build-results/
 __pycache__/
+/release/
