@@ -46,7 +46,9 @@ func TestPartitionValidationIsLocatedAndRedacted(t *testing.T) {
 		require.NotContains(t, err.Error(), "2147483648")
 		require.NotContains(t, err.Error(), "private")
 		if strings.Contains(query, "2147483648") {
-			require.Equal(t, 21, diagnostic.Position.Column)
+			require.Equal(t, sql.Position{Line: 2, Column: 21}, diagnostic.Position)
+		} else {
+			require.Equal(t, sql.Position{Line: 2, Column: 7}, diagnostic.Position)
 		}
 	}
 }

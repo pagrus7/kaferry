@@ -31,8 +31,8 @@ Saved commits take precedence. Without a commit:
 | --- | --- |
 | `WHERE` with positive lower bound | First offset returned by timestamp lookup for `lo` |
 | Non-positive lower bound or upper-only filter | Earliest retained offset |
-| No `WHERE`, group has no valid progress | Earliest retained offset by default; `START = LATEST` uses the stable end |
-| No `WHERE`, group already has valid progress | Earliest retained offset for the uncommitted partition |
+| No timestamp bounds, group has no valid progress | Earliest retained offset by default; `START = LATEST` uses the stable end |
+| No timestamp bounds, group already has valid progress | Earliest retained offset for the uncommitted partition |
 
 `LATEST` and a timestamp lookup with no match use the read-committed end (last stable offset, LSO), so records in open transactions remain eligible. Initial positions are committed before copying. Every partition is positioned explicitly; automatic offset reset is disabled. Out-of-range positions follow the rules below.
 
@@ -123,14 +123,14 @@ The initial assignment commit clears the previous stop. A later commit includes 
 ## Kafka output
 
 - One asynchronous idempotent producer per worker, with delivery reports and client batching.
-- Default `PARTITIONING = PRESERVE`: write original partition N to destination partition N, keeping original key bytes, including nulls. Check all input partition IDs before output; Kafka assignments recheck the destination. Avro uses the fixed selection's original IDs, never its replay cursor. This includes partitions whose records the filter excludes. Destination counts may be larger; missing IDs fail under every policy. Topics must exist.
+- Default `PARTITIONING = PRESERVE`: write original partition N to destination partition N, keeping original key bytes, including nulls. Check all selected input partition IDs before output; Kafka assignments recheck the destination. Avro uses the fixed selection's original IDs, never its replay cursor. This includes selected partitions whose records the timestamp filter excludes. Destination counts may be larger; missing IDs fail under every policy. Topics must exist.
 - `WITH (PARTITIONING = KEY)` on the destination selects Java-compatible Murmur2 key routing; null keys use sticky routing. Equal non-null keys stay together with a stable partitioner/count. Preserved placement can differ from other destination producers' key routing. Destination partition-count changes are logged. Source offsets are never copied; destination offsets are new.
 - Layout checks are not atomic with publishing. Topic recreation or partition changes during a copy can fail after partial output; missing partitions never fall back to key routing.
 - Submission order is preserved for records from one source partition routed to one destination partition during an uninterrupted producer session with stable routing. With `KEY`, null keys can spread. Replay and rebalances can duplicate and reorder output; there is no cross-partition order guarantee.
 - Client delivery retries default to `worker.delivery_timeout` (60 s). Connection `message.timeout.ms` / `delivery.timeout.ms` overrides it; values must be positive and conflicting aliases fail. Deadlines start at submission, independently of record timestamps. Exhausted delivery fails the run.
 - Queue-full refusal pauses reading and retries the same record first, up to `worker.delivery_timeout`. Accepted records are not submitted again within that assignment.
 - Optional destination configuration supports size/timestamp preflight; denial logs a warning. [Checks and fallbacks](client-compatibility.md#optional-destination-configuration). Preflight cannot guarantee broker acceptance: clocks, settings, framing and compression may differ.
-- The destination determines timestamp type. Known LogAppendTime restamps records. Otherwise timestamps outside ±9,223,372,036,854 Unix milliseconds cannot be published; apply the timestamp policy. Zero and negative timestamps are supported; Kafka uses −1 for a missing timestamp. [Source decoding limit](client-compatibility.md#known-issues). A missing timestamp without `WHERE` gets producer time, counted and warned about.
+- The destination determines timestamp type. Known LogAppendTime restamps records. Otherwise timestamps outside ±9,223,372,036,854 Unix milliseconds cannot be published; apply the timestamp policy. Zero and negative timestamps are supported; Kafka uses −1 for a missing timestamp. [Source decoding limit](client-compatibility.md#known-issues). A missing timestamp without timestamp bounds gets producer time, counted and warned about.
 - Destination retention is not checked; old CreateTime records may be deleted soon after copying.
 - Async delivery errors fail under every policy. A rejected batch does not identify the offending record, so SKIP cannot isolate it. No batch splitting or error-string parsing is attempted. Outcomes after revocation are discarded.
 
@@ -149,7 +149,7 @@ Default FAIL. Choose `ON_ERROR` or the specific timestamp policies; they are mut
 
 | Skippable failure | Policy |
 | --- | --- |
-| Missing timestamp required by `WHERE` | `ON_MISSING_TIMESTAMP` or `ON_ERROR` |
+| Missing timestamp required by timestamp bounds in `WHERE` | `ON_MISSING_TIMESTAMP` or `ON_ERROR` |
 | Timestamp outside known destination bounds or client range | `ON_REJECTED_TIMESTAMP` or `ON_ERROR` |
 | Synchronous size refusal or supported record validation failure | `ON_ERROR` |
 

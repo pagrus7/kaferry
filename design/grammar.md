@@ -165,7 +165,7 @@ SQL errors identify the first error found by one-based line and character (code 
 | `FROM TOPIC 'a' WITH (GROUP='g', ON_ERROR=SKIP)` | error policies belong in final `OPTIONS` |
 | `FROM FILE avro('archive') WITH (GROUP='g', START=EARLIEST)` | `START` requires a topic source |
 | `FROM FILE avro('archive') WITH (GROUP='g', CUTOFF=INTERVAL '1' MINUTE)` | `CUTOFF` requires a topic source |
-| `FROM TOPIC 'a' WITH (GROUP='g', START=EARLIEST) WHERE RECORD_TIMESTAMP < NOW()` | `START` cannot be combined with `WHERE` |
+| `FROM TOPIC 'a' WITH (GROUP='g', START=EARLIEST) WHERE RECORD_TIMESTAMP < NOW()` | `START` cannot be combined with timestamp bounds |
 | `FROM TOPIC 'a' WITH ()` | present clauses need at least one setting |
 | `FROM TOPIC 'a' WITH (GROUP='')` | explicit group names must be nonblank |
 | `WITH (GROUP='a', GROUP='b')` on a source | duplicate `GROUP` |

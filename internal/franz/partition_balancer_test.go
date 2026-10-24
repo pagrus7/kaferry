@@ -10,11 +10,16 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-func selectedBalance(t *testing.T, balancer kgo.GroupBalancer, count int32, owners ...[]int32) map[string][]int32 {
+type memberClaim struct {
+	generation int32
+	partitions []int32
+}
+
+func selectedBalance(t *testing.T, balancer kgo.GroupBalancer, count int32, owners ...memberClaim) map[string][]int32 {
 	t.Helper()
 	members := make([]kmsg.JoinGroupResponseMember, len(owners))
-	for i, ids := range owners {
-		members[i] = kmsg.JoinGroupResponseMember{MemberID: string(rune('a' + i)), ProtocolMetadata: balancer.JoinGroupMetadata([]string{"input"}, map[string][]int32{"input": ids}, 3)}
+	for i, claim := range owners {
+		members[i] = kmsg.JoinGroupResponseMember{MemberID: string(rune('a' + i)), ProtocolMetadata: balancer.JoinGroupMetadata([]string{"input"}, map[string][]int32{"input": claim.partitions}, claim.generation)}
 	}
 	member, _, err := balancer.MemberBalancer(members)
 	require.NoError(t, err)
@@ -34,18 +39,18 @@ func TestSelectedBalancerDistributesSparseIDsAndCooperativelyTransfersOwnership(
 	p := plan.Plan{Source: plan.Endpoint{Name: "input"}, Partitions: &plan.PartitionFilter{IDs: []int32{1, 8}}}
 	b := sourceBalancer(p, "fp")
 	require.True(t, b.IsCooperative())
-	initial := selectedBalance(t, b, 10, nil, nil)
+	initial := selectedBalance(t, b, 10, memberClaim{}, memberClaim{})
 	require.Len(t, initial["a"], 1)
 	require.Len(t, initial["b"], 1)
 	all := append(slices.Clone(initial["a"]), initial["b"]...)
 	slices.Sort(all)
 	require.Equal(t, []int32{1, 8}, all)
 	// When a new member joins while the existing member owns both IDs.
-	rebalance := selectedBalance(t, b, 10, []int32{1, 8}, nil)
+	rebalance := selectedBalance(t, b, 10, memberClaim{3, []int32{1, 8}}, memberClaim{})
 	// Then the recipient waits for revocation before receiving the moved partition.
 	require.Len(t, rebalance["a"], 1)
 	require.Empty(t, rebalance["b"])
-	settled := selectedBalance(t, b, 10, rebalance["a"], nil)
+	settled := selectedBalance(t, b, 10, memberClaim{4, rebalance["a"]}, memberClaim{})
 	require.Len(t, settled["a"], 1)
 	require.Len(t, settled["b"], 1)
 	require.NotEqual(t, settled["a"], settled["b"])
@@ -56,10 +61,24 @@ func TestComplementBalancerAdmitsAdditionsAndCanAssignNothing(t *testing.T) {
 	p := plan.Plan{Source: plan.Endpoint{Name: "input"}, Partitions: &plan.PartitionFilter{Exclude: true, IDs: []int32{0, 1}}}
 	b := sourceBalancer(p, "fp")
 	// When the topic grows, then the same predicate admits only the new partition.
-	initial := selectedBalance(t, b, 2, nil)
+	initial := selectedBalance(t, b, 2, memberClaim{})
 	require.Empty(t, initial["a"])
-	grown := selectedBalance(t, b, 3, nil)
+	grown := selectedBalance(t, b, 3, memberClaim{})
 	require.Equal(t, []int32{2}, grown["a"])
+}
+
+func TestSparseGenerationClaimsCannotSkipRevocation(t *testing.T) {
+	// Given a stale claim on partition 1 and a newer member still consuming all three selected IDs.
+	p := plan.Plan{Source: plan.Endpoint{Name: "input"}, Partitions: &plan.PartitionFilter{IDs: []int32{1, 8, 9}}}
+	b := sourceBalancer(p, "fp")
+	// When sticky balancing moves partition 1 back toward the stale claimant.
+	first := selectedBalance(t, b, 10, memberClaim{1, []int32{1}}, memberClaim{2, []int32{1, 8, 9}})
+	// Then neither member receives partition 1 until its current owner revokes it.
+	require.Empty(t, first["a"])
+	require.Equal(t, []int32{8, 9}, first["b"])
+	second := selectedBalance(t, b, 10, memberClaim{3, first["a"]}, memberClaim{3, first["b"]})
+	require.Equal(t, []int32{1}, second["a"])
+	require.Equal(t, []int32{8, 9}, second["b"])
 }
 
 func TestSelectedProtocolCannotMatchAnOlderOrDifferentQuery(t *testing.T) {

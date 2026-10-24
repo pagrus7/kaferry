@@ -183,6 +183,20 @@ func TestGroupInspectionRejectsDifferentSelectionsEvenBeforeAssignment(t *testin
 	}
 }
 
+func TestPreparingGroupCanAdmitWorkersBeforeItsProtocolIsElected(t *testing.T) {
+	// Given a new group with waiting Kaferry members and no elected protocol yet.
+	client := &metadataMock{request: func(context.Context, kmsg.Request) (kmsg.Response, error) {
+		return &kmsg.DescribeGroupsResponse{Groups: []kmsg.DescribeGroupsResponseGroup{{Group: "group", State: "PreparingRebalance", Members: []kmsg.DescribeGroupsResponseGroupMember{{ClientID: "kaferry-worker"}}}}}, nil
+	}}
+	i := &Inspector{client: client, topic: "input"}
+	// When inspecting, then defer protocol compatibility to the coordinator's fenced join and report activity.
+	require.NoError(t, i.CheckMembers(t.Context(), "group", "kaferry-partitions-v1-expected"))
+	m, err := i.Membership(t.Context(), "group", "kaferry-partitions-v1-expected")
+	require.NoError(t, err)
+	require.False(t, m.Foreign)
+	require.False(t, m.Idle)
+}
+
 func TestSavedOffsetsRejectFailedMetadataWithoutChangingCachedIdentity(t *testing.T) {
 	for _, mode := range []string{"recreated", "topic authorization", "partition error"} {
 		t.Run(mode, func(t *testing.T) {

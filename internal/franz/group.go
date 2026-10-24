@@ -34,7 +34,7 @@ func (i *Inspector) describeGroup(parent context.Context, group string) (kmsg.De
 	return g, nil
 }
 func compatibleMembers(g kmsg.DescribeGroupsResponseGroup, topic, protocol string) error {
-	if len(g.Members) > 0 && g.Protocol != protocol {
+	if len(g.Members) > 0 && g.Protocol != "" && g.Protocol != protocol {
 		return conflict("GROUP has an incompatible partition selection or assignment protocol")
 	}
 	for _, m := range g.Members {
