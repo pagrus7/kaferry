@@ -92,9 +92,7 @@ func TestRunnerFixedTipWaitsForAcknowledgementAndDoesNotCopyLaterRecords(t *test
 		messages = append(messages, attributes["msg"].(string))
 		details = append(details, attributes)
 	}
-	if !reflect.DeepEqual(messages, []string{"partition assigned", "tip watermark sampled", "partition stopped", "progress committed"}) {
-		t.Fatal("completion diagnostics changed", messages)
-	}
+	require.Equal(t, []string{"partition assigned", "tip watermark sampled", "partition stopped", "progress committed"}, messages, "completion diagnostics changed")
 	for i, expected := range []map[string]any{
 		{"partition": float64(0), "position": float64(0)},
 		{"partition": float64(0), "position": float64(0), "stable": float64(0), "high_watermark": float64(3)},

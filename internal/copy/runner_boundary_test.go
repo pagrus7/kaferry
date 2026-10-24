@@ -156,9 +156,7 @@ func TestRunnerStopsBeforePublishingWhenProgressRejectsInput(t *testing.T) {
 	runErr := r.Run(context.Background())
 
 	// Then
-	if !errors.Is(runErr, progress.failure) {
-		t.Fatal("progress failure lost", runErr)
-	}
+	require.ErrorIs(t, runErr, progress.failure, "progress failure lost")
 	if len(progress.observed) != 1 || len(sink.writes) != 0 || len(store.saves) != 0 {
 		t.Fatal("rejected input was published or committed")
 	}

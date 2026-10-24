@@ -41,9 +41,7 @@ func TestStopSavedOnlyAfterEarlierWritesResolve(t *testing.T) {
 			}
 			require.NoError(t, err)
 			if release == "lost" {
-				if len(store.saves) != 0 {
-					t.Fatal(store.saves)
-				}
+				require.Empty(t, store.saves)
 				return
 			}
 			if len(store.saves) != 1 || store.saves[0][0].Position != 1 || store.saves[0][0].Stop == nil || store.saves[0][0].Stop.At != 1 {
@@ -68,9 +66,7 @@ func TestFailedStopCommitCanBeRetriedAtSamePosition(t *testing.T) {
 	if err := r.commit(r.ids()); !errors.Is(err, failed) {
 		t.Fatal(err)
 	}
-	if r.partitions[0].stopSaved {
-		t.Fatal("failed stop treated as durable")
-	}
+	require.False(t, r.partitions[0].stopSaved, "failed stop treated as durable")
 	delete(store.fail, 0)
 	require.NoError(t, r.commit(r.ids()))
 	// Then the same position is retried and carries an EOF stop.

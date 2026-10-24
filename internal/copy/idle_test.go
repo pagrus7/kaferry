@@ -5,7 +5,6 @@ import (
 	"context"
 	"log/slog"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -57,9 +56,7 @@ func TestUnassignedTimeoutHasDistinctOutcomeBeforeAndAfterIntake(t *testing.T) {
 			if err == nil || exitCode(err) != 3 || err.Error() != "worker held no partitions for 1s" {
 				t.Fatalf("exit=%d err=%v", exitCode(err), err)
 			}
-			if !strings.Contains(logs.String(), `"msg":"local idle exit","idle_exit":"1s","exit_code":3`) {
-				t.Fatal("idle outcome is missing its structured context", logs.String())
-			}
+			require.Contains(t, logs.String(), `"msg":"local idle exit","idle_exit":"1s","exit_code":3`, "idle outcome is missing its structured context")
 			if afterIntake {
 				if !revoked || len(sink.writes) != 1 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1}}}) {
 					t.Fatal("confirmed progress was lost or advanced after release", sink.writes, store.saves)
@@ -124,9 +121,7 @@ func TestDelayedHandoffDistinguishesPartitionCompletionFromIdleExit(t *testing.T
 	trigger := incoming(0, 0, 1)
 	trigger.Record.TimestampMS = &stamp
 	require.NoError(t, a.input(trigger))
-	if a.partitions[1].stop != nil {
-		t.Fatal("fixture completed the partition intended for handoff")
-	}
+	require.Nil(t, a.partitions[1].stop, "fixture completed the partition intended for handoff")
 
 	// When P1 is revoked from A and its assignment to B is delayed past idle_exit.
 	require.NoError(t, a.Revoke([]int32{1}, false))

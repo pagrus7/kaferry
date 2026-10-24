@@ -40,16 +40,12 @@ func TestShutdownBudgetStartsBeforePotentiallyBlockingDrain(t *testing.T) {
 				r.failure = errors.New("write failed")
 			}
 			sink.flush = func() error {
-				if !observer.begun {
-					t.Fatal("drain began without a shutdown budget")
-				}
+				require.True(t, observer.begun, "drain began without a shutdown budget")
 				return nil
 			}
 			// When stopping, then a blocked flush is already covered by the process deadline.
 			_ = r.Run(ctx)
-			if !observer.begun {
-				t.Fatal("shutdown budget never started")
-			}
+			require.True(t, observer.begun, "shutdown budget never started")
 		})
 	}
 }
@@ -167,9 +163,7 @@ func TestRunnerDoesNotCommitPastFailedWrite(t *testing.T) {
 	runErr := r.Run(context.Background())
 
 	// Then
-	if runErr == nil {
-		t.Fatal("failed write was accepted")
-	}
+	require.Error(t, runErr, "failed write was accepted")
 	if len(p.saves) != 1 || p.saves[0][0].Position != 1 {
 		t.Fatalf("unsafe checkpoint: %+v", p.saves)
 	}
@@ -269,9 +263,7 @@ func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 	d.reports <- Delivery{Token: d.writes[0]}
 	require.NoError(t, r.deliveries())
 	_ = r.Revoke([]int32{0}, true)
-	if len(p.saves) != 0 {
-		t.Fatal("committed after ownership loss")
-	}
+	require.Empty(t, p.saves, "committed after ownership loss")
 }
 
 func TestPartialCommitReleasesSuccessfulPartitionsOnly(t *testing.T) {
@@ -322,9 +314,7 @@ func TestShutdownDrainDeadlineCommitsConfirmedPrefix(t *testing.T) {
 	drainErr := r.drain()
 
 	// Then
-	if drainErr == nil {
-		t.Fatal("unacknowledged write treated as drained")
-	}
+	require.Error(t, drainErr, "unacknowledged write treated as drained")
 	if c.Now().Sub(start) < 10*time.Second || c.Now().Sub(start) > 10*time.Second+10*time.Millisecond {
 		t.Fatal("wrong drain deadline")
 	}
@@ -379,9 +369,7 @@ func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 	tipsErr = r.tips()
 
 	// Then the original boundary stays fixed and the diagnostic names the cursors.
-	if *r.partitions[0].high != 2 {
-		t.Fatal("tip boundary moved")
-	}
+	require.Equal(t, int64(2), *r.partitions[0].high, "tip boundary moved")
 	if tipsErr == nil || !strings.Contains(tipsErr.Error(), "H=2 stable=0 consumed=0") {
 		t.Fatal("stalled transaction must name its boundary and cursors", tipsErr)
 	}
@@ -397,20 +385,14 @@ func TestIdleExitRequiresProcessedEmptyAssignment(t *testing.T) {
 	finished := r.readyToExit()
 
 	// Then it remains available for a first assignment.
-	if finished {
-		t.Fatal("exited before assignment")
-	}
+	require.False(t, finished, "exited before assignment")
 	_ = r.Assign(nil)
 	c.Sleep(2 * time.Second)
-	if !r.readyToExit() {
-		t.Fatal("bounded idle worker did not exit")
-	}
+	require.True(t, r.readyToExit(), "bounded idle worker did not exit")
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 	_ = r.Revoke([]int32{0}, false)
 	c.Sleep(time.Hour)
-	if r.readyToExit() {
-		t.Fatal("empty rebalance treated as completion")
-	}
+	require.False(t, r.readyToExit(), "empty rebalance treated as completion")
 }
 
 func TestSignalDuringPollDoesNotSubmitReturnedRecord(t *testing.T) {
@@ -448,9 +430,7 @@ func TestSignalCannotHideKnownFailure(t *testing.T) {
 	runErr := r.Run(ctx)
 
 	// Then
-	if !errors.Is(runErr, failure) {
-		t.Fatal("signal hid a known failure", runErr)
-	}
+	require.ErrorIs(t, runErr, failure, "signal hid a known failure")
 }
 
 type cancellingPoll struct {
@@ -596,9 +576,7 @@ func TestRevocationCommitFailures(t *testing.T) {
 			err := r.Revoke([]int32{0}, false)
 
 			// Then
-			if (err != nil) != tc.fails {
-				t.Fatalf("revoke error = %v, want failure=%v", err, tc.fails)
-			}
+			require.Equal(t, tc.fails, err != nil, "revoke error = %v, want failure=%v", err, tc.fails)
 			if len(r.partitions) != 0 || store.calls != 1 {
 				t.Fatalf("partition not released or commit retried: partitions=%d calls=%d", len(r.partitions), store.calls)
 			}
