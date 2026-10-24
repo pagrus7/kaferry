@@ -33,7 +33,7 @@ permissions:
   contents: read
 concurrency:
   group: containers-${{ github.event.pull_request.number || inputs.tag || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -133,7 +133,10 @@ jobs:
       - name: Verify SIGTERM checkpointing and container resume
         env:
           KAFERRY_TEST_IMAGE: kaferry:ci
-        run: go test -count=1 -timeout=3m -tags=integration,container -run '^TestContainerShutdownAndResume$' ./tests/compat
+          KAFKA_TEST_BROKERS: 127.0.0.1:39092
+        run: |
+          python3 scripts/ci.py container-resume go test -count=1 -json -timeout=3m -tags=integration,container -run '^TestContainerShutdownAndResume$' ./tests/compat
+          python3 scripts/ci.py verify-tests container-resume TestContainerShutdownAndResume
       - if: always()
         run: |
           make broker-down

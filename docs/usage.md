@@ -93,12 +93,12 @@ Progress logs default to 30 s; `worker.progress_interval='0'` disables them. [Me
 
 ## Containers
 
-For releases with an image, use a version tag or digest. Linux AMD64 and ARM64 are supported:
+For released images (Linux AMD64/ARM64):
 
 ```sh
-docker run --rm --user "$(id -u):$(id -g)" \
+docker run --rm --stop-timeout 35 --user "$(id -u):$(id -g)" \
   --mount "type=bind,src=$PWD,dst=/work" ghcr.io/pagrus7/kaferry:vX.Y.Z \
   run --file /work/copy.sql --config /work/connections.toml
 ```
 
-Use container paths in SQL and configuration. Set `worker.checkpoint_dir` beneath `/work` to retain file replay progress; container-only state disappears with `--rm`. Brokers must be reachable from the container. [Image verification and publishing](../releases/README.md#container-images).
+Use container paths and reachable broker addresses. Set `worker.checkpoint_dir` to `/work/checkpoints` for resume; `--rm` deletes container-only files. The stop timeout must exceed `worker.shutdown_timeout` (30s by default). [Image verification and publishing](../releases/README.md#container-images).

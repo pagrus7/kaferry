@@ -41,7 +41,7 @@ func TestContainerShutdownAndResume(t *testing.T) {
 		publish(t, producer, &kgo.Record{Topic: src, Value: []byte(fmt.Sprintf("round-%d", round)), Timestamp: time.Now()})
 		waitEnd(t, a, dst, int64(round+1))
 		// When Docker sends SIGTERM and waits for the process to stop.
-		stop := exec.Command("docker", "stop", "--time", "15", name)
+		stop := exec.Command("docker", "stop", "--time", "35", name)
 		data, err := stop.CombinedOutput()
 		require.NoError(t, err, "%s", data)
 		require.NoError(t, command.Wait(), "%s", logs.String())
