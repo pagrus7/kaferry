@@ -30,11 +30,15 @@ func renderStatus(output io.Writer, r inspect.StatusReport, asJSON bool) error {
 			unit = "input records"
 		}
 		for _, p := range r.Partitions[:min(8, len(r.Partitions))] {
+			label := fmt.Sprintf("Partition %d", p.ID)
+			if r.Source.Kind == "FILE" {
+				label = "Replay"
+			}
 			if p.Position == nil {
-				fmt.Fprintf(&b, "  Partition %d: no saved progress\n", p.ID)
+				fmt.Fprintf(&b, "  %s: no saved progress\n", label)
 				continue
 			}
-			fmt.Fprintf(&b, "  Partition %d: %s %d", p.ID, unit, *p.Position)
+			fmt.Fprintf(&b, "  %s: %s %d", label, unit, *p.Position)
 			if p.Stop != nil {
 				fmt.Fprintf(&b, "; %s at %d", inspect.StopDescription(p.Stop.Reason), p.Stop.At)
 			} else {

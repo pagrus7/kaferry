@@ -1,7 +1,6 @@
 package plan
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/pagrus7/kaferry/internal/sql"
@@ -31,25 +30,38 @@ func TestPartitionIdentityIsCanonicalAndKeepsPositioningDefaults(t *testing.T) {
 }
 
 func TestPartitionValidationIsLocatedAndRedacted(t *testing.T) {
-	for _, query := range []string{
-		"INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a'\nWHERE PARTITION IN (2147483648)",
-		"INSERT INTO TOPIC 'b' SELECT * FROM FILE avro('private')\nWHERE PARTITION IN (0)",
-	} {
-		// Given a syntactically valid predicate that planning cannot support.
-		s, err := sql.NewParser().Parse(query)
+	for _, source := range []string{"TOPIC 'a'", "FILE avro('private')"} {
+		// Given an overflowing partition literal for either supported source.
+		query := "INSERT INTO TOPIC 'b' SELECT * FROM " + source + "\nWHERE PARTITION IN (2147483648)"
+		ast, err := sql.NewParser().Parse(query)
 		require.NoError(t, err)
-		// When planning, then identify the offending value or predicate without quoting it.
-		_, err = NewPlanner(environment{}).Build(s, profiles)
+		// When planning, then locate the value and keep SQL values private.
+		_, err = NewPlanner(environment{}).Build(ast, profiles)
 		var diagnostic *sql.Diagnostic
 		require.ErrorAs(t, err, &diagnostic)
-		require.Equal(t, 2, diagnostic.Position.Line)
+		require.Equal(t, sql.Position{Line: 2, Column: 21}, diagnostic.Position)
 		require.NotContains(t, err.Error(), "2147483648")
 		require.NotContains(t, err.Error(), "private")
-		if strings.Contains(query, "2147483648") {
-			require.Equal(t, sql.Position{Line: 2, Column: 21}, diagnostic.Position)
-		} else {
-			require.Equal(t, sql.Position{Line: 2, Column: 7}, diagnostic.Position)
-		}
+	}
+}
+
+func TestFilePartitionPredicatesUseCanonicalQueryIdentity(t *testing.T) {
+	// Given equivalent file predicates with different list order and locations.
+	const base = "INSERT INTO FILE avro('out') SELECT * FROM FILE avro('in') "
+	a := build(t, base+"WHERE PARTITION NOT IN (5,0,5)")
+	b := build(t, base+"\nWHERE PARTITION NOT IN (0,5)")
+	// When planning and fingerprinting, then preserve file start rules and canonical identity.
+	require.Empty(t, a.Start)
+	x, err := a.Fingerprint("", "")
+	require.NoError(t, err)
+	y, err := b.Fingerprint("", "")
+	require.NoError(t, err)
+	require.Equal(t, x, y)
+	for _, suffix := range []string{"", "WHERE PARTITION IN (0,5)", "WHERE PARTITION NOT IN (0)"} {
+		p := build(t, base+suffix)
+		fp, err := p.Fingerprint("", "")
+		require.NoError(t, err)
+		require.NotEqual(t, x, fp)
 	}
 }
 

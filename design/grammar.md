@@ -58,7 +58,7 @@ Planning or startup enforces:
 - `WORKER_STOP_AFTER_RECORDS` is from 1 to 9,007,199,254,740,992; it caps accepted writes per worker per invocation, not records read or a shared group total.
 - `PARTITIONING` requires a topic destination and defaults to `PRESERVE`: original partition N goes to destination N. Every selected input partition ID must exist, including IDs whose records the timestamp filter excludes. Counts need not match. `KEY` uses original key bytes and the destination key partitioner. Missing partitions fail under every error policy.
 - Intervals use nonnegative integers; `DAY` is 86,400 seconds. `CUTOFF` requires a topic source with an upper bound. `ON_REJECTED_TIMESTAMP` requires a topic destination; `ON_MISSING_TIMESTAMP` timestamp bounds in `WHERE`.
-- At most one `PARTITION [NOT] IN (...)` predicate, for topic sources only; combine it with timestamp bounds using `AND` in either order. IDs are integers from 0 to 2147483647; lists are nonempty, sorted and deduplicated. Every listed ID must exist at startup, including exclusions. `IN` selects fixed IDs; `NOT IN` selects all others, including additions discovered while workers run.
+- At most one `PARTITION [NOT] IN (...)` predicate; combine it with timestamp bounds using `AND` in either order. IDs are integers from 0 to 2147483647; lists are nonempty, sorted and deduplicated. Every listed ID must exist in source metadata at startup, including exclusions; archives use completed-file headers. `IN` selects fixed IDs; `NOT IN` selects all others. Kafka discovers additions while workers run; archives pin matching completed files once and keep that selection on resume.
 - At most one lower and one upper bound. Timestamps are RFC 3339 with `Z` or an explicit offset and at most millisecond precision. The normalized `[lo, hi)` must be non-empty.
 - At startup, reject a destination that is the same archive directory (including path aliases) or the same Kafka cluster ID and topic as the source.
 - A topic without `@alias` uses the connection `default`, which must exist.
@@ -80,6 +80,14 @@ Select source partitions, then follow; replace `IN` with `NOT IN` to copy every 
 INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-repair')
 WHERE PARTITION IN (0, 2);
+```
+
+Archive partition selection uses the original Kafka IDs in file headers; it applies across all source topics/clusters represented in the directory:
+
+```sql
+INSERT INTO FILE avro('/data/repair')
+SELECT * FROM FILE avro('/data/orders') WITH (GROUP = 'archive-repair')
+WHERE PARTITION NOT IN (1, 3);
 ```
 
 Minimal archive replay: copy the current completed files and exit:
@@ -160,7 +168,6 @@ SQL errors identify the first error found by one-based line and character (code 
 | --- | --- |
 | `WHERE PARTITION IN ()` | partition lists must be nonempty |
 | `WHERE PARTITION IN (0) OR PARTITION IN (1)` | predicates combine only with `AND` |
-| `FROM FILE avro('archive') WHERE PARTITION IN (0)` | partition predicates require a topic source |
 | `OPTIONS (GROUP = 'g')` | `GROUP` belongs in source `WITH` |
 | `FROM TOPIC 'a' WITH (GROUP='g', ON_ERROR=SKIP)` | error policies belong in final `OPTIONS` |
 | `FROM FILE avro('archive') WITH (GROUP='g', START=EARLIEST)` | `START` requires a topic source |

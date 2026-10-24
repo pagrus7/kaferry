@@ -88,7 +88,7 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 	if err != nil {
 		return Plan{}, sql.At(statement.WherePosition, err)
 	}
-	plan.Partitions, err = partitionFilter(statement.Partitions, plan.Source.Kind)
+	plan.Partitions, err = partitionFilter(statement.Partitions)
 	if err != nil {
 		return Plan{}, err
 	}

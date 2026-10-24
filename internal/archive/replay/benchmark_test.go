@@ -21,7 +21,7 @@ func BenchmarkReplayOverlap(b *testing.B) {
 				writeFile(b, root, id+1, values, 0)
 			}
 			catalog := NewCatalog(root, codec(b), NativeFiles{})
-			selection, err := catalog.Select()
+			selection, err := catalog.Select(nil)
 			require.NoError(b, err)
 			progress := make([]Progress, len(selection.Files))
 			for i, f := range selection.Files {

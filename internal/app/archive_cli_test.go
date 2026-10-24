@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,7 +60,7 @@ func archiveRecords(t *testing.T, root string) []avro.Record {
 	codec, err := avro.New(64 << 20)
 	require.NoError(t, err)
 	catalog := replay.NewCatalog(root, codec, replay.NativeFiles{})
-	selection, err := catalog.Select()
+	selection, err := catalog.Select(nil)
 	require.NoError(t, err)
 	pool, err := replay.NewPool(catalog, replay.Limits{})
 	require.NoError(t, err)
@@ -143,6 +144,80 @@ func TestArchiveCLIResumeUsesFixedSelectionAndSavesStopReason(t *testing.T) {
 	require.Equal(t, before, after)
 }
 
+func TestArchivePartitionCLIInspectsCopiesAndResumesOnlyItsSelectedFiles(t *testing.T) {
+	for _, predicate := range []string{"PARTITION IN (5)", "PARTITION NOT IN (0)"} {
+		t.Run(predicate, func(t *testing.T) {
+			// Given two original partitions; the excluded one has no timestamps.
+			root := t.TempDir()
+			src, dst := filepath.Join(root, "input"), filepath.Join(root, "output")
+			source := avro.Source{Cluster: "cluster", Topic: "orders", TopicID: avro.TopicID{1}}
+			archiveFixture(t, src, 1, []avro.Record{{Source: source, TimestampKind: "unknown"}})
+			source.Partition = 5
+			stamp := int64(1000)
+			want := []avro.Record{
+				{Source: source, Offset: 10, TimestampMS: &stamp, TimestampKind: "create_time", Value: []byte("first"), Headers: []avro.Header{}},
+				{Source: source, Offset: 11, TimestampMS: &stamp, TimestampKind: "create_time", Value: []byte("second"), Headers: []avro.Header{}},
+			}
+			archiveFixture(t, src, 2, want)
+			cfg := filepath.Join(root, "worker.toml")
+			require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)), 0600))
+			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH(GROUP='selected') WHERE %s AND RECORD_TIMESTAMP < TIMESTAMP '2000-01-01T00:00:00Z'", dst, src, predicate)
+			call := func(command, statement string, asJSON bool) (int, []byte, string) {
+				t.Helper()
+				var out, diagnostics bytes.Buffer
+				args := []string{command, "-e", statement, "-c", cfg}
+				if asJSON {
+					args = append(args, "--json")
+				}
+				code := Execute(t.Context(), args, nil, &out, &diagnostics)
+				return code, out.Bytes(), diagnostics.String()
+			}
+			// When inspecting, then the public report describes only matching files and preserves the predicate.
+			code, data, logs := call("explain", query, true)
+			require.Zero(t, code, logs)
+			var preview inspect.Report
+			require.NoError(t, json.Unmarshal(data, &preview))
+			require.Equal(t, 1, preview.Source.File.FileCount)
+			require.NotNil(t, preview.Source.PartitionFilter)
+			require.Equal(t, strings.Contains(predicate, "NOT"), preview.Source.PartitionFilter.Exclude)
+			// When stopping at one accepted write, then the checkpoint contains only partition 5 while its cursor counts records.
+			code, _, logs = call("run", query+" OPTIONS(WORKER_STOP_AFTER_RECORDS=1)", false)
+			require.Zero(t, code, logs)
+			state, err := replay.ReadCheckpoint(root, "selected", replay.NativeGroupFiles{})
+			require.NoError(t, err)
+			require.Len(t, state.Files, 1)
+			require.EqualValues(t, 5, state.Files[0].File.Identity.Source.Partition)
+			require.EqualValues(t, 1, state.Position)
+			require.False(t, state.Complete)
+			extra := want[1]
+			extra.Offset = 12
+			archiveFixture(t, src, 3, []avro.Record{extra})
+			// When resuming after additions, then copy the original selection and report its EOF.
+			code, _, logs = call("run", query, false)
+			require.Zero(t, code, logs)
+			require.Equal(t, want, archiveRecords(t, dst))
+			code, data, logs = call("status", query, true)
+			require.Zero(t, code, logs)
+			var status inspect.StatusReport
+			require.NoError(t, json.Unmarshal(data, &status))
+			require.Equal(t, "stopped", status.Verdict)
+			require.Equal(t, 1, status.Source.File.FileCount)
+			require.EqualValues(t, 0, status.Partitions[0].ID)
+			require.EqualValues(t, 2, *status.Partitions[0].Position)
+			// A different predicate cannot reuse the saved group or change its checkpoint.
+			path := checkpoint.Path(root, "selected")
+			before, err := os.ReadFile(path)
+			require.NoError(t, err)
+			code, _, logs = call("run", strings.Replace(query, predicate, "PARTITION IN (0)", 1), false)
+			require.Equal(t, 2, code)
+			require.Contains(t, logs, "query identity mismatch")
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+		})
+	}
+}
+
 func TestArchiveCLIAllFilteredRecordsCanExceedPendingCap(t *testing.T) {
 	// Given more filtered inputs than the worker's pending-record capacity.
 	root := t.TempDir()
@@ -166,6 +241,26 @@ func TestArchiveCLIAllFilteredRecordsCanExceedPendingCap(t *testing.T) {
 	require.True(t, state.Complete)
 	require.Equal(t, "eof", state.Stop.Reason)
 	require.Empty(t, archiveRecords(t, dst), "filtered capture creates no empty data files")
+}
+
+func TestArchivePartitionMissingIDsFailBeforeCheckpointOrOutput(t *testing.T) {
+	for _, command := range []string{"run", "explain", "status"} {
+		// Given a listed partition absent from all completed headers.
+		root := t.TempDir()
+		src, dst := filepath.Join(root, "input"), filepath.Join(root, "output")
+		archiveFixture(t, src, 1, []avro.Record{{Source: avro.Source{Cluster: "cluster", Topic: "orders", TopicID: avro.TopicID{1}}, TimestampKind: "unknown"}})
+		cfg := filepath.Join(root, "worker.toml")
+		require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)), 0600))
+		query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH(GROUP='missing') WHERE PARTITION NOT IN (7)", dst, src)
+		var out bytes.Buffer
+		// When executing or inspecting, then the same validation classification applies and no selection is pinned.
+		require.Equal(t, 2, Execute(t.Context(), []string{command, "-e", query, "-c", cfg}, nil, &out, &out), out.String())
+		require.Contains(t, out.String(), "absent from source metadata")
+		_, err := os.Stat(checkpoint.Path(root, "missing"))
+		require.ErrorIs(t, err, os.ErrNotExist)
+		_, err = os.Stat(dst)
+		require.ErrorIs(t, err, os.ErrNotExist)
+	}
 }
 
 func TestArchiveCLIFreshPreviewDoesNotCreateRunState(t *testing.T) {

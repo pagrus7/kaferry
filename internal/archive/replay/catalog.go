@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
+	"github.com/pagrus7/kaferry/internal/plan"
 	"golang.org/x/sys/unix"
 )
 
@@ -31,7 +32,7 @@ type Selection struct {
 	PrivateFiles int
 }
 type Snapshot interface {
-	Select() (Selection, error)
+	Select(*plan.PartitionFilter) (Selection, error)
 	Validate([]File) error
 }
 type InputFile interface {
@@ -66,12 +67,16 @@ func NewCatalog(root string, codec *avro.Codec, files Filesystem) *Catalog {
 	return &Catalog{root: root, codec: codec, files: files}
 }
 
-func (c *Catalog) Select() (Selection, error) { return c.selectFiles(true) }
+func (c *Catalog) Select(filter *plan.PartitionFilter) (Selection, error) {
+	return c.selectFiles(true, filter)
+}
 
 // Inspect describes headers without hashing file contents or validating data blocks.
-func (c *Catalog) Inspect() (Selection, error) { return c.selectFiles(false) }
+func (c *Catalog) Inspect(filter *plan.PartitionFilter) (Selection, error) {
+	return c.selectFiles(false, filter)
+}
 
-func (c *Catalog) selectFiles(hashContents bool) (selection Selection, result error) {
+func (c *Catalog) selectFiles(hashContents bool, filter *plan.PartitionFilter) (selection Selection, result error) {
 	selection.Files = make([]File, 0)
 	dir, err := c.files.OpenDirectory(c.root)
 	if err != nil {
@@ -91,7 +96,7 @@ func (c *Catalog) selectFiles(hashContents bool) (selection Selection, result er
 			if !entry.Type().IsRegular() {
 				return selection, errors.New("completed archive input must be a regular file")
 			}
-			file, err := c.describe(entry.Name(), hashContents)
+			file, err := c.describe(entry.Name(), hashContents, filter)
 			if err != nil {
 				return selection, fmt.Errorf("select archive file %s: %w", entry.Name(), err)
 			}
@@ -112,10 +117,20 @@ func (c *Catalog) selectFiles(hashContents bool) (selection Selection, result er
 		}
 		seen[file.Identity.FileID] = true
 	}
+	if filter != nil {
+		ids := make([]int32, 0, len(selection.Files))
+		for _, file := range selection.Files {
+			ids = append(ids, file.Identity.Source.Partition)
+		}
+		if _, err := filter.Select(ids); err != nil {
+			return selection, err
+		}
+		selection.Files = slices.DeleteFunc(selection.Files, func(f File) bool { return !filter.Matches(f.Identity.Source.Partition) })
+	}
 	return selection, nil
 }
 
-func (c *Catalog) describe(name string, hashContents bool) (descriptor File, result error) {
+func (c *Catalog) describe(name string, hashContents bool, filter *plan.PartitionFilter) (descriptor File, result error) {
 	f, err := c.files.Open(filepath.Join(c.root, name))
 	if err != nil {
 		return descriptor, err
@@ -129,7 +144,7 @@ func (c *Catalog) describe(name string, hashContents bool) (descriptor File, res
 	if descriptor.name() != name {
 		return descriptor, errors.New("archive filename disagrees with file identity")
 	}
-	if !hashContents {
+	if !hashContents || !filter.Matches(descriptor.Identity.Source.Partition) {
 		return descriptor, nil
 	}
 	hash := sha256.New()
@@ -147,7 +162,7 @@ func (c *Catalog) describe(name string, hashContents bool) (descriptor File, res
 // Validate checks every selected file, including those already consumed, on resume.
 func (c *Catalog) Validate(files []File) error {
 	for _, file := range files {
-		current, err := c.describe(file.name(), true)
+		current, err := c.describe(file.name(), true, nil)
 		if err != nil {
 			return fmt.Errorf("validate archive file %s: %w", file.name(), err)
 		}

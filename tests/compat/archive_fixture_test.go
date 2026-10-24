@@ -89,7 +89,7 @@ func scanArchive(t *testing.T, path string, visit func(core.Record)) {
 	codec, err := avro.New(64 << 20)
 	require.NoError(t, err)
 	catalog := replay.NewCatalog(path, codec, replay.NativeFiles{})
-	selection, err := catalog.Select()
+	selection, err := catalog.Select(nil)
 	require.NoError(t, err)
 	require.Zero(t, selection.PrivateFiles, "finished copies leave no unfinished archive files")
 	pool, err := replay.NewPool(catalog, replay.Limits{Blocks: 32})

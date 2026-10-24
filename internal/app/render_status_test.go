@@ -81,3 +81,23 @@ func TestArchiveStatusTextReportsSavedSnapshot(t *testing.T) {
 	require.NoError(t, renderStatus(&output, report, false))
 	require.Contains(t, output.String(), "Snapshot: 3 completed files, 150 encoded bytes.")
 }
+
+func TestFileStatusLabelsReplayProgressInsteadOfAnOriginalPartition(t *testing.T) {
+	for _, saved := range []bool{false, true} {
+		// Given file replay whose original partition differs from the internal progress cursor.
+		r := inspect.StatusReport{Source: inspect.Endpoint{Kind: "FILE"}, Partitions: []inspect.SavedPartition{{ID: 0}}}
+		if saved {
+			position := int64(2)
+			r.Partitions[0].Position = &position
+		}
+		var out bytes.Buffer
+		// When rendering, then describe replay progress without implying original partition zero was selected.
+		require.NoError(t, renderStatus(&out, r, false))
+		require.NotContains(t, out.String(), "Partition 0:")
+		if saved {
+			require.Contains(t, out.String(), "Replay: input records 2")
+		} else {
+			require.Contains(t, out.String(), "Replay: no saved progress")
+		}
+	}
+}

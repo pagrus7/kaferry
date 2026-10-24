@@ -17,7 +17,7 @@ func TestReplayRejectsOffsetsDecreasingBetweenBlocks(t *testing.T) {
 	meta := descriptor(1, records(42))
 	writeForeign(t, root, meta, meta.Identity.Source, 42, 44, 43)
 	catalog := NewCatalog(root, codec(t), NativeFiles{})
-	selected, err := catalog.Select()
+	selected, err := catalog.Select(nil)
 	require.NoError(t, err)
 	pool, err := NewPool(catalog, Limits{})
 	require.NoError(t, err)

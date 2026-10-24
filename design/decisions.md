@@ -18,10 +18,11 @@ Completion, delivery and restart contracts. See the [usage guide](../docs/usage.
 
 ## Source partitions
 
-- `WHERE PARTITION IN (0, 2)` selects fixed source IDs. `NOT IN` selects all others, including additions discovered while workers run. Omission selects all partitions. Each listed ID must exist at startup; lists are nonempty, sorted and deduplicated. Partition predicates require a topic source.
+- `WHERE PARTITION IN (0, 2)` selects fixed source IDs. `NOT IN` selects all others. Kafka discovers additions while workers run. Omission selects all partitions. Each listed ID must exist at startup in Kafka metadata or completed archive headers; lists are nonempty, sorted and deduplicated.
+- For archives, `PARTITION` is the original Kafka partition, across all topics/clusters represented in the directory. Validate every completed header, then replay only matching files; excluded payloads are not hashed or decoded. Pin the filtered selection before output. Resume validates only that saved selection, never discovering additions or requiring excluded files to remain present. Both operators use the existing file checkpoint and one virtual progress cursor.
 - Kafka assigns only selected partitions through cooperative sticky balancing. Excluded partitions are never fetched or committed and do not count toward completion or destination layout checks. Saved metadata on all source partitions is still checked for query compatibility.
-- All workers in a group use the same predicate and query identity. Selected copies advertise a query-specific group protocol, without a fallback for older or differently configured members. Changing the predicate requires a new group.
-- Partition-only `WHERE` keeps the default EARLIEST/follow behavior; explicit `START = LATEST` is allowed without timestamp bounds. Empty assignments follow the existing worker idle rules; they do not establish group completion. Workers that exited do not discover additions.
+- All workers in a group use the same predicate and query identity. Selected Kafka copies advertise a query-specific group protocol, without a fallback for older or differently configured members. Changing the predicate requires a new group.
+- Kafka partition-only `WHERE` keeps the default EARLIEST/follow behavior; explicit `START = LATEST` is allowed without timestamp bounds. Empty assignments follow the existing worker idle rules; they do not establish group completion. Workers that exited do not discover additions.
 
 ## Kafka start positions
 
@@ -183,7 +184,7 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 | `record_errors` | Effective `FAIL`/`SKIP` policies: `missing_timestamp`, `rejected_timestamp`, `other_record`; SKIP applies before writing, not to delivery failures |
 | `source`, `destination` | `kind`, `name`, optional connection alias, cluster/topic IDs, partition count, destination timestamp type and `partitioning` (`PRESERVE` or `KEY` for a Kafka destination) |
 | Endpoint `file` | `exists`; source adds `size_bytes`, `file_count`, `position_records`, `window`, `window_origin`, `checkpoint`, `checkpoint_exists`. Destination `size_bytes` is zero; destination size and file count are not inspected |
-| `source.partition_filter` | Optional `{exclude, ids}` predicate; `exclude=true` means NOT IN, so added partitions are eligible |
+| `source.partition_filter` | Optional `{exclude, ids}` predicate; `exclude=true` means NOT IN. Kafka discovers eligible added partitions while workers run; archives retain their saved file selection |
 | `partitions` | Sorted `partition`, `start`, `log_start`, `log_end`, `saved`, `window`, `window_origin` |
 | `window` | Inclusive `lower`, exclusive `upper`; null means unbounded. `window_origin`: `literal`, `saved`, `adopted` or `resolved` for preview-only NOW |
 | `warnings` | Detected retention gaps and unavailable/changed destination timestamp behavior; may be empty |
@@ -196,7 +197,7 @@ Verdicts: invalid/incompatible progress → `unknown`; incompatible active membe
 
 `stopped` means every currently selected partition has a saved stop reason. More source records may remain; the time cutoff can miss records within the range. Workers remain independent: they never wait for other workers' stops.
 
-Text lists up to eight partitions; `--json` includes all. JSON version `1` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `stop`, `window`). Kafka positions are offsets; file positions count confirmed input records. File `size_bytes` and `file_count` describe the saved selection, or current completed files before the first run. Inspection checks selected headers and sizes for incomplete groups, not payload checksums. Status does not scan records or verify destination writes.
+Kafka text lists up to eight partitions; file text reports replay progress. `--json` includes all. JSON version `1` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `stop`, `window`). Kafka positions are offsets; file positions count confirmed input records. File `size_bytes` and `file_count` describe the saved selection, or current completed files before the first run. Inspection checks selected headers and sizes for incomplete groups, not payload checksums. Status does not scan records or verify destination writes.
 
 ## Configuration and CLI
 

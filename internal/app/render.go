@@ -53,19 +53,22 @@ func renderEndpoint(output io.Writer, label string, endpoint inspect.Endpoint) {
 	if endpoint.Kind == "TOPIC" {
 		fmt.Fprintf(output, " (connection %q; %d partitions)\n", endpoint.Connection, endpoint.PartitionCount)
 		fmt.Fprintf(output, "    Resolved cluster: %q\n", endpoint.ClusterID)
-		if filter := endpoint.PartitionFilter; filter != nil {
-			operator, additions := "IN", "Added partitions are excluded."
-			if filter.Exclude {
-				operator, additions = "NOT IN", "Added partitions are eligible while workers run."
-			}
-			ids := filter.IDs[:min(8, len(filter.IDs))]
-			fmt.Fprintf(output, "    Source selection: PARTITION %s %v. %s\n", operator, ids, additions)
-			if len(ids) < len(filter.IDs) {
-				fmt.Fprintf(output, "    %d more listed IDs; see --json.\n", len(filter.IDs)-len(ids))
-			}
-		}
 	} else {
 		fmt.Fprintln(output)
+	}
+	if filter := endpoint.PartitionFilter; filter != nil {
+		operator, additions := "IN", "Added partitions are excluded."
+		if filter.Exclude {
+			operator, additions = "NOT IN", "Added partitions are eligible while workers run."
+		}
+		if endpoint.Kind == "FILE" {
+			additions = "New files require a new group; resume keeps the saved selection."
+		}
+		ids := filter.IDs[:min(8, len(filter.IDs))]
+		fmt.Fprintf(output, "    Source selection: PARTITION %s %v. %s\n", operator, ids, additions)
+		if len(ids) < len(filter.IDs) {
+			fmt.Fprintf(output, "    %d more listed IDs; see --json.\n", len(filter.IDs)-len(ids))
+		}
 	}
 }
 

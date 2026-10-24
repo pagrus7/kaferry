@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -8,18 +9,18 @@ import (
 	"github.com/pagrus7/kaferry/internal/sql"
 )
 
-// PartitionFilter is a source predicate, independent of current topic topology.
+// PartitionFilter selects original source partitions independently of topology.
 type PartitionFilter struct {
 	Exclude bool    `json:"exclude"`
 	IDs     []int32 `json:"ids"`
 }
 
-func partitionFilter(ast *sql.PartitionFilter, kind string) (*PartitionFilter, error) {
+// ErrMissingPartition identifies a listed ID absent from source metadata.
+var ErrMissingPartition = errors.New("PARTITION predicate names an ID absent from source metadata")
+
+func partitionFilter(ast *sql.PartitionFilter) (*PartitionFilter, error) {
 	if ast == nil {
 		return nil, nil
-	}
-	if kind != "TOPIC" {
-		return nil, sql.At(ast.Position, fmt.Errorf("PARTITION requires a topic source"))
 	}
 	if len(ast.IDs) == 0 {
 		return nil, sql.At(ast.Position, fmt.Errorf("PARTITION requires a nonempty integer list"))
@@ -46,7 +47,7 @@ func (f *PartitionFilter) Select(available []int32) ([]int32, error) {
 	if f != nil {
 		for _, id := range f.IDs {
 			if !slices.Contains(available, id) {
-				return nil, fmt.Errorf("PARTITION predicate names an ID absent from source metadata")
+				return nil, ErrMissingPartition
 			}
 		}
 	}
