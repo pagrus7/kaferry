@@ -63,10 +63,10 @@ The capture component caps open files at 1024 by default. TOML `worker.archive_c
 
 ## Replay and progress
 
-Replay selects completed file IDs once and saves that selection before producing. Warn about observed private files. Concurrent capture does not expand this selection; a snapshot does not establish that capture is complete.
+Replay selects matching completed file IDs once and saves that selection before producing. Warn about observed private files. Concurrent capture does not expand this selection; a snapshot does not establish that capture is complete.
 
 - Same `GROUP`: resume its fixed selection and exact per-file block/record cursors. A completed group remains completed.
-- New `GROUP`: select all current completed files, including files another group may have replayed.
+- New `GROUP`: select current completed files matching the partition predicate, including files another group may have replayed.
 
 Store and exclusively lock the group-derived checkpoint outside the archive, which may be read-only. Save cursors only through destination-confirmed progress. Missing or changed selected inputs fail an incomplete replay.
 
@@ -83,7 +83,7 @@ Each `files` entry contains:
 
 `position` counts confirmed input records in merge order. EOF uses the file length as `block` and record index zero. Reads and writes are capped at 64 MiB. A [partial checkpoint fixture](../internal/archive/replay/testdata/partial-checkpoint-v1.json) fixes the wire representation.
 
-Writer-state checksums are calculated on durability flushes and publication; replay-checkpoint checksums are calculated on progress saves. Every replay progress save rewrites and checksums the whole file list, so save time and bytes written grow with selection size. Appends do not hash JSON themselves. Frequent rotation can make these batches small. Idle flushes with no new writes do not save writer state. Selection hashes every completed file. An incomplete restart rechecks every selected file, including consumed files, before returning records. Explain/status read headers, sizes and saved JSON without hashing archive payloads. Completed files must remain immutable during replay.
+Writer-state checksums are calculated on durability flushes and publication; replay-checkpoint checksums are calculated on progress saves. Every replay progress save rewrites and checksums the whole file list, so save time and bytes written grow with selection size. Appends do not hash JSON themselves. Frequent rotation can make these batches small. Idle flushes with no new writes do not save writer state. Selection validates every completed header and hashes only matching files. See [partition selection](decisions.md#source-partitions). An incomplete restart rechecks every selected file, including consumed files, before returning records. Explain/status read headers, sizes and saved JSON without hashing archive payloads. Completed files must remain immutable during replay.
 
 A checkpoint failure stops new reads. A source failure still allows saving earlier confirmed output. Destination-confirmed records after the last saved checkpoint can repeat after restart.
 

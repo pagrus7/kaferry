@@ -85,7 +85,7 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 	defer closeConnection(destination, stop, &result)
 	report.Source, report.Destination = sourceInfo, destinationInfo
 	report.Source.PartitionFilter = p.Partitions
-	if p.Partitions != nil {
+	if p.Source.Kind == "TOPIC" && p.Partitions != nil {
 		topic, err := source.Describe(ctx, false)
 		if err != nil {
 			return report, err

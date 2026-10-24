@@ -3,6 +3,7 @@ package replay
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,6 +12,7 @@ import (
 type faultyFiles struct {
 	Filesystem
 	fault  string
+	target string
 	start  int64
 	active int
 }
@@ -22,13 +24,13 @@ func TestInspectionDoesNotReadPayloadsButExecutionHashesThem(t *testing.T) {
 	files := &faultyFiles{Filesystem: NativeFiles{}, fault: "hash", start: file.Start}
 	catalog := NewCatalog(root, codec(t), files)
 	// When previewing a query, then headers and lengths are readable without a full content scan.
-	selection, err := catalog.Inspect()
+	selection, err := catalog.Inspect(nil)
 	require.NoError(t, err)
 	require.Len(t, selection.Files, 1)
 	require.NoError(t, catalog.ValidateHeaders([]File{file}))
 	require.Zero(t, files.active)
 	// When executing, then the same unreadable payload must fail before the selection is pinned.
-	_, err = catalog.Select()
+	_, err = catalog.Select(nil)
 	require.ErrorIs(t, err, errDisk)
 	require.Zero(t, files.active)
 }
@@ -36,6 +38,7 @@ func TestInspectionDoesNotReadPayloadsButExecutionHashesThem(t *testing.T) {
 type faultyInput struct {
 	InputFile
 	owner *faultyFiles
+	name  string
 }
 type faultyDirectory struct {
 	Directory
@@ -51,7 +54,7 @@ func (f *faultyFiles) Open(path string) (InputFile, error) {
 		return nil, err
 	}
 	f.active++
-	return &faultyInput{InputFile: input, owner: f}, nil
+	return &faultyInput{InputFile: input, owner: f, name: filepath.Base(path)}, nil
 }
 func (f *faultyFiles) OpenDirectory(path string) (Directory, error) {
 	dir, err := f.Filesystem.OpenDirectory(path)
@@ -71,7 +74,7 @@ func (f *faultyInput) ReadAt(data []byte, offset int64) (int, error) {
 	if f.owner.fault == "read" {
 		return 0, errDisk
 	}
-	if f.owner.fault == "hash" && offset+int64(len(data)) > f.owner.start {
+	if f.owner.fault == "hash" && (f.owner.target == "" || f.owner.target == f.name) && offset+int64(len(data)) > f.owner.start {
 		allowed := max(int64(0), f.owner.start-offset)
 		n, _ := f.InputFile.ReadAt(data[:int(allowed)], offset)
 		return n, errDisk

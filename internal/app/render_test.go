@@ -274,3 +274,20 @@ func TestExplanationStatesPartitionScopeAndBoundsOnlyTheTextList(t *testing.T) {
 		require.Equal(t, tc.filter, decoded.Source.PartitionFilter)
 	}
 }
+
+func TestFilePartitionTextExplainsItsFixedSelection(t *testing.T) {
+	for _, exclude := range []bool{false, true} {
+		// Given either archive partition predicate.
+		endpoint := inspect.Endpoint{Kind: "FILE", Name: "archive", PartitionFilter: &plan.PartitionFilter{Exclude: exclude, IDs: []int32{5}}}
+		var out bytes.Buffer
+		// When rendering, then use the same original-partition name and state that additions require another group.
+		renderEndpoint(&out, "Source", endpoint)
+		operator := "IN"
+		if exclude {
+			operator = "NOT IN"
+		}
+		require.Contains(t, out.String(), "Source selection: PARTITION "+operator+" [5].")
+		require.Contains(t, out.String(), "New files require a new group; resume keeps the saved selection.")
+		require.NotContains(t, out.String(), "Added partitions are eligible")
+	}
+}

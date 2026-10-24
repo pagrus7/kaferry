@@ -79,7 +79,7 @@ func TestMergePreservesDuplicatesFullRecordsAndPhysicalTiesWithBoundedResources(
 		}
 	}
 	catalog := NewCatalog(root, codec(t), NativeFiles{})
-	selected, err := catalog.Select()
+	selected, err := catalog.Select(nil)
 	require.NoError(t, err)
 	meter := &measuredOpener{Opener: catalog}
 	pool, err := NewPool(meter, Limits{OpenFiles: 2, Blocks: 2})
@@ -195,7 +195,7 @@ func TestReplayWritesOnlyToExternalCheckpointDirectory(t *testing.T) {
 	// When replaying and saving, then the input archive remains unchanged.
 	s, _ := diskSession(t, root, checkpoints, query(), Limits{}, 10)
 	require.Equal(t, records(42, 43), drain(t, s, true))
-	after, err := NewCatalog(root, codec(t), NativeFiles{}).describe(f.name(), true)
+	after, err := NewCatalog(root, codec(t), NativeFiles{}).describe(f.name(), true, nil)
 	require.NoError(t, err)
 	require.Equal(t, f, after)
 	_, err = os.Stat(filepath.Join(root, ".kaferry"))
@@ -256,17 +256,17 @@ func TestCatalogPinsOnlyCompletedRegularFilesAndReportsPrivateFiles(t *testing.T
 	}
 	catalog := NewCatalog(root, codec(t), NativeFiles{})
 	// When selecting, then only completed data is pinned and private output is reported.
-	selection, err := catalog.Select()
+	selection, err := catalog.Select(nil)
 	require.NoError(t, err)
 	require.Equal(t, []File{f}, selection.Files)
 	require.Equal(t, 1, selection.PrivateFiles)
 	// A renamed or linked completed file cannot impersonate its embedded identity.
 	require.NoError(t, os.Rename(filepath.Join(root, f.name()), filepath.Join(root, "renamed.avro")))
-	_, err = catalog.Select()
+	_, err = catalog.Select(nil)
 	require.ErrorContains(t, err, "filename")
 	require.NoError(t, os.Remove(filepath.Join(root, "renamed.avro")))
 	require.NoError(t, os.Symlink("missing", filepath.Join(root, f.name())))
-	_, err = catalog.Select()
+	_, err = catalog.Select(nil)
 	require.ErrorContains(t, err, "regular file")
 }
 

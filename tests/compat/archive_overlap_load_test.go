@@ -46,7 +46,7 @@ func TestLoadArchiveOverlap(t *testing.T) {
 			report.ArchiveReplayBlocks = blocks
 			// Then every duplicate source offset survives, with its distinct original value.
 			catalog := replay.NewCatalog(out, codec, replay.NativeFiles{})
-			selection, err := catalog.Select()
+			selection, err := catalog.Select(nil)
 			require.NoError(t, err)
 			pool, err := replay.NewPool(catalog, replay.Limits{Blocks: 32})
 			require.NoError(t, err)

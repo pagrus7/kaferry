@@ -12,6 +12,7 @@ import (
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
 	"github.com/pagrus7/kaferry/internal/checkpoint"
+	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,7 +71,7 @@ type memorySnapshots struct {
 	selectErr, validateErr error
 }
 
-func (m *memorySnapshots) Select() (Selection, error) {
+func (m *memorySnapshots) Select(*plan.PartitionFilter) (Selection, error) {
 	m.selects++
 	return Selection{Files: append([]File{}, m.files...), PrivateFiles: m.private}, m.selectErr
 }
@@ -145,7 +146,7 @@ func writeFile(t testing.TB, root string, id int, values []avro.Record, blockRec
 	}
 	require.NoError(t, w.Flush())
 	require.NoError(t, f.Close())
-	result, err := NewCatalog(root, codec(t), NativeFiles{}).describe(meta.name(), true)
+	result, err := NewCatalog(root, codec(t), NativeFiles{}).describe(meta.name(), true, nil)
 	require.NoError(t, err)
 	return result
 }

@@ -15,6 +15,7 @@ type Clock interface{ Now() time.Time }
 type Query struct {
 	Group, Fingerprint string
 	Window             plan.WindowSpec
+	Partitions         *plan.PartitionFilter
 	// PartitionCount bounds original IDs when replay requires an existing layout.
 	// Zero leaves IDs unrestricted; the constraint is not persisted.
 	PartitionCount int
@@ -61,7 +62,7 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 		if err != nil {
 			return nil, err
 		}
-		selection, err := inputs.Select()
+		selection, err := inputs.Select(query.Partitions)
 		if err != nil {
 			return nil, err
 		}
@@ -113,12 +114,18 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 }
 
 func (q Query) validatePartitions(files []Progress) error {
-	if q.PartitionCount == 0 {
+	if q.Partitions == nil && q.PartitionCount == 0 {
 		return nil
 	}
 	for _, file := range files {
-		if err := plan.CheckPartition(file.File.Identity.Source.Partition, q.PartitionCount); err != nil {
-			return err
+		id := file.File.Identity.Source.Partition
+		if !q.Partitions.Matches(id) {
+			return errors.New("replay selection contains an excluded original partition")
+		}
+		if q.PartitionCount != 0 {
+			if err := plan.CheckPartition(id, q.PartitionCount); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -56,6 +56,9 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result Sour
 		result.Window = saved.Window
 		result.Stop = saved.Stop
 		for _, f := range saved.Files {
+			if !p.Partitions.Matches(f.File.Identity.Source.Partition) {
+				return result, &Conflict{Err: errors.New("replay selection contains an excluded original partition")}
+			}
 			files = append(files, f.File)
 		}
 		if !saved.Complete {
@@ -64,8 +67,11 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result Sour
 			}
 		}
 	} else {
-		selection, err := catalog.Inspect()
+		selection, err := catalog.Inspect(p.Partitions)
 		if err != nil {
+			if errors.Is(err, plan.ErrMissingPartition) {
+				return result, &core.Exit{Code: 2, Err: err}
+			}
 			return result, err
 		}
 		files = selection.Files
