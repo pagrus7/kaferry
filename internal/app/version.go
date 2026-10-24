@@ -6,18 +6,56 @@ import (
 	"runtime/debug"
 )
 
-// Release builds set these through the linker; source builds identify as dev.
-var version = "dev"
-var revision = "unknown"
+// Linker values override the metadata embedded by the Go toolchain.
+var version string
+var revision string
 
-func versionString() string {
-	client := "unknown"
-	if info, ok := debug.ReadBuildInfo(); ok {
+type buildInfo struct {
+	version, revision, client string
+}
+
+func currentBuild() buildInfo {
+	info, _ := debug.ReadBuildInfo()
+	return resolveBuildInfo(info, version, revision)
+}
+
+func resolveBuildInfo(info *debug.BuildInfo, version, revision string) buildInfo {
+	build := buildInfo{version: "dev", client: "unknown"}
+	if info != nil {
+		if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			build.version = info.Main.Version
+		}
+		dirty := false
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				build.revision = setting.Value
+			case "vcs.modified":
+				dirty = setting.Value == "true"
+			}
+		}
+		if dirty && build.revision != "" {
+			build.revision += "-dirty"
+		}
 		for _, dependency := range info.Deps {
 			if dependency.Path == "github.com/twmb/franz-go" {
-				client = dependency.Version
+				build.client = dependency.Version
 			}
 		}
 	}
-	return fmt.Sprintf("kaferry %s (commit %s; %s; franz-go %s)", version, revision, runtime.Version(), client)
+	if version != "" {
+		build.version = version
+	}
+	if revision != "" {
+		build.revision = revision
+	}
+	if build.revision == "" {
+		build.revision = "unknown"
+	}
+	return build
+}
+
+func versionString() string {
+	build := currentBuild()
+	return fmt.Sprintf("kaferry %s (commit %s; %s; franz-go %s)", build.version, build.revision, runtime.Version(), build.client)
 }
