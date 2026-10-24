@@ -49,7 +49,7 @@ jobs:
       - name: Use the packaged binary
         if: inputs.artifact != ''
         run: |
-          set -- release/*.tar.gz
+          set -- release/kaferry-*.tar.gz
           test "$#" = 1
           mkdir -p .cache/release-test
           tar -xzf "$1" -C .cache/release-test

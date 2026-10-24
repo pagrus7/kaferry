@@ -1,6 +1,6 @@
 # Avro archives
 
-Directory-based Avro archives support capture, snapshot replay and file-to-file copying. Optional summaries are pending. [Usage](../docs/usage.md).
+Directory-based Avro archives support capture, snapshot replay and file-to-file copying. [Usage](../docs/usage.md).
 
 ## Records and files
 
@@ -23,7 +23,6 @@ The writer records its decoded-block byte limit (`worker.max_frame_bytes`, defau
 ```text
 archive/
   <writer>.<file>.avro
-  <writer>.<file>.summary.json
   .<writer>.<file>.partial
   .kaferry/writers/<writer>/
     lock
@@ -88,7 +87,3 @@ Writer-state checksums are calculated on durability flushes and publication; rep
 A checkpoint failure stops new reads. A source failure still allows saving earlier confirmed output. Destination-confirmed records after the last saved checkpoint can repeat after restart.
 
 The session returns every record and retains the resolved time window for the caller's filter. Out-of-order timestamps do not end a file. No active-file reads, replay follow mode, global completion barrier or built-in consolidation.
-
-## Optional summaries
-
-Each completed file may have a rebuildable versioned JSON summary: file ID, actual length, source identity, count, offset/time ranges and missing timestamp count. Trust it only with matching file ID and length; otherwise scan Avro. Pruning must preserve missing-timestamp/error behavior. Summary failure warns and does not invalidate completed data. Summaries never replace required recovery state or replay checkpoints.

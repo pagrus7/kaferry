@@ -11,9 +11,7 @@
 
 Copy Kafka records between topics and Avro archives with one SQL-like statement.
 
-Preserves raw bytes, nulls, ordered headers and timestamps where possible. No transformations or Schema Registry access.
-
-Implementation is AI-driven with Codex and Claude Code under human direction.
+Preserves raw bytes, nulls, ordered headers and timestamps where possible. No transformations or Schema Registry access. Copies records; topics, topic settings, ACLs and consumer-group offsets must be prepared separately.
 
 ## Install
 
@@ -21,13 +19,15 @@ Implementation is AI-driven with Codex and Claude Code under human direction.
 
 Homebrew: [pagrus7/tap](https://github.com/pagrus7/homebrew-tap).
 
-From source (Go 1.26+, no C compiler): `CGO_ENABLED=0 go install github.com/pagrus7/kaferry/cmd/kaferry@latest`. Add `$(go env GOPATH)/bin` to `PATH` if `GOBIN` is unset. For a checkout, use `make build`. [Source builds and redistribution](releases/README.md#source-installation).
+From source (Go 1.26+, no C compiler): `CGO_ENABLED=0 go install github.com/pagrus7/kaferry/cmd/kaferry@latest`. Add `$(go env GOPATH)/bin` to `PATH` if `GOBIN` is unset. For a checkout, use `make build`. [Installation, containers and redistribution](docs/install.md).
 
 ## Known issues
 
 When Kaferry reads Kafka, franz-go v1.22.2 misreads record timestamps outside ±9,223,372,036,854 Unix milliseconds. [Kafka 4+ defaults and scope](design/client-compatibility.md#known-issues).
 
 ## Quick start
+
+For a controlled first run with three known records and no broker, use the [archive tutorial](docs/usage.md#first-copy-without-kafka).
 
 Both topics must exist; the destination needs at least as many partitions as the source. Replace the addresses; add [authentication](#connections) as needed.
 
@@ -53,13 +53,13 @@ WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
 `@alias` selects a connection; named `GROUP` saves progress for reruns. Omitting `GROUP` starts a fresh copy each run. A new window, `CUTOFF` or partitioning mode needs a new group.
 
 ```sh
-bin/kaferry explain --file copy.sql --config connections.toml
-bin/kaferry run --file copy.sql --config connections.toml
+kaferry explain --file copy.sql --config connections.toml
+kaferry run --file copy.sql --config connections.toml
 ```
 
 ## Connections
 
-Quote dotted TOML keys. [Supported properties](design/decisions.md#connection-properties); SASL/PLAIN over TLS:
+Quote dotted TOML keys. [Supported properties](docs/reference.md#connection-properties); SASL/PLAIN over TLS:
 
 ```toml
 [connections.prod]
@@ -86,8 +86,10 @@ Keep passwords out of SQL literals and shell arguments. [Configuration rules](do
 - **Archives:** multiple capture workers; one replay process per group/checkpoint directory. Storage needs durable sync, atomic rename and locks. [File setup and resume](docs/usage.md#run-a-copy).
 - **Permissions:** [Source READ and destination WRITE grants](docs/usage.md#permissions).
 
-[Usage guide](docs/usage.md)
+[Documentation index](docs/README.md) · [Usage guide](docs/usage.md)
 
 ## Development
+
+Implementation is AI-driven with Codex and Claude Code under human direction.
 
 [Tests](design/components.md#test-targets) · [MIT license](LICENSE); dependencies retain their licenses · [Security](SECURITY.md)

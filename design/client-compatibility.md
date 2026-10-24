@@ -66,4 +66,4 @@ Completion samples the log end including open transactions. A stable offset alon
 - If a gap check reports an unknown source topic or partition, the run stops; rerun after the topic is available. Source replica reassignment is untested and may trigger this.
 - A delivery timeout can occur after the broker appended the record. The failed record stays unconfirmed and can duplicate on restart; later records cannot advance that partition's saved prefix past it.
 
-For retries, shutdown, memory and group checks, see [Errors](decisions.md#errors), [Delivery and progress](decisions.md#delivery-and-progress), [connection properties](decisions.md#connection-properties) and [Identity](decisions.md#identity).
+For retries, shutdown, memory and group checks, see [Errors](decisions.md#errors), [Delivery and progress](decisions.md#delivery-and-progress), [connection properties](../docs/reference.md#connection-properties) and [Identity](decisions.md#identity).

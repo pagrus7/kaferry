@@ -58,7 +58,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 
 - Priorities: correctness, simplicity, throughput, CI duration, binary size.
 - Single-purpose structs behind narrow interfaces; keep core logic Fx-free. Lines of code and cyclomatic complexity are signals, not targets.
-- Keep user documentation example-based. CI caps [README](../README.md) at 5,500 characters and enforces fewer than 10,000 across README and [usage](../docs/usage.md). Grammar tests parse and plan the fenced SQL examples; invalid examples use inline code.
+- Keep user documentation example-based. CI caps [README](../README.md) at 5,500 characters. The [usage guide](../docs/usage.md) covers complete workflows without a shared character cap. Keep one authoritative explanation per topic, link exact contracts, and remove repetition before shortening explanations. Grammar tests parse and plan the fenced SQL examples; invalid examples use inline code. The broker-free archive tutorial generates a temporary download bundle from the SQL, TOML and JSON under `examples/archive-demo`, then runs its documented commands in `make smoke`. Release archive checks set `KAFERRY_TUTORIAL_BUNDLE` to test the exact examples asset before publishing it. To build locally, run `go run ./scripts/package_examples .cache/archive-demo.tar.gz`; generated Avro files and download archives stay outside Git.
 
 ## Tests
 
@@ -115,7 +115,7 @@ KAFERRY_SOAK_DURATION=30m \
 python3 scripts/ci.py soak make soak
 ```
 
-[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. Bounded load measurements appear in the summary and `checks-kafka` artifact: throughput, sampled RSS, work caps and logs. Summaries list the slowest tests. [Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) run nightly unless a successful scheduled run already tested the same main commit; the weekly full run always includes a 30-minute soak. Manual dispatch runs all suites with a configurable soak duration (keep it below the 40-minute test timeout). Artifacts retain evidence for 30 days; each test invocation runs once and failures stay visible in Actions.
+[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. Bounded load measurements appear in the summary and `checks-kafka` artifact: throughput, sampled RSS, work caps and logs. Summaries list the slowest tests. [Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) run nightly unless a successful scheduled run already tested the same main commit; the weekly full run always includes a 30-minute soak. Manual dispatch runs all suites with a configurable soak duration (keep it below the 40-minute test timeout). Release assets retain a concise [qualification summary](../releases/README.md#qualification-summary); detailed artifacts retain evidence for 30 days; each test invocation runs once and failures stay visible in Actions.
 
 PRs also run quality/security checks and [additional integrity suites](../.github/workflows/risk.yml). Only the prose allowlist skips fault and security/failover tests; unknown paths run both. The ordinary PR suites always run. Strict branch protection applies to admins; CodeQL errors and High/Critical security findings block merging.
 

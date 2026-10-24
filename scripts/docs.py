@@ -59,7 +59,7 @@ def check(path):
 
 
 if __name__ == '__main__':
-    files = subprocess.check_output(['git', 'ls-files', '*.md'], text=True).splitlines()
+    files = subprocess.check_output(['git', 'ls-files', '--cached', '--others', '--exclude-standard', '*.md'], text=True).splitlines()
     errors = []
     for name in files:
         try:
@@ -69,7 +69,6 @@ if __name__ == '__main__':
     if errors:
         sys.exit('\n'.join(errors))
     readme = Path('README.md').read_text()
-    size = sum(len(Path(p).read_text()) for p in ['README.md', 'docs/usage.md'])
-    if len(readme) > 5500 or size >= 10000:
-        sys.exit(f'Documentation budget exceeded: README {len(readme)}/5500; user docs {size}/10000')
+    if len(readme) > 5500:
+        sys.exit(f'Documentation budget exceeded: README {len(readme)}/5500')
     print(f'Local links and shell syntax checked in {len(files)} Markdown files.')

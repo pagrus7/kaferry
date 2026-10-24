@@ -19,6 +19,10 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 sh tests/qualification/certificates.sh "$cert_dir"
 compose up -d --wait --wait-timeout 90
+if [ -n "${KAFERRY_REPORT_DIR:-}" ]; then
+  mkdir -p "$KAFERRY_REPORT_DIR"
+  compose images --format json > "$KAFERRY_REPORT_DIR/qualification.broker-images.json"
+fi
 export KAFERRY_QUAL_BROKERS=127.0.0.1:41092,127.0.0.1:42092,127.0.0.1:43092
 export KAFERRY_QUAL_CA="$cert_dir/ca.pem"
 export KAFERRY_QUAL_WRONG_CA="$cert_dir/wrong-ca.pem"
