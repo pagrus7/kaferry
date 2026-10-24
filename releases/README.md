@@ -47,3 +47,21 @@ python3 scripts/release_notes.py vX.Y.Z > "$release_notes_file" &&
   gh release edit vX.Y.Z --notes-file "$release_notes_file"
 rm "$release_notes_file"
 ```
+
+## Container images
+
+Images package the tested Linux release binaries without recompiling them. The container workflow downloads the published archives, verifies SHA-256 checksums and archive provenance against the exact release tag, commit and release workflow, and retains `LICENSE` and `THIRD_PARTY_NOTICES.txt` in `/usr/share/doc/kaferry`. A digest-pinned Distroless base supplies CA certificates and its own package files. The image runs as UID/GID 65532, with `HOME=/tmp` and `/work` as its working directory; bind mounts need suitable ownership or an explicit `--user`.
+
+The workflow builds one multi-platform OCI archive containing image-specific SPDX SBOM and BuildKit provenance. Native AMD64/ARM64 jobs load that archive without rebuilding, compare its binary and license bytes with the inputs, exercise file copying, and check Kafka checkpointing/resume after Docker sends SIGTERM. Only after both jobs pass can the publish job copy the same OCI archive to GHCR and attest its image-index digest. Version tags are immutable: publishing a different digest under an existing version fails. Retry a failed publish job with its retained artifact; do not rebuild a published version.
+
+The release workflow calls image publishing after the GitHub release is published. Manual dispatch of `containers.yml` takes an existing stable release tag and defaults to validation without publishing. Publishing needs the repository's package-write and attestation permissions. A newly created GHCR package is private by default; set its visibility to public in package settings before advertising pulls. This changes package visibility, not the image bytes.
+
+Verify a published digest with GitHub CLI:
+
+```sh
+gh attestation verify oci://ghcr.io/pagrus7/kaferry@sha256:DIGEST \
+  --repo pagrus7/kaferry \
+  --signer-workflow pagrus7/kaferry/.github/workflows/containers.yml
+```
+
+Use a registry login if needed. The image also carries SBOM/provenance records for inspection; attestations establish build origin, not application correctness. No `latest` tag is published.

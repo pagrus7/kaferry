@@ -19,6 +19,8 @@ Implementation is AI-driven with Codex and Claude Code under human direction.
 
 [Download](https://github.com/pagrus7/kaferry/releases/latest), verify `SHA256SUMS`, extract and run `kaferry`.
 
+Homebrew: [pagrus7/tap](https://github.com/pagrus7/homebrew-tap).
+
 From source: `make build` with Go 1.26+, then `bin/kaferry --version`. No C compiler is needed.
 
 ## Known issues
