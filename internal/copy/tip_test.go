@@ -38,9 +38,7 @@ func TestTipSamplingRetriesWithoutStartingWaitOrBlockingOtherPartitions(t *testi
 	// When sampling during the outage and checking again before the retry delay.
 	err := r.tips()
 	require.NoError(t, err)
-	if query.calls != 1 {
-		t.Fatal("watermark queries were not interleaved with polling", query.calls)
-	}
+	require.Equal(t, 1, query.calls, "watermark queries were not interleaved with polling")
 	err = r.tips()
 
 	// Then both partitions are attempted once; neither H nor tip_wait is started.

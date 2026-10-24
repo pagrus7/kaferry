@@ -3,6 +3,7 @@ package franz
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strconv"
@@ -39,11 +40,7 @@ func parseSettings(properties plan.Properties) (settings, error) {
 	rules := s.rules()
 	values := properties.Values()
 	_, s.explicitMessageBytes = values["message.max.bytes"]
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
+	keys := slices.Sorted(maps.Keys(values))
 	for _, key := range keys {
 		apply, ok := rules[key]
 		if !ok {
@@ -171,11 +168,7 @@ func unsupportedProperty(key string, rules map[string]propertyRule) error {
 	if key == "partitioner" {
 		return invalidProperty(key, "unsupported; use WITH (PARTITIONING = PRESERVE) or WITH (PARTITIONING = KEY) after the INTO endpoint")
 	}
-	keys := make([]string, 0, len(rules))
-	for name := range rules {
-		keys = append(keys, name)
-	}
-	slices.Sort(keys)
+	keys := slices.Sorted(maps.Keys(rules))
 	// Property names are input too; do not print arbitrary bytes in diagnostics.
 	if strings.IndexFunc(key, func(c rune) bool { return !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '.' || c == '_') }) >= 0 {
 		key = "(invalid property name)"
