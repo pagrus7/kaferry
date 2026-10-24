@@ -59,7 +59,7 @@ jobs:
           fi
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.10'
+          go-version: '1.27.3'
           cache: true
       - run: make check
       - name: Build versioned binary
@@ -94,7 +94,7 @@ jobs:
           file: bin/kaferry
           format: spdx-json
           output-file: release/sbom-${{ matrix.platform }}.spdx.json
-          syft-version: v1.54.1
+          syft-version: v1.55.0
           upload-artifact: false
           upload-release-assets: false
           dependency-snapshot: false
