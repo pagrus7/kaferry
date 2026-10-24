@@ -184,7 +184,7 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 | `record_errors` | Effective `FAIL`/`SKIP` policies: `missing_timestamp`, `rejected_timestamp`, `other_record`; SKIP applies before writing, not to delivery failures |
 | `source`, `destination` | `kind`, `name`, optional connection alias, cluster/topic IDs, partition count, destination timestamp type and `partitioning` (`PRESERVE` or `KEY` for a Kafka destination) |
 | Endpoint `file` | `exists`; source adds `size_bytes`, `file_count`, `position_records`, `window`, `window_origin`, `checkpoint`, `checkpoint_exists`. Destination `size_bytes` is zero; destination size and file count are not inspected |
-| `source.partition_filter` | Optional `{exclude, ids}` predicate; `exclude=true` means NOT IN, so added partitions are eligible |
+| `source.partition_filter` | Optional `{exclude, ids}` predicate; `exclude=true` means NOT IN. Kafka discovers eligible added partitions while workers run; archives retain their saved file selection |
 | `partitions` | Sorted `partition`, `start`, `log_start`, `log_end`, `saved`, `window`, `window_origin` |
 | `window` | Inclusive `lower`, exclusive `upper`; null means unbounded. `window_origin`: `literal`, `saved`, `adopted` or `resolved` for preview-only NOW |
 | `warnings` | Detected retention gaps and unavailable/changed destination timestamp behavior; may be empty |

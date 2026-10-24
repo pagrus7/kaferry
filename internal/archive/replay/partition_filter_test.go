@@ -36,6 +36,29 @@ func TestPartitionSelectionNeverReadsExcludedPayloads(t *testing.T) {
 	}
 }
 
+func TestExcludedArchiveHeadersStillRequireAValidFileIdentity(t *testing.T) {
+	// Given an excluded partition whose completed filename disagrees with its otherwise valid header.
+	root := t.TempDir()
+	writeFile(t, root, 1, records(0), 0)
+	other := records(0)
+	other[0].Source.Partition = 5
+	excluded := writeFile(t, root, 2, other, 0)
+	require.NoError(t, os.Rename(filepath.Join(root, excluded.name()), filepath.Join(root, "renamed.avro")))
+	filter := &plan.PartitionFilter{IDs: []int32{0}}
+	catalog := NewCatalog(root, codec(t), NativeFiles{})
+	// When selecting, inspecting or starting replay, then metadata validation still fails and no selection is pinned.
+	_, err := catalog.Select(filter)
+	require.ErrorContains(t, err, "filename disagrees with file identity")
+	_, err = catalog.Inspect(filter)
+	require.ErrorContains(t, err, "filename disagrees with file identity")
+	q := query()
+	q.Partitions = filter
+	store := &memoryCheckpoints{}
+	_, err = NewSession(q, clock{}, store, catalog, &memoryBlocks{}, 10)
+	require.ErrorContains(t, err, "filename disagrees with file identity")
+	require.Empty(t, store.writes)
+}
+
 func TestPartitionReplayPinsOnlyMatchingFilesAndKeepsThatSnapshotOnResume(t *testing.T) {
 	// Given a complement predicate and multiple physical records in the selected original partition.
 	root, checkpoints := t.TempDir(), t.TempDir()
