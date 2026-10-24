@@ -96,6 +96,9 @@ func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 		// When starting a copy with the saved group position.
 		process := startCLI(t, ctx, binary, statement, "run", "-f", "-")
 		waitMembers(t, a, group, 1, 1, nil)
+		// Then the source position is saved before records arrive for START=LATEST.
+		start := committedPartitions(t, a, group, src, 1)
+		require.EqualValues(t, run*10+1, start[0].At, "initial source position")
 		if run == 1 {
 
 			// When
