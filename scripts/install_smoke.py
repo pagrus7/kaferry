@@ -31,9 +31,10 @@ def main():
                 for file in filter(None, files):
                     archive.write(root / file, f"{MODULE}@{version}/{file}")
         env = dict(os.environ, CGO_ENABLED="0", GOWORK="off", GOFLAGS="", GOBIN=str(work / "bin"),
-                   GOMODCACHE=str(work / "modules"), GOSUMDB="off",
+                   GOMODCACHE=str(work / "modules"), GOSUMDB="sum.golang.org",
+                   GONOSUMDB=MODULE, GOPRIVATE="", GONOPROXY="",
                    GOPROXY=proxy.as_uri() + "," + (cache / "cache/download").as_uri())
-        # Only this synthetic local proxy test disables sumdb; dependency hashes stay in go.sum.
+        # Exempt only the synthetic module; real dependencies still use Go's checksum database.
         for version in VERSIONS:
             subprocess.run(["go", "install", f"{MODULE}/cmd/kaferry@{version}"], env=env, cwd=work, check=True)
             output = subprocess.check_output([str(work / "bin/kaferry"), "--version"], text=True)
