@@ -100,7 +100,7 @@ func (c *engineConnection) DestinationPartitions(ctx context.Context) (int, erro
 	return len(parts), err
 }
 func (c *engineConnection) ValidatePartitions(context.Context, []int32) error { return nil }
-func (c *engineConnection) CheckMembers(context.Context, string) error {
+func (c *engineConnection) CheckMembers(context.Context, string, string) error {
 	return c.fixture.stage("members")
 }
 func (c *engineConnection) ReadProgress(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafkaport.Progress, error) {
@@ -423,6 +423,27 @@ func TestEngineRejectsPartitionMismatchBeforeProgressOrOutput(t *testing.T) {
 	require.NotContains(t, f.trace, "topic-input")
 	require.NotContains(t, f.trace, "topic-output")
 	require.NotContains(t, f.trace, "run")
+}
+
+func TestEngineChecksOnlySelectedIDsAgainstDestinationAndRejectsMissingSourceIDs(t *testing.T) {
+	for _, id := range []int32{0, 2} {
+		// Given a two-partition source and a destination containing only selected partition zero.
+		f := newEngineFixture()
+		f.store = f.input
+		f.partitions = map[string][]int32{"source": {0, 1}, "output": {0}}
+		p := enginePlan("TOPIC", "TOPIC")
+		p.Destination.Name, p.Destination.Partitioning = "output", plan.Preserve
+		p.Partitions = &plan.PartitionFilter{IDs: []int32{id}}
+		// When starting, then excluded layout differences pass but a missing selected source fails before progress.
+		err := newEngine(f, f, f, engineLogger(), nil).Run(t.Context(), p, config.Defaults(""), noopShutdown{})
+		if id == 0 {
+			require.NoError(t, err)
+		} else {
+			require.ErrorContains(t, err, "absent from source metadata")
+			require.NotContains(t, f.trace, "progress")
+			require.NotContains(t, f.trace, "topic-input")
+		}
+	}
 }
 
 func TestEngineBindsPreservedLayoutToTheInput(t *testing.T) {

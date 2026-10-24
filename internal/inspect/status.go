@@ -14,7 +14,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
-const StatusMeaning = "Stopped means every current partition has a saved stop reason. More source records may remain; the time cutoff can miss records within the range."
+const StatusMeaning = "Stopped means every currently selected partition has a saved stop reason. More source records may remain; the time cutoff can miss records within the range."
 
 var stopDescriptions = map[string]string{
 	"timestamp":         "timestamp cutoff reached",
@@ -84,6 +84,16 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 	}
 	defer closeConnection(destination, stop, &result)
 	report.Source, report.Destination = sourceInfo, destinationInfo
+	report.Source.PartitionFilter = p.Partitions
+	if p.Partitions != nil {
+		topic, err := source.Describe(ctx, false)
+		if err != nil {
+			return report, err
+		}
+		if _, err = p.Partitions.Select(topic.Partitions); err != nil {
+			return report, &kafkaport.Conflict{Err: err}
+		}
+	}
 	report.Fingerprint, err = p.Fingerprint(sourceInfo.ClusterID, destinationInfo.ClusterID)
 	if err != nil {
 		return report, &kafkaport.Conflict{Err: err}
@@ -107,7 +117,7 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 }
 
 func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.InspectionConnection, r *StatusReport) error {
-	before, err := c.Membership(ctx, p.Group)
+	before, err := c.Membership(ctx, p.Group, kafkaport.GroupProtocol(p, r.Fingerprint))
 	if err != nil {
 		return err
 	}
@@ -115,7 +125,7 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 	if err != nil {
 		return err
 	}
-	after, err := c.Membership(ctx, p.Group)
+	after, err := c.Membership(ctx, p.Group, kafkaport.GroupProtocol(p, r.Fingerprint))
 	if err != nil {
 		return err
 	}
@@ -127,8 +137,11 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 		return &kafkaport.Conflict{Err: fmt.Errorf("source topic identity changed")}
 	}
 	r.Source.PartitionCount = len(topic.Partitions)
-	slices.Sort(topic.Partitions)
-	for _, id := range topic.Partitions {
+	selected, err := p.Partitions.Select(topic.Partitions)
+	if err != nil {
+		return &kafkaport.Conflict{Err: err}
+	}
+	for _, id := range selected {
 		row := SavedPartition{ID: id}
 		if position, ok := saved[id]; ok {
 			row.Position = &position

@@ -108,7 +108,7 @@ func (p *Plan) policyOption(option sql.Option) error {
 		p.Policies = Policies{option.Value, option.Value, option.Value}
 	case "ON_MISSING_TIMESTAMP":
 		if p.Window.Lower == nil && p.Window.Upper == nil {
-			return sql.At(option.Position, fmt.Errorf("ON_MISSING_TIMESTAMP requires WHERE"))
+			return sql.At(option.Position, fmt.Errorf("ON_MISSING_TIMESTAMP requires timestamp bounds in WHERE"))
 		}
 		p.Policies.MissingTimestamp = option.Value
 	case "ON_REJECTED_TIMESTAMP":

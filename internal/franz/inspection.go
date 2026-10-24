@@ -19,8 +19,8 @@ func (c *connection) Describe(ctx context.Context, configuration bool) (kafkapor
 	return info, ctx.Err()
 }
 
-func (c *connection) Membership(ctx context.Context, group string) (kafkaport.Membership, error) {
-	return c.inspector.Membership(ctx, group)
+func (c *connection) Membership(ctx context.Context, group, protocol string) (kafkaport.Membership, error) {
+	return c.inspector.Membership(ctx, group, protocol)
 }
 
 func (c *connection) Saved(ctx context.Context, group, fingerprint string, window plan.WindowSpec, cutoff int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {

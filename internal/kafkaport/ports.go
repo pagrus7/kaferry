@@ -40,7 +40,7 @@ type Connection interface {
 	Partitions(context.Context) ([]int32, error)
 	DestinationPartitions(context.Context) (int, error)
 	PartitionValidator
-	CheckMembers(context.Context, string) error
+	CheckMembers(context.Context, string, string) error
 	ReadProgress(context.Context, string, string, plan.WindowSpec, int64) (map[int32]Progress, error)
 	Source(context.Context, plan.Plan, string, config.Worker, PartitionValidator) (core.Source, core.ProgressStore, error)
 	Sink(context.Context, config.Worker) (core.Sink, error)

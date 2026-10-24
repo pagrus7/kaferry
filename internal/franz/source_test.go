@@ -121,6 +121,19 @@ func TestFetchReportsTerminalErrorsEvenBesideRetryableOnes(t *testing.T) {
 	}
 }
 
+func TestExcludedAssignmentCannotPositionOrCommit(t *testing.T) {
+	// Given a selected source and an invalid excluded assignment.
+	s, client := sourceFixture(t)
+	s.plan.Partitions = &plan.PartitionFilter{IDs: []int32{2}}
+	answer := make(chan lifecycleAnswer, 1)
+	// When handling the callback, then reject before reading progress or saving initial offsets.
+	err := s.lifecycle(lifecycleEvent{ids: []int32{0}, answer: answer})
+	require.ErrorContains(t, err, "excluded source partition")
+	require.Error(t, (<-answer).err)
+	require.Zero(t, s.inspector.(*sourceMetadataMock).savedReads)
+	require.Empty(t, client.committed)
+}
+
 func TestSourcePreservesRecordBesideTransientFetchError(t *testing.T) {
 	// Given a fetch with a retryable error for one partition and a valid record for another.
 	s, _ := sourceFixture(t)

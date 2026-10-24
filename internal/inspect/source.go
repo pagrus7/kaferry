@@ -2,7 +2,6 @@ package inspect
 
 import (
 	"context"
-	"slices"
 
 	"github.com/pagrus7/kaferry/internal/config"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
@@ -40,9 +39,18 @@ func (s *Service) source(ctx context.Context, p plan.Plan, limits config.Worker,
 }
 
 func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafkaport.InspectionConnection, report *Report) error {
+	if p.Partitions != nil {
+		topic, err := connection.Describe(ctx, false)
+		if err != nil {
+			return err
+		}
+		if _, err = p.Partitions.Select(topic.Partitions); err != nil {
+			return &kafkaport.Conflict{Err: err}
+		}
+	}
 	saved, metadata := map[int32]int64{}, map[int32]kafkaport.Progress{}
 	if !p.OneOff {
-		if err := connection.CheckMembers(ctx, p.Group); err != nil {
+		if err := connection.CheckMembers(ctx, p.Group, kafkaport.GroupProtocol(p, report.Fingerprint)); err != nil {
 			return err
 		}
 		var err error
@@ -60,9 +68,12 @@ func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafka
 	if err != nil {
 		return err
 	}
+	selected, err := p.Partitions.Select(topic.Partitions)
+	if err != nil {
+		return &kafkaport.Conflict{Err: err}
+	}
 	report.Source.PartitionCount = len(topic.Partitions)
-	slices.Sort(topic.Partitions)
-	located, err := s.positioning.New(connection, connection, p, report.Fingerprint, topic.TopicID).Locate(ctx, topic.Partitions, saved, metadata)
+	located, err := s.positioning.New(connection, connection, p, report.Fingerprint, topic.TopicID).Locate(ctx, selected, saved, metadata)
 	if err != nil {
 		return err
 	}

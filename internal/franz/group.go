@@ -33,7 +33,10 @@ func (i *Inspector) describeGroup(parent context.Context, group string) (kmsg.De
 	}
 	return g, nil
 }
-func compatibleMembers(g kmsg.DescribeGroupsResponseGroup, topic string) error {
+func compatibleMembers(g kmsg.DescribeGroupsResponseGroup, topic, protocol string) error {
+	if len(g.Members) > 0 && g.Protocol != protocol {
+		return conflict("GROUP has an incompatible partition selection or assignment protocol")
+	}
 	for _, m := range g.Members {
 		if !strings.HasPrefix(m.ClientID, "kaferry-") {
 			return conflict("GROUP has a foreign active member")
@@ -54,19 +57,19 @@ func compatibleMembers(g kmsg.DescribeGroupsResponseGroup, topic string) error {
 	return nil
 }
 
-func (i *Inspector) CheckMembers(parent context.Context, group string) error {
+func (i *Inspector) CheckMembers(parent context.Context, group, protocol string) error {
 	g, err := i.describeGroup(parent, group)
 	if err != nil {
 		return err
 	}
-	return compatibleMembers(g, i.topic)
+	return compatibleMembers(g, i.topic, protocol)
 }
-func (i *Inspector) Membership(ctx context.Context, group string) (kafkaport.Membership, error) {
+func (i *Inspector) Membership(ctx context.Context, group, protocol string) (kafkaport.Membership, error) {
 	g, err := i.describeGroup(ctx, group)
 	if err != nil {
 		return kafkaport.Membership{}, err
 	}
-	return kafkaport.Membership{State: g.State, Foreign: compatibleMembers(g, i.topic) != nil, Idle: len(g.Members) == 0 && (g.State == "Empty" || g.State == "Dead")}, nil
+	return kafkaport.Membership{State: g.State, Foreign: compatibleMembers(g, i.topic, protocol) != nil, Idle: len(g.Members) == 0 && (g.State == "Empty" || g.State == "Dead")}, nil
 }
 
 func (i *Inspector) Saved(parent context.Context, group, fp string, window plan.WindowSpec, cutoff int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {

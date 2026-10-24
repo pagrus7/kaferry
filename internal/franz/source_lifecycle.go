@@ -24,6 +24,13 @@ func (s *Source) lifecycle(event lifecycleEvent) error {
 	}
 	ctx, cancel := context.WithTimeout(s.query, 10*time.Second)
 	defer cancel()
+	for _, id := range event.ids {
+		if !s.plan.Partitions.Matches(id) {
+			err := fmt.Errorf("assignment contains an excluded source partition")
+			event.answer <- lifecycleAnswer{err: err}
+			return err
+		}
+	}
 	if s.routing != nil && len(event.ids) > 0 {
 		if err := s.routing.ValidatePartitions(ctx, event.ids); err != nil {
 			event.answer <- lifecycleAnswer{err: err}

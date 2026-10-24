@@ -137,8 +137,8 @@ func (c *connection) ValidatePartitions(ctx context.Context, ids []int32) error 
 	return nil
 }
 
-func (c *connection) CheckMembers(ctx context.Context, group string) error {
-	return c.inspector.CheckMembers(ctx, group)
+func (c *connection) CheckMembers(ctx context.Context, group, protocol string) error {
+	return c.inspector.CheckMembers(ctx, group, protocol)
 }
 func (c *connection) ReadProgress(ctx context.Context, group, fp string, window plan.WindowSpec, cutoff int64) (map[int32]kafkaport.Progress, error) {
 	_, progress, err := c.inspector.Saved(ctx, group, fp, window, cutoff)
@@ -154,6 +154,9 @@ func (c *connection) Source(query context.Context, p plan.Plan, fp string, limit
 		if err := c.inspector.Refresh(query); err != nil {
 			return nil, nil, err
 		}
+	}
+	if _, err := p.Partitions.Select(c.inspector.parts); err != nil {
+		return nil, nil, &kafkaport.Conflict{Err: err}
 	}
 	settings, err := c.settings.bounded(limits)
 	if err != nil {
@@ -172,7 +175,7 @@ func (c *connection) Source(query context.Context, p plan.Plan, fp string, limit
 	if settings.clientID != "" {
 		clientID += "-" + settings.clientID
 	}
-	options = append(options, kgo.WithContext(clientCtx), kgo.ClientID(clientID), kgo.ConsumerGroup(p.Group), kgo.DisableAutoCommit(), kgo.ConsumeResetOffset(kgo.NoResetOffset()), kgo.FetchIsolationLevel(kgo.ReadCommitted()), kgo.FetchMaxWait(500*time.Millisecond), kgo.KeepControlRecords(), kgo.BlockRebalanceOnPoll(), kgo.Balancers(kgo.CooperativeStickyBalancer()))
+	options = append(options, kgo.WithContext(clientCtx), kgo.ClientID(clientID), kgo.ConsumerGroup(p.Group), kgo.DisableAutoCommit(), kgo.ConsumeResetOffset(kgo.NoResetOffset()), kgo.FetchIsolationLevel(kgo.ReadCommitted()), kgo.FetchMaxWait(500*time.Millisecond), kgo.KeepControlRecords(), kgo.BlockRebalanceOnPoll(), kgo.Balancers(sourceBalancer(p, fp)))
 	client, err := c.factory.clients.Consumer(options...)
 	if err != nil {
 		cancel()

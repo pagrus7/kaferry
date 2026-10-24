@@ -25,16 +25,17 @@ type ErrorPolicies struct {
 }
 
 type Endpoint struct {
-	Kind           string       `json:"kind"`
-	Format         string       `json:"format,omitempty"`
-	Name           string       `json:"name"`
-	Connection     string       `json:"connection,omitempty"`
-	ClusterID      string       `json:"cluster_id,omitempty"`
-	TopicID        string       `json:"topic_id,omitempty"`
-	PartitionCount int          `json:"partition_count,omitempty"`
-	Partitioning   string       `json:"partitioning,omitempty"`
-	TimestampType  string       `json:"timestamp_type,omitempty"`
-	File           *FileSummary `json:"file,omitempty"`
+	Kind            string                `json:"kind"`
+	Format          string                `json:"format,omitempty"`
+	Name            string                `json:"name"`
+	Connection      string                `json:"connection,omitempty"`
+	ClusterID       string                `json:"cluster_id,omitempty"`
+	TopicID         string                `json:"topic_id,omitempty"`
+	PartitionCount  int                   `json:"partition_count,omitempty"`
+	Partitioning    string                `json:"partitioning,omitempty"`
+	PartitionFilter *plan.PartitionFilter `json:"partition_filter,omitempty"`
+	TimestampType   string                `json:"timestamp_type,omitempty"`
+	File            *FileSummary          `json:"file,omitempty"`
 }
 
 type FileSummary struct {

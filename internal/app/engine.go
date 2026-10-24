@@ -204,7 +204,7 @@ func (e *runtimeEngine) prepareSource(ctx context.Context, p plan.Plan, fp strin
 	if p.Source.Kind == "FILE" {
 		return e.files.OpenSource(p, fp, limits, partitionCount)
 	}
-	if err := connection.CheckMembers(ctx, p.Group); err != nil {
+	if err := connection.CheckMembers(ctx, p.Group, kafkaport.GroupProtocol(p, fp)); err != nil {
 		return nil, err
 	}
 	saved, err := connection.ReadProgress(ctx, p.Group, fp, p.Window, p.CutoffMS)
@@ -230,6 +230,17 @@ func routingValidator(p plan.Plan, destination kafkaport.Connection) kafkaport.P
 }
 
 func validateRouting(ctx context.Context, p plan.Plan, source, destination kafkaport.Connection) (int, error) {
+	var ids []int32
+	if p.Source.Kind == "TOPIC" && (p.Partitions != nil || p.Destination.PreservesPartitions()) {
+		available, err := source.Partitions(ctx)
+		if err != nil {
+			return 0, err
+		}
+		ids, err = p.Partitions.Select(available)
+		if err != nil {
+			return 0, &kafkaport.Conflict{Err: err}
+		}
+	}
 	if !p.Destination.PreservesPartitions() {
 		return 0, nil
 	}
@@ -238,10 +249,6 @@ func validateRouting(ctx context.Context, p plan.Plan, source, destination kafka
 		return 0, err
 	}
 	if p.Source.Kind == "TOPIC" {
-		ids, err := source.Partitions(ctx)
-		if err != nil {
-			return 0, err
-		}
 		if err = plan.CheckPartitions(ids, count); err != nil {
 			return 0, &kafkaport.Conflict{Err: err}
 		}

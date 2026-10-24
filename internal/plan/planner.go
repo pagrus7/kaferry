@@ -64,6 +64,7 @@ type Plan struct {
 	OneOff                 bool
 	Start                  string
 	Window                 WindowSpec
+	Partitions             *PartitionFilter
 	CutoffMS               int64
 	WorkerStopAfterRecords uint64
 	Policies               Policies
@@ -86,6 +87,10 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 	plan.Window, err = normalize(statement.Bounds)
 	if err != nil {
 		return Plan{}, sql.At(statement.WherePosition, err)
+	}
+	plan.Partitions, err = partitionFilter(statement.Partitions, plan.Source.Kind)
+	if err != nil {
+		return Plan{}, err
 	}
 	if plan.Destination.Kind == "TOPIC" {
 		plan.Destination.Partitioning = Preserve
@@ -112,7 +117,7 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 			plan.Start = "EARLIEST"
 		}
 		if len(statement.Bounds) > 0 && plan.Start != "" {
-			return Plan{}, sql.At(optionPosition(statement.Source.Options, "START", statement.Source.OptionsPosition), fmt.Errorf("START cannot be combined with WHERE; remove START"))
+			return Plan{}, sql.At(optionPosition(statement.Source.Options, "START", statement.Source.OptionsPosition), fmt.Errorf("START cannot be combined with timestamp bounds in WHERE; remove START"))
 		}
 	} else if plan.Start != "" {
 		return Plan{}, sql.At(optionPosition(statement.Source.Options, "START", statement.Source.OptionsPosition), fmt.Errorf("START requires a topic source; remove START for FILE sources"))
@@ -221,11 +226,13 @@ func (p Plan) Fingerprint(sourceClusterID, destinationClusterID string) (string,
 		Destination  identity
 		Window       WindowSpec
 		CutoffMS     int64
-		Partitioning string `json:",omitempty"`
+		Partitioning string           `json:",omitempty"`
+		Partitions   *PartitionFilter `json:",omitempty"`
 	}{Version: 1, Source: source, Destination: destination, Window: p.Window, CutoffMS: p.CutoffMS}
 	if p.Destination.PreservesPartitions() {
 		canonical.Partitioning = Preserve
 	}
+	canonical.Partitions = p.Partitions
 	encoded, err := json.Marshal(canonical)
 	if err != nil {
 		return "", err
