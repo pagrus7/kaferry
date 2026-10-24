@@ -90,3 +90,15 @@ kaferry run -c connections.toml -f copy.sql
 ```
 
 Progress logs default to 30 s; `worker.progress_interval='0'` disables them. [Metric meanings and settings](../design/decisions.md#observability).
+
+## Containers
+
+For released images (Linux AMD64/ARM64):
+
+```sh
+docker run --rm --stop-timeout 35 --user "$(id -u):$(id -g)" \
+  --mount "type=bind,src=$PWD,dst=/work" ghcr.io/pagrus7/kaferry:vX.Y.Z \
+  run --file /work/copy.sql --config /work/connections.toml
+```
+
+Use container paths and reachable broker addresses. Set `worker.checkpoint_dir` to `/work/checkpoints` for resume; `--rm` deletes container-only files. The stop timeout must exceed `worker.shutdown_timeout` (30s by default). [Image verification and publishing](../releases/README.md#container-images).

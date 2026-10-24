@@ -185,3 +185,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$RELEASE_TAG" --verify-tag --title "Kaferry $RELEASE_TAG" --notes-file release-notes.txt release/*
+
+  containers:
+    if: github.event_name == 'push' || inputs.publish
+    needs: publish
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/containers.yml
+    with:
+      tag: ${{ github.ref_name }}
+      publish: true

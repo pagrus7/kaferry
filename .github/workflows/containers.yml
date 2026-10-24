@@ -1,0 +1,177 @@
+name: containers
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/containers.yml'
+      - '.github/workflows/release.yml'
+      - 'packaging/container/**'
+      - 'scripts/container_*'
+      - 'scripts/test_container_*'
+      - 'tests/compat/container_test.go'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing published stable release tag'
+        type: string
+        required: true
+      publish:
+        description: 'Publish the tested images to GHCR'
+        type: boolean
+        default: false
+        required: true
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      publish:
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: containers-${{ github.event.pull_request.number || inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.inputs.outputs.version }}
+      revision: ${{ steps.inputs.outputs.revision }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.10'
+          cache: true
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - name: Prepare exact binary and license inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          PR: ${{ github.event_name == 'pull_request' }}
+        run: |
+          if [ "$PR" = true ]; then
+            python3 scripts/container_artifacts.py candidate .cache/container-context
+          else
+            python3 scripts/container_artifacts.py release .cache/container-context --tag "$TAG"
+          fi
+      - id: inputs
+        name: Read validated release identity
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          record = json.loads(Path('.cache/container-context/release.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f"version={record['version']}\nrevision={record['revision']}\n")
+          PY
+      - name: Build OCI archive with SBOM and provenance
+        env:
+          VERSION: ${{ steps.inputs.outputs.version }}
+          REVISION: ${{ steps.inputs.outputs.revision }}
+        run: |
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            --file packaging/container/Dockerfile \
+            --build-arg "VERSION=$VERSION" --build-arg "REVISION=$REVISION" \
+            --sbom=true --provenance=mode=max \
+            --output type=oci,dest=.cache/kaferry.oci.tar .cache/container-context
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: container-inputs
+          path: |
+            .cache/kaferry.oci.tar
+            .cache/container-context/
+          include-hidden-files: true
+          retention-days: 7
+  test:
+    needs: build
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.10'
+          cache: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: container-inputs
+          path: .cache
+      - run: sudo apt-get update && sudo apt-get install --yes skopeo
+      - name: Load the native platform without rebuilding
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: skopeo copy --override-arch "$ARCH" oci-archive:.cache/kaferry.oci.tar docker-daemon:kaferry:ci
+      - name: Verify packaged bytes and file-copy fidelity
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: python3 scripts/container_smoke.py kaferry:ci .cache/container-context "$ARCH"
+      - name: Verify immutable OCI publishing against a disposable registry
+        if: matrix.arch == 'amd64'
+        run: |
+          printf '[[registry]]\nlocation="localhost:5000"\ninsecure=true\n' | sudo tee /etc/containers/registries.conf > /dev/null
+          docker run --detach --name kaferry-image-registry --publish 127.0.0.1:5000:5000 \
+            registry:3@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2
+          curl --fail --retry 10 --retry-all-errors --retry-delay 1 --max-time 3 http://localhost:5000/v2/
+          first=$(python3 scripts/container_publish.py .cache/kaferry.oci.tar localhost:5000/kaferry:test)
+          second=$(python3 scripts/container_publish.py .cache/kaferry.oci.tar localhost:5000/kaferry:test)
+          test "$first" = "$second"
+          printf '%s\n' "$first" | grep -Eq '^sha256:[a-f0-9]{64}$'
+      - run: make broker
+      - name: Verify SIGTERM checkpointing and container resume
+        env:
+          KAFERRY_TEST_IMAGE: kaferry:ci
+          KAFKA_TEST_BROKERS: 127.0.0.1:39092
+        run: |
+          python3 scripts/ci.py container-resume go test -count=1 -json -timeout=3m -tags=integration,container -run '^TestContainerShutdownAndResume$' ./tests/compat
+          python3 scripts/ci.py verify-tests container-resume TestContainerShutdownAndResume
+      - if: always()
+        run: |
+          make broker-down
+          docker rm --force kaferry-image-registry 2>/dev/null || true
+  publish:
+    if: github.event_name != 'pull_request' && inputs.publish
+    needs: [build, test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: container-inputs
+          path: .cache
+      - run: sudo apt-get update && sudo apt-get install --yes skopeo
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login --username "$GITHUB_ACTOR" --password-stdin ghcr.io
+      - id: push
+        name: Publish the tested OCI archive without replacing a version
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          digest=$(python3 scripts/container_publish.py .cache/kaferry.oci.tar "ghcr.io/pagrus7/kaferry:$VERSION")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Attest the published image index
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/pagrus7/kaferry
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
