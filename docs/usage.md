@@ -13,7 +13,7 @@ docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io
 
 This output is from a fresh `kaferry-demo` volume. If you ran the README example, continue with the status command below.
 
-The image includes [copy.sql](../examples/archive-demo/copy.sql), its configuration and three sample Kafka records stored in Avro files. The command copies these records from `input` to `output` and saves progress for the named group `archive-demo`. Docker keeps the files and checkpoints in the `kaferry-demo` volume after the container exits.
+The image includes [copy.sql](../examples/archive-demo/copy.sql), its configuration and three sample Kafka records stored in Avro files. The command copies these records from `input` to `output` and saves progress for the named group `archive-demo`. A checkpoint records replay progress in a file. Docker keeps it with the input and output in the `kaferry-demo` volume after the container exits.
 
 ```sh
 docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest status -c tutorial.toml -f copy.sql
@@ -59,7 +59,7 @@ This deletes the demo's input, output and checkpoints. Running the first command
 
 ## First copy without Kafka
 
-Install `kaferry` on `PATH` ([installation](install.md)). This tutorial uses a shell, `curl` and `tar`, three synthetic records, and local storage that supports sync, atomic rename and locks. It needs no broker or credentials. Choose a [release](https://github.com/pagrus7/kaferry/releases) that includes `archive-demo.tar.gz` and matches your binary. Set `version` below to that release tag, then run the block in a directory that does not already contain `archive-demo`:
+Install `kaferry` on `PATH` ([installation](install.md)). This tutorial uses a shell, `curl` and `tar`, three synthetic records, and a fresh directory on local disk ([archive storage requirements](#archive-a-topic-and-replay-it)). It needs no broker or credentials. Choose a [release](https://github.com/pagrus7/kaferry/releases) that includes `archive-demo.tar.gz` and matches your binary. Set `version` below to that release tag, then run the block in a directory that does not already contain `archive-demo`:
 
 ```sh
 version=vX.Y.Z
@@ -94,28 +94,11 @@ The first `copy summary` reports `submitted: 3` and `confirmed: 3`. The status i
 
 This group consumed its fixed file selection and saved progress after output confirmation. Status reads saved progress; it does not compare destination contents. The rerun summary reports `submitted: 0` and `confirmed: 0`, and the output still contains three records. Keep `output` and `checkpoints` together: a completed checkpoint does not recreate deleted output. To repeat the tutorial from scratch, use another fresh copy of the example directory.
 
-## What a copy job means
-
-A named `GROUP` identifies saved progress. Kafka stores it as source consumer-group offsets and metadata; archive replay stores it in `worker.checkpoint_dir`. The query and endpoint identities must match when resuming. Omitting `GROUP` generates a new independent group every run.
-
-| Input mode | What stops this worker? | Saved state and rerun |
-| --- | --- | --- |
-| Kafka without an enabled completion rule | A signal or worker record threshold | Confirmed offsets; the same group resumes and follows new records, including when both timestamp rules are OFF |
-| Kafka with timestamp completion enabled | Per-partition [completion rules](../design/decisions.md#completion), or worker record threshold | Confirmed offsets, resolved window, ends and stops; the same group resumes under those rules |
-| Kafka with a fixed offset end | Reaching each saved exclusive end, or worker record threshold | Ends remain fixed; rerunning the same group excludes later appends |
-| Completed Avro files | Completing selected streams under EOF or explicit criteria, or worker record threshold | Fixed file selection and confirmed cursors; the same group retains its selection |
-
-A worker record threshold applies afresh to each invocation. A new archive group selects current completed files, including files already copied by other groups. See [identity rules](../design/decisions.md#identity) before changing a saved job.
-
-## Configuration
-
-Use `-c connections.toml`; SQL overrides TOML. [Settings](reference.md#configuration-and-cli).
-
 ## Copy between Kafka topics
 
-Both topics must exist; the destination needs at least as many partitions as the source. Replace the addresses; add [authentication](#connections) as needed.
+Install `kaferry` on `PATH` ([installation](install.md)). Create both topics first; topic settings, ACLs and consumer-group offsets are not copied. These examples keep original partition numbers, so the destination needs every selected source partition ID; add `WITH (PARTITIONING = KEY)` after the destination topic to route by key instead ([routing](../design/decisions.md#kafka-output)).
 
-**`connections.toml`:**
+Replace the addresses in **`connections.toml`**; add [authentication](#connections) and the required [permissions](#permissions). Kaferry copies raw bytes: ensure their formats and Schema Registry IDs work at the destination. Destination broker settings can replace timestamps or delete old records soon after copying; see [Kafka output](../design/decisions.md#kafka-output) and [client limits](../design/client-compatibility.md#kafka-input-timestamps).
 
 ```toml
 [connections.prod]
@@ -125,21 +108,116 @@ Both topics must exist; the destination needs at least as many partitions as the
 'bootstrap.servers' = 'destination.example:9092'
 ```
 
-**`copy.sql`:** filter Kafka record timestamps, not payload times, from 09:00 inclusive to 10:00 exclusive (UTC).
+Choose one example below and save it as **`copy.sql`**. `@prod` and `@backup` select the connection profiles above. Preview, run and check saved progress with:
+
+```sh
+kaferry explain -c connections.toml -f copy.sql
+kaferry run -c connections.toml -f copy.sql
+kaferry status -c connections.toml -f copy.sql --json
+```
+
+For a following copy, press Ctrl+C before checking status. `explain` checks the query and current metadata without writing; it does not check write access. [Inspection output](reference.md#inspection).
+
+### Copy the current backlog and stop
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-backfill')
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-snapshot')
+WHERE RECORD_OFFSET < LATEST;
+```
+
+An offset is a position within one partition. `LATEST` is its readable end, excluded from the copy: an end of 10 means `< LATEST` includes offset 9. Kaferry saves each partition's end when first assigned; an open transaction can hold it below records already written, and partitions capture their ends separately.
+
+Only committed records still retained by Kafka can be copied. The named `GROUP` saves progress in the source Kafka group: rerunning it keeps the saved ends and excludes later appends. A new group, or omitting `GROUP`, starts an independent copy and can duplicate existing output; see [resuming](#resume-or-start-over).
+
+### Try a small copy first
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-preview')
+WHERE RECORD_OFFSET < LATEST
+OPTIONS (WORKER_STOP_AFTER_RECORDS = 100);
+```
+
+Each invocation accepts at most 100 records for writing in this process, or stops sooner at the saved ends. A saved `worker_record_cap` stop means the allowance was reached; rerun without `OPTIONS` to continue to those same ends, or keep it for another allowance of 100. [Counting rules](../design/decisions.md#worker-record-stop).
+
+### Copy an offset range
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-offsets-0')
+WHERE PARTITION IN (0)
+  AND RECORD_OFFSET >= 100
+  AND RECORD_OFFSET <= 199;
+```
+
+Copies offsets 100 through 199, both included, from source partition 0; `<= 199` is equivalent to `< 200`. The partition must exist and retain start position 100 and end position 200 when the copy starts, or the copy fails. Offset gaps mean this need not produce 100 records.
+
+### Copy selected partitions
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-partitions')
+WHERE PARTITION IN (0, 2)
+  AND RECORD_OFFSET < LATEST;
+```
+
+Copies only source partitions 0 and 2 to their saved readable ends; both IDs must exist. Use `PARTITION NOT IN (0, 2)` to select every other partition; Kafka can discover added eligible partitions while the worker runs. [Partition selection](../design/decisions.md#source-partitions).
+
+### Use different offsets per partition
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-offset-repair')
+WHERE (PARTITION IN (0) AND RECORD_OFFSET >= 100 AND RECORD_OFFSET <= 199)
+   OR (PARTITION IN (2) AND RECORD_OFFSET >= 900 AND RECORD_OFFSET < LATEST);
+```
+
+Copies offsets 100–199 from partition 0 and offsets from 900 up to the saved readable end of partition 2. Each branch needs its own partition selection and upper offset bound; selections must not overlap, and unlisted partitions are excluded. The same [available-position rules](../design/decisions.md#offset-ends) apply to numeric bounds.
+
+## Copy records in a time range
+
+Use the connection profiles and commands from [Kafka setup](#copy-between-kafka-topics).
+
+### Within the current backlog
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-hour')
+WHERE RECORD_OFFSET < LATEST
+  AND RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
+  AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
+```
+
+Copies Kafka record timestamps from 09:00 inclusive to 10:00 exclusive (UTC), not times inside the payload. Reading can continue from the first matching timestamp through each saved readable end, including records newer than the requested range. Matching records appended beyond those ends are excluded; timestamps only filter records in this example, without deciding when reading stops.
+
+### Allow late arrivals
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod'
+WITH (GROUP = 'orders-hour-live',
+      MAX_STALENESS = INTERVAL '5' MINUTE,
+      MAX_OUT_OF_ORDER = INTERVAL '5' MINUTE)
 WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
 ```
 
-`@alias` selects a connection; named `GROUP` saves progress for reruns. Omitting `GROUP` starts a fresh copy each run. Changing the window, effective timestamp allowances, offset criteria or partitioning mode needs a new group. Kafka timestamp completion defaults to five minutes for arrival delay and disorder; `MAX_OUT_OF_ORDER` can override disorder independently. Copying starts immediately. [Completion and assumptions](../design/decisions.md#completion).
+Use this when records for the range are still arriving, or to finish an old range without reading to today's end. Both settings show their five-minute defaults; copying starts immediately:
 
-```sh
-kaferry explain --file copy.sql --config connections.toml
-kaferry run --file copy.sql --config connections.toml
+- `MAX_STALENESS`: once Kaferry's clock passes 10:05, it captures each partition's current end, including unfinished transactions, saves it and reads up to it. Records appended beyond that saved end are excluded; if the deadline is already past, capture happens at startup.
+- `MAX_OUT_OF_ORDER`: reading a record stamped strictly after 10:05 stops reading that partition, even before reaching its saved end. A later record stamped 09:59 can be missed, even if already present.
+
+Increase the arrival-delay or disorder allowance to match your input, or disable the corresponding rule with `OFF`. Either rule can finish a partition independently, so increasing one does not protect against the other stopping early; neither setting limits total run time. [Exact rules and assumptions](../design/decisions.md#completion) · [Relative windows with `NOW()`](../design/grammar.md#valid-examples).
+
+## Keep copying new records
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-follow');
 ```
+
+Copies the retained backlog, then follows new records until you press Ctrl+C. Add `START = LATEST` inside source `WITH` to skip the backlog for a fresh group; saved progress takes precedence on resume. A partition filter without an offset end also keeps following.
 
 ## Connections
 
@@ -160,28 +238,15 @@ Set `PROD_PASSWORD` in the environment, then prefix the SQL statement with:
 WITH CONNECTION prod AS ('sasl.password' = ENV('PROD_PASSWORD'))
 ```
 
-Keep passwords out of SQL literals and shell arguments. [Configuration rules](#configuration).
-
-## SQL settings
-
-`WITH` and `OPTIONS` are optional. Kafka source `WITH` sets `GROUP`, `START`, `MAX_STALENESS` and `MAX_OUT_OF_ORDER`; archive source `WITH` sets `GROUP` and optional `MAX_OUT_OF_ORDER`. Sink properties configure partitioning or archive rotation. [Defaults by endpoint](reference.md#endpoint-with-properties). Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
+Keep passwords out of SQL literals and shell arguments. SQL connection properties override TOML; use `-c connections.toml` to load profiles. [Configuration](reference.md#configuration-and-cli).
 
 ## Permissions
 
 Kafka needs source topic/group READ and destination WRITE (including DESCRIBE); some brokers also need cluster IDEMPOTENT_WRITE. Without a named `GROUP`, grant group READ on the `kaferry-` prefix. File-only copies need no Kafka grants. [Optional DESCRIBE_CONFIGS](../design/client-compatibility.md#optional-destination-configuration).
 
-## Preview a copy
+## Archive a topic and replay it
 
-```sh
-kaferry explain -c connections.toml -f copy.sql
-kaferry explain -c connections.toml -f copy.sql --json
-```
-
-Shows endpoints, progress, windows and policies without joining, writing or locking. Records, bytes, duration and write access are not checked. [Output contract](reference.md#inspection).
-
-## Run a copy
-
-Pass SQL with `-f file`, `-f -` (stdin) or `-e "SQL"`.
+Use storage where successful saves survive a crash, file replacement happens as one operation, and locks prevent competing processes from updating the same state. Verify these guarantees across hosts for shared storage. [Storage contract](../design/archive.md#layout-and-ownership).
 
 **Archive retained records, then follow new ones.** Create the parent directory:
 
@@ -193,7 +258,9 @@ SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive');
 SQL
 ```
 
-Replay completed files while capture continues; stop capture first to include its remaining records. Create the checkpoint directory:
+Multiple workers can capture into one archive. Stop capture with Ctrl+C and wait for a successful exit before replaying its remaining records; [recover a failed capture](#capture-crashed) first.
+
+**Replay completed files to Kafka.** A checkpoint is a file recording replay progress, stored outside the input archive. Create its directory before running one replay process for this group:
 
 ```sh
 mkdir -p ~/.kaferry/checkpoints
@@ -201,15 +268,9 @@ kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM ARCHIVE 'archive/orders' WITH (GROUP = 'orders-restore');"
 ```
 
-Without timestamp bounds, Kafka starts at the earliest retained record; `START = LATEST` selects new ones. Saved progress takes precedence. Without an enabled completion rule, Kafka follows. Archive replay selects current completed files and exits; the same group retains its selection. [Examples](../design/grammar.md#valid-examples).
+Replay selects current completed files and exits after reading that selection; the same group keeps its selection and progress. Keep the checkpoint directory and existing output to resume; new archive files require a new group and can cause older records to be copied again. [Archive recovery and moving replay](#archive-procedures).
 
-To copy the current readable Kafka backlog and exit, add `WHERE RECORD_OFFSET < LATEST`. Each partition saves its own exclusive end; rerunning the same group keeps those ends. Timestamp filters can restrict records within that snapshot without a lateness assumption. Use a new group for a fresh snapshot. [Offset examples](../design/grammar.md#valid-examples).
-
-Use `WHERE PARTITION IN (0, 2)` for fixed source IDs, or `NOT IN (0, 2)` for all others. Kafka discovers additions while workers run; archive replay pins matching files once and keeps that selection on resume. All workers share the same predicate. Listed IDs must exist in Kafka metadata or completed archive headers. Excluded Kafka partitions are not fetched or committed; excluded archive payloads are not read. [Selection rules](../design/decisions.md#source-partitions).
-
-Omitting `GROUP` means `ONE_OFF`: each run logs a fresh group. Reruns and concurrent unnamed runs copy independently. Use a shared named group for Kafka workers.
-
-Add `OPTIONS (WORKER_STOP_AFTER_RECORDS = 100)` before the final `;` to stop each process after accepting 100 records for writing. Each restart gets a fresh allowance. [Counting rules](../design/decisions.md#worker-record-stop).
+Pass SQL with `-f file`, `-f -` (stdin), or `-e "SQL"`, as above. [Archive rotation, routing and more SQL examples](../design/grammar.md#valid-examples).
 
 ## Stop and check results
 
@@ -219,13 +280,13 @@ SIGINT/SIGTERM stop reading, allow 10 s for writes, then save progress. File flu
 kaferry status -c connections.toml -f copy.sql --json
 ```
 
-`stopped` means every currently selected partition has a saved stop reason, including worker record thresholds. More input may remain; staleness stops can miss records within the range. Kafka activity is checked twice, without an atomic snapshot; file activity is not checked. Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](reference.md#saved-status).
+`stopped` means every currently selected partition has a saved stop reason; it does not verify destination contents. Record limits can leave input unread, and [timestamp stops](#allow-late-arrivals) depend on their assumptions. Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](reference.md#saved-status).
 
 ## Resume or start over
 
-Rerun with the same `GROUP`, endpoints, filter, `MAX_STALENESS`, partitioning mode and checkpoint directory. Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
+Rerun the same query with the same named `GROUP`, endpoints and checkpoint directory. Saved time windows and offset ends are reused; changing filters, completion allowances or routing needs a new group ([identity rules](../design/decisions.md#identity)). For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
 
-Keep output, checkpoints and locks. Archive files must stay unchanged until replay completes. [Archive recovery and moving replay](#archive-procedures).
+Keep existing output and saved progress. Kafka stores progress in source consumer-group offsets; archive replay uses checkpoint files. Expired offsets or missing checkpoints can start a fresh copy; crashes and Kafka rebalances can repeat or reorder writes. Keep selected completed archive files unchanged and retain lock files until replay completes. [Archive recovery and moving replay](#archive-procedures).
 
 ## Archive procedures
 
@@ -249,7 +310,7 @@ Keep the whole archive directory, including hidden files, and retain the source 
 ### Move replay to another machine
 
 1. Stop replay and all capture writers for this archive, and wait for successful exits. Recover a failed capture before moving its archive. Keep the destination’s existing output.
-2. Copy the entire source archive and checkpoint directory, including hidden files and lock files, to storage with the required sync, rename and lock guarantees. Selected archive files must remain byte-for-byte unchanged.
+2. Copy the entire source archive and checkpoint directory, including hidden files and lock files, to storage meeting the [archive requirements](#archive-a-topic-and-replay-it). Selected archive files must remain byte-for-byte unchanged.
 3. Create the destination checkpoint directory if needed and set `worker.checkpoint_dir` to its new path. Update archive paths and connection details while keeping the named group, query and destination identity. For a file destination, move its existing output as well; paths alone do not prove that output is present.
 4. Run `explain` to check that saved progress is found, then rerun the same copy. Destination-confirmed records after the last saved checkpoint may repeat.
 

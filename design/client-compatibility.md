@@ -1,6 +1,6 @@
 # Client compatibility
 
-Kafka-client and deployment constraints. See [copy caveats](../docs/caveats.md), [permissions](../docs/usage.md#permissions), [copy behavior](decisions.md), and [installation](../README.md#install).
+Kafka-client and deployment constraints. See [copy examples](../docs/usage.md#copy-between-kafka-topics), [permissions](../docs/usage.md#permissions), [copy behavior](decisions.md), and [installation](../README.md#install).
 
 ## Tested configurations
 
@@ -32,6 +32,12 @@ Startup attempts `DescribeConfigs` on the destination topic. Denial or failure l
 | Timestamp before/after bounds; legacy difference bound | Check CreateTime timestamps before submission, allowing record-level SKIP | Broker rejection stops the run under every policy |
 
 Size preflight counts an uncompressed single-record batch and the client’s 4–5 byte outer framing. Compression, changed settings or clock skew can change broker acceptance. Size preflight can refuse a record up to 5 bytes below the broker limit; timestamp preflight can skip a record the broker would accept. Both refusals support SKIP.
+
+## Kafka input timestamps
+
+When Kaferry reads Kafka, its client, franz-go v1.22.2, misreads record timestamps outside roughly 1677–2262. The exact limits are ±9,223,372,036,854 Unix milliseconds.
+
+[Kafka 4+ rejects new far-future timestamps by default](https://kafka.apache.org/40/generated/topic_config.html#topicconfigs_message.timestamp.after.max.ms); existing records, extreme past timestamps and custom settings can still expose this limitation.
 
 ## Kafka requests
 

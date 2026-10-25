@@ -32,8 +32,8 @@ docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io
 
 With a fresh `kaferry-demo` volume, this copies the three bundled sample records into `output` and saves progress. The files remain after the container exits. [Inspect results, rerun and reset](docs/usage.md#first-copy-with-docker) · [Run without Docker](docs/usage.md#first-copy-without-kafka) · [Copy Kafka topics](docs/usage.md#copy-between-kafka-topics).
 
-## Caveats
+## Examples
 
-Before copying your own data, read the [caveats](docs/caveats.md) for time windows, delivery and resume, Kafka destinations, archive storage and timestamp limits.
+[Current records](docs/usage.md#copy-the-current-backlog-and-stop) · [Offset range](docs/usage.md#copy-an-offset-range) · [Selected partitions](docs/usage.md#copy-selected-partitions) · [Time range](docs/usage.md#copy-records-in-a-time-range) · [Archive and replay](docs/usage.md#archive-a-topic-and-replay-it).
 
 [Documentation index](docs/README.md) · [Settings and results](docs/reference.md) · [Tests and contributing](design/components.md) · [Security](SECURITY.md) · [MIT license](LICENSE); dependencies retain their licenses.
