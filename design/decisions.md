@@ -39,6 +39,7 @@ Saved commits take precedence. Without a commit:
 
 - Commit below log start: resume at log start; log old position, log start and offset gap, which is not a lost-record count.
 - Commit above log end: fail as truncation. An out-of-range position during copying fails; restart reevaluates it.
+- With a saved captured end H, resume fails if the current log end is below H or retention has moved log start beyond H. Kaferry does not capture a replacement end.
 - Only retained data is available. A nonzero log start whose first retained timestamp exceeds `lo` produces a retention warning.
 
 ## Completion

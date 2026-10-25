@@ -21,7 +21,7 @@ func TestPreservedPartitionsAndExplicitKeyRouting(t *testing.T) {
 	a := admin(t)
 	source := topic(t, a, 3)
 	p := producer(t)
-	stamp := time.Now().Add(-2 * time.Minute).Truncate(time.Millisecond)
+	stamp := time.Now().Add(-10 * time.Minute).Truncate(time.Millisecond)
 	keys := [][]byte{nil, {}, {0, 255}, nil, {}, {3, 0}}
 	for id, key := range keys {
 		publish(t, p, &kgo.Record{Topic: source, Partition: int32(id % 3), Key: key, Value: []byte{byte(id)}, Timestamp: stamp})

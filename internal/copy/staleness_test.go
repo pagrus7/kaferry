@@ -140,3 +140,44 @@ func TestStalenessRejectsTruncatedEndAndFailedCaptureSave(t *testing.T) {
 		})
 	}
 }
+
+func TestStalenessProgressResetsAnExistingTipWait(t *testing.T) {
+	for _, progress := range []string{"record", "EOF"} {
+		t.Run(progress, func(t *testing.T) {
+			// Given a captured end and an already-running one-second blocked-tip wait.
+			r, source, sink, _, clock := fixture(t)
+			r.plan.Source.Kind = "TOPIC"
+			r.limits.TipWait = "1s"
+			upper := clock.Now().Add(-time.Minute).UnixMilli()
+			query := &watermarkSource{testSource: source}
+			r.source = query
+			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{End: new(int64(10))}, Window: plan.Window{Upper: &upper}}}))
+			require.NoError(t, r.eof(Cursor{}))
+			require.NoError(t, r.tips())
+			firstWait := r.partitions[0].waitStarted
+			clock.Sleep(750 * time.Millisecond)
+
+			// When consumed progress resumes, either as a record or a proven offset gap.
+			if progress == "record" {
+				input := incoming(0, 0, 1)
+				input.Record.TimestampMS = new(upper - 1)
+				require.NoError(t, r.input(input))
+				sink.reports <- Delivery{Token: sink.writes[0]}
+				require.NoError(t, r.deliveries())
+				require.NoError(t, r.tips())
+				require.True(t, r.partitions[0].waitStarted.IsZero())
+			}
+			require.NoError(t, r.eof(Cursor{Position: 1}))
+			require.NoError(t, r.tips())
+			require.Equal(t, firstWait.Add(750*time.Millisecond), r.partitions[0].waitStarted)
+
+			// Then the old deadline does not fail; only a full new continuous wait does.
+			clock.Sleep(300 * time.Millisecond)
+			require.NoError(t, r.tips())
+			clock.Sleep(701 * time.Millisecond)
+			require.ErrorContains(t, r.tips(), "tip wait exceeded")
+			require.Equal(t, int64(10), *r.partitions[0].high)
+			require.Zero(t, query.calls)
+		})
+	}
+}

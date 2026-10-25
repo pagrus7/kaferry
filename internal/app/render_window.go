@@ -133,7 +133,7 @@ func renderStop(output io.Writer, source inspect.Endpoint, window plan.Window, s
 			return err
 		}
 		fmt.Fprintf(output, "  Stop threshold: %s (window end + %d ms max staleness).\n", formatBound(&threshold), staleness)
-		fmt.Fprintln(output, "    Per assigned partition: stop when a record timestamp exceeds the threshold. Once the clock passes it, save the current log end and read toward that fixed end; the timestamp rule still applies.")
+		fmt.Fprintln(output, "    Per assigned partition: reuse a saved captured end. Otherwise, once the clock passes the threshold, save the current log end. Stop at that fixed end unless a record timestamp exceeds the threshold first.")
 		fmt.Fprintln(output, "    Open transactions can delay reading that end; worker.tip_wait bounds a stalled readable tip, not ordinary backlog processing.")
 	}
 	return nil
