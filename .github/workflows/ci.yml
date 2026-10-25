@@ -111,8 +111,12 @@ jobs:
           if [ ! -f .cache/previous-version/internal/sql/options.go ]; then
             export KAFERRY_LEGACY_SQL_BINARY="$previous_binary"
           fi
-          if ! rg -q 'p.take\("ARCHIVE"\)' .cache/previous-version/internal/sql/parser.go; then
+          archive_syntax_status=0
+          grep -Fq 'p.take("ARCHIVE")' .cache/previous-version/internal/sql/parser.go || archive_syntax_status=$?
+          if [ "$archive_syntax_status" -eq 1 ]; then
             export KAFERRY_FILE_SQL_BINARIES="$previous_binary"
+          elif [ "$archive_syntax_status" -ne 0 ]; then
+            exit "$archive_syntax_status"
           fi
           export KAFERRY_TEST_BINARY="$PWD/bin/kaferry"
           python3 scripts/ci.py migration go test -count=1 -race -tags=integration,migration -run TestPreviousBinary -v ./tests/compat
