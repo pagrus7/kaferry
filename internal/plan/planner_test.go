@@ -44,7 +44,7 @@ func TestDocumentedExamples(t *testing.T) {
 				// When parsing and planning without opening endpoints.
 				statement, err := sql.NewParser().Parse(input)
 				require.NoError(t, err)
-				_, err = NewPlanner(environment{"DR_PASSWORD": "secret", "PROD_PASSWORD": "secret"}).Build(statement, connections)
+				_, err = NewPlanner(environment{"DR_PASSWORD": "secret", "PROD_PASSWORD": "secret", "KAFKA_OAUTH_SECRET": "secret"}).Build(statement, connections)
 				// Then each example is valid with the actual parser and planner.
 				require.NoError(t, err)
 			})

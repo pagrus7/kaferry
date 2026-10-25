@@ -31,6 +31,20 @@ func (s settings) securityOptions() ([]kgo.Opt, error) {
 			options = append(options, kgo.SASL(scram.Auth{User: s.username, Pass: s.password}.AsSha256Mechanism()))
 		case "SCRAM-SHA-512":
 			options = append(options, kgo.SASL(scram.Auth{User: s.username, Pass: s.password}.AsSha512Mechanism()))
+		case "OAUTHBEARER":
+			mechanism, err := s.oauth.mechanism()
+			if err != nil {
+				return nil, err
+			}
+			options = append(options, kgo.SASL(mechanism))
+		case "AWS_MSK_IAM":
+			options = append(options, kgo.SASL(defaultAWSMechanism()))
+		case "GSSAPI":
+			mechanism, err := s.kerberos.mechanism()
+			if err != nil {
+				return nil, err
+			}
+			options = append(options, kgo.SASL(mechanism))
 		}
 	} else if s.username != "" || s.password != "" {
 		return nil, invalidProperty("security.protocol", "SASL credentials require SASL_PLAINTEXT or SASL_SSL")

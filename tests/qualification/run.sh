@@ -18,7 +18,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 sh tests/qualification/certificates.sh "$cert_dir"
-compose up -d --wait --wait-timeout 90
+compose up -d --build --wait --wait-timeout 90
 if [ -n "${KAFERRY_REPORT_DIR:-}" ]; then
   mkdir -p "$KAFERRY_REPORT_DIR"
   compose images --format json > "$KAFERRY_REPORT_DIR/qualification.broker-images.json"
@@ -26,5 +26,7 @@ fi
 export KAFERRY_QUAL_BROKERS=127.0.0.1:41092,127.0.0.1:42092,127.0.0.1:43092
 export KAFERRY_QUAL_CA="$cert_dir/ca.pem"
 export KAFERRY_QUAL_WRONG_CA="$cert_dir/wrong-ca.pem"
+export KAFERRY_QUAL_KRB_CONFIG="$cert_dir/client-krb5.conf"
+export KAFERRY_QUAL_KEYTAB="$cert_dir/copier.keytab"
 CGO_ENABLED=1 "${GO:-go}" test -count=1 -timeout=5m -race -tags=integration,qualification \
   -run 'TestSaslTls|TestReplicatedCluster' "${KAFERRY_TEST_OUTPUT:--v}" ./tests/compat

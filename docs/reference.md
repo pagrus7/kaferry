@@ -113,7 +113,14 @@ Values are strings in TOML and SQL. Unknown keys, unsupported values and contrad
 | --- | --- |
 | `bootstrap.servers` | Required comma-separated host[:port] entries, no protocol prefix |
 | `security.protocol` | `PLAINTEXT` (default), `SSL`, `SASL_PLAINTEXT`, `SASL_SSL`. `ssl.*` keys require SSL or SASL_SSL; `sasl.*` keys require SASL_PLAINTEXT or SASL_SSL |
-| `sasl.mechanism`, `sasl.username`, `sasl.password` | PLAIN (default), SCRAM-SHA-256 or SCRAM-SHA-512; credentials required for SASL |
+| `sasl.mechanism` | PLAIN (default), SCRAM-SHA-256, SCRAM-SHA-512, OAUTHBEARER, AWS_MSK_IAM or GSSAPI |
+| `sasl.username`, `sasl.password` | Both required for PLAIN and SCRAM; rejected for other mechanisms |
+| `sasl.oauthbearer.token.endpoint.url`, `sasl.oauthbearer.client.id`, `sasl.oauthbearer.client.secret` | HTTPS token endpoint and client credentials for OAUTHBEARER. Tokens are reused until near expiration, then requested again when a broker authenticates; token requests have a 10 s timeout |
+| `sasl.oauthbearer.scope` | Optional space-separated OAuth scopes |
+| `sasl.oauthbearer.ssl.ca.location` | Optional PEM CA file for the token endpoint; otherwise system roots. Independent of Kafka TLS settings |
+| `sasl.oauthbearer.token.file` | Alternative to OAuth client credentials: a file containing a bearer token, reread for each authentication. An external credential provider must replace it before expiry; cannot be combined with other OAuth settings |
+| `sasl.kerberos.principal`, `sasl.kerberos.keytab` | Required GSSAPI principal including realm (`user@REALM`) and keytab file |
+| `sasl.kerberos.config`, `sasl.kerberos.service.name` | Kerberos configuration file (default `/etc/krb5.conf`) and broker service name (default `kafka`); tickets are renewed while the Kafka client runs |
 | `ssl.ca.location` | PEM CA file; otherwise system roots |
 | `ssl.certificate.location`, `ssl.key.location` | PEM client certificate and unencrypted private key; supply both |
 | `ssl.endpoint.identification.algorithm` | `https` (default) or `none`; `none` disables hostname checks but retains CA-chain checks |
