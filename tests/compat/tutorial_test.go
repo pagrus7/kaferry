@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/inspect"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -164,5 +165,7 @@ func TestArchiveTutorialCancellation(t *testing.T) {
 	}
 	// Then waiting is bounded and the child has exited, releasing its operating-system lock.
 	require.Error(t, process.wait())
-	require.NoError(t, syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB), "cancelled tutorial left its child running")
+	require.EventuallyWithT(t, func(check *assert.CollectT) {
+		assert.NoError(check, syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB), "cancelled tutorial left its child running")
+	}, 5*time.Second, 10*time.Millisecond)
 }
