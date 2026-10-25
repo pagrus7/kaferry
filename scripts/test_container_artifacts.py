@@ -37,8 +37,8 @@ class ArchiveTest(unittest.TestCase):
             names = ['archive-demo/copy.sql', 'archive-demo/tutorial.toml',
                      'archive-demo/input/' + '1' * 32 + '.' + '2' * 32 + '.avro']
             for index, (filenames, link) in enumerate(((names[:2], False),
-                                                     (names[:2] + ['../escape'], False),
-                                                     (names[:2] + [names[0]], False),
+                                                     (['../escape'] + names[1:], False),
+                                                     (names + [names[0]], False),
                                                      (names, True))):
                 # Given an incomplete or unsafe tutorial, even after download verification.
                 with tarfile.open(path, 'w:gz') as archive:
