@@ -111,6 +111,9 @@ jobs:
           if [ ! -f .cache/previous-version/internal/sql/options.go ]; then
             export KAFERRY_LEGACY_SQL_BINARY="$previous_binary"
           fi
+          if ! rg -q 'p.take\("ARCHIVE"\)' .cache/previous-version/internal/sql/parser.go; then
+            export KAFERRY_FILE_SQL_BINARIES="$previous_binary"
+          fi
           export KAFERRY_TEST_BINARY="$PWD/bin/kaferry"
           python3 scripts/ci.py migration go test -count=1 -race -tags=integration,migration -run TestPreviousBinary -v ./tests/compat
       - name: Capture bounded load measurements

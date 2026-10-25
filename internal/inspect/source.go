@@ -9,7 +9,7 @@ import (
 )
 
 func (s *Service) source(ctx context.Context, p plan.Plan, limits config.Worker, connection kafkaport.InspectionConnection, report *Report) ([]int32, error) {
-	if p.Source.Kind == "FILE" {
+	if p.Source.Kind == "ARCHIVE" {
 		info, err := s.files.Source(p, report.Fingerprint, limits)
 		if err != nil {
 			return nil, err

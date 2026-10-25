@@ -61,7 +61,7 @@ func TestWorkerStopAcrossEndpointDirections(t *testing.T) {
 	archive := filepath.Join(t.TempDir(), "sample.avro")
 
 	// When a topic-to-file copy resumes with a different cap.
-	statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s') ", archive, source, source+"-archive-limit")
+	statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s') ", archive, source, source+"-archive-limit")
 	executeWithWorkerStop(t, statement, config, 3)
 	// Then it saves only that record prefix, with unchanged bytes and metadata.
 	require.Equal(t, expected[:3], archiveRecords(t, archive))
@@ -88,7 +88,7 @@ func TestWorkerStopAcrossEndpointDirections(t *testing.T) {
 	t.Run("file to topic", func(t *testing.T) {
 		// Given the five-record sample and a Kafka destination.
 		destination := topic(t, a, 3)
-		statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM FILE avro('%s') WITH (GROUP='restore-limit') ", destination, archive)
+		statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM ARCHIVE '%s' WITH (GROUP='restore-limit') ", destination, archive)
 		// When a file checkpoint resumes under a changed cap.
 		executeWithWorkerStop(t, statement, config, 2)
 		// Then progress limits each run, and a later EOF run adds no duplicates.
@@ -104,7 +104,7 @@ func TestWorkerStopAcrossEndpointDirections(t *testing.T) {
 	t.Run("file to file", func(t *testing.T) {
 		// Given the same sample and a new archive.
 		clone := filepath.Join(t.TempDir(), "clone.avro")
-		statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='clone-limit') ", clone, archive)
+		statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='clone-limit') ", clone, archive)
 		// When reaching the cap and then EOF in separate runs.
 		executeWithWorkerStop(t, statement, config, 4)
 		// Then preserve order and avoid recopying previously saved records.

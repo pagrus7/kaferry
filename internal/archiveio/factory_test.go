@@ -22,7 +22,7 @@ func TestFactoryOwnsReplayCheckpointAndRejectsUnsafePaths(t *testing.T) {
 	limits := config.Defaults("").Worker
 	limits.CheckpointDir = &root
 	factory := NewFactory(core.RealClock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Format: "avro", Name: filepath.Join(root, "input")}, Destination: plan.Endpoint{Kind: "FILE", Format: "avro", Name: filepath.Join(root, "output")}, Group: "group"}
+	p := plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: filepath.Join(root, "input")}, Destination: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: filepath.Join(root, "output")}, Group: "group"}
 	seed := p
 	seed.Destination = p.Source
 	sink, err := factory.OpenOutput(seed.Destination, limits)
@@ -78,7 +78,7 @@ func TestInvalidCheckpointDirectoryFailsBeforeCreatingReplayState(t *testing.T) 
 			}
 			limits := config.Defaults("").Worker
 			limits.CheckpointDir = &directory
-			p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "FILE", Format: "avro", Name: filepath.Join(root, "output")}, Group: "g"}
+			p := plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: filepath.Join(root, "output")}, Group: "g"}
 			factory := NewFactory(core.RealClock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			// When starting replay, then fail as a configuration conflict without creating output or state.
 			_, err := factory.OpenSource(p, "fingerprint", limits, 0)

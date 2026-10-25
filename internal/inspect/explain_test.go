@@ -237,7 +237,7 @@ func TestOneOffDoesNotReadOrGenerateAConsumerGroup(t *testing.T) {
 func TestArchiveInspectionCarriesSnapshotAndReplayPosition(t *testing.T) {
 	// Given a saved archive selection and its destination directory.
 	service, p, factory, files := fixture()
-	p.Source.Kind, p.Destination.Kind = "FILE", "FILE"
+	p.Source.Kind, p.Destination.Kind = "ARCHIVE", "ARCHIVE"
 	p.Source.Format, p.Destination.Format = "avro", "avro"
 	files.source = archiveio.SourceInspection{ArchiveInspection: archiveio.ArchiveInspection{Exists: true, Size: 250, FileCount: 2}, Position: 200, Saved: true, CheckpointPath: "checkpoint.json"}
 	files.destination = archiveio.ArchiveInspection{Exists: true}
@@ -272,7 +272,7 @@ func TestInspectionFailuresCloseOnlyAcquiredConnections(t *testing.T) {
 			case "source refresh":
 				source.afterSaved = func() { source.fail = "describe" }
 			case "file output":
-				p.Destination.Kind, files.failOutput, wantDestination = "FILE", injected, 0
+				p.Destination.Kind, files.failOutput, wantDestination = "ARCHIVE", injected, 0
 			default:
 				source.fail = failure
 			}
@@ -361,7 +361,7 @@ func TestFilePreviewPreservesFreshAndSavedRelativeWindows(t *testing.T) {
 		t.Run(fmt.Sprint(saved), func(t *testing.T) {
 			// Given a file inspector's resolved NOW bounds, record position and checkpoint state.
 			service, p, factory, files := fixture()
-			p.Source.Kind = "FILE"
+			p.Source.Kind = "ARCHIVE"
 			p.Window = plan.WindowSpec{Upper: &plan.Expression{Now: true}}
 			upper, origin := int64(5000), "resolved"
 			if saved {
@@ -409,7 +409,7 @@ func TestExplainChecksEverySourcePartitionForPreservedRouting(t *testing.T) {
 func TestExplainUsesArchiveProvenanceAndReportsDestinationRouting(t *testing.T) {
 	// Given a fixed archive selection originally captured from partition 5.
 	service, p, factory, files := fixture()
-	p.Source.Kind = "FILE"
+	p.Source.Kind = "ARCHIVE"
 	p.Source.Format = "avro"
 	p.Destination.Partitioning = plan.Preserve
 	files.source.Partitions = []int32{0, 5}

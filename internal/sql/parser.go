@@ -162,17 +162,12 @@ func (p *parser) endpoint() Endpoint {
 		position := p.current.Position
 		return Endpoint{Position: position, Kind: "TOPIC", Name: p.text("string")}
 	}
-	if !p.take("FILE") {
+	if !p.take("ARCHIVE") {
 		p.fail()
 		return Endpoint{}
 	}
-	p.expect("avro")
-	p.expect("(")
 	position := p.current.Position
-	name := p.text("string")
-	e := Endpoint{Position: position, Kind: "FILE", Name: name, Format: "avro"}
-	p.expect(")")
-	return e
+	return Endpoint{Position: position, Kind: "ARCHIVE", Name: p.text("string"), Format: "avro"}
 }
 
 func (p *parser) connection() Connection {

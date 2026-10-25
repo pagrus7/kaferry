@@ -30,7 +30,7 @@ func TestMissingTimestampSkipAndResumeWithDifferentPolicy(t *testing.T) {
 	writeArchiveRecords(t, src, records)
 	cfg := filepath.Join(dir, "config.toml")
 	require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir = %q\n", dir)), 0600))
-	prefix := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH(GROUP='missing') WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' ", dst, src, stamp.Add(-time.Second).Format(time.RFC3339Nano))
+	prefix := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH(GROUP='missing') WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' ", dst, src, stamp.Add(-time.Second).Format(time.RFC3339Nano))
 	var output bytes.Buffer
 
 	// When copying with the default policy, then the missing timestamp fails the run.

@@ -15,9 +15,9 @@ func endpoint(source sql.Endpoint, profiles Profiles, inline []sql.Connection) (
 		return Endpoint{}, fmt.Errorf("endpoint name is empty")
 	}
 	switch e.Kind {
-	case "FILE":
+	case "ARCHIVE":
 		if e.Format != "avro" {
-			return Endpoint{}, fmt.Errorf("unsupported file format")
+			return Endpoint{}, fmt.Errorf("unsupported archive format")
 		}
 		return e, nil
 	case "TOPIC":
@@ -116,8 +116,8 @@ func (e *Endpoint) destinationOptions(options []sql.Option) error {
 			e.Partitioning = o.Value
 			return nil
 		}
-		if e.Kind != "FILE" {
-			return sql.At(o.Position, fmt.Errorf("%s requires a FILE destination", o.Name))
+		if e.Kind != "ARCHIVE" {
+			return sql.At(o.Position, fmt.Errorf("%s requires an ARCHIVE destination", o.Name))
 		}
 		return e.rotationOption(o)
 	})

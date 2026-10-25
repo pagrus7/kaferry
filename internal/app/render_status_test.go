@@ -75,7 +75,7 @@ func TestStatusOutputFailuresRemainErrors(t *testing.T) {
 
 func TestArchiveStatusTextReportsSavedSnapshot(t *testing.T) {
 	// Given an Avro group's selected files, which may differ from current directory contents.
-	report := inspect.StatusReport{Source: inspect.Endpoint{Kind: "FILE", File: &inspect.FileSummary{FileCount: 3, SizeBytes: 150}}}
+	report := inspect.StatusReport{Source: inspect.Endpoint{Kind: "ARCHIVE", File: &inspect.FileSummary{FileCount: 3, SizeBytes: 150}}}
 	var output bytes.Buffer
 	// When rendering status, then bytes describe that snapshot rather than the current directory.
 	require.NoError(t, renderStatus(&output, report, false))
@@ -85,7 +85,7 @@ func TestArchiveStatusTextReportsSavedSnapshot(t *testing.T) {
 func TestFileStatusLabelsReplayProgressInsteadOfAnOriginalPartition(t *testing.T) {
 	for _, saved := range []bool{false, true} {
 		// Given file replay whose original partition differs from the internal progress cursor.
-		r := inspect.StatusReport{Source: inspect.Endpoint{Kind: "FILE"}, Partitions: []inspect.SavedPartition{{ID: 0}}}
+		r := inspect.StatusReport{Source: inspect.Endpoint{Kind: "ARCHIVE"}, Partitions: []inspect.SavedPartition{{ID: 0}}}
 		if saved {
 			position := int64(2)
 			r.Partitions[0].Position = &position

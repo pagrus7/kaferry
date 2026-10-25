@@ -64,7 +64,7 @@ func TestExplainBinaryResumesWithoutChangingKafkaOrCreatingFiles(t *testing.T) {
 	// Given a fresh query into a file, when explaining, then no output or lock is created.
 	directory := t.TempDir()
 	archive := filepath.Join(directory, "out.avro")
-	query = fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP=ONE_OFF, START=EARLIEST) ", archive, source)
+	query = fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP=ONE_OFF, START=EARLIEST) ", archive, source)
 	command = exec.CommandContext(ctx, binary, "explain", "-e", query, "-c", config)
 	output, err := command.CombinedOutput()
 	if err != nil || !bytes.Contains(output, []byte("ONE_OFF")) {

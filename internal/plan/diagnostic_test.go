@@ -10,7 +10,7 @@ import (
 )
 
 func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
-	const files = "INSERT INTO FILE avro('out')\nSELECT * FROM FILE avro('in')\nWITH(GROUP='g')\n"
+	const files = "INSERT INTO ARCHIVE 'out'\nSELECT * FROM ARCHIVE 'in'\nWITH(GROUP='g')\n"
 	const topics = "INSERT INTO TOPIC 'b'\nSELECT * FROM TOPIC 'a'\nWITH(GROUP='g')\n"
 	source := func(base, settings string) string { return strings.Replace(base, "GROUP='g'", settings, 1) }
 	for _, tc := range []struct {
@@ -21,18 +21,18 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 		{"whitespace group", source(files, "GROUP=' '"), "' '", "GROUP must not be blank; use a quoted name or ONE_OFF", nil, nil},
 		{"empty group", source(files, "GROUP=''"), "''", "GROUP must not be blank; use a quoted name or ONE_OFF", nil, nil},
 		{"duplicate group", source(files, "GROUP='g', GROUP='h'"), "GROUP='h'", "option GROUP repeats; specify it once; first declaration at line 3, column 6", nil, nil},
-		{"unsupported AST file format", files, "'out'", "INTO endpoint: unsupported file format", func(s *sql.Statement) { s.Destination.Format = "unsupported" }, nil},
-		{"missing age interval", strings.Replace(files, "avro('out')", "avro('private/path') WITH(ROTATE_AFTER_AGE=INTERVAL '1' HOUR)", 1), "INTERVAL", "ROTATE_AFTER_AGE requires a positive interval", func(s *sql.Statement) { s.Destination.Options[0].Interval = nil }, nil},
-		{"invalid AST partitioning", "INSERT INTO TOPIC 'b' WITH(PARTITIONING=KEY) SELECT * FROM FILE avro('in') WITH(GROUP='g')", "KEY", "PARTITIONING must be PRESERVE or KEY", func(s *sql.Statement) { s.Destination.Options[0].Value = "secret-mode" }, nil},
-		{"file partitioning", strings.Replace(files, "avro('out')", "avro('out') WITH(PARTITIONING=KEY)", 1), "PARTITIONING", "PARTITIONING requires a topic destination", nil, nil},
-		{"topic rotation", strings.Replace(topics, "TOPIC 'b'", "TOPIC 'b' WITH(ROTATE_AFTER_SIZE=1k)", 1) + "WHERE RECORD_TIMESTAMP < NOW()", "ROTATE_AFTER_SIZE", "ROTATE_AFTER_SIZE requires a FILE destination", nil, nil},
+		{"unsupported AST archive format", files, "'out'", "INTO endpoint: unsupported archive format", func(s *sql.Statement) { s.Destination.Format = "unsupported" }, nil},
+		{"missing age interval", strings.Replace(files, "ARCHIVE 'out'", "ARCHIVE 'private/path' WITH(ROTATE_AFTER_AGE=INTERVAL '1' HOUR)", 1), "INTERVAL", "ROTATE_AFTER_AGE requires a positive interval", func(s *sql.Statement) { s.Destination.Options[0].Interval = nil }, nil},
+		{"invalid AST partitioning", "INSERT INTO TOPIC 'b' WITH(PARTITIONING=KEY) SELECT * FROM ARCHIVE 'in' WITH(GROUP='g')", "KEY", "PARTITIONING must be PRESERVE or KEY", func(s *sql.Statement) { s.Destination.Options[0].Value = "secret-mode" }, nil},
+		{"file partitioning", strings.Replace(files, "ARCHIVE 'out'", "ARCHIVE 'out' WITH(PARTITIONING=KEY)", 1), "PARTITIONING", "PARTITIONING requires a topic destination", nil, nil},
+		{"topic rotation", strings.Replace(topics, "TOPIC 'b'", "TOPIC 'b' WITH(ROTATE_AFTER_SIZE=1k)", 1) + "WHERE RECORD_TIMESTAMP < NOW()", "ROTATE_AFTER_SIZE", "ROTATE_AFTER_SIZE requires an ARCHIVE destination", nil, nil},
 		{"unknown AST setting", files, "GROUP=", "unsupported setting; use the settings supported in WITH after the FROM endpoint", func(s *sql.Statement) { s.Source.Options[0].Name = "secret-setting" }, nil},
 		{"empty endpoint", strings.Replace(files, "'out'", "''", 1), "''", "INTO endpoint: endpoint name is empty", nil, nil},
 		{"invalid policy", files + "OPTIONS(ON_ERROR=FAIL)", "FAIL", "ON_ERROR must be FAIL or SKIP", func(s *sql.Statement) { s.Options[0].Value = "RETRY" }, nil},
 		{"invalid start", source(topics, "GROUP='g', START=EARLIEST"), "EARLIEST", "START must be EARLIEST or LATEST", func(s *sql.Statement) { s.Source.Options[1].Value = "BEGIN" }, nil},
-		{"file start", source(files, "GROUP='g', START=EARLIEST"), "START", "START requires a topic source; remove START for FILE sources", nil, nil},
+		{"file start", source(files, "GROUP='g', START=EARLIEST"), "START", "START requires a topic source; remove START for ARCHIVE sources", nil, nil},
 		{"WHERE and START", source(topics, "GROUP='g', START=EARLIEST") + "WHERE RECORD_TIMESTAMP < NOW()", "START", "START cannot be combined with timestamp bounds in WHERE; remove START", nil, nil},
-		{"CUTOFF file", source(files, "GROUP='g', CUTOFF=INTERVAL '1' MINUTE"), "CUTOFF", "CUTOFF requires a topic source; remove CUTOFF for FILE sources", nil, nil},
+		{"CUTOFF file", source(files, "GROUP='g', CUTOFF=INTERVAL '1' MINUTE"), "CUTOFF", "CUTOFF requires a topic source; remove CUTOFF for ARCHIVE sources", nil, nil},
 		{"CUTOFF no upper", source(topics, "GROUP='g', CUTOFF=INTERVAL '1' MINUTE") + "WHERE RECORD_TIMESTAMP >= NOW()", "CUTOFF", "CUTOFF requires an upper timestamp bound in WHERE", nil, nil},
 		{"missing timestamp policy", files + "OPTIONS(ON_MISSING_TIMESTAMP=SKIP)", "ON_MISSING_TIMESTAMP", "ON_MISSING_TIMESTAMP requires timestamp bounds in WHERE", nil, nil},
 		{"rejected timestamp policy", files + "OPTIONS(ON_REJECTED_TIMESTAMP=SKIP)", "ON_REJECTED_TIMESTAMP", "ON_REJECTED_TIMESTAMP requires a topic destination", nil, nil},
@@ -47,8 +47,8 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 		{"missing zone", files + "WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00'", "'2026-10-01", "timestamp must be RFC 3339 with an explicit zone and at most 3 fractional digits, for example '2026-10-01T09:00:00Z'", nil, nil},
 		{"negative interval", files + "WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '-1' HOUR", "'-1'", "interval must be a non-negative integer, for example INTERVAL '7' DAY", nil, nil},
 		{"duplicate lower bound", files + "WHERE RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP > NOW()", "> NOW()", "at most one lower and one upper bound are allowed; remove this repeated bound; first bound at line 4, column 24", nil, nil},
-		{"default connection", "INSERT INTO FILE avro('out')\nSELECT * FROM TOPIC 'a' WITH(GROUP='g',START=EARLIEST)", "'a'", "FROM endpoint: default connection is not defined; add WITH CONNECTION default or TOML [connections.default]", nil, Profiles{}},
-		{"undefined connection", "INSERT INTO FILE avro('out')\nSELECT * FROM TOPIC 'a@missing' WITH(GROUP='g',START=EARLIEST)", "'a@missing'", "FROM endpoint: connection alias is not defined; add it with WITH CONNECTION or TOML [connections.alias]", nil, nil},
+		{"default connection", "INSERT INTO ARCHIVE 'out'\nSELECT * FROM TOPIC 'a' WITH(GROUP='g',START=EARLIEST)", "'a'", "FROM endpoint: default connection is not defined; add WITH CONNECTION default or TOML [connections.default]", nil, Profiles{}},
+		{"undefined connection", "INSERT INTO ARCHIVE 'out'\nSELECT * FROM TOPIC 'a@missing' WITH(GROUP='g',START=EARLIEST)", "'a@missing'", "FROM endpoint: connection alias is not defined; add it with WITH CONNECTION or TOML [connections.alias]", nil, nil},
 		{"destination before source", "INSERT INTO TOPIC 'out@missing' SELECT * FROM TOPIC 'in@missing' WITH(GROUP='g',START=EARLIEST)", "'out@missing'", "INTO endpoint: connection alias is not defined; add it with WITH CONNECTION or TOML [connections.alias]", nil, nil},
 		{"duplicate alias", "WITH CONNECTION prod AS ('bootstrap.servers'='x'), CONNECTION prod AS ('bootstrap.servers'='y')\n" + files, "prod AS ('bootstrap.servers'='y')", "connection alias repeats; declare each alias once; first declaration at line 1, column 17", nil, nil},
 		{"duplicate property", "WITH CONNECTION prod AS ('private'='x', 'private'='y')\n" + files, "'private'='y'", "inline connection property repeats; specify it once per CONNECTION; first declaration at line 1, column 26", nil, nil},
@@ -106,7 +106,7 @@ func TestSourcePositionsDoNotChangePlansOrSavedIdentity(t *testing.T) {
 
 func TestPlannerDiagnosticsRedactLiteralAndResolvedSecrets(t *testing.T) {
 	const secret = "sensitive_SENTINEL_5c27"
-	const files = " INSERT INTO FILE avro('out') SELECT * FROM FILE avro('in') WITH(GROUP='g') "
+	const files = " INSERT INTO ARCHIVE 'out' SELECT * FROM ARCHIVE 'in' WITH(GROUP='g') "
 	for _, tc := range []struct {
 		query         string
 		invalidPolicy bool
@@ -114,7 +114,7 @@ func TestPlannerDiagnosticsRedactLiteralAndResolvedSecrets(t *testing.T) {
 		{"WITH CONNECTION prod AS ('sasl.password'=ENV('" + secret + "'))" + files + "", false},
 		{"WITH CONNECTION prod AS ('sasl.password'=ENV('PASSWORD'), 'bootstrap.servers'='x')" + files + "OPTIONS(ON_ERROR=" + secret + ")", true},
 		{"WITH CONNECTION prod AS ('" + secret + "'='x', '" + secret + "'='y')" + files + "", false},
-		{"INSERT INTO FILE avro('out') SELECT * FROM TOPIC 'a@" + secret + "' WITH(GROUP='g', START=EARLIEST)", false},
+		{"INSERT INTO ARCHIVE 'out' SELECT * FROM TOPIC 'a@" + secret + "' WITH(GROUP='g', START=EARLIEST)", false},
 		{files + "WHERE RECORD_TIMESTAMP >= TIMESTAMP '" + secret + "'", false},
 	} {
 		// Given sensitive literals and a resolved environment credential.
@@ -138,7 +138,7 @@ func TestPlannerDiagnosticsRedactLiteralAndResolvedSecrets(t *testing.T) {
 
 func TestConnectionErrorsDistinguishUndefinedAndMissingSettings(t *testing.T) {
 	// Given an existing connection with no bootstrap.servers.
-	query := "INSERT INTO FILE avro('out') SELECT * FROM TOPIC 'a@empty' WITH (GROUP='g', START=EARLIEST) "
+	query := "INSERT INTO ARCHIVE 'out' SELECT * FROM TOPIC 'a@empty' WITH (GROUP='g', START=EARLIEST) "
 	statement, err := sql.NewParser().Parse(query)
 	require.NoError(t, err)
 	// When comparing validation of a defined and an undefined connection.
@@ -170,7 +170,7 @@ func TestConnectionSettingsReportEmptyValuesAndOrigins(t *testing.T) {
 		{"'sasl.password'='x'", "bootstrap.servers is empty in the configured connection profile; set a nonempty value there", Profiles{"prod": {"bootstrap.servers": ""}}},
 	} {
 		// Given broker settings from literal SQL, ENV, configuration or a merged connection.
-		query := "INSERT INTO FILE avro('out')\nSELECT * FROM TOPIC 'a@prod' WITH (GROUP='g', START=EARLIEST) "
+		query := "INSERT INTO ARCHIVE 'out'\nSELECT * FROM TOPIC 'a@prod' WITH (GROUP='g', START=EARLIEST) "
 		line := 2
 		if tc.connection != "" {
 			query = "WITH CONNECTION prod AS (" + tc.connection + ")\n" + query
@@ -195,7 +195,7 @@ func TestConnectionSettingsReportEmptyValuesAndOrigins(t *testing.T) {
 
 func TestLocationFreeASTsKeepCompleteMessages(t *testing.T) {
 	// Given a caller-built AST without source positions and repeated known options.
-	statement := sql.Statement{Source: sql.Endpoint{Kind: "FILE", Format: "avro", Name: "in", Options: []sql.Option{{Name: "GROUP", Value: "g"}, {Name: "GROUP", Value: "h"}}}, Destination: sql.Endpoint{Kind: "FILE", Format: "avro", Name: "out"}, Options: []sql.Option{{Name: "GROUP", Value: "g"}, {Name: "GROUP", Value: "h"}}}
+	statement := sql.Statement{Source: sql.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: "in", Options: []sql.Option{{Name: "GROUP", Value: "g"}, {Name: "GROUP", Value: "h"}}}, Destination: sql.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: "out"}, Options: []sql.Option{{Name: "GROUP", Value: "g"}, {Name: "GROUP", Value: "h"}}}
 	// When validating the plan without invented coordinates.
 	_, err := NewPlanner(environment{}).Build(statement, nil)
 	// Then retain a complete corrective hint with no dangling location reference.

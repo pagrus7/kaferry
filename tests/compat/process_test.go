@@ -18,32 +18,28 @@ import (
 
 // cliProcess owns one Wait call; completion publishes its output and exit status.
 type cliProcess struct {
-	command   *exec.Cmd
-	stdin     io.WriteCloser
-	done      chan struct{}
-	output    bytes.Buffer
-	err       error
-	legacySQL bool
+	command *exec.Cmd
+	stdin   io.WriteCloser
+	done    chan struct{}
+	output  bytes.Buffer
+	err     error
 }
 
 func startCLI(t *testing.T, ctx context.Context, binary, input string, args ...string) *cliProcess {
 	t.Helper()
-	legacy := needsLegacySQL(binary)
-	if legacy {
-		for i := 0; i < len(args)-1; i++ {
-			if args[i] == "-e" || args[i] == "--sql" {
-				var err error
-				args[i+1], err = legacySQL(args[i+1])
-				require.NoError(t, err)
-			}
-		}
-		if input != "" {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "-e" || args[i] == "--sql" {
 			var err error
-			input, err = legacySQL(input)
+			args[i+1], err = binarySQL(binary, args[i+1])
 			require.NoError(t, err)
 		}
 	}
-	p := &cliProcess{command: exec.CommandContext(ctx, binary, args...), done: make(chan struct{}), legacySQL: legacy}
+	if input != "" {
+		var err error
+		input, err = binarySQL(binary, input)
+		require.NoError(t, err)
+	}
+	p := &cliProcess{command: exec.CommandContext(ctx, binary, args...), done: make(chan struct{})}
 	p.command.Stdin = strings.NewReader(input)
 	p.start(t)
 	return p
@@ -65,7 +61,7 @@ func binaryWorker(t *testing.T, ctx context.Context, statement, config string) w
 
 func launchCLI(t *testing.T, ctx context.Context, binary string, args ...string) *cliProcess {
 	t.Helper()
-	p := &cliProcess{command: exec.CommandContext(ctx, binary, args...), done: make(chan struct{}), legacySQL: needsLegacySQL(binary)}
+	p := &cliProcess{command: exec.CommandContext(ctx, binary, args...), done: make(chan struct{})}
 	var err error
 	p.stdin, err = p.command.StdinPipe()
 	require.NoError(t, err)
@@ -90,14 +86,11 @@ func (p *cliProcess) start(t *testing.T) {
 	})
 }
 func (p *cliProcess) send(input string) error {
-	if p.legacySQL {
-		var err error
-		input, err = legacySQL(input)
-		if err != nil {
-			return err
-		}
+	input, err := binarySQL(p.command.Path, input)
+	if err != nil {
+		return err
 	}
-	_, err := io.WriteString(p.stdin, input)
+	_, err = io.WriteString(p.stdin, input)
 	return errors.Join(err, p.stdin.Close())
 }
 

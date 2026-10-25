@@ -118,7 +118,7 @@ func separatePaths(p plan.Plan, directory string) error {
 	if relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return &Conflict{Err: errors.New("checkpoint directory must be outside the source archive")}
 	}
-	if p.Destination.Kind == "FILE" {
+	if p.Destination.Kind == "ARCHIVE" {
 		source, err1 := os.Stat(p.Source.Name)
 		destination, err2 := os.Stat(p.Destination.Name)
 		if err1 == nil && err2 == nil && os.SameFile(source, destination) {

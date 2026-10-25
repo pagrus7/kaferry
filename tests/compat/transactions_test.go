@@ -47,7 +47,7 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "out.avro")
 			group := src + "-copy"
 			cfg := configuration(t)
-			statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' ", path, src, group, stamp.Add(-time.Second).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano))
+			statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' ", path, src, group, stamp.Add(-time.Second).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano))
 			result := make(chan workerResult, 1)
 			samples := make(chan int64, 1)
 			go func() {

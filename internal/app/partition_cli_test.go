@@ -102,7 +102,7 @@ func TestFilePartitionsLimitPreservedDestinationLayoutWithoutJoiningAGroup(t *te
 		joins.Add(1)
 		return nil, nil, false
 	})
-	query := fmt.Sprintf("WITH CONNECTION p AS ('bootstrap.servers'='%s') INSERT INTO TOPIC 'output@p' SELECT * FROM FILE avro('%s') WITH(GROUP='file-selected') WHERE PARTITION IN (0)", strings.Join(cluster.ListenAddrs(), ","), src)
+	query := fmt.Sprintf("WITH CONNECTION p AS ('bootstrap.servers'='%s') INSERT INTO TOPIC 'output@p' SELECT * FROM ARCHIVE '%s' WITH(GROUP='file-selected') WHERE PARTITION IN (0)", strings.Join(cluster.ListenAddrs(), ","), src)
 	var out, errout bytes.Buffer
 	// When explaining and copying, then only selected original IDs must fit the destination.
 	require.Zero(t, Execute(t.Context(), []string{"explain", "-e", query, "-c", cfg, "--json"}, nil, &out, &errout), errout.String())

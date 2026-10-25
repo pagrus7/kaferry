@@ -60,7 +60,7 @@ Sampling and timeout logs include H and the stable/consumed positions. H is loca
 
 A timestamp stop commits at the trigger record, so rerunning stops there again. A tip stop commits the next position, so rerunning may copy later arrivals. Without an upper bound, Kafka sources follow until stopped or the worker record threshold is reached.
 
-File sources resume a fixed selection of completed Avro files; a new group selects current files. File sources do not use `CUTOFF`.
+Archive sources resume a fixed selection of completed Avro files; a new group selects current files. Archive sources do not use `CUTOFF`.
 
 ## Worker record stop
 
@@ -124,7 +124,7 @@ The initial assignment commit clears the previous stop. A later commit includes 
 ## Kafka output
 
 - One asynchronous idempotent producer per worker, with delivery reports and client batching.
-- Default `PARTITIONING = PRESERVE`: write original partition N to destination partition N, keeping original key bytes, including nulls. Check all selected input partition IDs before output; Kafka assignments recheck the destination. Avro uses the fixed selection's original IDs, never its replay cursor. This includes selected partitions whose records the timestamp filter excludes. Destination counts may be larger; missing IDs fail under every policy. Topics must exist.
+- Default `PARTITIONING = PRESERVE`: write original partition N to destination partition N, keeping original key bytes, including nulls. Check all selected input partition IDs before output; Kafka assignments recheck the destination. Archive replay uses the fixed selection's original IDs, never its replay cursor. This includes selected partitions whose records the timestamp filter excludes. Destination counts may be larger; missing IDs fail under every policy. Topics must exist.
 - `WITH (PARTITIONING = KEY)` on the destination selects Java-compatible Murmur2 key routing; null keys use sticky routing. Equal non-null keys stay together with a stable partitioner/count. Preserved placement can differ from other destination producers' key routing. Destination partition-count changes are logged. Source offsets are never copied; destination offsets are new.
 - Layout checks are not atomic with publishing. Topic recreation or partition changes during a copy can fail after partial output; missing partitions never fall back to key routing.
 - Submission order is preserved for records from one source partition routed to one destination partition during an uninterrupted producer session with stable routing. With `KEY`, null keys can spread. Replay and rebalances can duplicate and reorder output; there is no cross-partition order guarantee.
@@ -161,7 +161,7 @@ Default FAIL. Choose `ON_ERROR` or the specific timestamp policies; they are mut
 
 ## Files
 
-`FILE avro('directory')` captures independently recoverable compressed files. Multiple workers can capture to local or shared storage. Replay uses one process per group/checkpoint directory, saves a fixed completed-file selection, and preserves original Kafka identity. Storage needs durable sync, atomic rename and exclusive locks across its users. [Avro contract](archive.md).
+`ARCHIVE 'directory'` captures independently recoverable compressed files. Multiple workers can capture to local or shared storage. Replay uses one process per group/checkpoint directory, saves a fixed completed-file selection, and preserves original Kafka identity. Storage needs durable sync, atomic rename and exclusive locks across its users. [Archive contract](archive.md).
 
 Kafka consumers are created and validated before opening archive output. Kaferry saves source progress only after the archive has synced its data and recovery state. The runner saves progress before closing adapters; closing a Kafka source does not commit offsets. [Capture and recovery](archive.md#capture-and-recovery).
 
