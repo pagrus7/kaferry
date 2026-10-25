@@ -142,7 +142,7 @@ func (p *parser) statement() Statement {
 	if p.is("WHERE") {
 		s.WherePosition = p.current.Position
 		p.next()
-		p.predicates(&s)
+		p.where(&s)
 	}
 	if p.is("OPTIONS") {
 		s.OptionsPosition = p.current.Position
@@ -225,6 +225,8 @@ func (p *parser) predicates(s *Statement) {
 			}
 			p.expect(")")
 			s.Partitions = filter
+		} else if p.take("RECORD_OFFSET") {
+			s.OffsetBounds = append(s.OffsetBounds, p.offsetBound())
 		} else {
 			p.expect("RECORD_TIMESTAMP")
 			s.Bounds = append(s.Bounds, p.bounds()...)
@@ -312,7 +314,14 @@ func (p *parser) option(scope Scope) Option {
 	p.expect("=")
 	o.ValuePosition = p.current.Position
 	switch o.Name {
-	case "MAX_STALENESS", "ROTATE_AFTER_AGE":
+	case "MAX_STALENESS", "MAX_OUT_OF_ORDER":
+		if p.take("OFF") {
+			o.Value = "OFF"
+		} else {
+			i := p.interval()
+			o.Interval = &i
+		}
+	case "ROTATE_AFTER_AGE":
 		i := p.interval()
 		o.Interval = &i
 	case "GROUP":

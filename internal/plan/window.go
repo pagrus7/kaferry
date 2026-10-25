@@ -88,7 +88,7 @@ func (s WindowSpec) ValidateStored(w Window, staleness int64) error {
 	if w.Lower != nil && w.Upper != nil && *w.Lower >= *w.Upper {
 		return fmt.Errorf("stored time range is empty")
 	}
-	if w.Upper != nil {
+	if w.Upper != nil && staleness >= 0 {
 		_, err := checkedAdd(*w.Upper, staleness)
 		return err
 	}

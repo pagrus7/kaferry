@@ -101,8 +101,8 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 	if input != nil {
 		source, store = input, input
 	} else {
-		if p.Window.Upper != nil {
-			e.log.Warn("bounded copy can omit late and out-of-order timestamps under the max staleness rule")
+		if p.Window.Upper != nil && !p.HasOffsetEnd() && (p.MaxStalenessMS >= 0 || p.DisorderMS() >= 0) {
+			e.log.Warn("timestamp completion relies on configured arrival-delay and timestamp-disorder assumptions")
 		}
 		var sourceProgress copy.ProgressStore
 		source, sourceProgress, err = sourceEndpoint.connection.Source(ctx, p, fp, limits, routingValidator(p, destinationEndpoint.connection))

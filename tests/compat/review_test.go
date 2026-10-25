@@ -108,7 +108,7 @@ func probeSourceProgress(t *testing.T, name, group string) (*adapter.Source, cor
 	require.NoError(t, err)
 	clients := adapter.NewClients()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	factory := adapter.NewFactory(commitmeta.NewCodec(), clients, kafkaport.NewPositionerFactory(core.RealClock{}, logger), core.RealClock{}, logger)
+	factory := adapter.NewFactory(commitmeta.NewCodec(), clients, kafkaport.NewPositionerFactory(core.RealClock{}, logger, kafkaport.NewOffsetLookupFactory()), core.RealClock{}, logger)
 	connection, err := factory.Open(context.Background(), p.Source)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = connection.Close(context.Background()) })

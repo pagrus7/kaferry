@@ -36,6 +36,10 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 		return report, err
 	}
 	report = Report{Version: 2, Group: p.Group, OneOff: p.OneOff, MaxStalenessMS: p.MaxStalenessMS, WorkerStopAfterRecords: p.WorkerStopAfterRecords, StartRule: p.Start, RecordErrors: ErrorPolicies{p.Policies.MissingTimestamp, p.Policies.RejectedTimestamp, p.Policies.OtherRecord}, Partitions: []Partition{}, Warnings: []string{}}
+	if d := p.DisorderMS(); d >= 0 && p.Window.Upper != nil {
+		report.MaxOutOfOrderMS = &d
+	}
+	report.Offsets, report.PartitionOffsets = p.Offsets, p.PartitionOffsets
 	if p.OneOff {
 		report.Group = "ONE_OFF"
 	}

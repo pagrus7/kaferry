@@ -138,7 +138,7 @@ func fixture() (*Service, plan.Plan, *factoryMock, *filesMock) {
 	}
 	factory := &factoryMock{connections: map[string]*topicMock{"input": topic("input-id"), "output": topic("output-id")}, failure: errors.New("open failed")}
 	files := &filesMock{}
-	positioning := kafkaport.NewPositionerFactory(fixedClock{time.UnixMilli(5000)}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	positioning := kafkaport.NewPositionerFactory(fixedClock{time.UnixMilli(5000)}, slog.New(slog.NewTextHandler(io.Discard, nil)), kafkaport.NewOffsetLookupFactory())
 	return NewExplainer(factory, files, positioning), p, factory, files
 }
 
@@ -165,7 +165,7 @@ func TestTopicPreviewUsesSavedPositionsAndOnlyRequiredStartLookups(t *testing.T)
 	require.Len(t, report.Partitions, 2)
 	window := plan.Window{Lower: number(100), Upper: number(1000)}
 	want := []Partition{
-		{ID: 0, Start: 4, End: number(8), Saved: true, LogEnd: 10, Window: window, WindowOrigin: "literal"},
+		{ID: 0, Start: 4, EndOrigin: "saved", End: number(8), Saved: true, LogEnd: 10, Window: window, WindowOrigin: "literal"},
 		{ID: 1, Start: 3, LogEnd: 11, Window: window, WindowOrigin: "literal"},
 	}
 	require.Equal(t, want, report.Partitions)

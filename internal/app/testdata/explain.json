@@ -3,6 +3,7 @@
   "fingerprint": "query-id",
   "group": "backfill",
   "one_off": false,
+  "max_out_of_order_ms": 1000,
   "max_staleness_ms": 1000,
   "source": {
     "kind": "TOPIC",

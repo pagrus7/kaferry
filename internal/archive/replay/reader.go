@@ -142,3 +142,29 @@ func readAt(blocks Blocks, p Progress) (avro.Record, Position, error) {
 	}
 	return record, next, err
 }
+
+// finishSource records the end of every selected file for one original stream.
+// The caller attaches these cursor changes to a confirmed input prefix.
+func (r *Reader) finishSource(source avro.Source) []delta {
+	var skipped []delta
+	for i := range r.files {
+		p := &r.files[i]
+		if compareSource(p.File.Identity.Source, source) != 0 || p.ended() {
+			continue
+		}
+		p.Next = Position{Block: p.File.Size, Previous: max(p.Next.Previous, p.File.Identity.FirstOffset)}
+		skipped = append(skipped, delta{file: i, next: p.Next})
+	}
+	kept := r.queue[:0]
+	for _, h := range r.queue {
+		if compareSource(h.source, source) != 0 {
+			kept = append(kept, h)
+		}
+	}
+	r.queue = kept
+	heap.Init(&r.queue)
+	if r.pending >= 0 && compareSource(r.files[r.pending].File.Identity.Source, source) == 0 {
+		r.pending = -1
+	}
+	return skipped
+}

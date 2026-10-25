@@ -30,7 +30,8 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Kafka metadata | [franz](../internal/franz) | Inspect identities, offsets and optional destination config | sourceMetadata, destinationMetadata, MetadataClient |
 | Kafka contracts | [kafkaport](../internal/kafkaport) | Endpoint interfaces and saved-progress identity checks | Connection, copy.ProgressStore; client libraries stay in adapters |
 | Commit metadata codec | [commitmeta](../internal/commitmeta) | Encode/decode the versioned commit format, without Kafka I/O | `commitmeta.Codec`; private wire types, independent golden/invalid-input tests |
-| Kafka positioning | [kafkaport](../internal/kafkaport) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetReader, TimeReader; client conversions in franz |
+| Kafka offset lookup | [kafkaport/offset_lookup.go](../internal/kafkaport/offset_lookup.go) | Batch named boundary/timestamp queries and reject incomplete results | OffsetLookupFactory through Fx; connection-bound raw OffsetReader and TimeReader |
+| Kafka positioning | [kafkaport](../internal/kafkaport) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetLookupFactory, OffsetLookup; raw offset/time ports and client conversions in franz |
 | Kafka input | [franz](../internal/franz) | Hand off callbacks/fetches to the core loop; position, pause and prove gaps | ConsumerClient, sourceMetadata, gapReader, rebalanceBridge, PartitionValidator |
 | Kafka output | [franz](../internal/franz) | Validate records, bound admission and report asynchronous deliveries | ProducerClient, destinationMetadata, Clock |
 | Kafka commits | [franz](../internal/franz) | Save positions and eligible stops; reject commits without a group member ID and generation | offsetCommitter, copy.ProgressStore |

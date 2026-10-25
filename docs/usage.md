@@ -76,7 +76,7 @@ WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
 ```
 
-`@alias` selects a connection; named `GROUP` saves progress for reruns. Omitting `GROUP` starts a fresh copy each run. A new window, `MAX_STALENESS` or partitioning mode needs a new group. `MAX_STALENESS` defaults to five minutes; override it in source `WITH`, for example `MAX_STALENESS = INTERVAL '10' MINUTE`, for known buffering or timestamp disorder. Copying starts immediately. [Completion and assumptions](../design/decisions.md#completion).
+`@alias` selects a connection; named `GROUP` saves progress for reruns. Omitting `GROUP` starts a fresh copy each run. Changing the window, effective timestamp allowances, offset criteria or partitioning mode needs a new group. Kafka timestamp completion defaults to five minutes for arrival delay and disorder; `MAX_OUT_OF_ORDER` can override disorder independently. Copying starts immediately. [Completion and assumptions](../design/decisions.md#completion).
 
 ```sh
 kaferry explain --file copy.sql --config connections.toml
@@ -106,7 +106,7 @@ Keep passwords out of SQL literals and shell arguments. [Configuration rules](#c
 
 ## SQL settings
 
-`WITH` and `OPTIONS` are optional. Source `WITH` overrides `GROUP`, `START`, `MAX_STALENESS`; destination `WITH` overrides partitioning or Avro rotation. Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
+`WITH` and `OPTIONS` are optional. Kafka source `WITH` sets `GROUP`, `START`, `MAX_STALENESS` and `MAX_OUT_OF_ORDER`; file source `WITH` sets `GROUP` and optional `MAX_OUT_OF_ORDER`. Sink properties configure partitioning or Avro rotation. [Defaults by endpoint](reference.md#endpoint-with-properties). Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
 
 ## Permissions
 
@@ -143,7 +143,9 @@ kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM FILE avro('archive/orders') WITH (GROUP = 'orders-restore');"
 ```
 
-Without timestamp bounds, Kafka starts at the earliest retained record; `START = LATEST` selects new ones. Saved progress takes precedence. Without an end time, Kafka follows. Avro selects current completed files and exits; the same group retains its selection. [Examples](../design/grammar.md#valid-examples).
+Without timestamp bounds, Kafka starts at the earliest retained record; `START = LATEST` selects new ones. Saved progress takes precedence. Without an enabled completion rule, Kafka follows. Avro selects current completed files and exits; the same group retains its selection. [Examples](../design/grammar.md#valid-examples).
+
+To copy the current readable Kafka backlog and exit, add `WHERE RECORD_OFFSET < LATEST`. Each partition saves its own exclusive end; rerunning the same group keeps those ends. Timestamp filters can restrict records within that snapshot without a lateness assumption. Use a new group for a fresh snapshot. [Offset examples](../design/grammar.md#valid-examples).
 
 Use `WHERE PARTITION IN (0, 2)` for fixed source IDs, or `NOT IN (0, 2)` for all others. Kafka discovers additions while workers run; Avro pins matching files once and keeps that selection on resume. All workers share the same predicate. Listed IDs must exist in Kafka metadata or completed archive headers. Excluded Kafka partitions are not fetched or committed; excluded archive payloads are not read. [Selection rules](../design/decisions.md#source-partitions).
 

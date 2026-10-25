@@ -16,7 +16,7 @@ import (
 
 func explanationFixture() inspect.Report {
 	lo, hi := int64(1000), int64(2000)
-	return inspect.Report{Version: 2, Fingerprint: "query-id", Group: "backfill", MaxStalenessMS: 1000, StartRule: "WINDOW",
+	return inspect.Report{Version: 2, Fingerprint: "query-id", Group: "backfill", MaxStalenessMS: 1000, MaxOutOfOrderMS: new(int64(1000)), StartRule: "WINDOW",
 		Source:       inspect.Endpoint{Kind: "TOPIC", Name: "input", Connection: "prod", ClusterID: "cluster-id", TopicID: "topic-id", PartitionCount: 1},
 		Destination:  inspect.Endpoint{Kind: "FILE", Name: "out.avro", File: &inspect.FileSummary{}},
 		Partitions:   []inspect.Partition{{ID: 0, Start: 4, LogEnd: 12, End: new(int64(12)), Saved: true, Window: plan.Window{Lower: &lo, Upper: &hi}, WindowOrigin: "literal"}},
@@ -289,5 +289,32 @@ func TestFilePartitionTextExplainsItsFixedSelection(t *testing.T) {
 		require.Contains(t, out.String(), "Source selection: PARTITION "+operator+" [5].")
 		require.Contains(t, out.String(), "New files require a new group; resume keeps the saved selection.")
 		require.NotContains(t, out.String(), "Added partitions are eligible")
+	}
+}
+
+func TestTextExplanationDistinguishesIndependentCompletionRules(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		s      int64
+		d      *int64
+		offset *plan.OffsetRange
+		want   []string
+	}{
+		{name: "clock only", s: 1000, want: []string{"Timestamp stopping: OFF", "Capture replicated ends after"}},
+		{name: "data only", s: -1, d: new(int64(0)), want: []string{"Timestamp stop:", "Wall-clock end capture: OFF"}},
+		{name: "both disabled", s: -1, want: []string{"Timestamp stopping: OFF", "keep following"}},
+		{name: "different allowances", s: 10000, d: new(int64(1000)), want: []string{"1000 ms MAX_OUT_OF_ORDER", "10000 ms MAX_STALENESS"}},
+		{name: "offset end", offset: &plan.OffsetRange{Latest: true}, want: []string{"fixed exclusive offset end", "timestamps filter records"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given the resolved report, when rendering, then explain each active completion rule separately.
+			report := explanationFixture()
+			report.MaxStalenessMS, report.MaxOutOfOrderMS, report.Offsets = tc.s, tc.d, tc.offset
+			report.WorkerStopAfterRecords = 10
+			output := textExplanation(t, report)
+			for _, want := range tc.want {
+				require.Contains(t, output, want)
+			}
+		})
 	}
 }

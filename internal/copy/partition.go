@@ -61,11 +61,14 @@ func (p *partition) sampled(high int64) {
 // to sample, stop or time out. A successful sample
 // stays fixed across assignments through saved progress.
 func (p *partition) tipAction(now time.Time, staleness int64, wait time.Duration) (tipAction, error) {
-	threshold, err := p.window.StopThreshold(staleness)
-	if err != nil {
-		return tipWait, err
-	}
 	if p.high == nil {
+		if staleness < 0 {
+			return tipWait, nil
+		}
+		threshold, err := p.window.StopThreshold(staleness)
+		if err != nil {
+			return tipWait, err
+		}
 		if now.UnixMilli() > threshold && p.sampling.due(now) {
 			return tipSample, nil
 		}

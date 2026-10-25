@@ -96,7 +96,13 @@ func renderProgress(output io.Writer, report inspect.Report) {
 		}
 		fmt.Fprintf(output, "  Resume: %d of %d partitions have saved offsets.\n", saved, len(report.Partitions))
 		for _, partition := range report.Partitions[:min(8, len(report.Partitions))] {
-			if partition.End != nil {
+			if report.Offsets != nil || len(report.PartitionOffsets) > 0 {
+				fmt.Fprintf(output, "  Partition %d: start %d", partition.ID, partition.Start)
+				if partition.End != nil {
+					fmt.Fprintf(output, "; exclusive end %d (%s)", *partition.End, partition.EndOrigin)
+				}
+				fmt.Fprintln(output)
+			} else if partition.End != nil {
 				fmt.Fprintf(output, "  Partition %d: saved captured end %d.\n", partition.ID, *partition.End)
 			}
 		}
@@ -111,6 +117,8 @@ func renderProgress(output io.Writer, report inspect.Report) {
 
 func startRule(rule string) string {
 	switch rule {
+	case "OFFSET":
+		return "use the resolved per-partition offset positions."
 	case "LATEST":
 		return "start at the current read-committed end."
 	case "WINDOW":

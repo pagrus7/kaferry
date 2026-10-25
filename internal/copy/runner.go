@@ -224,7 +224,7 @@ func (r *Runner) input(input Input) error {
 	}
 	p.position = input.Next
 	r.flow.observe(r.tracker)
-	if filtered, err := r.filter(p.window, input.Record, token); filtered || err != nil {
+	if filtered, err := r.filterInput(p.window, input.Record, token); filtered || err != nil {
 		return err
 	}
 
@@ -235,7 +235,10 @@ func (r *Runner) stopAtTimestamp(p *partition, input Input) (bool, error) {
 	if r.plan.Source.Kind != "TOPIC" {
 		return false, nil
 	}
-	stop, err := p.pastTimestamp(input.Record.TimestampMS, r.plan.MaxStalenessMS)
+	if r.plan.DisorderMS() < 0 || r.plan.HasOffsetEnd() {
+		return false, nil
+	}
+	stop, err := p.pastTimestamp(input.Record.TimestampMS, r.plan.DisorderMS())
 	if !stop || err != nil {
 		return false, err
 	}
@@ -248,6 +251,19 @@ func (r *Runner) stopAtTimestamp(p *partition, input Input) (bool, error) {
 	return true, nil
 }
 
+func (r *Runner) filterInput(window plan.Window, record Record, token Token) (bool, error) {
+	if r.plan.Offsets != nil || len(r.plan.PartitionOffsets) > 0 {
+		if record.Source == nil {
+			return true, fmt.Errorf("offset criteria require original source provenance")
+		}
+		if bounds := r.plan.OffsetRange(record.Source.Partition); bounds != nil && !bounds.Contains(record.Source.Offset) {
+			r.tracker.Settle(token, true)
+			r.filtered++
+			return true, nil
+		}
+	}
+	return r.filter(window, record, token)
+}
 func (r *Runner) filter(window plan.Window, record Record, token Token) (bool, error) {
 	if record.TimestampMS == nil && (window.Lower != nil || window.Upper != nil) {
 		return true, r.recordError(token, &RecordError{Class: "missing_timestamp", Err: fmt.Errorf("record lacks required timestamp")})
@@ -355,7 +371,7 @@ func (r *Runner) tips() error {
 	wait, _ := time.ParseDuration(r.limits.TipWait)
 	sampled := false // Interleave watermark queries with consumer polling.
 	for id, p := range r.partitions {
-		if p.stop != nil || p.window.Upper == nil || r.plan.Source.Kind != "TOPIC" {
+		if p.stop != nil || r.plan.Source.Kind != "TOPIC" || p.high == nil && (p.window.Upper == nil || r.plan.MaxStalenessMS < 0) {
 			continue
 		}
 		action, err := p.tipAction(r.clock.Now(), r.plan.MaxStalenessMS, wait)

@@ -72,6 +72,9 @@ func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafka
 	if err != nil {
 		return &kafkaport.Conflict{Err: err}
 	}
+	if p.Offsets != nil || len(p.PartitionOffsets) > 0 {
+		report.StartRule = "OFFSET"
+	}
 	report.Source.PartitionCount = len(topic.Partitions)
 	located, err := s.positioning.New(connection, connection, p, report.Fingerprint, topic.TopicID).Locate(ctx, selected, saved, metadata)
 	if err != nil {
@@ -80,5 +83,11 @@ func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafka
 	var warnings []string
 	report.Partitions, warnings = partitionRows(p, located, saved, metadata)
 	report.Warnings = append(report.Warnings, warnings...)
+	for _, row := range report.Partitions {
+		if row.EndOrigin == "preview" {
+			report.Warnings = append(report.Warnings, "Unsaved LATEST ends are previews; execution resolves and saves them independently.")
+			break
+		}
+	}
 	return nil
 }

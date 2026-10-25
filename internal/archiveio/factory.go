@@ -49,7 +49,7 @@ func (f *Factory) OpenSource(p plan.Plan, fp string, w config.Worker, partitionC
 		_ = pool.Close()
 		return nil, &Conflict{Err: err}
 	}
-	session, err := replay.NewSession(replay.Query{Group: p.Group, Fingerprint: fp, Window: p.Window, Partitions: p.Partitions, PartitionCount: partitionCount}, f.clock, journal, catalog, pool, w.RecordCap)
+	session, err := replay.NewSession(replay.Query{Group: p.Group, Fingerprint: fp, Window: p.Window, Partitions: p.Partitions, Offsets: p.Offsets, PartitionOffsets: p.PartitionOffsets, MaxOutOfOrderMS: p.MaxOutOfOrderMS, PartitionCount: partitionCount}, f.clock, journal, catalog, pool, w.RecordCap)
 	if err != nil {
 		return nil, &Conflict{Err: errors.Join(err, pool.Close(), journal.Close())}
 	}

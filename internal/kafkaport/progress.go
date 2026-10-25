@@ -38,9 +38,6 @@ func DecodeProgress(codec commitmeta.Codec, metadata *string, fp, topicID string
 }
 
 func ValidateWindow(progress Progress, spec plan.WindowSpec, staleness int64) error {
-	if progress.End != nil && spec.Upper == nil {
-		return conflict("captured end requires an upper timestamp bound")
-	}
 	if progress.Window != nil {
 		if err := spec.ValidateStored(*progress.Window, staleness); err != nil {
 			return conflict("invalid stored time window: %v", err)

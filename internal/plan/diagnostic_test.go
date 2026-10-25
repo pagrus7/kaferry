@@ -32,7 +32,7 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 		{"invalid start", source(topics, "GROUP='g', START=EARLIEST"), "EARLIEST", "START must be EARLIEST or LATEST", func(s *sql.Statement) { s.Source.Options[1].Value = "BEGIN" }, nil},
 		{"file start", source(files, "GROUP='g', START=EARLIEST"), "START", "START requires a topic source; remove START for FILE sources", nil, nil},
 		{"WHERE and START", source(topics, "GROUP='g', START=EARLIEST") + "WHERE RECORD_TIMESTAMP < NOW()", "START", "START cannot be combined with timestamp bounds in WHERE; remove START", nil, nil},
-		{"missing max staleness interval", source(topics, "GROUP='g', MAX_STALENESS=INTERVAL '1' MINUTE") + "WHERE RECORD_TIMESTAMP < NOW()", "INTERVAL", "MAX_STALENESS requires an interval", func(s *sql.Statement) { s.Source.Options[1].Interval = nil }, nil},
+		{"missing max staleness interval", source(topics, "GROUP='g', MAX_STALENESS=INTERVAL '1' MINUTE") + "WHERE RECORD_TIMESTAMP < NOW()", "INTERVAL", "MAX_STALENESS requires an interval or OFF", func(s *sql.Statement) { s.Source.Options[1].Interval = nil }, nil},
 		{"MAX_STALENESS file", source(files, "GROUP='g', MAX_STALENESS=INTERVAL '1' MINUTE"), "MAX_STALENESS", "MAX_STALENESS requires a topic source; remove MAX_STALENESS for FILE sources", nil, nil},
 		{"MAX_STALENESS no upper", source(topics, "GROUP='g', MAX_STALENESS=INTERVAL '1' MINUTE") + "WHERE RECORD_TIMESTAMP >= NOW()", "MAX_STALENESS", "MAX_STALENESS requires an upper timestamp bound in WHERE", nil, nil},
 		{"missing timestamp policy", files + "OPTIONS(ON_MISSING_TIMESTAMP=SKIP)", "ON_MISSING_TIMESTAMP", "ON_MISSING_TIMESTAMP requires timestamp bounds in WHERE", nil, nil},

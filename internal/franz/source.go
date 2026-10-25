@@ -22,6 +22,7 @@ type Source struct {
 	client               ConsumerClient
 	routing              kafkaport.PartitionValidator
 	inspector            sourceMetadata
+	lookup               kafkaport.OffsetLookup
 	positioning          kafkaport.PositionerFactory
 	store                *Committer
 	bridge               *rebalanceBridge
@@ -174,15 +175,11 @@ func (s *Source) Pause(id int32, paused bool) error {
 func (s *Source) HighWatermark(id int32) (int64, error) {
 	ctx, cancel := context.WithTimeout(s.query, 2*time.Second)
 	defer cancel()
-	ends, err := s.inspector.Offsets(ctx, []int32{id}, kafkaport.LatestOffset, false)
+	ends, err := s.lookup.ReplicatedEnd(ctx, []int32{id})
 	if err != nil {
 		return 0, transientFailure(err)
 	}
-	end, ok := ends[id]
-	if !ok {
-		return 0, fmt.Errorf("missing offset result for partition %d", id)
-	}
-	return end, nil
+	return ends[id], nil
 }
 func (s *Source) transient(err error) bool {
 	var retry *core.Recoverable

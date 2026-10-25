@@ -16,6 +16,9 @@ type Query struct {
 	Group, Fingerprint string
 	Window             plan.WindowSpec
 	Partitions         *plan.PartitionFilter
+	Offsets            *plan.OffsetRange
+	PartitionOffsets   []plan.PartitionOffsetRange
+	MaxOutOfOrderMS    *int64
 	// PartitionCount bounds original IDs when replay requires an existing layout.
 	// Zero leaves IDs unrestricted; the constraint is not persisted.
 	PartitionCount int
@@ -25,8 +28,9 @@ type Item struct {
 	Record         avro.Record
 }
 type delta struct {
-	file int
-	next Position
+	file    int
+	next    Position
+	skipped []delta
 }
 
 var ErrPendingFull = errors.New("replay must checkpoint confirmed records before reading more")
@@ -42,6 +46,8 @@ type Session struct {
 	saveErr      error
 	closed       bool
 	PrivateFiles int
+	criteria     plan.Plan
+	threshold    *int64
 }
 
 // NewSession takes ownership of store and blocks only on success.
@@ -52,7 +58,7 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 	if maxPending < 1 {
 		return nil, errors.New("replay pending-record cap must be positive")
 	}
-	s := &Session{store: store, blocks: blocks, limit: maxPending}
+	s := &Session{store: store, blocks: blocks, limit: maxPending, criteria: plan.Plan{Offsets: query.Offsets, PartitionOffsets: query.PartitionOffsets}}
 	saved, err := store.Load()
 	if err != nil {
 		return nil, err
@@ -60,6 +66,9 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 	if saved == nil {
 		window, err := query.Window.Resolve(clock.Now())
 		if err != nil {
+			return nil, err
+		}
+		if err = query.Window.ValidateStored(window, query.disorderAllowance()); err != nil {
 			return nil, err
 		}
 		selection, err := inputs.Select(query.Partitions)
@@ -88,7 +97,7 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 		if s.saved.Group != query.Group || s.saved.Fingerprint != query.Fingerprint {
 			return nil, errors.New("replay checkpoint query identity mismatch")
 		}
-		if err = query.Window.ValidateStored(s.saved.Window, 0); err != nil {
+		if err = query.Window.ValidateStored(s.saved.Window, query.disorderAllowance()); err != nil {
 			return nil, err
 		}
 		if err = query.validatePartitions(s.saved.Files); err != nil {
@@ -103,6 +112,10 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 				return nil, err
 			}
 		}
+	}
+	if query.MaxOutOfOrderMS != nil && *query.MaxOutOfOrderMS >= 0 && !s.criteria.HasOffsetEnd() && s.saved.Window.Upper != nil {
+		threshold := *s.saved.Window.Upper + *query.MaxOutOfOrderMS
+		s.threshold = &threshold
 	}
 	if !s.saved.Complete {
 		s.reader, err = NewReader(s.saved.Files, blocks)
@@ -152,7 +165,14 @@ func (s *Session) Next() (item Item, err error) {
 	if err != nil {
 		return item, err
 	}
-	s.pending = append(s.pending, delta{file: entry.File, next: entry.Next})
+	d := delta{file: entry.File, next: entry.Next}
+	bounds := s.criteria.OffsetRange(entry.Record.Source.Partition)
+	pastOffset := bounds != nil && bounds.Upper != nil && entry.Record.Offset >= *bounds.Upper
+	pastTime := s.threshold != nil && entry.Record.TimestampMS != nil && *entry.Record.TimestampMS > *s.threshold
+	if pastOffset || pastTime {
+		d.skipped = s.reader.finishSource(entry.Record.Source)
+	}
+	s.pending = append(s.pending, d)
 	item = Item{Position: position, Next: position + 1, Record: entry.Record}
 	return item, nil
 }
@@ -180,6 +200,9 @@ func (s *Session) CheckpointStop(position int64, stop *core.Stop) error {
 	count := int(position - s.saved.Position)
 	for _, d := range s.pending[:count] {
 		next.Files[d.file].Next = d.next
+		for _, skip := range d.skipped {
+			next.Files[skip.file].Next = skip.next
+		}
 	}
 	next.Position = position
 	next.Complete = true
@@ -215,3 +238,10 @@ func (s *Session) Close() error {
 }
 
 func equalStop(a, b *core.Stop) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
+
+func (q Query) disorderAllowance() int64 {
+	if q.MaxOutOfOrderMS != nil {
+		return max(0, *q.MaxOutOfOrderMS)
+	}
+	return 0
+}

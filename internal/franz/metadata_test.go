@@ -213,7 +213,7 @@ func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
 			// When startup or assignment validates saved progress through their common path.
 			positions, metadata, err := inspector.decodeSaved(map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 42, Metadata: &text}}, "fp", spec, staleness)
 			// Then only compatible progress can reach positioning.
-			if scenario == "valid" {
+			if scenario == "valid" || scenario == "captured end without upper bound" {
 				if err != nil || positions[0] != 42 || len(metadata) != 1 {
 					t.Fatal(positions, metadata, err)
 				}

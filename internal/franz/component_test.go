@@ -23,7 +23,7 @@ import (
 )
 
 func componentFactory() *Factory {
-	return NewFactory(commitmeta.NewCodec(), NewClients(), kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger()), core.RealClock{}, quietLogger())
+	return NewFactory(commitmeta.NewCodec(), NewClients(), kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory()), core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory())
 }
 func componentPlan(t *testing.T, cluster *kfake.Cluster) plan.Plan {
 	return testPlan(t, map[string]string{"bootstrap.servers": strings.Join(cluster.ListenAddrs(), ",")})
