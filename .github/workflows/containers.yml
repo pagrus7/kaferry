@@ -8,6 +8,8 @@ on:
       - 'scripts/container_*'
       - 'scripts/test_container_*'
       - 'tests/compat/container_test.go'
+      - 'examples/archive-demo/**'
+      - 'scripts/package_examples/**'
       - 'go.mod'
       - 'go.sum'
   workflow_dispatch:

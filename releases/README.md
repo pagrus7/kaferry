@@ -64,6 +64,8 @@ CI installs synthetic tagged and pseudo-versioned module archives through a loca
 
 ## Container publishing
 
+Images include the release's verified `archive-demo.tar.gz` contents under `/demo`, with an empty checkpoint directory owned by the image user. A fresh volume mounted at `/demo` receives these files from Docker. Candidate images generate the same bundle from the checkout. Each native image test runs the bundled copy and checks saved completion and a zero-record rerun across separate containers.
+
 The workflow builds one multi-platform OCI archive containing image-specific SPDX SBOM and BuildKit provenance. Native AMD64/ARM64 jobs load that archive without rebuilding, compare its binary and license bytes with the inputs, exercise file copying, and check Kafka checkpointing/resume after Docker sends SIGTERM. Only after both jobs pass can the publish job copy the same OCI archive to GHCR and attest its image-index digest. Version tags are immutable: publishing a different digest under an existing version fails. Retry a failed publish job with its retained artifact; do not rebuild a published version.
 
 The release workflow calls image publishing after the GitHub release is published. Manual dispatch of `containers.yml` takes an existing stable release tag and defaults to validation without publishing. Publishing needs the repository's package-write and attestation permissions. A newly created GHCR package is private by default; set its visibility to public in package settings before advertising pulls. This changes package visibility, not the image bytes.

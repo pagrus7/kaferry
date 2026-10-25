@@ -1,5 +1,19 @@
 # Using Kaferry
 
+## First copy with Docker
+
+Install Docker Engine or Docker Desktop and select Linux containers. This example needs no Kafka broker, Go toolchain or local Kaferry binary. Commands work in PowerShell and Unix shells. Replace `vX.Y.Z` with a release tag whose image includes the demo, and use a volume name that does not already contain an earlier demo:
+
+```sh
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:vX.Y.Z run -c tutorial.toml -f copy.sql
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:vX.Y.Z status -c tutorial.toml -f copy.sql --json
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:vX.Y.Z run -c tutorial.toml -f copy.sql
+```
+
+Docker creates the volume and fills it with the bundled SQL, configuration, three input records and an empty checkpoint directory. The first run reports `confirmed: 3`; status reports `stopped` with position `3`; the rerun reports `confirmed: 0`. The `output` archive and saved progress remain in the volume after each container exits. Status reads saved progress; it does not compare destination contents.
+
+To delete the demo's input, output and saved progress, stop any demo containers and run `docker volume rm kaferry-demo`. The next run with that name starts fresh. Keep the same image tag while resuming a demo. [Copy between Kafka topics](#copy-between-kafka-topics) · [Run your own files in a container](#containers).
+
 ## First copy without Kafka
 
 Install `kaferry` on `PATH` ([installation](install.md)). This tutorial uses a shell, `curl` and `tar`, three synthetic records, and local storage that supports sync, atomic rename and locks. It needs no broker or credentials. Choose a [release](https://github.com/pagrus7/kaferry/releases) that includes `archive-demo.tar.gz` and matches your binary. Set `version` below to that release tag, then run the block in a directory that does not already contain `archive-demo`:

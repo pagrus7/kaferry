@@ -4,6 +4,7 @@ ARG VERSION
 ARG REVISION
 COPY linux/${TARGETARCH}/kaferry /usr/local/bin/kaferry
 COPY linux/${TARGETARCH}/LICENSE linux/${TARGETARCH}/THIRD_PARTY_NOTICES.txt /usr/share/doc/kaferry/
+COPY --chown=65532:65532 archive-demo /demo
 LABEL org.opencontainers.image.source="https://github.com/pagrus7/kaferry" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}" \

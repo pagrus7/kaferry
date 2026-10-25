@@ -25,15 +25,13 @@ When Kaferry reads Kafka, franz-go v1.22.2 misreads record timestamps outside ±
 
 ## Quick start
 
-[Download and unpack the tutorial](docs/usage.md#first-copy-without-kafka) for three known records and no broker. From its `archive-demo` directory:
+With Docker running Linux containers, copy three bundled sample records without a broker or local Kaferry installation. Replace `vX.Y.Z` with your release tag:
 
 ```sh
-mkdir -p checkpoints
-kaferry run -c tutorial.toml -f copy.sql
-kaferry status -c tutorial.toml -f copy.sql --json
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:vX.Y.Z run -c tutorial.toml -f copy.sql
 ```
 
-The first run confirms three records; rerunning the same named group confirms zero. [Kafka setup and copying](docs/usage.md#copy-between-kafka-topics) · [Authentication](docs/usage.md#connections).
+The first run confirms three records; rerunning confirms zero. [Check results and reset the Docker demo](docs/usage.md#first-copy-with-docker) · [Run without Docker](docs/usage.md#first-copy-without-kafka) · [Copy Kafka topics](docs/usage.md#copy-between-kafka-topics).
 
 ## Before you run
 
