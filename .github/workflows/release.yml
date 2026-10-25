@@ -117,8 +117,8 @@ jobs:
           [[ "$version" == "kaferry $RELEASE_TAG (commit $SOURCE_SHA; "* ]]
           go run ./scripts/package_examples .cache/release-smoke/archive-demo.tar.gz
           set -o pipefail
-          KAFERRY_TUTORIAL_BUNDLE="$PWD/.cache/release-smoke/archive-demo.tar.gz" KAFERRY_TEST_BINARY="$PWD/.cache/release-smoke/kaferry" KAFERRY_EXPECT_BINARY_SHA256="$(shasum -a 256 .cache/release-smoke/kaferry | cut -d ' ' -f 1)" go test -count=1 -json -tags=integration,load -run '^(TestArchiveTutorial|TestLoadObservability)$/^round-0$/^disabled$' ./tests/compat | tee ".cache/release-smoke/smoke-$PLATFORM.log"
-          KAFERRY_REPORT_DIR=.cache/release-smoke python3 scripts/ci.py verify-tests "smoke-$PLATFORM" 'TestLoadObservability/round-0/disabled' 'TestArchiveTutorial'
+          KAFERRY_TUTORIAL_BUNDLE="$PWD/.cache/release-smoke/archive-demo.tar.gz" KAFERRY_TEST_BINARY="$PWD/.cache/release-smoke/kaferry" KAFERRY_EXPECT_BINARY_SHA256="$(shasum -a 256 .cache/release-smoke/kaferry | cut -d ' ' -f 1)" go test -count=1 -json -tags=integration,load -run '^(TestArchiveTutorial(Cancellation)?|TestLoadObservability)$/^round-0$/^disabled$' ./tests/compat | tee ".cache/release-smoke/smoke-$PLATFORM.log"
+          KAFERRY_REPORT_DIR=.cache/release-smoke python3 scripts/ci.py verify-tests "smoke-$PLATFORM" 'TestLoadObservability/round-0/disabled' 'TestArchiveTutorial' 'TestArchiveTutorialCancellation'
           if [ "$PLATFORM" = linux-amd64 ]; then
             cp .cache/release-smoke/archive-demo.tar.gz release/archive-demo.tar.gz
           fi

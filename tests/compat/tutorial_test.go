@@ -5,10 +5,13 @@ package compat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -59,7 +62,7 @@ func TestArchiveTutorial(t *testing.T) {
 	require.Len(t, expected.Partitions, 1)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "sh", "-eu", "-c", script)
+	command := tutorialShell(ctx, script)
 	command.Dir = directory
 	command.Env = append(os.Environ(), "PATH="+commands+string(os.PathListSeparator)+os.Getenv("PATH"))
 	// When executing the guide's exact commands, including status and the same-group rerun.
@@ -98,4 +101,68 @@ func TestArchiveTutorial(t *testing.T) {
 		require.EqualValues(t, i, record.Source.Offset)
 	}
 	require.Equal(t, input, archiveRecords(t, filepath.Join(directory, "output")), "rerun must preserve exactly the three original records")
+}
+
+func tutorialShell(ctx context.Context, script string) *exec.Cmd {
+	command := exec.CommandContext(ctx, "sh", "-eu", "-c", script)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	command.WaitDelay = time.Second
+	return command
+}
+
+func TestArchiveTutorialCancellation(t *testing.T) {
+	if pidFile := os.Getenv("KAFERRY_TUTORIAL_HANG_PID"); pidFile != "" {
+		// The child holds a lock and the inherited output pipes while it hangs.
+		lock, err := os.OpenFile(pidFile+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+		require.NoError(t, err)
+		defer lock.Close()
+		require.NoError(t, syscall.Flock(int(lock.Fd()), syscall.LOCK_EX))
+		require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o600))
+		time.Sleep(time.Minute)
+		return
+	}
+	// Given a tutorial shell whose child holds a lock and keeps its output pipes open.
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	lock, err := os.OpenFile(pidFile+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lock.Close() })
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	command := tutorialShell(ctx, `"$KAFERRY_TUTORIAL_TEST_BINARY" -test.run '^TestArchiveTutorialCancellation$'; :`)
+	command.Env = append(os.Environ(), "KAFERRY_TUTORIAL_HANG_PID="+pidFile, "KAFERRY_TUTORIAL_TEST_BINARY="+os.Args[0])
+	process := &cliProcess{command: command, done: make(chan struct{})}
+	process.start(t)
+	t.Cleanup(func() {
+		if !process.finished() {
+			_ = syscall.Kill(-process.pid(), syscall.SIGKILL)
+		}
+		if errors.Is(syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB), syscall.EWOULDBLOCK) {
+			data, _ := os.ReadFile(pidFile)
+			if pid, err := strconv.Atoi(string(data)); err == nil {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(pidFile)
+		return err == nil && len(data) > 0
+	}, 5*time.Second, 10*time.Millisecond, "child must acquire its lock before cancellation")
+	require.ErrorIs(t, syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB), syscall.EWOULDBLOCK)
+	// When the tutorial context is cancelled, stop the shell and its child together.
+	cancel()
+	select {
+	case <-process.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled tutorial kept waiting for its child or output pipes")
+	}
+	// Then waiting is bounded and the child has exited, releasing its operating-system lock.
+	require.Error(t, process.wait())
+	require.NoError(t, syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB), "cancelled tutorial left its child running")
 }

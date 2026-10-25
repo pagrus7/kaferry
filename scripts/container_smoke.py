@@ -54,7 +54,7 @@ def main():
     # The wrapper is not the executable; exact image/binary identity was checked above.
     env.pop("KAFERRY_EXPECT_BINARY_SHA256", None)
     subprocess.run(["go", "test", "-count=1", "-tags=integration,load", "-run",
-                    "^(TestArchiveTutorial|TestLoadObservability)$/^round-0$/^disabled$", "./tests/compat"], env=env, check=True)
+                    "^(TestArchiveTutorial(Cancellation)?|TestLoadObservability)$/^round-0$/^disabled$", "./tests/compat"], env=env, check=True)
     print("Container identity, licenses, CA certificates and file-copy fidelity verified")
 
 
