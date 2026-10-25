@@ -34,7 +34,7 @@ docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io
 {"time":"2026-10-25T22:39:06.602132061Z","level":"INFO","msg":"copy summary","submitted":3,"confirmed":3,"filtered":0,"skipped":0,"timestamp_stops":0,"tip_stops":0,"peak_uncommitted_records":3,"peak_uncommitted_bytes":534}
 ```
 
-This copies the three bundled sample records into `output` and saves progress in the `kaferry-demo` volume. The files remain after the container exits. [Inspect results, rerun and reset](docs/usage.md#first-copy-with-docker) · [Run without Docker](docs/usage.md#first-copy-without-kafka) · [Copy Kafka topics](docs/usage.md#copy-between-kafka-topics).
+With a fresh `kaferry-demo` volume, this copies the three bundled sample records into `output` and saves progress. The files remain after the container exits. [Inspect results, rerun and reset](docs/usage.md#first-copy-with-docker) · [Run without Docker](docs/usage.md#first-copy-without-kafka) · [Copy Kafka topics](docs/usage.md#copy-between-kafka-topics).
 
 ## Before you run
 

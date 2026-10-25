@@ -11,6 +11,8 @@ docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io
 {"time":"2026-10-25T22:39:06.602132061Z","level":"INFO","msg":"copy summary","submitted":3,"confirmed":3,"filtered":0,"skipped":0,"timestamp_stops":0,"tip_stops":0,"peak_uncommitted_records":3,"peak_uncommitted_bytes":534}
 ```
 
+This output is from a fresh `kaferry-demo` volume. If you ran the README example, continue with the status command below.
+
 The image includes [copy.sql](../examples/archive-demo/copy.sql), its configuration and three sample Kafka records stored in Avro files. The command copies these records from `input` to `output` and saves progress for the named group `archive-demo`. Docker keeps the files and checkpoints in the `kaferry-demo` volume after the container exits.
 
 ```sh
