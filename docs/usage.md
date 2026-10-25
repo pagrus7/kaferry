@@ -30,7 +30,7 @@ The first `copy summary` reports `submitted: 3` and `confirmed: 3`. The status i
 ```json
 {
   "verdict": "stopped",
-  "reason": "file end reached",
+  "reason": "file selection completed",
   "partitions": [{"id": 0, "position": 3, "stop": {"reason": "eof", "at": 3}}]
 }
 ```
