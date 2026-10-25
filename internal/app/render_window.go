@@ -161,5 +161,4 @@ func renderCompletion(output io.Writer, report inspect.Report, window plan.Windo
 	fmt.Fprintf(output, "  Clock capture threshold: %s (window end + %d ms MAX_STALENESS).\n", formatBound(&threshold), report.MaxStalenessMS)
 	fmt.Fprintln(output, "    Per assigned partition: reuse a saved captured end. Otherwise, once the clock passes the threshold, save the current replicated end. Drain the fixed end unless timestamp evidence stops the partition first.")
 	fmt.Fprintln(output, "    Open transactions can delay reading that end; worker.tip_wait bounds a stalled readable tip, not ordinary backlog processing. This is not a runtime deadline.")
-	return
 }
