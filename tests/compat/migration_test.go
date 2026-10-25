@@ -118,9 +118,9 @@ func runMigrationExpect(t *testing.T, binary, statement, config string, want int
 		}
 	}
 	require.Equal(t, want, code, "migration: %s", process.logs())
-	for _, text := range diagnostic {
-		if text != "" {
-			require.Contains(t, process.logs(), text)
+	for _, pattern := range diagnostic {
+		if pattern != "" {
+			require.Regexp(t, pattern, process.logs())
 		}
 	}
 }
@@ -141,7 +141,7 @@ func migrationCheckpoint(t *testing.T, configuration, group string) *replay.Stat
 	return state
 }
 
-func TestPreviousBinaryRejectsCapturedEndMetadata(t *testing.T) {
+func TestPreviousBinaryRejectsChangedCapturedEndQuery(t *testing.T) {
 	// Given a candidate bounded copy with a saved captured end.
 	previous := os.Getenv("KAFERRY_PREVIOUS_BINARY")
 	require.NotEmpty(t, previous)
@@ -159,8 +159,8 @@ func TestPreviousBinaryRejectsCapturedEndMetadata(t *testing.T) {
 	require.True(t, strings.HasPrefix(progress.Metadata, "kaferry:3;"))
 	before := archiveRecords(t, out)
 
-	// When the previous binary reads those commits, then it rejects the format before writing.
+	// When the other binary reads those commits with a changed query, then it rejects the format or query identity before writing.
 	oldSQL := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s')", out, source, group)
-	runMigrationExpect(t, previous, oldSQL, config, 2, "unsupported version of commit metadata")
+	runMigrationExpect(t, previous, oldSQL, config, 2, "unsupported version of commit metadata|query fingerprint mismatch")
 	require.Equal(t, before, archiveRecords(t, out))
 }
