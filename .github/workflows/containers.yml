@@ -8,6 +8,8 @@ on:
       - 'scripts/container_*'
       - 'scripts/test_container_*'
       - 'tests/compat/container_test.go'
+      - 'examples/archive-demo/**'
+      - 'scripts/package_examples/**'
       - 'go.mod'
       - 'go.sum'
   workflow_dispatch:
@@ -128,6 +130,8 @@ jobs:
           first=$(python3 scripts/container_publish.py .cache/kaferry.oci.tar localhost:5000/kaferry:test)
           second=$(python3 scripts/container_publish.py .cache/kaferry.oci.tar localhost:5000/kaferry:test)
           test "$first" = "$second"
+          latest=$(python3 scripts/container_publish.py .cache/kaferry.oci.tar localhost:5000/kaferry:latest)
+          test "$latest" = "$first"
           printf '%s\n' "$first" | grep -Eq '^sha256:[a-f0-9]{64}$'
       - run: make broker
       - name: Verify SIGTERM checkpointing and container resume
@@ -146,6 +150,9 @@ jobs:
     needs: [build, test]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    concurrency:
+      group: kaferry-container-publish
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -175,3 +182,12 @@ jobs:
           subject-name: ghcr.io/pagrus7/kaferry
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+      - name: Update the latest stable image alias
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          current=$(gh api repos/pagrus7/kaferry/releases/latest --jq .tag_name)
+          if [ "$VERSION" = "$current" ]; then
+            python3 scripts/container_publish.py .cache/kaferry.oci.tar ghcr.io/pagrus7/kaferry:latest
+          fi
