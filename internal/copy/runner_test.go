@@ -134,7 +134,7 @@ func fixture(t *testing.T) (*Runner, *testSource, *testSink, *testStore, *testCl
 	s := &testSource{clock: c, paused: make(map[int32]bool), assignments: []Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}}
 	d := &testSink{reports: make(chan Delivery, 100)}
 	p := &testStore{}
-	r := NewRunner(s, d, p, c, slog.New(slog.NewTextHandler(io.Discard, nil)), plan.Plan{Source: plan.Endpoint{Kind: "FILE"}}, config.Defaults(t.TempDir()).Worker, NewTracker(), NoopStopObserver{}, nil)
+	r := NewRunner(s, d, p, c, slog.New(slog.NewTextHandler(io.Discard, nil)), plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE"}}, config.Defaults(t.TempDir()).Worker, NewTracker(), NoopStopObserver{}, nil)
 	return r, s, d, p, c
 }
 func incoming(id int32, position int64, size int) Input {

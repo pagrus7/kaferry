@@ -38,7 +38,7 @@ func TestInspectionRejectsChangedSavedWindowWithoutWriting(t *testing.T) {
 	directory := t.TempDir()
 	limits := config.Defaults("").Worker
 	limits.CheckpointDir = &directory
-	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "FILE", Format: "avro", Name: filepath.Join(t.TempDir(), "output")}, Group: "g", Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 10}}}
+	p := plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: filepath.Join(t.TempDir(), "output")}, Group: "g", Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 10}}}
 	fp, err := p.Fingerprint("", "")
 	require.NoError(t, err)
 	lower := int64(11)
@@ -65,7 +65,7 @@ func TestSavedExcludedFileIsRejectedBeforeInspectionOrReplayReads(t *testing.T) 
 	directory := t.TempDir()
 	limits := config.Defaults("").Worker
 	limits.CheckpointDir = &directory
-	p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "FILE", Format: "avro", Name: filepath.Join(t.TempDir(), "output")}, Group: "g", Partitions: &plan.PartitionFilter{IDs: []int32{0}}}
+	p := plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: filepath.Join(t.TempDir(), "output")}, Group: "g", Partitions: &plan.PartitionFilter{IDs: []int32{0}}}
 	fp, err := p.Fingerprint("", "")
 	require.NoError(t, err)
 	file := replay.File{Identity: avro.Identity{Version: 1, WriterID: strings.Repeat("1", 32), FileID: strings.Repeat("2", 32), Source: avro.Source{Cluster: "cluster", Topic: "orders", TopicID: avro.TopicID{1}, Partition: 5}, FirstOffset: 0, BlockLimit: 8 << 20}, Size: 200, Start: 100, SHA256: strings.Repeat("0", 64)}
@@ -92,7 +92,7 @@ func TestInspectionRejectsRelativeDisorderOverflowWithoutWriting(t *testing.T) {
 			directory := t.TempDir()
 			limits := config.Defaults("").Worker
 			limits.CheckpointDir = &directory
-			p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "FILE", Format: "avro", Name: filepath.Join(t.TempDir(), "output")}, Group: "g", Window: plan.WindowSpec{Upper: &plan.Expression{Now: true, AdjustmentMS: math.MaxInt64 - 807}}, MaxOutOfOrderMS: new(int64(1000))}
+			p := plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: filepath.Join(t.TempDir(), "output")}, Group: "g", Window: plan.WindowSpec{Upper: &plan.Expression{Now: true, AdjustmentMS: math.MaxInt64 - 807}}, MaxOutOfOrderMS: new(int64(1000))}
 			fp, err := p.Fingerprint("", "")
 			require.NoError(t, err)
 			if saved {

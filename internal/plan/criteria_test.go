@@ -19,9 +19,9 @@ func TestCriteriaDefaultsAndIndependentAllowances(t *testing.T) {
 		{"TOPIC 'a'", "MAX_STALENESS=OFF", -1, -1},
 		{"TOPIC 'a'", "MAX_STALENESS=OFF,MAX_OUT_OF_ORDER=INTERVAL '0' SECOND", -1, 0},
 		{"TOPIC 'a'", "MAX_OUT_OF_ORDER=OFF", 300000, -1},
-		{"FILE avro('a')", "", 0, -1},
-		{"FILE avro('a')", "MAX_OUT_OF_ORDER=INTERVAL '0' SECOND", 0, 0},
-		{"FILE avro('a')", "MAX_OUT_OF_ORDER=OFF", 0, -1},
+		{"ARCHIVE 'a'", "", 0, -1},
+		{"ARCHIVE 'a'", "MAX_OUT_OF_ORDER=INTERVAL '0' SECOND", 0, 0},
+		{"ARCHIVE 'a'", "MAX_OUT_OF_ORDER=OFF", 0, -1},
 	} {
 		t.Run(tc.kind+tc.options, func(t *testing.T) {
 			// Given an upper timestamp bound and source-specific settings in any order.
@@ -33,7 +33,7 @@ func TestCriteriaDefaultsAndIndependentAllowances(t *testing.T) {
 			p := build(t, q+" WHERE RECORD_TIMESTAMP < TIMESTAMP '2026-10-22T10:00:00Z'")
 			require.Equal(t, tc.s, p.MaxStalenessMS)
 			require.Equal(t, tc.d, p.DisorderMS())
-			require.Equal(t, tc.kind == "FILE avro('a')" || tc.s >= 0 || tc.d >= 0, p.Finite())
+			require.Equal(t, tc.kind == "ARCHIVE 'a'" || tc.s >= 0 || tc.d >= 0, p.Finite())
 		})
 	}
 }

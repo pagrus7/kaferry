@@ -68,7 +68,7 @@ func TestExplainPlansAndInspectsWithoutExecuting(t *testing.T) {
 	for _, failure := range []string{"", "parse", "inspect"} {
 		t.Run(failure, func(t *testing.T) {
 			// Given independent execution and inspection boundaries.
-			m := &commandMocks{t: t, ctx: t.Context(), cfg: config.Defaults("home"), plan: enginePlan("FILE", "FILE"), fail: failure, failure: &core.Exit{Code: 1, Err: errors.New("failed")}}
+			m := &commandMocks{t: t, ctx: t.Context(), cfg: config.Defaults("home"), plan: enginePlan("ARCHIVE", "ARCHIVE"), fail: failure, failure: &core.Exit{Code: 1, Err: errors.New("failed")}}
 			// When explaining through the same preparation stages as run.
 			report, err := newCommand(m, m, m, m, m, m, nil).Explain(m.ctx, "statement", "config.toml", noopShutdown{})
 			// Then only the inspector executes, and failures retain their cause.
@@ -91,7 +91,7 @@ func TestCommandPlansBeforeExecutingAndStopsOnFailure(t *testing.T) {
 	stages := []string{"parse", "load", "build", "validate", "execute"}
 	for index, fail := range append(append([]string{}, stages...), "") {
 		t.Run("failure-"+fail, func(t *testing.T) {
-			m := &commandMocks{t: t, fail: fail, failure: errors.New("failure"), ctx: context.Background(), cfg: config.Defaults("home"), ast: sql.Statement{Source: sql.Endpoint{Name: "input"}}, plan: enginePlan("FILE", "FILE")}
+			m := &commandMocks{t: t, fail: fail, failure: errors.New("failure"), ctx: context.Background(), cfg: config.Defaults("home"), ast: sql.Statement{Source: sql.Endpoint{Name: "input"}}, plan: enginePlan("ARCHIVE", "ARCHIVE")}
 
 			// When
 			err := newCommand(m, m, m, m, m, nil, nil).Run(m.ctx, "statement", "config.toml", noopShutdown{})
@@ -161,8 +161,8 @@ func TestRunnerFactoryInjectsFreshProgressPerExecution(t *testing.T) {
 	factory := newRunnerFactory(core.RealClock{}, engineLogger(), progress)
 	stop := errors.New("stop after assignment")
 	source := assignmentSource{failure: stop}
-	first := factory.New(source, nil, nil, enginePlan("FILE", "FILE"), config.Worker{}, core.NoopStopObserver{}, nil)
-	second := factory.New(source, nil, nil, enginePlan("FILE", "FILE"), config.Worker{}, core.NoopStopObserver{}, nil)
+	first := factory.New(source, nil, nil, enginePlan("ARCHIVE", "ARCHIVE"), config.Worker{}, core.NoopStopObserver{}, nil)
+	second := factory.New(source, nil, nil, enginePlan("ARCHIVE", "ARCHIVE"), config.Worker{}, core.NoopStopObserver{}, nil)
 	require.Len(t, progress.made, 2)
 	require.NotSame(t, progress.made[0], progress.made[1])
 

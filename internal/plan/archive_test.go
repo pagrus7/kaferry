@@ -13,7 +13,7 @@ func TestArchiveOptionsValidateAndKeepOperationalSettingsOutOfFingerprint(t *tes
 	// Given optional rotation settings and equivalent query identity.
 	build := func(t *testing.T, options string) Plan {
 		t.Helper()
-		statement, err := sql.NewParser().Parse(fmt.Sprintf("INSERT INTO FILE avro('out') %s SELECT * FROM FILE avro('in') WITH (GROUP='g') ", options))
+		statement, err := sql.NewParser().Parse(fmt.Sprintf("INSERT INTO ARCHIVE 'out' %s SELECT * FROM ARCHIVE 'in' WITH (GROUP='g') ", options))
 		require.NoError(t, err)
 		p, err := NewPlanner(nil).Build(statement, nil)
 		require.NoError(t, err)
@@ -38,7 +38,7 @@ func TestArchiveOptionDiagnosticsLocateValuesWithoutLeakingPaths(t *testing.T) {
 	} {
 		t.Run(tc.options, func(t *testing.T) {
 			// Given a malformed file option containing a private endpoint path.
-			query := "INSERT INTO FILE avro('private/path') WITH(" + strings.TrimPrefix(tc.options, ",") + ") SELECT * FROM FILE avro('in') WITH(GROUP='g')"
+			query := "INSERT INTO ARCHIVE 'private/path' WITH(" + strings.TrimPrefix(tc.options, ",") + ") SELECT * FROM ARCHIVE 'in' WITH(GROUP='g')"
 			ast, err := sql.NewParser().Parse(query)
 			require.NoError(t, err)
 			// When planning, then the diagnostic identifies the option without echoing SQL values.
@@ -54,7 +54,7 @@ func TestArchiveOptionDiagnosticsLocateValuesWithoutLeakingPaths(t *testing.T) {
 
 func TestSourceRotationDiagnosticLocatesOptionWithoutLeakingPaths(t *testing.T) {
 	// Given rotation on a source endpoint with a private path.
-	query := "INSERT INTO FILE avro('private/output') SELECT * FROM FILE avro('private/input') WITH(GROUP='g', ROTATE_AFTER_SIZE=1k)"
+	query := "INSERT INTO ARCHIVE 'private/output' SELECT * FROM ARCHIVE 'private/input' WITH(GROUP='g', ROTATE_AFTER_SIZE=1k)"
 	_, err := sql.NewParser().Parse(query)
 	// When parsing, then locate a destination setting in the source clause.
 	require.ErrorContains(t, err, "put it in WITH after the INTO endpoint")

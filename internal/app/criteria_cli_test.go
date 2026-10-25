@@ -35,7 +35,7 @@ func TestArchiveCriteriaCLIUsesOriginalStreamsAndResumesCompletion(t *testing.T)
 				criteria = "RECORD_OFFSET>=101 AND RECORD_OFFSET<102"
 				want = []int64{101}
 			}
-			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH(GROUP='criteria'%s) WHERE %s", output, input, settings, criteria)
+			query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH(GROUP='criteria'%s) WHERE %s", output, input, settings, criteria)
 			// When run and then resumed, then copy only matching original records and do not reopen completed streams.
 			for range 2 {
 				var logs bytes.Buffer

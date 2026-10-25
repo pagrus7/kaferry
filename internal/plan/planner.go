@@ -134,7 +134,7 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 			return Plan{}, sql.At(optionPosition(statement.Source.Options, "START", statement.Source.OptionsPosition), fmt.Errorf("START cannot be combined with timestamp bounds in WHERE; remove START"))
 		}
 	} else if plan.Start != "" {
-		return Plan{}, sql.At(optionPosition(statement.Source.Options, "START", statement.Source.OptionsPosition), fmt.Errorf("START requires a topic source; remove START for FILE sources"))
+		return Plan{}, sql.At(optionPosition(statement.Source.Options, "START", statement.Source.OptionsPosition), fmt.Errorf("START requires a topic source; remove START for ARCHIVE sources"))
 	}
 	return plan, nil
 }
@@ -215,7 +215,8 @@ func (p Plan) Fingerprint(sourceClusterID, destinationClusterID string) (string,
 		Topic     string
 	}
 	endpointIdentity := func(endpoint Endpoint, clusterID string) (identity, error) {
-		if endpoint.Kind == "FILE" {
+		if endpoint.Kind == "ARCHIVE" {
+			// FILE is the fixed wire identifier in saved query fingerprints.
 			return identity{Kind: "FILE", Format: endpoint.Format}, nil
 		}
 		if clusterID == "" {

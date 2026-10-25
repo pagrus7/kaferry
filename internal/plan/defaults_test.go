@@ -8,8 +8,8 @@ import (
 )
 
 func TestMinimalStatementsMatchExplicitDefaults(t *testing.T) {
-	for _, source := range []string{"TOPIC 'a'", "FILE avro('in')"} {
-		for _, destination := range []string{"TOPIC 'b'", "FILE avro('out')"} {
+	for _, source := range []string{"TOPIC 'a'", "ARCHIVE 'in'"} {
+		for _, destination := range []string{"TOPIC 'b'", "ARCHIVE 'out'"} {
 			t.Run(source+" to "+destination, func(t *testing.T) {
 				// Given each endpoint combination with no settings clauses.
 				query := fmt.Sprintf("INSERT INTO %s SELECT * FROM %s", destination, source)
@@ -55,9 +55,9 @@ func TestOptionalSourceSettingsOverrideOnlyTheirDefaults(t *testing.T) {
 }
 
 func TestTimeFiltersDoNotBecomeExplicitStartRules(t *testing.T) {
-	for _, source := range []string{"TOPIC 'a'", "FILE avro('in')"} {
+	for _, source := range []string{"TOPIC 'a'", "ARCHIVE 'in'"} {
 		// Given an upper-only filter without source settings.
-		query := "INSERT INTO FILE avro('out') SELECT * FROM " + source + " WHERE RECORD_TIMESTAMP < NOW()"
+		query := "INSERT INTO ARCHIVE 'out' SELECT * FROM " + source + " WHERE RECORD_TIMESTAMP < NOW()"
 		// When planning, then leave positioning to the filter rather than adding a conflicting START.
 		p := build(t, query)
 		require.True(t, p.OneOff)

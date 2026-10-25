@@ -53,7 +53,7 @@ func (p Plan) DisorderMS() int64 {
 	return p.defaultDisorderMS()
 }
 func (p Plan) Finite() bool {
-	return p.Source.Kind == "FILE" || p.WorkerStopAfterRecords > 0 || p.HasOffsetEnd() || p.Window.Upper != nil && (p.MaxStalenessMS >= 0 || p.DisorderMS() >= 0)
+	return p.Source.Kind == "ARCHIVE" || p.WorkerStopAfterRecords > 0 || p.HasOffsetEnd() || p.Window.Upper != nil && (p.MaxStalenessMS >= 0 || p.DisorderMS() >= 0)
 }
 func allowance(o sql.Option) (int64, error) {
 	if o.Value == "OFF" && o.Interval == nil {

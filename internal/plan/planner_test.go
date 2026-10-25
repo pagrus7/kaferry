@@ -75,7 +75,7 @@ func TestUsageCommandSQL(t *testing.T) {
 
 func TestWindowBoundaries(t *testing.T) {
 	// Given
-	p := build(t, "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') WITH (GROUP=ONE_OFF) WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z' AND TIMESTAMP '2026-10-01T09:30:00Z' ")
+	p := build(t, "INSERT INTO ARCHIVE 'b' SELECT * FROM ARCHIVE 'a' WITH (GROUP=ONE_OFF) WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z' AND TIMESTAMP '2026-10-01T09:30:00Z' ")
 	w, err := p.Window.Resolve(time.Time{})
 	require.NoError(t, err)
 	lo := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
@@ -128,7 +128,7 @@ func TestInvalidTimeExpressions(t *testing.T) {
 		{"RECORD_TIMESTAMP >= TIMESTAMP '2026-10-02T00:00:00Z' AND RECORD_TIMESTAMP < TIMESTAMP '2026-10-01T00:00:00Z'", "empty"},
 	}
 	for _, tc := range filters {
-		statement, err := sql.NewParser().Parse("INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') WITH(GROUP='g') WHERE " + tc.filter)
+		statement, err := sql.NewParser().Parse("INSERT INTO ARCHIVE 'b' SELECT * FROM ARCHIVE 'a' WITH(GROUP='g') WHERE " + tc.filter)
 		require.NoError(t, err)
 
 		// When
@@ -249,7 +249,7 @@ func TestQuotedOneOffGroupRemainsNamed(t *testing.T) {
 				group = "'ONE_OFF'"
 			}
 			// When building the copy plan.
-			p := build(t, "INSERT INTO FILE avro('b') SELECT * FROM FILE avro('a') WITH(GROUP="+group+")")
+			p := build(t, "INSERT INTO ARCHIVE 'b' SELECT * FROM ARCHIVE 'a' WITH(GROUP="+group+")")
 			// Then quoting selects a named group that can resume.
 			require.Equal(t, !quoted, p.OneOff)
 			if quoted {

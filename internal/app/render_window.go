@@ -118,14 +118,14 @@ func formatBound(value *int64) string {
 // Inspection validates completion arithmetic before rendering the report.
 func renderCompletion(output io.Writer, report inspect.Report, window plan.Window) {
 	if report.Offsets != nil && report.Offsets.HasEnd() || len(report.PartitionOffsets) > 0 {
-		if report.Source.Kind == "FILE" {
+		if report.Source.Kind == "ARCHIVE" {
 			fmt.Fprintln(output, "  Stop: selected archive EOF or the original source offset ends; timestamps filter records.")
 		} else {
 			fmt.Fprintln(output, "  Stop: fixed exclusive offset end per partition; timestamps filter records. LATEST previews can change before execution.")
 		}
 		return
 	}
-	if report.Source.Kind == "FILE" {
+	if report.Source.Kind == "ARCHIVE" {
 		rule := "end of this group's fixed selection of completed archive files"
 		if report.WorkerStopAfterRecords > 0 {
 			rule = "worker record threshold or " + rule + ", whichever comes first"
@@ -150,7 +150,7 @@ func renderCompletion(output io.Writer, report inspect.Report, window plan.Windo
 		threshold := *window.Upper + *d
 		fmt.Fprintf(output, "  Timestamp stop threshold: %s (window end + %d ms MAX_OUT_OF_ORDER), per original source partition.\n", formatBound(&threshold), *d)
 	}
-	if report.Source.Kind == "FILE" {
+	if report.Source.Kind == "ARCHIVE" {
 		return
 	}
 	if report.MaxStalenessMS < 0 {

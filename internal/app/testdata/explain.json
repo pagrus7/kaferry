@@ -14,7 +14,7 @@
     "partition_count": 1
   },
   "destination": {
-    "kind": "FILE",
+    "kind": "ARCHIVE",
     "name": "out.avro",
     "file": {
       "exists": false,

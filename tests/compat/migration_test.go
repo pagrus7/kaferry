@@ -40,7 +40,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			clone := filepath.Join(t.TempDir(), "clone")
 			config := configuration(t, "max_frame_bytes=8192")
 			group := source + "-migration"
-			sql := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s') ", archive, source, group)
+			sql := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s') ", archive, source, group)
 			limited := func(query string) string {
 				return query + " OPTIONS(WORKER_STOP_AFTER_RECORDS=1)"
 			}
@@ -62,7 +62,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			require.Equal(t, int64(2), committedPartitions(t, admin, group, source, 1)[0].At)
 
 			// Given a partially replayed archive with a saved record cursor.
-			cloneSQL := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='file-migration') ", clone, archive)
+			cloneSQL := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='file-migration') ", clone, archive)
 			runMigrationBinary(t, direction.first, limited(cloneSQL), config)
 			require.Equal(t, complete[:1], archiveRecords(t, clone))
 			state := migrationCheckpoint(t, config, "file-migration")
@@ -93,7 +93,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 
 			// When a fresh group reads the archive, then it sees the same full records.
 			fresh := filepath.Join(t.TempDir(), "read")
-			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='archive-read') ", fresh, archive)
+			query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='archive-read') ", fresh, archive)
 			runMigrationBinary(t, direction.second, query, config)
 			require.Equal(t, complete, archiveRecords(t, fresh))
 		})
@@ -153,14 +153,14 @@ func TestPreviousBinaryRejectsCapturedEndMetadata(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "archive")
 	group := source + "-bounded"
 	config := configuration(t)
-	statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH(GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s'", out, source, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
+	statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s'", out, source, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
 	runMigrationBinary(t, testBinary(t), statement, config)
 	progress := committedPartitions(t, a, group, source, 1)[0]
 	require.True(t, strings.HasPrefix(progress.Metadata, "kaferry:3;"))
 	before := archiveRecords(t, out)
 
 	// When the previous binary reads those commits, then it rejects the format before writing.
-	oldSQL := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH(GROUP='%s')", out, source, group)
+	oldSQL := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s')", out, source, group)
 	runMigrationExpect(t, previous, oldSQL, config, 2, "unsupported version of commit metadata")
 	require.Equal(t, before, archiveRecords(t, out))
 }

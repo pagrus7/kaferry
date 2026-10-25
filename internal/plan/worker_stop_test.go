@@ -32,7 +32,7 @@ func TestWorkerStopValidationAndFingerprint(t *testing.T) {
 func TestInvalidWorkerStopRangeDoesNotEchoInput(t *testing.T) {
 	for _, value := range []string{"0", "9007199254740993", "18446744073709551616"} {
 		// Given a syntactically valid integer outside the supported range.
-		query := "INSERT INTO FILE avro('out') SELECT * FROM FILE avro('in') WITH(GROUP='g')\nOPTIONS(WORKER_STOP_AFTER_RECORDS=" + value + ")"
+		query := "INSERT INTO ARCHIVE 'out' SELECT * FROM ARCHIVE 'in' WITH(GROUP='g')\nOPTIONS(WORKER_STOP_AFTER_RECORDS=" + value + ")"
 		statement, err := sql.NewParser().Parse(query)
 		require.NoError(t, err)
 		// When planning it.
@@ -64,7 +64,7 @@ func TestWorkerStopKeepsSourceDefaults(t *testing.T) {
 
 func TestWorkerStopOptionCannotRepeat(t *testing.T) {
 	// Given two worker stop values in one query.
-	statement, err := sql.NewParser().Parse("INSERT INTO FILE avro('out') SELECT * FROM FILE avro('in') WITH (GROUP='g') OPTIONS (WORKER_STOP_AFTER_RECORDS=1, WORKER_STOP_AFTER_RECORDS=2)")
+	statement, err := sql.NewParser().Parse("INSERT INTO ARCHIVE 'out' SELECT * FROM ARCHIVE 'in' WITH (GROUP='g') OPTIONS (WORKER_STOP_AFTER_RECORDS=1, WORKER_STOP_AFTER_RECORDS=2)")
 	require.NoError(t, err)
 	// When planning, then reject the second declaration rather than silently overriding it.
 	_, err = NewPlanner(nil).Build(statement, nil)

@@ -144,7 +144,7 @@ func verifyArchive(t *testing.T, path string, count int, original *core.Provenan
 	require.Equal(t, count, verified, "all logical records survive archive copy")
 }
 
-func archiveQuery(path string) string { return fmt.Sprintf("FILE avro('%s')", filepath.ToSlash(path)) }
+func archiveQuery(path string) string { return fmt.Sprintf("ARCHIVE '%s'", filepath.ToSlash(path)) }
 
 func brokerSourceIdentity(t *testing.T, admin *kadm.Client, topic string) *core.Provenance {
 	t.Helper()

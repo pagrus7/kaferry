@@ -73,7 +73,7 @@ func TestFixedOffsetEndCompletesWithoutTimestampOrClockEvidence(t *testing.T) {
 func TestOffsetFilterUsesOriginalProvenance(t *testing.T) {
 	// Given a file replay whose virtual cursor differs from the original Kafka offset.
 	r, source, sink, _, _ := fixture(t)
-	r.plan.Source.Kind = "FILE"
+	r.plan.Source.Kind = "ARCHIVE"
 	r.plan.Offsets = &plan.OffsetRange{Lower: new(int64(100)), Upper: new(int64(102))}
 	require.NoError(t, source.Start(r, nil))
 	for i, offset := range []int64{99, 100, 101, 102} {

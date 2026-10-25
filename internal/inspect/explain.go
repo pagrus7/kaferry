@@ -73,7 +73,7 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 		}
 	}
 	stop.Stage("inspecting destination archive")
-	if p.Destination.Kind == "FILE" {
+	if p.Destination.Kind == "ARCHIVE" {
 		info, err := s.files.Destination(p.Destination.Name)
 		if err != nil {
 			return report, err

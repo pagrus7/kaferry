@@ -197,7 +197,7 @@ func TestFullCapFlushesAndCommitsBeforePeriodicDeadline(t *testing.T) {
 }
 
 func TestSignalDuringBoundedCopySavesProgressAndFails(t *testing.T) {
-	for _, kind := range []string{"FILE", "TOPIC"} {
+	for _, kind := range []string{"ARCHIVE", "TOPIC"} {
 		t.Run(kind, func(t *testing.T) {
 			// Given a bounded source with confirmed work and another record in Poll.
 			r, source, sink, store, clock := fixture(t)

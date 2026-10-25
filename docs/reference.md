@@ -58,7 +58,7 @@ Source properties follow `FROM`; sink properties follow `INSERT INTO`. Unknown o
 
 Both allowances require an upper timestamp bound and reject an explicit offset end. Either enabled rule can establish completion. Raising only one allowance does not protect against an invalid assumption used by the other. Both `OFF` means following filtered records until another stop or a signal. Neither allowance limits total run time. [Completion guarantees](../design/decisions.md#completion).
 
-#### File source
+#### Archive source
 
 | Property | Default | Meaning |
 | --- | --- | --- |
@@ -73,7 +73,7 @@ Both allowances require an upper timestamp bound and reject an explicit offset e
 | --- | --- | --- |
 | `PARTITIONING` | `PRESERVE` | Preserve original partition numbers, or use `KEY` for key-based routing |
 
-#### File sink
+#### Archive sink
 
 | Property | Default | Meaning |
 | --- | --- | --- |

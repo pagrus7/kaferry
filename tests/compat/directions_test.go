@@ -92,7 +92,7 @@ func TestAllFileDirectionsAndResume(t *testing.T) {
 	dir := t.TempDir()
 	archive, clone := filepath.Join(dir, "archive.avro"), filepath.Join(dir, "clone.avro")
 	cfg := configuration(t)
-	statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", archive, src, src+"-archive", stamp.Add(time.Second).Format(time.RFC3339Nano))
+	statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", archive, src, src+"-archive", stamp.Add(time.Second).Format(time.RFC3339Nano))
 
 	// When
 	execute(t, statement, cfg)
@@ -101,11 +101,11 @@ func TestAllFileDirectionsAndResume(t *testing.T) {
 	require.Equal(t, expected, archiveRecords(t, archive), "topic-to-file preserves full logical records")
 	execute(t, statement, cfg)
 	require.Len(t, archiveRecords(t, archive), 24, "completed archive was recopied")
-	statement = fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='clone') ", clone, archive)
+	statement = fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='clone') ", clone, archive)
 	execute(t, statement, cfg)
 	execute(t, statement, cfg)
 	require.Equal(t, expected, archiveRecords(t, clone), "file-to-file preserves records without recopying saved output")
-	statement = fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM FILE avro('%s') WITH (GROUP='restore') ", dst, archive)
+	statement = fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM ARCHIVE '%s' WITH (GROUP='restore') ", dst, archive)
 	execute(t, statement, cfg)
 	execute(t, statement, cfg)
 	assertTopicRecords(t, dst, 3, expected)

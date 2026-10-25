@@ -114,9 +114,9 @@ class PerformanceTest(unittest.TestCase):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as name, chdir(name):
                 effects = ([{'records_per_second': 100}, ValueError('baseline failed')] if failure == 'base'
                            else [OSError('head failed')] if failure == 'head' else None)
-                with patch('performance.resolve', side_effect=lambda ref: ref), \
+                with patch.dict(os.environ), patch('performance.resolve', side_effect=lambda ref: ref), \
                         patch('performance.command', return_value='fixture-images'), \
-                        patch('performance.build', side_effect=lambda ref, root: (Path(ref), {'sha256': ref})), \
+                        patch('performance.build', side_effect=lambda ref, root: (Path(ref), {'sha256': ref, 'archive_sql': ref == 'head'})), \
                         patch('performance.subprocess.run'), \
                         patch('performance.measure', side_effect=effects, return_value={'records_per_second': 100}), \
                         redirect_stdout(io.StringIO()):
@@ -126,6 +126,7 @@ class PerformanceTest(unittest.TestCase):
                             execute('base', 'head', 2, {'kafka': 10, 'file': 10})
                     else:
                         execute('base', 'head', 2, {'kafka': 10, 'file': 10})
+                    self.assertEqual(os.environ['KAFERRY_FILE_SQL_BINARIES'], 'base')
                 report = json.loads(Path('build-results/performance.json').read_text())
                 self.assertEqual(report['compatible'], failure is None)
                 if failure:

@@ -26,12 +26,12 @@ func renderStatus(output io.Writer, r inspect.StatusReport, asJSON bool) error {
 		renderEndpoint(&b, "Destination", r.Destination)
 		fmt.Fprintln(&b, "\nSaved progress")
 		unit := "offset"
-		if r.Source.Kind == "FILE" {
+		if r.Source.Kind == "ARCHIVE" {
 			unit = "input records"
 		}
 		for _, p := range r.Partitions[:min(8, len(r.Partitions))] {
 			label := fmt.Sprintf("Partition %d", p.ID)
-			if r.Source.Kind == "FILE" {
+			if r.Source.Kind == "ARCHIVE" {
 				label = "Replay"
 			}
 			if p.Position == nil {

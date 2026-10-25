@@ -99,7 +99,7 @@ func (p *Plan) stalenessOption(option sql.Option) error {
 		return err
 	}
 	if p.Source.Kind != "TOPIC" {
-		return sql.At(option.Position, fmt.Errorf("MAX_STALENESS requires a topic source; remove MAX_STALENESS for FILE sources"))
+		return sql.At(option.Position, fmt.Errorf("MAX_STALENESS requires a topic source; remove MAX_STALENESS for ARCHIVE sources"))
 	}
 	if p.Window.Upper == nil {
 		return sql.At(option.Position, fmt.Errorf("MAX_STALENESS requires an upper timestamp bound in WHERE"))

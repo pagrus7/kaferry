@@ -11,7 +11,7 @@ tar -xzf archive-demo.tar.gz
 cd archive-demo
 ```
 
-Checkout users can build the package from the repository root with `go run ./scripts/package_examples .cache/archive-demo.tar.gz`, then extract that file in a fresh directory. The input is a Kaferry-format Avro archive, not an arbitrary Avro file. Its values are `order-1`, `order-2`, `order-3`, at original offsets 0–2 in one partition. `copy.sql` copies them to `output` with the named group `archive-demo`; `tutorial.toml` stores replay progress in `checkpoints`.
+Checkout users can build the package from the repository root with `go run ./scripts/package_examples .cache/archive-demo.tar.gz`, then extract that file in a fresh directory. The input is a Kaferry archive: Avro containers with a fixed Kafka record schema and raw key/value bytes. Its values are `order-1`, `order-2`, `order-3`, at original offsets 0–2 in one partition. `copy.sql` copies them to `output` with the named group `archive-demo`; `tutorial.toml` stores replay progress in `checkpoints`.
 
 <!-- archive-tutorial-commands -->
 ```sh
@@ -107,7 +107,7 @@ Keep passwords out of SQL literals and shell arguments. [Configuration rules](#c
 
 ## SQL settings
 
-`WITH` and `OPTIONS` are optional. Kafka source `WITH` sets `GROUP`, `START`, `MAX_STALENESS` and `MAX_OUT_OF_ORDER`; file source `WITH` sets `GROUP` and optional `MAX_OUT_OF_ORDER`. Sink properties configure partitioning or Avro rotation. [Defaults by endpoint](reference.md#endpoint-with-properties). Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
+`WITH` and `OPTIONS` are optional. Kafka source `WITH` sets `GROUP`, `START`, `MAX_STALENESS` and `MAX_OUT_OF_ORDER`; archive source `WITH` sets `GROUP` and optional `MAX_OUT_OF_ORDER`. Sink properties configure partitioning or archive rotation. [Defaults by endpoint](reference.md#endpoint-with-properties). Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
 
 ## Permissions
 
@@ -131,7 +131,7 @@ Pass SQL with `-f file`, `-f -` (stdin) or `-e "SQL"`.
 ```sh
 mkdir -p archive
 kaferry run -c connections.toml -f - <<'SQL'
-INSERT INTO FILE avro('archive/orders')
+INSERT INTO ARCHIVE 'archive/orders'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive');
 SQL
 ```
@@ -141,14 +141,14 @@ Replay completed files while capture continues; stop capture first to include it
 ```sh
 mkdir -p ~/.kaferry/checkpoints
 kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM FILE avro('archive/orders') WITH (GROUP = 'orders-restore');"
+SELECT * FROM ARCHIVE 'archive/orders' WITH (GROUP = 'orders-restore');"
 ```
 
-Without timestamp bounds, Kafka starts at the earliest retained record; `START = LATEST` selects new ones. Saved progress takes precedence. Without an enabled completion rule, Kafka follows. Avro selects current completed files and exits; the same group retains its selection. [Examples](../design/grammar.md#valid-examples).
+Without timestamp bounds, Kafka starts at the earliest retained record; `START = LATEST` selects new ones. Saved progress takes precedence. Without an enabled completion rule, Kafka follows. Archive replay selects current completed files and exits; the same group retains its selection. [Examples](../design/grammar.md#valid-examples).
 
 To copy the current readable Kafka backlog and exit, add `WHERE RECORD_OFFSET < LATEST`. Each partition saves its own exclusive end; rerunning the same group keeps those ends. Timestamp filters can restrict records within that snapshot without a lateness assumption. Use a new group for a fresh snapshot. [Offset examples](../design/grammar.md#valid-examples).
 
-Use `WHERE PARTITION IN (0, 2)` for fixed source IDs, or `NOT IN (0, 2)` for all others. Kafka discovers additions while workers run; Avro pins matching files once and keeps that selection on resume. All workers share the same predicate. Listed IDs must exist in Kafka metadata or completed archive headers. Excluded Kafka partitions are not fetched or committed; excluded archive payloads are not read. [Selection rules](../design/decisions.md#source-partitions).
+Use `WHERE PARTITION IN (0, 2)` for fixed source IDs, or `NOT IN (0, 2)` for all others. Kafka discovers additions while workers run; archive replay pins matching files once and keeps that selection on resume. All workers share the same predicate. Listed IDs must exist in Kafka metadata or completed archive headers. Excluded Kafka partitions are not fetched or committed; excluded archive payloads are not read. [Selection rules](../design/decisions.md#source-partitions).
 
 Omitting `GROUP` means `ONE_OFF`: each run logs a fresh group. Reruns and concurrent unnamed runs copy independently. Use a shared named group for Kafka workers.
 
@@ -204,7 +204,7 @@ Replay selects completed files once. It does not read private files or add files
 
 ```sh
 kaferry explain -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM FILE avro('archive/orders') WITH (GROUP = ONE_OFF);"
+SELECT * FROM ARCHIVE 'archive/orders' WITH (GROUP = ONE_OFF);"
 ```
 
 This preview creates no group or checkpoint and does not expand an existing replay selection. These checks establish which archive files are available; they do not verify the intended Kafka source set.
@@ -229,7 +229,7 @@ Errors stop the copy. `ON_ERROR = SKIP` drops identified records rejected before
 
 ## Workers
 
-Kafka-source workers use identical SQL and a dedicated `GROUP`. Use fixed timestamps; `NOW()` can differ. Stop workers before upgrading. Avro captures can use local or shared storage. Replay uses one process per group/checkpoint directory. Rerun unassigned workers to pick up unfinished work.
+Kafka-source workers use identical SQL and a dedicated `GROUP`. Use fixed timestamps; `NOW()` can differ. Stop workers before upgrading. Archive captures can use local or shared storage. Replay uses one process per group/checkpoint directory. Rerun unassigned workers to pick up unfinished work.
 
 ## Monitoring
 
