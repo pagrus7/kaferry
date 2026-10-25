@@ -25,6 +25,8 @@ From a checkout, run `make build`. From the repository root, invoke `./bin/kafer
 
 ## Container images
 
+[Try the bundled Docker demo](usage.md#first-copy-with-docker) without installing Kaferry or setting up Kafka.
+
 Images package the tested Linux release binaries without recompiling them. The container workflow downloads the published archives, verifies SHA-256 checksums and archive provenance against the exact release tag, commit and release workflow, and retains `LICENSE` and `THIRD_PARTY_NOTICES.txt` in `/usr/share/doc/kaferry`. A digest-pinned Distroless base supplies CA certificates and its own package files. The image runs as UID/GID 65532, with `HOME=/tmp` and `/work` as its working directory; bind mounts need suitable ownership or an explicit `--user`.
 
 Verify a published digest with GitHub CLI:
@@ -35,6 +37,6 @@ gh attestation verify oci://ghcr.io/pagrus7/kaferry@sha256:DIGEST \
   --signer-workflow pagrus7/kaferry/.github/workflows/containers.yml
 ```
 
-Use a registry login if needed. The image also carries SBOM/provenance records for inspection; attestations establish build origin, not application correctness. No `latest` tag is published.
+Use a registry login if needed. The image also carries SBOM/provenance records for inspection; attestations establish build origin, not application correctness. `ghcr.io/pagrus7/kaferry:latest` follows the current stable release after its image passes testing and attestation. Version tags and digests identify fixed images.
 
 [Run with mounted files and persistent checkpoints](usage.md#containers).

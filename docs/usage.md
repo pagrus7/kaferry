@@ -1,5 +1,62 @@
 # Using Kaferry
 
+## First copy with Docker
+
+```sh
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
+```
+
+```text
+{"time":"2026-10-25T22:39:06.595190641Z","level":"INFO","msg":"partition assigned","partition":0,"position":0,"window":{"lower":null,"upper":null}}
+{"time":"2026-10-25T22:39:06.602132061Z","level":"INFO","msg":"copy summary","submitted":3,"confirmed":3,"filtered":0,"skipped":0,"timestamp_stops":0,"tip_stops":0,"peak_uncommitted_records":3,"peak_uncommitted_bytes":534}
+```
+
+This output is from a fresh `kaferry-demo` volume. If you ran the README example, continue with the status command below.
+
+The image includes [copy.sql](../examples/archive-demo/copy.sql), its configuration and three sample Kafka records stored in Avro files. The command copies these records from `input` to `output` and saves progress for the named group `archive-demo`. Docker keeps the files and checkpoints in the `kaferry-demo` volume after the container exits.
+
+```sh
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest status -c tutorial.toml -f copy.sql
+```
+
+```text
+Status: stopped
+Group: "archive-demo"
+Reason: file selection completed
+  Source: ARCHIVE "input"
+  Destination: ARCHIVE "output"
+
+Saved progress
+  Replay: input records 3; file selection completed at 3
+  Snapshot: 1 completed files, 1498 encoded bytes.
+
+Stopped means this group saved a stop reason for its fixed selection of archive files. A new group selects current completed files.
+Activity: not checked for files.
+```
+
+This reads the group's saved progress from the volume.
+
+```sh
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
+```
+
+```text
+{"time":"2026-10-25T22:39:07.066648988Z","level":"INFO","msg":"partition assigned","partition":0,"position":3,"window":{"lower":null,"upper":null}}
+{"time":"2026-10-25T22:39:07.066686447Z","level":"INFO","msg":"copy summary","submitted":0,"confirmed":0,"filtered":0,"skipped":0,"timestamp_stops":0,"tip_stops":0,"peak_uncommitted_records":0,"peak_uncommitted_bytes":0}
+```
+
+This resumes the same group from its saved position. The output remains in the volume across containers.
+
+```sh
+docker volume rm kaferry-demo
+```
+
+```text
+kaferry-demo
+```
+
+This deletes the demo's input, output and checkpoints. Running the first command again starts a fresh copy. [Copy between Kafka topics](#copy-between-kafka-topics) · [Run your own files in a container](#containers).
+
 ## First copy without Kafka
 
 Install `kaferry` on `PATH` ([installation](install.md)). This tutorial uses a shell, `curl` and `tar`, three synthetic records, and local storage that supports sync, atomic rename and locks. It needs no broker or credentials. Choose a [release](https://github.com/pagrus7/kaferry/releases) that includes `archive-demo.tar.gz` and matches your binary. Set `version` below to that release tag, then run the block in a directory that does not already contain `archive-demo`:
@@ -253,7 +310,7 @@ For released images (Linux AMD64/ARM64):
 
 ```sh
 docker run --rm --stop-timeout 35 --user "$(id -u):$(id -g)" \
-  --mount "type=bind,src=$PWD,dst=/work" ghcr.io/pagrus7/kaferry:vX.Y.Z \
+  --mount "type=bind,src=$PWD,dst=/work" ghcr.io/pagrus7/kaferry:latest \
   run --file /work/copy.sql --config /work/connections.toml
 ```
 

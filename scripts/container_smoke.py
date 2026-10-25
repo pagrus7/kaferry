@@ -7,6 +7,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import tempfile
+import uuid
 
 
 def write_wrapper(path, root, image):
@@ -14,6 +15,27 @@ def write_wrapper(path, root, image):
                "--env", "HOME=/tmp", "--mount", f"type=bind,src={root},dst={root}"]
     path.write_text("#!/bin/sh\nexec " + shlex.join(command) + ' --workdir "$PWD" ' + shlex.quote(image) + ' "$@"\n')
     path.chmod(0o755)
+
+
+def check_tutorial(image):
+    # Given the bundled tutorial and a fresh Docker-managed volume, using the image's default user.
+    volume = "kaferry-demo-" + uuid.uuid4().hex
+    command = ["docker", "run", "--rm", "--mount", f"source={volume},target=/demo", "--workdir", "/demo", image]
+    try:
+        for expected in (3, 0):
+            # When separate containers run the same named copy group.
+            result = subprocess.run(command + ["run", "-c", "tutorial.toml", "-f", "copy.sql"],
+                                    text=True, capture_output=True, check=True)
+            summaries = [entry for line in result.stderr.splitlines()
+                         if (entry := json.loads(line)).get("msg") == "copy summary"]
+            if len(summaries) != 1 or summaries[0]["confirmed"] != expected:
+                raise ValueError(f"tutorial expected {expected} confirmations: {result.stderr}")
+            status = json.loads(subprocess.check_output(command + ["status", "-c", "tutorial.toml", "-f", "copy.sql", "--json"], text=True))
+            # Then progress survives container removal and a rerun confirms no additional records.
+            if status["verdict"] != "stopped" or status["partitions"][0]["position"] != 3:
+                raise ValueError(f"tutorial did not save completion: {status}")
+    finally:
+        subprocess.run(["docker", "volume", "rm", volume], check=True, stdout=subprocess.DEVNULL)
 
 
 def main():
@@ -45,6 +67,7 @@ def main():
                                       "--security-opt=no-new-privileges", args.image, "--version"], text=True)
     if not output.startswith(f"kaferry {record['version']} (commit {record['revision']}; "):
         raise ValueError(f"unexpected container version: {output!r}")
+    check_tutorial(args.image)
     root = Path.cwd().resolve()
     wrapper = root / ".cache/container-kaferry"
     write_wrapper(wrapper, root, args.image)

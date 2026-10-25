@@ -20,32 +20,40 @@ class PublishTest(unittest.TestCase):
             self.assertEqual(run.call_count, 1)
 
     def test_existing_different_digest_and_registry_denial_never_push(self):
-        for response in (subprocess.CompletedProcess([], 0, stdout=b'other image'),
-                         subprocess.CompletedProcess([], 1, stderr=b'unauthorized'),
-                         subprocess.CompletedProcess([], 1, stderr=b'network timeout')):
+        cases = [('registry/image:v1', subprocess.CompletedProcess([], 0, stdout=b'other image'))]
+        for reference in ('registry/image:v1', 'registry/image:latest'):
+            cases.extend((reference, subprocess.CompletedProcess([], 1, stderr=error))
+                         for error in (b'unauthorized', b'network timeout'))
+        for reference, response in cases:
             # Given a different version digest or an unverifiable registry state.
-            with self.subTest(response=response), patch('container_publish.subprocess.check_output', return_value=b'candidate'), patch('container_publish.subprocess.run', return_value=response) as run:
+            with self.subTest(reference=reference, response=response), patch('container_publish.subprocess.check_output', return_value=b'candidate'), patch('container_publish.subprocess.run', return_value=response) as run:
                 # When attempting to publish, then stop before copying any image.
                 with self.assertRaises((ValueError, RuntimeError)):
-                    publish(Path('image.tar'), 'registry/image:v1')
+                    publish(Path('image.tar'), reference)
                 self.assertEqual(run.call_count, 1)
 
-    def test_absent_tag_is_copied_and_registry_digest_is_checked(self):
-        # Given a missing version tag and a fixed OCI manifest.
+    def test_missing_version_and_latest_alias_copy_the_tested_digest(self):
+        # Given a missing version tag or a latest alias pointing at an older image.
         manifest = b'candidate manifest'
         expected = 'sha256:' + hashlib.sha256(manifest).hexdigest()
-        for registry_digest in (expected, 'sha256:' + '0' * 64):
-            with tempfile.TemporaryDirectory() as name:
-                archive = Path(name) / 'image.tar'
-                def run(command, **kwargs):
-                    if command[1] == 'inspect':
-                        return subprocess.CompletedProcess(command, 1, stderr=b'manifest unknown')
-                    Path(str(archive) + '.digest').write_text(registry_digest + '\n')
-                    return subprocess.CompletedProcess(command, 0)
-                with patch('container_publish.subprocess.check_output', return_value=manifest), patch('container_publish.subprocess.run', side_effect=run):
-                    # When copying succeeds, then only the matching registry digest can be attested.
-                    if registry_digest == expected:
-                        self.assertEqual(publish(archive, 'registry/image:v1'), expected)
-                    else:
-                        with self.assertRaises(ValueError):
-                            publish(archive, 'registry/image:v1')
+        for reference, existing in (
+                ('registry/image:v1', subprocess.CompletedProcess([], 1, stderr=b'manifest unknown')),
+                ('registry/image:latest', subprocess.CompletedProcess([], 0, stdout=b'older image'))):
+            for registry_digest in (expected, 'sha256:' + '0' * 64):
+                with self.subTest(reference=reference, digest=registry_digest), tempfile.TemporaryDirectory() as name:
+                    archive = Path(name) / 'image.tar'
+                    def run(command, **kwargs):
+                        if command[1] == 'inspect':
+                            return existing
+                        Path(str(archive) + '.digest').write_text(registry_digest + '\n')
+                        return subprocess.CompletedProcess(command, 0)
+                    with patch('container_publish.subprocess.check_output', return_value=manifest), patch('container_publish.subprocess.run', side_effect=run) as calls:
+                        # When copying succeeds, then only the tested digest can be accepted.
+                        if registry_digest == expected:
+                            self.assertEqual(publish(archive, reference), expected)
+                        else:
+                            with self.assertRaises(ValueError):
+                                publish(archive, reference)
+                        self.assertEqual(calls.call_count, 2)
+                        self.assertIn('--preserve-digests', calls.call_args.args[0])
+                        self.assertEqual(calls.call_args.args[0][-1], 'docker://' + reference)

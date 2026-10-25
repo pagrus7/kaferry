@@ -16,11 +16,15 @@ REPO = "pagrus7/kaferry"
 FILES = ("kaferry", "LICENSE", "THIRD_PARTY_NOTICES.txt")
 
 
-def extract_archive(path, checksums, destination):
+def verify_checksum(path, checksums):
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     rows = re.findall(r"^([a-f0-9]{64})  " + re.escape(path.name) + r"$", checksums, re.M)
     if rows != [digest]:
         raise ValueError(f"missing, duplicate or incorrect checksum: {path.name}")
+
+
+def extract_archive(path, checksums, destination):
+    verify_checksum(path, checksums)
     with tarfile.open(path) as archive:
         members = archive.getmembers()
         if sorted(m.name for m in members) != sorted(FILES) or not all(m.isfile() and m.size for m in members):
@@ -31,6 +35,24 @@ def extract_archive(path, checksums, destination):
             with archive.extractfile(member) as source, target.open("wb") as output:
                 shutil.copyfileobj(source, output)
             target.chmod(0o755 if member.name == "kaferry" else 0o644)
+
+
+def extract_tutorial(path, destination):
+    with tarfile.open(path) as archive:
+        members = archive.getmembers()
+        names = [member.name for member in members]
+        expected = {"archive-demo/copy.sql", "archive-demo/tutorial.toml"}
+        inputs = [name for name in names if re.fullmatch(r"archive-demo/input/[a-f0-9]{32}\.[a-f0-9]{32}\.avro", name)]
+        if (len(members) != 3 or len(inputs) != 1 or set(names) != expected | set(inputs)
+                or not all(member.isfile() and member.size for member in members)):
+            raise ValueError("tutorial must contain SQL, configuration and one archive input")
+        for member in members:
+            target = destination / member.name.removeprefix("archive-demo/")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.extractfile(member) as source, target.open("wb") as output:
+                shutil.copyfileobj(source, output)
+            target.chmod(0o644)
+    (destination / "checkpoints").mkdir()
 
 
 def release(tag, directory):
@@ -50,16 +72,22 @@ def release(tag, directory):
         downloaded = Path(name)
         subprocess.run(["gh", "release", "download", tag, "--repo", REPO, "--dir", name,
                         "--pattern", "SHA256SUMS", "--pattern", f"kaferry-{tag}-linux-*.tar.gz",
-                        "--pattern", "provenance-linux-*.json"], check=True)
+                        "--pattern", "provenance-linux-*.json", "--pattern", "archive-demo.tar.gz"], check=True)
         checksums = (downloaded / "SHA256SUMS").read_text()
-        for arch in ("amd64", "arm64"):
-            path = downloaded / f"kaferry-{tag}-linux-{arch}.tar.gz"
+        packages = [(f"kaferry-{tag}-linux-{arch}.tar.gz", arch) for arch in ("amd64", "arm64")]
+        packages.append(("archive-demo.tar.gz", "amd64"))
+        for filename, arch in packages:
+            path = downloaded / filename
             subprocess.run(["gh", "attestation", "verify", str(path), "--repo", REPO,
                             "--bundle", str(downloaded / f"provenance-linux-{arch}.json"),
                             "--signer-workflow", f"{REPO}/.github/workflows/release.yml",
                             "--source-ref", f"refs/tags/{tag}", "--source-digest", revision,
                             "--deny-self-hosted-runners"], check=True)
-            extract_archive(path, checksums, directory / "linux" / arch)
+            if filename == "archive-demo.tar.gz":
+                verify_checksum(path, checksums)
+                extract_tutorial(path, directory / "archive-demo")
+            else:
+                extract_archive(path, checksums, directory / "linux" / arch)
     return tag, revision
 
 
@@ -74,6 +102,10 @@ def candidate(directory):
         subprocess.run(["python3", "scripts/notices.py", "bin/kaferry", "bin/THIRD_PARTY_NOTICES.txt"], env=env, check=True)
         for filename in FILES:
             shutil.copy2(Path(filename) if filename == "LICENSE" else Path("bin") / filename, target / filename)
+    bundle = directory / "archive-demo.tar.gz"
+    subprocess.run(["go", "run", "./scripts/package_examples", str(bundle)], check=True)
+    extract_tutorial(bundle, directory / "archive-demo")
+    bundle.unlink()
     return version, revision
 
 
