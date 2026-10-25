@@ -97,7 +97,8 @@ func sourceFixture(t *testing.T) (*Source, *consumerMock) {
 	client := &consumerMock{}
 	p := testPlan(t, nil)
 	store := &Committer{codec: commitmeta.NewCodec(), client: client, topic: "input", group: p.Group, metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: "id"}}}
-	s := &Source{client: client, inspector: &sourceMetadataMock{}, positioning: kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger()), store: store, bridge: newRebalanceBridge(ctx, "input"), pump: &fetchPump{fetched: make(chan fetchResult, 1)}, plan: p, fingerprint: "fp", topicID: "id", query: ctx, ctx: ctx, cancel: cancel, clientCancel: func() {}, life: &lifecycleMock{}, positions: map[int32]int64{0: 0}, paused: make(map[int32]bool), held: make(map[int32]*kgo.Record), retention: make(map[int32]kafkaport.RetentionCheck), log: quietLogger(), lastTip: time.Now()}
+	metadata := &sourceMetadataMock{}
+	s := &Source{lookup: kafkaport.NewOffsetLookupFactory().New(metadata, metadata), client: client, inspector: metadata, positioning: kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory()), store: store, bridge: newRebalanceBridge(ctx, "input"), pump: &fetchPump{fetched: make(chan fetchResult, 1)}, plan: p, fingerprint: "fp", topicID: "id", query: ctx, ctx: ctx, cancel: cancel, clientCancel: func() {}, life: &lifecycleMock{}, positions: map[int32]int64{0: 0}, paused: make(map[int32]bool), held: make(map[int32]*kgo.Record), retention: make(map[int32]kafkaport.RetentionCheck), log: quietLogger(), lastTip: time.Now()}
 	return s, client
 }
 func feed(s *Source, record *kgo.Record, err error) {

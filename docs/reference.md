@@ -10,19 +10,20 @@ Text sections show endpoints, progress, time windows, behavior and any warnings.
 
 Kafka JSON rows show the selected start and retained/log-end offsets; log end includes open transactions. Offset differences are not record counts or completion evidence. Fresh `NOW()` values are preview-only.
 
-Archive inspection reads completed-file headers, sizes and saved checkpoint data without scanning record payloads, taking locks or recovering private files. Source positions count confirmed input records. `ONE_OFF` never generates a group or reads an existing checkpoint; the preview says a fresh group would be used.
+Archive inspection reads completed-file headers, sizes and saved checkpoint data without scanning record payloads, taking locks or recovering private files. Source positions count confirmed examined input records. `ONE_OFF` never generates a group or reads an existing checkpoint; the preview says a fresh group would be used.
 
-`--json` emits version 1 with all partitions and warnings. Time bounds use signed Unix milliseconds; byte and offset fields are counts. Connection properties and SQL text are excluded.
+`--json` emits version 2 with all partitions and warnings. Time bounds use signed Unix milliseconds; byte and offset fields are counts. Connection properties and SQL text are excluded.
 
 | Fields | Meaning |
 | --- | --- |
-| `version`, `fingerprint`, `group`, `one_off`, `cutoff_ms` | Report format and query identity; one-off group is `ONE_OFF` |
-| `start_rule` | Kafka fallback for partitions without progress: `WINDOW`, `EARLIEST` or `LATEST`; absent for file sources |
+| `version`, `fingerprint`, `group`, `one_off`, `max_staleness_ms`, `max_out_of_order_ms` | Report format and query identity; one-off group is `ONE_OFF`. `max_staleness_ms=-1` disables capture; `max_out_of_order_ms=null` disables timestamp stopping |
+| `start_rule` | Kafka fallback for partitions without progress: `WINDOW`, `OFFSET`, `EARLIEST` or `LATEST`; absent for file sources |
 | `record_errors` | Effective `FAIL`/`SKIP` policies: `missing_timestamp`, `rejected_timestamp`, `other_record`; SKIP applies before writing, not to delivery failures |
 | `source`, `destination` | `kind`, `name`, optional connection alias, cluster/topic IDs, partition count, destination timestamp type and `partitioning` (`PRESERVE` or `KEY` for a Kafka destination) |
 | Endpoint `file` | `exists`; source adds `size_bytes`, `file_count`, `position_records`, `window`, `window_origin`, `checkpoint`, `checkpoint_exists`. Destination `size_bytes` is zero; destination size and file count are not inspected |
 | `source.partition_filter` | Optional `{exclude, ids}` predicate; `exclude=true` means NOT IN. Kafka discovers eligible added partitions while workers run; archives retain their saved file selection |
-| `partitions` | Sorted `partition`, `start`, `log_start`, `log_end`, `saved`, `window`, `window_origin` |
+| `partitions` | Sorted `partition`, `start`, `log_start`, `log_end`, `saved`, `window`, `window_origin`; optional `captured_end` is the exclusive end offset; `end_origin` distinguishes `saved`, `literal` and unsaved `preview` |
+| `offset_range`, `partition_offset_ranges` | Optional symbolic offset criteria; per-partition entries include original partition IDs |
 | `window` | Inclusive `lower`, exclusive `upper`; null means unbounded. `window_origin`: `literal`, `saved`, `adopted` or `resolved` for preview-only NOW |
 | `warnings` | Detected retention gaps and unavailable/changed destination timestamp behavior; may be empty |
 
@@ -32,15 +33,54 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 
 Verdicts: invalid/incompatible progress → `unknown`; incompatible active members → `unknown`; active members, unsettled group state or changed membership → `running`; no saved progress → `unknown`; any current partition without a saved stop → `incomplete`; otherwise → `stopped`. Added eligible partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. New archive files do not expand a saved replay selection. Status reports `unknown` (5) when a checkpoint or saved selection cannot be validated; other operational read failures exit 1 without a verdict.
 
-`stopped` means every currently selected partition has a saved stop reason. More source records may remain; the time cutoff can miss records within the range. Workers remain independent: they never wait for other workers' stops.
+`stopped` means every currently selected partition has a saved stop reason. More source records may remain; timestamp completion depends on the configured arrival-delay and disorder assumptions. Workers remain independent: they never wait for other workers' stops.
 
-Kafka text lists up to eight partitions; file text reports replay progress. `--json` includes all. JSON version `1` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `stop`, `window`). Kafka positions are offsets; file positions count confirmed input records. File `size_bytes` and `file_count` describe the saved selection, or current completed files before the first run. Inspection checks selected headers and sizes for incomplete groups, not payload checksums. Status does not scan records or verify destination writes.
+Kafka text lists up to eight partitions; file text reports replay progress. `--json` includes all. JSON version `1` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `stop`, `window`, `captured_end`). Kafka positions are offsets; file positions count confirmed examined input records. File `size_bytes` and `file_count` describe the saved selection, or current completed files before the first run. Inspection checks selected headers and sizes for incomplete groups, not payload checksums. Status does not scan records or verify destination writes.
 
 ## Configuration and CLI
 
 Connections use TOML profiles or `WITH CONNECTION`; SQL keys override TOML. Endpoint `WITH` configures source progress/start rules or destination rotation/partitioning; optional final `OPTIONS` holds worker stops and all record-error policies. `ENV('NAME')` resolves at startup, fails if unset and is redacted. Worker settings are in TOML.
 
 Profiles can be shared by sources and destinations. Supported connection keys are mapped to franz-go options; other keys fail before endpoints are opened, without displaying property values. A property name does not imply full librdkafka compatibility.
+
+### Endpoint WITH properties
+
+Source properties follow `FROM`; sink properties follow `INSERT INTO`. Unknown or inapplicable properties fail. Final `OPTIONS` contains worker stops and record-error policies. [Syntax and examples](../design/grammar.md).
+
+#### Kafka source
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| `GROUP` | `ONE_OFF` | Named consumer-group progress, or a generated independent group per invocation |
+| `START` | `EARLIEST` | Initial position without timestamp bounds; `LATEST` starts at the readable committed end. Saved progress takes precedence; new partitions in an established group start at earliest retained data |
+| `MAX_STALENESS` | `INTERVAL '5' MINUTE` with a timestamp upper bound | Capture replicated ends after the interval end plus this allowance; `OFF` disables wall-clock capture |
+| `MAX_OUT_OF_ORDER` | Inherits `MAX_STALENESS` | Allowance before timestamp progress can finish a partition; `OFF` disables timestamp stopping |
+
+Both allowances require an upper timestamp bound and reject an explicit offset end. Either enabled rule can establish completion. Raising only one allowance does not protect against an invalid assumption used by the other. Both `OFF` means following filtered records until another stop or a signal. Neither allowance limits total run time. [Completion guarantees](../design/decisions.md#completion).
+
+#### Archive source
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| `GROUP` | `ONE_OFF` | Checkpoint containing the pinned completed-file selection and physical replay cursors |
+| `MAX_OUT_OF_ORDER` | `OFF` | Optional timestamp-disorder allowance per original source identity and partition; requires an upper timestamp bound and rejects an explicit offset end |
+
+`START` and `MAX_STALENESS` are Kafka-only. New files do not expand a saved selection. Timestamp and original-offset criteria filter archived records; filesystem modification times and byte positions are not record criteria. [File replay](../design/archive.md#replay-and-progress).
+
+#### Kafka sink
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| `PARTITIONING` | `PRESERVE` | Preserve original partition numbers, or use `KEY` for key-based routing |
+
+#### Archive sink
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| `ROTATE_AFTER_SIZE` | `1g` | Compressed container size target; binary k/m/g suffixes |
+| `ROTATE_AFTER_AGE` | `INTERVAL '1' HOUR` | Elapsed file age before rotation |
+
+[Rotation and publication](../design/archive.md#rotation).
 
 ### Worker settings
 
@@ -57,7 +97,7 @@ Optional keys in TOML's `[worker]` table; byte values are integers:
 | `delivery_timeout` | `'60s'` | Delivery deadline and queue-full wait |
 | `shutdown_timeout` | `'30s'` | Whole-process stop deadline |
 | `idle_exit` | `'30s'` | Wait after an empty assignment before exit 3 |
-| `tip_wait` | `'15m'` | Wait to reach sampled H |
+| `tip_wait` | `'15m'` | Continuous wait at the readable tip below the saved captured end; ordinary backlog processing resets it |
 | `progress_interval` | '30s' | Progress logs; '0' disables |
 | `checkpoint_dir` | `~/.kaferry/checkpoints` | File-source checkpoint directory |
 
@@ -100,10 +140,10 @@ Queue/fetch overrides must be positive. Byte queue settings use KiB. Large or co
 
 | Normal exit | Meaning |
 | --- | --- |
-| 0 | Status is `stopped`, or the preview printed, or this worker finished its file input or remaining Kafka partitions, or reached its worker record threshold. A signal cleanly stopped a Kafka copy with no end time or worker record threshold. SKIP counts do not change the code |
-| 1 | Copy, inspection, output, cleanup or the shutdown deadline failed, or a signal arrived before completion of startup, a file copy, or a Kafka copy with an end time or worker record threshold. Conflicts after the first consumed record also exit 1 |
+| 0 | Status is `stopped`, or the preview printed, or this worker finished its file input or remaining Kafka partitions, or reached its worker record threshold. A signal cleanly stopped a Kafka copy without an enabled completion rule or worker record threshold. SKIP counts do not change the code |
+| 1 | Copy, inspection, output, cleanup or the shutdown deadline failed, or a signal arrived before completion of startup, a file copy, or a Kafka copy with an enabled completion rule or worker record threshold. Conflicts after the first consumed record also exit 1 |
 | 2 | Usage/parse/plan/configuration error, or a validation conflict before the first consumed record (Kafka topic validation, query/source identity, replay checkpoint/lock or self-copy) |
-| 3 | For a Kafka copy with an end time or worker record threshold, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |
+| 3 | For a Kafka copy with an enabled completion rule or worker record threshold, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |
 | 4 | Status is `incomplete`: a partition lacks a saved stop |
 | 5 | Status is `unknown`: progress is absent, invalid or incompatible, or the group has an incompatible active member |
 | 6 | Status is `running`: group activity or a change was observed |
@@ -131,7 +171,7 @@ Metric names are experimental. All describe this worker's invocation; restarts a
 | Metric (`kaferry.` prefix) | Meaning |
 | --- | --- |
 | `records.submitted`, `records.confirmed` | Separate cumulative counts accepted and acknowledged by the destination; not unique records |
-| `records.filtered`, `records.skipped` | Separate cumulative counts excluded by time filters or error policy |
+| `records.filtered`, `records.skipped` | Separate cumulative counts of examined records excluded by timestamp or offset filters, and dropped by error policy |
 | `buffer.entries`, `buffer.entry_limit` | Unsaved tracked progress entries and their worker cap; entries can include cursor gaps and exclude a record deferred before tracking |
 | `buffer.estimated_size`, `buffer.estimated_size_limit` | Tracked cap-accounting bytes and their cap; not payload/wire bytes or total memory |
 | `partitions.held`, `partitions.stopped` | Current held partitions and held partitions at their stop rule, split by reason: `timestamp`, `tip`, `eof`, or `worker_record_cap`; not group completion |

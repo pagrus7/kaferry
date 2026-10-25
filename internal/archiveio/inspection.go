@@ -48,7 +48,7 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result Sour
 		if saved.Fingerprint != fp {
 			return result, &Conflict{Err: errors.New("replay checkpoint query identity mismatch")}
 		}
-		if err = p.Window.ValidateStored(saved.Window, 0); err != nil {
+		if err = p.ValidateWindow(saved.Window); err != nil {
 			return result, &Conflict{Err: err}
 		}
 		result.Saved = true
@@ -82,6 +82,9 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result Sour
 		if err != nil {
 			return result, &Conflict{Err: err}
 		}
+	}
+	if err = p.ValidateWindow(result.Window); err != nil {
+		return result, &Conflict{Err: err}
 	}
 	result.FileCount = len(files)
 	seen := map[int32]bool{}

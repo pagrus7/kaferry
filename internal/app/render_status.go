@@ -39,6 +39,9 @@ func renderStatus(output io.Writer, r inspect.StatusReport, asJSON bool) error {
 				continue
 			}
 			fmt.Fprintf(&b, "  %s: %s %d", label, unit, *p.Position)
+			if p.End != nil {
+				fmt.Fprintf(&b, "; captured end %d", *p.End)
+			}
 			if p.Stop != nil {
 				fmt.Fprintf(&b, "; %s at %d", inspect.StopDescription(p.Stop.Reason), p.Stop.At)
 			} else {

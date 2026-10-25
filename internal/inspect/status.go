@@ -14,12 +14,12 @@ import (
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
-const StatusMeaning = "Stopped means every currently selected partition has a saved stop reason. More source records may remain; the time cutoff can miss records within the range."
+const StatusMeaning = "Stopped means every currently selected partition has a saved stop reason. More source records may remain; timestamp completion depends on the configured arrival-delay and disorder assumptions."
 
 var stopDescriptions = map[string]string{
-	"timestamp":         "timestamp cutoff reached",
-	"tip":               "topic end reached after cutoff",
-	"eof":               "file end reached",
+	"timestamp":         "timestamp disorder threshold reached",
+	"tip":               "saved partition end reached",
+	"eof":               "file selection completed",
 	"worker_record_cap": "worker record threshold reached",
 }
 
@@ -45,6 +45,7 @@ type StatusReport struct {
 type SavedPartition struct {
 	ID       int32        `json:"id"`
 	Position *int64       `json:"position,omitempty"`
+	End      *int64       `json:"captured_end,omitempty"`
 	Stop     *core.Stop   `json:"stop,omitempty"`
 	Window   *plan.Window `json:"window,omitempty"`
 }
@@ -121,7 +122,7 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 	if err != nil {
 		return err
 	}
-	saved, metadata, err := c.Saved(ctx, p.Group, r.Fingerprint, p.Window, p.CutoffMS)
+	saved, metadata, err := c.Saved(ctx, p.Group, r.Fingerprint, p.Window, p.MaxStalenessMS)
 	if err != nil {
 		return err
 	}
@@ -146,6 +147,7 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 		if position, ok := saved[id]; ok {
 			row.Position = &position
 			row.Stop = metadata[id].Stop
+			row.End = metadata[id].End
 			row.Window = metadata[id].Window
 		}
 		r.Partitions = append(r.Partitions, row)

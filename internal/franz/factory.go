@@ -17,13 +17,14 @@ import (
 type Factory struct {
 	codec       commitmeta.Codec
 	clients     Clients
+	lookups     kafkaport.OffsetLookupFactory
 	positioning kafkaport.PositionerFactory
 	clock       core.Clock
 	log         *slog.Logger
 }
 
-func NewFactory(codec commitmeta.Codec, clients Clients, positioning kafkaport.PositionerFactory, clock core.Clock, log *slog.Logger) *Factory {
-	return &Factory{codec: codec, clients: clients, positioning: positioning, clock: clock, log: log}
+func NewFactory(codec commitmeta.Codec, clients Clients, positioning kafkaport.PositionerFactory, clock core.Clock, log *slog.Logger, lookups kafkaport.OffsetLookupFactory) *Factory {
+	return &Factory{lookups: lookups, codec: codec, clients: clients, positioning: positioning, clock: clock, log: log}
 }
 
 // Validate checks both endpoints before the engine opens Kafka or file handles.
@@ -140,8 +141,8 @@ func (c *connection) ValidatePartitions(ctx context.Context, ids []int32) error 
 func (c *connection) CheckMembers(ctx context.Context, group, protocol string) error {
 	return c.inspector.CheckMembers(ctx, group, protocol)
 }
-func (c *connection) ReadProgress(ctx context.Context, group, fp string, window plan.WindowSpec, cutoff int64) (map[int32]kafkaport.Progress, error) {
-	_, progress, err := c.inspector.Saved(ctx, group, fp, window, cutoff)
+func (c *connection) ReadProgress(ctx context.Context, group, fp string, window plan.WindowSpec, staleness int64) (map[int32]kafkaport.Progress, error) {
+	_, progress, err := c.inspector.Saved(ctx, group, fp, window, staleness)
 	return progress, err
 }
 func (c *connection) Close(context.Context) error { c.cancel(); c.inspector.client.Close(); return nil }
@@ -183,7 +184,7 @@ func (c *connection) Source(query context.Context, p plan.Plan, fp string, limit
 		return nil, nil, conflict("invalid Kafka consumer configuration")
 	}
 	store := &Committer{codec: c.factory.codec, client: client, topic: p.Source.Name, group: p.Group, topicID: c.inspector.topicID, metadata: make(map[int32]kafkaport.Progress)}
-	source := &Source{routing: routing, client: client, inspector: c.inspector, positioning: c.factory.positioning, store: store, bridge: bridge, plan: p, fingerprint: fp, topicID: topicID(c.inspector.topicID), clusterID: c.inspector.clusterID, originalTopicID: c.inspector.topicID, query: query, ctx: ctx, cancel: cancel, clientCancel: clientCancel, positions: make(map[int32]int64), paused: make(map[int32]bool), held: make(map[int32]*kgo.Record), retention: make(map[int32]kafkaport.RetentionCheck), log: c.factory.log}
+	source := &Source{routing: routing, client: client, lookup: c.factory.lookups.New(c.inspector, c.inspector), inspector: c.inspector, positioning: c.factory.positioning, store: store, bridge: bridge, plan: p, fingerprint: fp, topicID: topicID(c.inspector.topicID), clusterID: c.inspector.clusterID, originalTopicID: c.inspector.topicID, query: query, ctx: ctx, cancel: cancel, clientCancel: clientCancel, positions: make(map[int32]int64), paused: make(map[int32]bool), held: make(map[int32]*kgo.Record), retention: make(map[int32]kafkaport.RetentionCheck), log: c.factory.log}
 	source.gaps = &fetchGap{client: c.inspector.client, topic: p.Source.Name, topicID: source.topicID}
 	return source, store, nil
 }

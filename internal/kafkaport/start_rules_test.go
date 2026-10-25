@@ -52,7 +52,7 @@ func (t *countingTimes) OffsetsForTimes(_ context.Context, queries map[int32]int
 func TestEmptyAssignmentNeedsNoOffsetRequests(t *testing.T) {
 	// Given a positioner with no assigned partitions.
 	offsets := &countingOffsets{}
-	p := NewPositionerFactory(&fixedClock{}, quietLogger()).New(offsets, &countingTimes{}, plan.Plan{}, "fp", "id")
+	p := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(offsets, &countingTimes{}, plan.Plan{}, "fp", "id")
 	// When locating the empty assignment, then it needs no broker requests.
 	got, err := p.Locate(t.Context(), nil, nil, nil)
 	if err != nil || len(got.Assignments) != 0 || len(offsets.calls) != 0 {
@@ -88,7 +88,7 @@ func TestPositioningStartRulesAndCommittedPositions(t *testing.T) {
 			offsets := &countingOffsets{low: 100, high: 1000, stable: 900}
 			times := &countingTimes{}
 			p := plan.Plan{Source: plan.Endpoint{Name: topic}, Start: scenario.start, Window: scenario.window}
-			positioner := NewPositionerFactory(&fixedClock{now: time.Unix(100, 0)}, quietLogger()).New(offsets, times, p, "fp", "topic-id")
+			positioner := NewPositionerFactory(&fixedClock{now: time.Unix(100, 0)}, quietLogger(), NewOffsetLookupFactory()).New(offsets, times, p, "fp", "topic-id")
 
 			// When a partition is assigned through the positioner interface.
 			got, err := positioner.Locate(t.Context(), []int32{1}, scenario.saved, map[int32]Progress{})
@@ -116,7 +116,7 @@ func TestPositioningBatchesBrokerRequests(t *testing.T) {
 	clock := &fixedClock{now: time.UnixMilli(10 * hour)}
 	offsets := &countingOffsets{low: 100, high: 1000, stable: 900}
 	times := &countingTimes{}
-	positioner := NewPositionerFactory(clock, quietLogger()).New(offsets, times, plan.Plan{Source: plan.Endpoint{Name: topic}, Window: spec}, "fp", "topic-id")
+	positioner := NewPositionerFactory(clock, quietLogger(), NewOffsetLookupFactory()).New(offsets, times, plan.Plan{Source: plan.Endpoint{Name: topic}, Window: spec}, "fp", "topic-id")
 	savedLower := 5 * hour
 	saved := map[int32]int64{}
 	metadata := map[int32]Progress{}
@@ -202,7 +202,7 @@ func TestPositioningDoesNotFallbackAfterLookupFailure(t *testing.T) {
 				p.Window = plan.WindowSpec{}
 				p.Start = "LATEST"
 			}
-			positioner := NewPositionerFactory(&fixedClock{}, quietLogger()).New(offsets, times, p, "fp", "id")
+			positioner := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(offsets, times, p, "fp", "id")
 			// When locating the assignment.
 			got, err := positioner.Locate(t.Context(), []int32{1}, nil, nil)
 			// Then no usable position or initial progress escapes via a fallback.

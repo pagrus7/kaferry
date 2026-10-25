@@ -101,8 +101,8 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 	if input != nil {
 		source, store = input, input
 	} else {
-		if p.Window.Upper != nil {
-			e.log.Warn("bounded copy can omit late and out-of-order timestamps after a cutoff stop")
+		if p.Window.Upper != nil && !p.HasOffsetEnd() && (p.MaxStalenessMS >= 0 || p.DisorderMS() >= 0) {
+			e.log.Warn("timestamp completion relies on configured arrival-delay and timestamp-disorder assumptions")
 		}
 		var sourceProgress copy.ProgressStore
 		source, sourceProgress, err = sourceEndpoint.connection.Source(ctx, p, fp, limits, routingValidator(p, destinationEndpoint.connection))
@@ -207,7 +207,7 @@ func (e *runtimeEngine) prepareSource(ctx context.Context, p plan.Plan, fp strin
 	if err := connection.CheckMembers(ctx, p.Group, kafkaport.GroupProtocol(p, fp)); err != nil {
 		return nil, err
 	}
-	saved, err := connection.ReadProgress(ctx, p.Group, fp, p.Window, p.CutoffMS)
+	saved, err := connection.ReadProgress(ctx, p.Group, fp, p.Window, p.MaxStalenessMS)
 	if err != nil {
 		return nil, err
 	}

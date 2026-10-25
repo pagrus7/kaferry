@@ -172,7 +172,7 @@ func TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 	_, p, src, dst, group := secureFixture(t)
 	stamp := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
 	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Key: []byte{0, 255}, Value: []byte{}, Headers: []kgo.RecordHeader{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, Timestamp: stamp})
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", dst, src, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", dst, src, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
@@ -224,7 +224,7 @@ func TestSaslTlsScramMechanisms(t *testing.T) {
 			cfg := secureProperties(t, "copier", "fixture-copy-secret")
 			cfg["sasl.mechanism"] = mechanism
 			waitScramReady(t, cfg, src)
-			statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", dst, src, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
+			statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", dst, src, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
 			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 			defer cancel()
 

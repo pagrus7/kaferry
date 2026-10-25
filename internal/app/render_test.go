@@ -16,15 +16,15 @@ import (
 
 func explanationFixture() inspect.Report {
 	lo, hi := int64(1000), int64(2000)
-	return inspect.Report{Version: 1, Fingerprint: "query-id", Group: "backfill", CutoffMS: 1000, StartRule: "WINDOW",
+	return inspect.Report{Version: 2, Fingerprint: "query-id", Group: "backfill", MaxStalenessMS: 1000, MaxOutOfOrderMS: new(int64(1000)), StartRule: "WINDOW",
 		Source:       inspect.Endpoint{Kind: "TOPIC", Name: "input", Connection: "prod", ClusterID: "cluster-id", TopicID: "topic-id", PartitionCount: 1},
 		Destination:  inspect.Endpoint{Kind: "ARCHIVE", Name: "out.avro", File: &inspect.FileSummary{}},
-		Partitions:   []inspect.Partition{{ID: 0, Start: 4, LogEnd: 12, Saved: true, Window: plan.Window{Lower: &lo, Upper: &hi}, WindowOrigin: "literal"}},
+		Partitions:   []inspect.Partition{{ID: 0, Start: 4, LogEnd: 12, End: new(int64(12)), Saved: true, Window: plan.Window{Lower: &lo, Upper: &hi}, WindowOrigin: "literal"}},
 		RecordErrors: inspect.ErrorPolicies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}, Warnings: []string{}}
 }
 
 func TestExplanationJSONContract(t *testing.T) {
-	// Given the public version-one JSON report.
+	// Given the public version-two JSON report.
 	want, err := os.ReadFile("testdata/explain.json")
 	require.NoError(t, err)
 	var output bytes.Buffer
@@ -53,7 +53,7 @@ func TestTextExplanationStructuresBehaviorAndEscapesNames(t *testing.T) {
 		require.Greater(t, position, previous)
 		previous = position
 	}
-	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "1970-01-01T00:00:03Z", "clock passes it and reading reaches a sampled log end", "Open transactions", "worker.tip_wait", "saved offset 1 expired", "Record errors: stop", "Output: Kaferry archive files"} {
+	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "saved captured end 12", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "1970-01-01T00:00:03Z", "reuse a saved captured end", "Otherwise, once the clock passes the threshold, save the current replicated end", "Open transactions", "worker.tip_wait", "saved offset 1 expired", "Record errors: stop", "Output: Kaferry archive files"} {
 		require.Contains(t, output, want)
 	}
 	for _, absent := range []string{"query-id", "topic-id", "lookup end", "span", "Run permissions", "\x1b"} {
@@ -195,7 +195,7 @@ func TestTextExplanationShowsOnlyApplicableSkipCategories(t *testing.T) {
 			require.NotContains(t, output, "rejected timestamps")
 			if filtered {
 				require.Contains(t, output, "Fresh start: earliest retained offset; apply the time filter while reading.")
-				require.Contains(t, output, "Stop threshold: 1970-01-01T00:00:03Z")
+				require.Contains(t, output, "Timestamp stop threshold: 1970-01-01T00:00:03Z")
 			} else {
 				require.Contains(t, output, "Record errors: stop")
 				require.Contains(t, output, "start at the earliest retained offset.")
@@ -289,5 +289,32 @@ func TestFilePartitionTextExplainsItsFixedSelection(t *testing.T) {
 		require.Contains(t, out.String(), "Source selection: PARTITION "+operator+" [5].")
 		require.Contains(t, out.String(), "New files require a new group; resume keeps the saved selection.")
 		require.NotContains(t, out.String(), "Added partitions are eligible")
+	}
+}
+
+func TestTextExplanationDistinguishesIndependentCompletionRules(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		s      int64
+		d      *int64
+		offset *plan.OffsetRange
+		want   []string
+	}{
+		{name: "clock only", s: 1000, want: []string{"Timestamp stopping: OFF", "Clock capture threshold:"}},
+		{name: "data only", s: -1, d: new(int64(0)), want: []string{"Timestamp stop threshold:", "Wall-clock end capture: OFF"}},
+		{name: "both disabled", s: -1, want: []string{"Timestamp stopping: OFF", "keep following"}},
+		{name: "different allowances", s: 10000, d: new(int64(1000)), want: []string{"1000 ms MAX_OUT_OF_ORDER", "10000 ms MAX_STALENESS"}},
+		{name: "offset end", offset: &plan.OffsetRange{Latest: true}, want: []string{"fixed exclusive offset end", "timestamps filter records"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given the resolved report, when rendering, then explain each active completion rule separately.
+			report := explanationFixture()
+			report.MaxStalenessMS, report.MaxOutOfOrderMS, report.Offsets = tc.s, tc.d, tc.offset
+			report.WorkerStopAfterRecords = 10
+			output := textExplanation(t, report)
+			for _, want := range tc.want {
+				require.Contains(t, output, want)
+			}
+		})
 	}
 }

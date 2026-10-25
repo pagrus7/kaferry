@@ -25,9 +25,28 @@ func TestPersistedFingerprintCompatibility(t *testing.T) {
 			// When its canonical identity is fingerprinted.
 			got, err := p.Fingerprint("source-cluster", "destination-cluster")
 
-			// Then existing consumer groups and checkpoints keep the same identity.
+			// Then unaffected identities remain compatible and bounded Kafka identities reject the former semantics.
 			require.NoError(t, err)
-			require.Equal(t, tc.digest, got)
+			if p.Source.Kind == "TOPIC" && p.Window.Upper != nil {
+				require.NotEqual(t, tc.digest, got)
+			} else {
+				require.Equal(t, tc.digest, got)
+			}
 		})
 	}
+}
+
+func TestBoundedFingerprintPinsCompletionSemantics(t *testing.T) {
+	// Given a bounded query using the current default.
+	query := "INSERT INTO TOPIC 'b' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a' WITH (GROUP='g') WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR AND RECORD_TIMESTAMP < NOW()"
+	p := build(t, query)
+	// When fingerprinting, then the canonical identity is independently fixed.
+	fp, err := p.Fingerprint("source-cluster", "destination-cluster")
+	require.NoError(t, err)
+	require.Equal(t, "12877001310d72398ba96d680622f197e65a401bee704fb24e598a688704b8ff", fp)
+	// Given an explicit one-minute allowance, bounded-query identity rejects incompatible completion semantics.
+	p.MaxStalenessMS = 60000
+	fp, err = p.Fingerprint("source-cluster", "destination-cluster")
+	require.NoError(t, err)
+	require.NotEqual(t, "778cea5a3b644122a14bcc4d3953654db50e897da318701f0b12add9fe402352", fp)
 }

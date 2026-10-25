@@ -135,7 +135,7 @@ func (i *Inspector) lookupOffsets(parent context.Context, queries map[int32]int6
 				continue
 			}
 			if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("offset lookup partition %d: %w", p.Partition, err)
 			}
 			result[p.Partition] = p.Offset
 		}

@@ -3,25 +3,20 @@ package franz
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"time"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/kafkaport"
 )
 
 func (s *Source) pollTips(ctx context.Context) error {
-	ends, err := s.inspector.Offsets(ctx, s.ownedIDs(), kafkaport.LatestOffset, true)
+	ends, err := s.lookup.ReadableEnd(ctx, s.ownedIDs())
 	if err != nil {
 		return err
 	}
 	var gaps []int32
 	for id, position := range s.positions {
-		end, ok := ends[id]
-		if !ok {
-			return fmt.Errorf("offset response omitted partition %d", id)
-		}
+		end := ends[id]
 		if s.paused[id] {
 			continue
 		}

@@ -31,7 +31,7 @@ func TestSavedMixedWindowSurvivesClockAdvanceAndAdoption(t *testing.T) {
 				adopted = &window
 			}
 
-			// When positioning after both the saved upper bound and its cutoff.
+			// When positioning after both the saved upper bound and its staleness.
 			got, _, position, err := p.window(0, saved, metadata, adopted, time.UnixMilli(14400000))
 
 			// Then persisted windows remain authoritative; only fresh resolution fails.
@@ -84,7 +84,7 @@ func TestPositioningBatchesTimeLookupsAndUsesCommittedEndForNoMatch(t *testing.T
 	offsets, times := &offsetsStub{}, &timesStub{}
 	lower := int64(10)
 	p := plan.Plan{Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: lower}}}
-	positioner := NewPositionerFactory(core.RealClock{}, quietLogger()).New(offsets, times, p, "fp", "topic-id")
+	positioner := NewPositionerFactory(core.RealClock{}, quietLogger(), NewOffsetLookupFactory()).New(offsets, times, p, "fp", "topic-id")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// When resolving both starts through client-neutral mocked ports.
@@ -105,7 +105,7 @@ func TestPositioningBatchesTimeLookupsAndUsesCommittedEndForNoMatch(t *testing.T
 func TestReusedPositionerDoesNotRepeatAnEarlierEndLookup(t *testing.T) {
 	// Given a positioner that started one assignment at its stable end.
 	offsets := &offsetsStub{}
-	p := NewPositionerFactory(core.RealClock{}, quietLogger()).New(offsets, &timesStub{}, plan.Plan{Start: "LATEST"}, "fp", "topic-id")
+	p := NewPositionerFactory(core.RealClock{}, quietLogger(), NewOffsetLookupFactory()).New(offsets, &timesStub{}, plan.Plan{Start: "LATEST"}, "fp", "topic-id")
 	if _, err := p.Locate(t.Context(), []int32{0}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -144,12 +144,43 @@ func TestPositioningRejectsIncompleteOrInvalidOffsetResults(t *testing.T) {
 					}
 					return map[int32]int64{0: 0}, nil
 				})
-				p := NewPositionerFactory(core.RealClock{}, quietLogger()).New(reader, &timesStub{}, plan.Plan{Start: "LATEST"}, "fp", "topic-id")
+				p := NewPositionerFactory(core.RealClock{}, quietLogger(), NewOffsetLookupFactory()).New(reader, &timesStub{}, plan.Plan{Start: "LATEST"}, "fp", "topic-id")
 				// When resolving the assignment, then it fails instead of silently starting at offset zero.
 				if _, err := p.Locate(t.Context(), []int32{0}, nil, nil); err == nil {
 					t.Fatal("invalid offset result accepted")
 				}
 			})
 		}
+	}
+}
+
+func TestPositioningRestoresCapturedEndAndTerminalStops(t *testing.T) {
+	for _, reason := range []string{"timestamp", "tip", "worker_record_cap"} {
+		t.Run(reason, func(t *testing.T) {
+			// Given saved progress with a captured end smaller than the current source end.
+			p := plan.Plan{Window: plan.WindowSpec{Upper: &plan.Expression{LiteralMS: 1000}}}
+			pos := NewPositionerFactory(core.RealClock{}, quietLogger(), NewOffsetLookupFactory()).New(&offsetsStub{}, &timesStub{}, p, "fp", "topic-id")
+			position := int64(42)
+			if reason == "tip" {
+				position = 60
+			}
+			metadata := map[int32]Progress{0: {End: new(int64(60)), Stop: &core.Stop{Reason: reason, At: position}}}
+			// When reassigned, then keep the boundary and only clear an invocation record stop.
+			result, err := pos.Locate(t.Context(), []int32{0}, map[int32]int64{0: position}, metadata)
+			require.NoError(t, err)
+			require.Equal(t, int64(60), *result.Assignments[0].Cursor.End)
+			if reason == "worker_record_cap" {
+				require.Nil(t, result.Assignments[0].Cursor.Stop)
+			} else {
+				require.Equal(t, metadata[0].Stop, result.Assignments[0].Cursor.Stop)
+			}
+		})
+	}
+	for _, end := range []int64{2, 101} {
+		// Given a captured end outside current retained positions, when restoring, then fail closed.
+		p := plan.Plan{Window: plan.WindowSpec{Upper: &plan.Expression{LiteralMS: 1000}}}
+		pos := NewPositionerFactory(core.RealClock{}, quietLogger(), NewOffsetLookupFactory()).New(&offsetsStub{}, &timesStub{}, p, "fp", "topic-id")
+		_, err := pos.Locate(t.Context(), []int32{0}, map[int32]int64{0: 2}, map[int32]Progress{0: {End: &end}})
+		require.ErrorContains(t, err, "captured end")
 	}
 }

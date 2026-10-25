@@ -86,7 +86,7 @@ func TestExplainCLIInputFormsLeaveFilesUnchanged(t *testing.T) {
 			require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
 			require.Zero(t, code)
 			require.Zero(t, stderr.Len())
-			require.EqualValues(t, 1, report.Version)
+			require.EqualValues(t, 2, report.Version)
 			require.True(t, report.OneOff)
 			require.Equal(t, "ONE_OFF", report.Group, "preview must not generate a run's group")
 			require.NotNil(t, report.Source.File.PositionRecords)
@@ -153,7 +153,7 @@ func TestExplainCLIReportsInputAndIdentityErrorsWithoutPartialOutput(t *testing.
 }
 
 func TestExplainUsesOnlyReadOnlyKafkaRequests(t *testing.T) {
-	for _, output := range []string{"TOPIC", "ARCHIVE", "SELF-COPY"} {
+	for _, output := range []string{"TOPIC", "ARCHIVE", "SELF-COPY", "OFFSET"} {
 		t.Run(output, func(t *testing.T) {
 			// Given real protocol clients and two source partitions.
 			cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(2, "input"), kfake.SeedTopics(3, "output"))
@@ -189,7 +189,10 @@ func TestExplainUsesOnlyReadOnlyKafkaRequests(t *testing.T) {
 			} else if output == "SELF-COPY" {
 				destination = "TOPIC 'input'"
 			}
-			query := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='secret_SENTINEL_415') INSERT INTO %s SELECT * FROM TOPIC 'input' WITH (GROUP='preview', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS (ON_ERROR=SKIP)", strings.Join(cluster.ListenAddrs(), ","), destination, stamp.Format(time.RFC3339Nano), stamp.Add(time.Minute).Format(time.RFC3339Nano))
+			query := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='secret_SENTINEL_415') INSERT INTO %s SELECT * FROM TOPIC 'input' WITH (GROUP='preview', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS (ON_ERROR=SKIP)", strings.Join(cluster.ListenAddrs(), ","), destination, stamp.Format(time.RFC3339Nano), stamp.Add(time.Minute).Format(time.RFC3339Nano))
+			if output == "OFFSET" {
+				query = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC 'output' SELECT * FROM TOPIC 'input' WHERE RECORD_OFFSET<LATEST", strings.Join(cluster.ListenAddrs(), ","))
+			}
 			var stdout, stderr bytes.Buffer
 			// When the full Fx-composed command explains the copy.
 			code := Execute(ctx, []string{"explain", "-e", query, "--json"}, nil, &stdout, &stderr)
@@ -208,8 +211,18 @@ func TestExplainUsesOnlyReadOnlyKafkaRequests(t *testing.T) {
 			require.Zero(t, code)
 			require.Zero(t, writes.Load())
 			require.Len(t, report.Partitions, 2)
-			require.Equal(t, "WINDOW", report.StartRule)
-			require.Equal(t, (inspect.ErrorPolicies{MissingTimestamp: "SKIP", RejectedTimestamp: "SKIP", OtherRecord: "SKIP"}), report.RecordErrors)
+			if output == "OFFSET" {
+				require.Equal(t, "OFFSET", report.StartRule)
+				for _, p := range report.Partitions {
+					require.EqualValues(t, 1, *p.End)
+					require.Equal(t, "preview", p.EndOrigin)
+				}
+			} else {
+				require.Equal(t, "WINDOW", report.StartRule)
+			}
+			if output != "OFFSET" {
+				require.Equal(t, (inspect.ErrorPolicies{MissingTimestamp: "SKIP", RejectedTimestamp: "SKIP", OtherRecord: "SKIP"}), report.RecordErrors)
+			}
 			require.Zero(t, report.Partitions[0].Start)
 			require.EqualValues(t, 1, report.Partitions[0].LogEnd)
 			require.NotContains(t, stdout.String()+stderr.String(), "secret_SENTINEL")

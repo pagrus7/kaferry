@@ -37,9 +37,9 @@ func DecodeProgress(codec commitmeta.Codec, metadata *string, fp, topicID string
 	return progress, nil
 }
 
-func ValidateWindow(progress Progress, spec plan.WindowSpec, cutoff int64) error {
+func ValidateWindow(progress Progress, spec plan.WindowSpec, staleness int64) error {
 	if progress.Window != nil {
-		if err := spec.ValidateStored(*progress.Window, cutoff); err != nil {
+		if err := spec.ValidateStored(*progress.Window, staleness); err != nil {
 			return conflict("invalid stored time window: %v", err)
 		}
 	}

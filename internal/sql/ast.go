@@ -59,6 +59,8 @@ type Statement struct {
 	Connections     []Connection
 	Source          Endpoint
 	Destination     Endpoint
+	OffsetBounds    []OffsetBound
+	OffsetBranches  []OffsetBranch
 	Bounds          []Bound
 	Partitions      *PartitionFilter
 	Options         []Option

@@ -17,7 +17,7 @@ func TestUnassignedTimeoutHasDistinctOutcomeBeforeAndAfterIntake(t *testing.T) {
 		t.Run(map[bool]string{false: "before intake", true: "after intake"}[afterIntake], func(t *testing.T) {
 			// Given a bounded worker that becomes unassigned, optionally after copying.
 			r, source, sink, store, clock := fixture(t)
-			upper, stamp := int64(1000), int64(900)
+			upper, stamp := clock.Now().Add(time.Hour).UnixMilli(), clock.Now().UnixMilli()
 			r.plan.Source.Kind = "TOPIC"
 			r.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
 			r.limits.IdleExit = "1s"
@@ -72,6 +72,7 @@ func TestAssignmentBeforeIdleDeadlineCompletesNormally(t *testing.T) {
 	// Given a bounded worker with an empty assignment and one-second idle timeout.
 	r, source, sink, store, clock := fixture(t)
 	upper, stamp := int64(1000), int64(1001)
+	source.high = 1
 	r.plan.Source.Kind = "TOPIC"
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
 	r.limits.IdleExit = "1s"

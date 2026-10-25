@@ -66,7 +66,7 @@ func TestTimestampLookupAcrossSegmentsAndPreEpochBound(t *testing.T) {
 	}{{"equal", stamp.Format(time.RFC3339Nano), 20}, {"preepoch", "1969-12-31T23:59:59.999Z", 40}} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "out.avro")
-			statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s-%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' ", path, src, src, test.name, test.lower, stamp.Add(time.Second).Format(time.RFC3339Nano))
+			statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s-%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' ", path, src, src, test.name, test.lower, stamp.Add(time.Second).Format(time.RFC3339Nano))
 
 			// When
 			execute(t, statement, cfg)

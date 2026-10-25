@@ -79,6 +79,10 @@ func (c *Committer) snapshot(cursors []core.Cursor) (map[string]map[int32]kgo.Ep
 			return nil, nil, fmt.Errorf("cannot commit unowned partition %d", cursor.Partition)
 		}
 		progress.Stop = cursor.Stop
+		progress.End = cursor.End
+		if cursor.End != nil && cursor.Position > *cursor.End {
+			return nil, nil, fmt.Errorf("committed position exceeds captured end")
+		}
 		if cursor.Stop != nil && cursor.Stop.At > cursor.Position {
 			return nil, nil, fmt.Errorf("stop exceeds committed position")
 		}

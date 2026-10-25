@@ -65,14 +65,14 @@ func TestTimeFiltersDoNotBecomeExplicitStartRules(t *testing.T) {
 		require.Nil(t, p.Window.Lower)
 		require.NotNil(t, p.Window.Upper)
 		if p.Source.Kind == "TOPIC" {
-			require.EqualValues(t, 60000, p.CutoffMS)
+			require.EqualValues(t, 300000, p.MaxStalenessMS)
 		} else {
-			require.Zero(t, p.CutoffMS)
+			require.Zero(t, p.MaxStalenessMS)
 		}
 	}
-	// Given only an explicit cutoff, when planned, then it overrides the cutoff without requiring GROUP.
-	p := build(t, "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' WITH(CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < NOW() OPTIONS(ON_ERROR=SKIP)")
+	// Given only an explicit staleness, when planned, then it overrides the staleness without requiring GROUP.
+	p := build(t, "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' WITH(MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < NOW() OPTIONS(ON_ERROR=SKIP)")
 	require.True(t, p.OneOff)
-	require.Zero(t, p.CutoffMS)
+	require.Zero(t, p.MaxStalenessMS)
 	require.Equal(t, (Policies{"SKIP", "SKIP", "SKIP"}), p.Policies)
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -113,6 +114,7 @@ func sourceWithGaps(t *testing.T, count int32) (*Source, *stubGapReader) {
 		stable[id] = 10
 	}
 	source.inspector = &sourceMetadataMock{stable: stable}
+	source.lookup = kafkaport.NewOffsetLookupFactory().New(source.inspector, source.inspector)
 	proof := &stubGapReader{}
 	source.gaps = proof
 	return source, proof

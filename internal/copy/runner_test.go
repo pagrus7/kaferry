@@ -330,7 +330,8 @@ func TestTimestampTriggerReplaysTriggerOffset(t *testing.T) {
 	stamp := int64(2001)
 	r.plan.Source.Kind = "TOPIC"
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: hi}
-	r.plan.CutoffMS = 1000
+	r.plan.MaxStalenessMS = 1000
+	s.high = 1
 	s.assignments[0].Window.Upper = &hi
 	in := incoming(0, 0, 1)
 	in.Record.TimestampMS = &stamp
@@ -341,7 +342,7 @@ func TestTimestampTriggerReplaysTriggerOffset(t *testing.T) {
 
 	// Then
 	require.NoError(t, runErr)
-	if len(d.writes) != 0 || len(p.saves) != 1 || p.saves[0][0].Position != 0 || p.saves[0][0].Stop == nil || p.saves[0][0].Stop.Reason != "timestamp" {
+	if len(d.writes) != 0 || len(p.saves) != 2 || p.saves[0][0].Position != 0 || p.saves[0][0].Stop != nil || p.saves[1][0].Position != 0 || p.saves[1][0].Stop == nil || p.saves[1][0].Stop.Reason != "timestamp" {
 		t.Fatal("trigger record was written or checkpointed past")
 	}
 }

@@ -51,7 +51,7 @@ func TestCrossClusterOpaqueSchemaBytes(t *testing.T) {
 	for i := range 12 {
 		publish(t, p, &kgo.Record{Topic: name, Partition: int32(i % 2), Key: key, Value: value, Headers: headers, Timestamp: stamp})
 	}
-	statement := fmt.Sprintf("WITH CONNECTION source AS ('bootstrap.servers'='%s'), CONNECTION destination AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s@destination' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s@source' WITH (GROUP='%s-cross', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), dr, name, name, name, stamp.Add(time.Second).Format(time.RFC3339Nano))
+	statement := fmt.Sprintf("WITH CONNECTION source AS ('bootstrap.servers'='%s'), CONNECTION destination AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s@destination' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s@source' WITH (GROUP='%s-cross', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), dr, name, name, name, stamp.Add(time.Second).Format(time.RFC3339Nano))
 
 	// When
 	execute(t, statement, configuration(t))

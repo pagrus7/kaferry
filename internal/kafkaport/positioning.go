@@ -2,7 +2,6 @@ package kafkaport
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"slices"
 	"time"
@@ -13,8 +12,7 @@ import (
 
 // positioner resolves one assignment, batching broker requests by offset kind.
 type positioner struct {
-	offsets     OffsetReader
-	times       TimeReader
+	lookup      OffsetLookup
 	plan        plan.Plan
 	fingerprint string
 	topicID     string
@@ -39,15 +37,16 @@ type PositionerFactory interface {
 	New(OffsetReader, TimeReader, plan.Plan, string, string) AssignmentPositioner
 }
 type positionerFactory struct {
-	clock copy.Clock
-	log   *slog.Logger
+	clock   copy.Clock
+	log     *slog.Logger
+	lookups OffsetLookupFactory
 }
 
-func NewPositionerFactory(clock copy.Clock, logger *slog.Logger) PositionerFactory {
-	return &positionerFactory{clock: clock, log: logger}
+func NewPositionerFactory(clock copy.Clock, logger *slog.Logger, lookups OffsetLookupFactory) PositionerFactory {
+	return &positionerFactory{clock: clock, log: logger, lookups: lookups}
 }
 func (f *positionerFactory) New(offsets OffsetReader, times TimeReader, p plan.Plan, fingerprint, topicID string) AssignmentPositioner {
-	return &positioner{offsets: offsets, times: times, plan: p, fingerprint: fingerprint, topicID: topicID, clock: f.clock, log: f.log}
+	return &positioner{lookup: f.lookups.New(offsets, times), plan: p, fingerprint: fingerprint, topicID: topicID, clock: f.clock, log: f.log}
 }
 
 func (p *positioner) Locate(ctx context.Context, parts []int32, saved map[int32]int64, metadata map[int32]Progress) (Positioning, error) {
@@ -72,13 +71,30 @@ func (p *positioner) Locate(ctx context.Context, parts []int32, saved map[int32]
 		if err != nil {
 			return Positioning{}, err
 		}
+		if stored.End != nil && (*stored.End > p.high[part] || position > *stored.End) {
+			return Positioning{}, conflict("partition %d captured end is outside retained positions", part)
+		}
+		if stored.End != nil && window.Upper == nil {
+			r := p.plan.OffsetRange(part)
+			if r == nil || !r.HasEnd() {
+				return Positioning{}, conflict("captured end requires completion criteria")
+			}
+		}
+		cursor := copy.Cursor{Partition: part, Position: position, End: stored.End}
+		if (window.Upper != nil || stored.End != nil) && stored.Stop != nil && stored.Stop.Reason != "worker_record_cap" {
+			cursor.Stop = stored.Stop
+		}
 		progress[part] = stored
-		assignments[n] = copy.Assignment{Cursor: copy.Cursor{Partition: part, Position: position}, Window: window}
+		assignments[n] = copy.Assignment{Cursor: cursor, Window: window}
 	}
 	if err := p.resolveTimes(ctx, assignments); err != nil {
 		return Positioning{}, err
 	}
-	if err := p.resolveEnds(ctx, assignments); err != nil {
+	readable, err := p.resolveEnds(ctx, assignments)
+	if err != nil {
+		return Positioning{}, err
+	}
+	if err := p.resolveOffsetRanges(ctx, assignments, saved, readable); err != nil {
 		return Positioning{}, err
 	}
 	retention := make(map[int32]RetentionCheck)
@@ -93,25 +109,13 @@ func (p *positioner) Locate(ctx context.Context, parts []int32, saved map[int32]
 
 func (p *positioner) watermarks(ctx context.Context, ids []int32) error {
 	var err error
-	p.low, err = p.offsets.Offsets(ctx, ids, EarliestOffset, false)
+	p.low, err = p.lookup.Earliest(ctx, ids)
 	if err != nil {
 		return err
 	}
-	p.high, err = p.offsets.Offsets(ctx, ids, LatestOffset, false)
+	p.high, err = p.lookup.ReplicatedEnd(ctx, ids)
 	if err != nil {
 		return err
-	}
-	if err := validateOffsets(ids, p.low); err != nil {
-		return err
-	}
-	return validateOffsets(ids, p.high)
-}
-
-func validateOffsets(ids []int32, offsets map[int32]int64) error {
-	for _, id := range ids {
-		if offset, present := offsets[id]; !present || offset < 0 {
-			return fmt.Errorf("missing or invalid offset for partition %d", id)
-		}
 	}
 	return nil
 }
@@ -147,9 +151,10 @@ func (p *positioner) window(id int32, saved map[int32]int64, metadata map[int32]
 			return window, progress, position, conflict("invalid resolved time window: %v", err)
 		}
 	}
-	if err := p.plan.Window.ValidateStored(window, p.plan.CutoffMS); err != nil {
+	if err := p.plan.ValidateWindow(window); err != nil {
 		return window, progress, position, conflict("invalid time window: %v", err)
 	}
+
 	if p.plan.Window.Relative() {
 		progress.Window = &window
 		p.log.Info("partition window positioned", "partition", id, "origin", origin, "window", window)
@@ -187,43 +192,45 @@ func (p *positioner) resolveTimes(ctx context.Context, assignments []copy.Assign
 	if len(p.lookups) == 0 {
 		return nil
 	}
-	found, err := p.times.OffsetsForTimes(ctx, p.lookups)
+	queries := make([]TimestampOffsetQuery, 0, len(p.lookups))
+	for id, stamp := range p.lookups {
+		queries = append(queries, TimestampOffsetQuery{Partition: id, TimestampMS: stamp})
+	}
+	matches, err := p.lookup.AtOrAfterTimestamp(ctx, queries)
 	if err != nil {
 		return err
+	}
+	found := make(map[int32]TimestampOffsetMatch, len(matches))
+	for _, m := range matches {
+		found[m.Partition] = m
 	}
 	for n, assignment := range assignments {
 		id := assignment.Cursor.Partition
 		if _, queried := p.lookups[id]; !queried {
 			continue
 		}
-		offset, ok := found[id]
-		if !ok {
-			return fmt.Errorf("missing timestamp lookup result for partition %d", id)
-		}
-		if offset < 0 {
+		offset := found[id]
+		if !offset.Found {
 			p.ends = append(p.ends, id) // No match starts at the read-committed end.
 			continue
 		}
-		assignments[n].Cursor.Position = offset
+		assignments[n].Cursor.Position = offset.Offset
 	}
 	return nil
 }
 
-func (p *positioner) resolveEnds(ctx context.Context, assignments []copy.Assignment) error {
+func (p *positioner) resolveEnds(ctx context.Context, assignments []copy.Assignment) (map[int32]int64, error) {
 	if len(p.ends) == 0 {
-		return nil
+		return map[int32]int64{}, nil
 	}
-	stable, err := p.offsets.Offsets(ctx, p.ends, LatestOffset, true)
+	stable, err := p.lookup.ReadableEnd(ctx, p.ends)
 	if err != nil {
-		return err
-	}
-	if err := validateOffsets(p.ends, stable); err != nil {
-		return err
+		return nil, err
 	}
 	for n, assignment := range assignments {
 		if assignment.Cursor.Position < 0 {
 			assignments[n].Cursor.Position = stable[assignment.Cursor.Partition]
 		}
 	}
-	return nil
+	return stable, nil
 }

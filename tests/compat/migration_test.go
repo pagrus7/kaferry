@@ -40,7 +40,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			clone := filepath.Join(t.TempDir(), "clone")
 			config := configuration(t, "max_frame_bytes=8192")
 			group := source + "-migration"
-			sql := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", archive, source, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
+			sql := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s') ", archive, source, group)
 			limited := func(query string) string {
 				return query + " OPTIONS(WORKER_STOP_AFTER_RECORDS=1)"
 			}
@@ -54,7 +54,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			require.True(t, strings.HasPrefix(progress.Metadata, "kaferry:2;"))
 
 			// When the other binary resumes, then it copies only the remaining record.
-			runMigrationBinary(t, direction.second, sql, config)
+			runMigrationBinary(t, direction.second, limited(sql), config)
 			complete := archiveRecords(t, archive)
 			require.Len(t, complete, 2)
 			require.Equal(t, first[0], complete[0])
@@ -79,7 +79,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 
 			// Given independently known unsupported commit prefixes, reject them before changing output.
 			supported := progress.Metadata
-			for _, unsupported := range []string{"kaferry:1", "kaferry:3"} {
+			for _, unsupported := range []string{"kaferry:1", "kaferry:4"} {
 				progress.Metadata = strings.Replace(supported, "kaferry:2;", unsupported+";", 1)
 				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 				result, err := admin.CommitOffsets(ctx, group, kadm.Offsets{source: {0: progress}})
@@ -139,4 +139,28 @@ func migrationCheckpoint(t *testing.T, configuration, group string) *replay.Stat
 	require.NoError(t, err)
 	require.NotNil(t, state)
 	return state
+}
+
+func TestPreviousBinaryRejectsCapturedEndMetadata(t *testing.T) {
+	// Given a candidate bounded copy with a saved captured end.
+	previous := os.Getenv("KAFERRY_PREVIOUS_BINARY")
+	require.NotEmpty(t, previous)
+	a := admin(t)
+	source := topic(t, a, 1)
+	p := producer(t)
+	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	publish(t, p, &kgo.Record{Topic: source, Partition: 0, Value: []byte("bounded"), Timestamp: stamp})
+	out := filepath.Join(t.TempDir(), "archive")
+	group := source + "-bounded"
+	config := configuration(t)
+	statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s'", out, source, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
+	runMigrationBinary(t, testBinary(t), statement, config)
+	progress := committedPartitions(t, a, group, source, 1)[0]
+	require.True(t, strings.HasPrefix(progress.Metadata, "kaferry:3;"))
+	before := archiveRecords(t, out)
+
+	// When the previous binary reads those commits, then it rejects the format before writing.
+	oldSQL := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s')", out, source, group)
+	runMigrationExpect(t, previous, oldSQL, config, 2, "unsupported version of commit metadata")
+	require.Equal(t, before, archiveRecords(t, out))
 }

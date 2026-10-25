@@ -29,7 +29,7 @@ func TestExplainBinaryResumesWithoutChangingKafkaOrCreatingFiles(t *testing.T) {
 		publish(t, producer, &kgo.Record{Topic: source, Partition: partition, Timestamp: stamp, Value: []byte("record")})
 	}
 	group := source + "-explain"
-	query := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", destination, source, group, stamp.Add(time.Minute).Format(time.RFC3339Nano))
+	query := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", destination, source, group, stamp.Add(time.Minute).Format(time.RFC3339Nano))
 	config := configuration(t)
 	execute(t, query, config)
 	before, err := a.FetchOffsets(t.Context(), group)

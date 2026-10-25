@@ -101,7 +101,7 @@ func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte("original"), Timestamp: stamp})
 	group := src + "-recreated"
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), dst, src, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), dst, src, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
 	execute(t, statement, "")
 	old := committedPartitions(t, a, group, src, 1)[0]
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -158,7 +158,7 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 	src, dst := topic(t, a, 1), topic(t, a, 1)
 	group := src + "-excess-workers"
 	end := time.Now().Add(time.Hour).Truncate(time.Millisecond)
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), dst, src, group, end.Format(time.RFC3339Nano))
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), dst, src, group, end.Format(time.RFC3339Nano))
 	cfg := configuration(t, "idle_exit='5s'\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
@@ -223,7 +223,7 @@ func TestConcurrentNowWindowsPersistAcrossWorkersAndRestart(t *testing.T) {
 	a := admin(t)
 	src, dst := topic(t, a, 2), topic(t, a, 1)
 	group := src + "-now-workers"
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR AND RECORD_TIMESTAMP < NOW() + INTERVAL '1' HOUR ", broker(t), dst, src, group)
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR AND RECORD_TIMESTAMP < NOW() + INTERVAL '1' HOUR ", broker(t), dst, src, group)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	results := make(chan workerResult, 2)
@@ -344,7 +344,7 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 	for i := range 32 {
 		publish(t, p, &kgo.Record{Topic: src, Partition: 0, Key: []byte("stable"), Value: []byte(fmt.Sprint(i)), Timestamp: stamp})
 	}
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000'), CONNECTION slow AS ('bootstrap.servers'='%s','linger.ms'='100') INSERT INTO TOPIC '%s@slow' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), broker(t), dst, src, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000'), CONNECTION slow AS ('bootstrap.servers'='%s','linger.ms'='100') INSERT INTO TOPIC '%s@slow' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), broker(t), dst, src, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
 	cfg := configuration(t, "record_cap=16\npartition_record_cap=16\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

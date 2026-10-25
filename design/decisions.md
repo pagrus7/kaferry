@@ -39,28 +39,37 @@ Saved commits take precedence. Without a commit:
 
 - Commit below log start: resume at log start; log old position, log start and offset gap, which is not a lost-record count.
 - Commit above log end: fail as truncation. An out-of-range position during copying fails; restart reevaluates it.
+- With a saved captured end H, resume fails if the current log end is below H or retention has moved log start beyond H. Kaferry does not capture a replacement end.
 - Only retained data is available. A nonzero log start whose first retained timestamp exceeds `lo` produces a retention warning.
 
 ## Completion
 
-A Kafka partition with an upper bound stops when either:
+Copies consume immediately. [Endpoint settings](../docs/reference.md#endpoint-with-properties) define the defaults. None of the timestamp allowances changes the timestamp filter or limits total run time.
 
-1. It encounters a timestamp strictly greater than `hi + CUTOFF`.
-2. Wall time passes `hi + CUTOFF` and it catches up as described below.
+For a timestamp upper bound `hi`, each Kafka partition can stop on either enabled rule:
 
-`CUTOFF` defaults to one minute. This is a heuristic: later offsets can have earlier timestamps. For an end of 10:00 and one-minute cutoff, a 10:02 record stops the partition; a subsequent 09:59 record is missed, even if already present. Each stop logs its reason, partition and position. Timestamp stops also log the trigger timestamp and flag it if more than one minute ahead of the local clock; tip stops log H.
+1. A consumed record timestamp strictly exceeds `hi + MAX_OUT_OF_ORDER`.
+2. Its consumed position reaches a saved exclusive end **H**. After wall time strictly passes `hi + MAX_STALENESS`, capture the current replicated end H, including open transactions, without waiting to catch up. Save H separately from confirmed progress before processing more input. Timestamp stopping remains active during the drain.
 
-### Catching up
+Timestamp stopping assumes later offsets never fall farther behind an earlier timestamp than the configured disorder allowance. A future-dated record can stop before matching records already present. Wall-clock capture assumes arrival delay and the consumer clock's lead fit its allowance. Configuring either value verifies neither assumption. Raising one value does not correct an invalid bound used by the other. No finite allowance covers arbitrary replay or clock errors; retained data cannot recover records removed by retention or compaction.
 
-1. After wall time passes `hi + CUTOFF` and the partition reaches its read-committed tip, Kaferry records the log end **H**, including open transactions. H stays fixed for this assignment.
-2. Kaferry keeps reading only committed records. The partition stops when its consumed position reaches H, accounting for aborted/control records. H = 0 completes immediately. The worker waits until earlier records are delivered, filtered or skipped before exiting.
-3. An open transaction delays completion until it commits or aborts. If H is not reached within `worker.tip_wait` (default 15 min) after sampling, Kaferry fails the run.
+`OFF` disables a rule. With both rules disabled, Kafka follows filtered records until another stop criterion or a signal. File replay defaults to examining the whole pinned selection. Explicit `MAX_OUT_OF_ORDER` applies the same timestamp rule to each original source identity and partition across its selected files; it cannot stop another original partition. Cursor changes that skip the rest of a stream are saved only through confirmed input progress.
 
-Sampling and timeout logs include H and the stable/consumed positions. H is local to this worker and is not saved for restart.
+### Offset ends
 
-A timestamp stop commits at the trigger record, so rerunning stops there again. A tip stop commits the next position, so rerunning may copy later arrivals. Without an upper bound, Kafka sources follow until stopped or the worker record threshold is reached.
+`RECORD_OFFSET < LATEST` captures the readable committed end (last stable offset) on a partition's first assignment. It excludes unresolved transactions and later appends. Numeric offset bounds supply positions directly; explicit Kafka bounds outside retained positions fail at initialization. An explicit offset end determines completion; timestamps only filter records, and timestamp completion settings are rejected. For files, offsets refer to original Kafka offsets and LATEST means EOF of the pinned file selection.
 
-Archive sources resume a fixed selection of completed Avro files; a new group selects current files. Archive sources do not use `CUTOFF`.
+Ends stay fixed across restart and reassignment. Saved timestamp and end stops remain complete; worker record stops receive a fresh allowance. Appends at or beyond a saved end are excluded. A crash before saving an end can lead to a later capture. Each partition captures independently; neither end mode is an atomic topic snapshot. With saved H, resume fails if log end is below H or retention has moved log start beyond H. Do not capture a replacement end.
+
+Kafka reads only committed records. An open transaction below a replicated H can delay the drain until it commits or aborts. `worker.tip_wait` bounds a continuous wait at the readable tip below H; ordinary backlog progress resets it. Timeout fails the run. Offset gaps, aborted records and control records count toward reaching H. H = 0 completes immediately. Output confirmation precedes saving completion.
+
+### Added assignments and lookups
+
+Eligible added Kafka partitions use the startup assignment path: validate identity and destination layout, load saved progress, reuse resolved windows and ends, resolve missing positions, then save initial state before exposing input. A partition without progress adopts a saved relative window when available. `START = LATEST` bootstraps a fresh group; an uncommitted partition in an established group starts at earliest retained data. A passed timestamp deadline captures its end immediately. A new LATEST range captures its readable end at initialization. Exited workers do not discover additions.
+
+All explicit broker position queries use the injected `OffsetLookup`: earliest retained, readable end, replicated end, or earliest retained match at/after a requested timestamp. The timestamp request includes partition and Unix milliseconds. No match is distinct from an unknown partition, failed request or missing response. A timestamp older than retention can still return a retained match; the broker cannot establish whether earlier matching records expired. Timestamp lower bounds can use this lookup; an upper timestamp lookup alone is not a safe end because later offsets can have earlier timestamps.
+
+Stop logs identify reason, partition and position. Timestamp stops identify the trigger and flag it if more than one minute ahead of the local clock. Inspection previews unsaved offset ends and reports saved ends; it never saves a boundary or validates source-order and clock assumptions.
 
 ## Worker record stop
 
@@ -80,8 +89,8 @@ Archive sources resume a fixed selection of completed Avro files; a new group se
 
 ### When a worker exits
 
-- A worker exits `0` after every partition it still holds stops or its record limit is reached, outstanding writes are acknowledged and progress is committed. Partitions released during a rebalance do not count toward source completion. Kafka copies without an end time or worker record threshold keep waiting for records or assignments until signalled.
-- For a Kafka copy with an end time or worker record threshold, the wait starts when Kafka reports an empty assignment while the worker holds no partitions. If it still has none after `worker.idle_exit` (30 seconds by default), it exits `3`. Another empty-assignment notification restarts the timer. Waiting for the first assignment notification or losing all partitions during a rebalance does not start it. The exit logs `local idle exit`, the timeout and the code. A worker assigned an empty partition does not exit this way.
+- A worker exits `0` after every partition it still holds stops or its record limit is reached, outstanding writes are acknowledged and progress is committed. Partitions released during a rebalance do not count toward source completion. Kafka copies without an enabled completion rule or worker record threshold keep waiting for records or assignments until signalled.
+- For a Kafka copy with an enabled completion rule or worker record threshold, the wait starts when Kafka reports an empty assignment while the worker holds no partitions. If it still has none after `worker.idle_exit` (30 seconds by default), it exits `3`. Another empty-assignment notification restarts the timer. Waiting for the first assignment notification or losing all partitions during a rebalance does not start it. The exit logs `local idle exit`, the timeout and the code. A worker assigned an empty partition does not exit this way.
 - More workers than source partitions can leave some workers with no partitions to read. This can also happen while Kafka moves partitions between workers. If the last workers exit before a partition reaches its new owner, that partition can remain unfinished. Rerunning the same query and group resumes saved positions and may copy late arrivals.
 - If your supervisor restarts workers on nonzero exits, set a policy for code `3`. Restarting rejoins the group and can give the worker partitions to copy.
 
@@ -97,7 +106,7 @@ Resume requires matching query and endpoint identity:
 
 | Included in query fingerprint | Excluded |
 | --- | --- |
-| Endpoint kinds and archive formats; Kafka cluster IDs and topics; normalized timestamp and partition predicates; `CUTOFF`; Kafka output partitioning mode | Connection aliases/properties, file paths/IDs, `GROUP`, `START`, `WORKER_STOP_AFTER_RECORDS`, error policies and tuning |
+| Endpoint kinds and archive formats; Kafka cluster IDs and topics; normalized timestamp and partition predicates; effective timestamp allowances and offset criteria; Kafka output partitioning mode | Connection aliases/properties, file paths/IDs, `GROUP`, `START`, `WORKER_STOP_AFTER_RECORDS`, error policies and tuning |
 
 Policies can therefore change to SKIP when resuming a failed record. Changing partitioning mode requires a new group. `NOW()` bounds are fingerprinted as expressions; resolved windows are stored separately.
 
@@ -109,7 +118,7 @@ Before subscribing, group inspection also rejects active members whose client ID
 
 ### Commit metadata
 
-Kafka stores `kaferry:2;` followed by a UTF-8 JSON object with each committed offset. The complete string is at most 4,096 bytes; a broker may enforce a smaller limit.
+Kafka stores `kaferry:2;` or `kaferry:3;` followed by a UTF-8 JSON object with each committed offset. The complete string is at most 4,096 bytes; a broker may enforce a smaller limit.
 
 | Field | Meaning |
 | --- | --- |
@@ -117,9 +126,9 @@ Kafka stores `kaferry:2;` followed by a UTF-8 JSON object with each committed of
 | `win` | Optional `{"lower": integer-or-null, "upper": integer-or-null}`; signed 64-bit Unix milliseconds, lower inclusive/upper exclusive. Required for saved `NOW()` bounds |
 | `stop` | Optional `{"reason": "timestamp", "tip" or "worker_record_cap", "at": integer}`; nonnegative source offset where the stopping rule was reached, at or below the committed offset. `at` is not a timestamp |
 
-Absent `stop` means no saved stop. Zero is a valid offset or time bound. Unknown/duplicate fields, null fields other than window bounds, invalid values, foreign prefixes and unsupported versions are rejected. JSON whitespace and field order do not matter. The prefix selects the decoder. Only version `2` JSON with the fields above is supported.
+Absent `stop` means no saved stop. Zero is a valid offset or time bound. Unknown/duplicate fields, null fields other than window bounds, invalid values, foreign prefixes and unsupported versions are rejected. JSON whitespace and field order do not matter. The prefix selects the decoder. Version `2` uses the fields above. Version `3` additionally requires `end`, a nonnegative exclusive captured end offset. Version `2` rejects `end`; version `3` rejects missing or null `end`. Progress without a captured end uses version `2`; progress with one uses version `3`. A committed position or stop cannot exceed its captured end.
 
-The initial assignment commit clears the previous stop. A later commit includes it only after every earlier required write succeeds (Kafka acknowledgment or file fsync), including stops at unchanged offsets. Lost assignments never commit. A crash before saving can replay writes.
+The initial assignment commit preserves saved timestamp and end stops and clears worker record stops. A later commit includes it only after every earlier required write succeeds (Kafka acknowledgment or file fsync), including stops at unchanged offsets. Lost assignments never commit. A crash before saving can replay writes.
 
 ## Kafka output
 

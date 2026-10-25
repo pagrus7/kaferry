@@ -65,7 +65,10 @@ type Plan struct {
 	Start                  string
 	Window                 WindowSpec
 	Partitions             *PartitionFilter
-	CutoffMS               int64
+	MaxOutOfOrderMS        *int64
+	Offsets                *OffsetRange
+	PartitionOffsets       []PartitionOffsetRange
+	MaxStalenessMS         int64
 	WorkerStopAfterRecords uint64
 	Policies               Policies
 }
@@ -92,11 +95,14 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 	if err != nil {
 		return Plan{}, err
 	}
+	if err = plan.offsetCriteria(statement); err != nil {
+		return Plan{}, err
+	}
 	if plan.Destination.Kind == "TOPIC" {
 		plan.Destination.Partitioning = Preserve
 	}
-	if plan.Source.Kind == "TOPIC" && plan.Window.Upper != nil {
-		plan.CutoffMS = 60000
+	if plan.Source.Kind == "TOPIC" && plan.Window.Upper != nil && !plan.HasOffsetEnd() {
+		plan.MaxStalenessMS = 300000
 	}
 	if err = plan.Destination.destinationOptions(statement.Destination.Options); err != nil {
 		return Plan{}, err
@@ -108,10 +114,18 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 		return Plan{}, err
 	}
 	if hi := plan.Window.Upper; hi != nil && !hi.Now {
-		if _, err := checkedAdd(hi.LiteralMS, plan.CutoffMS); err != nil {
-			return Plan{}, sql.At(optionPosition(statement.Source.Options, "CUTOFF", statement.WherePosition), fmt.Errorf("upper bound plus CUTOFF: %w", err))
+		if plan.MaxStalenessMS >= 0 {
+			if _, err := checkedAdd(hi.LiteralMS, plan.MaxStalenessMS); err != nil {
+				return Plan{}, sql.At(optionPosition(statement.Source.Options, "MAX_STALENESS", statement.WherePosition), fmt.Errorf("upper bound plus MAX_STALENESS: %w", err))
+			}
+		}
+		if plan.MaxOutOfOrderMS != nil && *plan.MaxOutOfOrderMS >= 0 {
+			if _, err := checkedAdd(hi.LiteralMS, *plan.MaxOutOfOrderMS); err != nil {
+				return Plan{}, sql.At(optionPosition(statement.Source.Options, "MAX_OUT_OF_ORDER", statement.WherePosition), fmt.Errorf("upper bound plus MAX_OUT_OF_ORDER: %w", err))
+			}
 		}
 	}
+
 	if plan.Source.Kind == "TOPIC" {
 		if len(statement.Bounds) == 0 && plan.Start == "" {
 			plan.Start = "EARLIEST"
@@ -222,14 +236,28 @@ func (p Plan) Fingerprint(sourceClusterID, destinationClusterID string) (string,
 		return "", fmt.Errorf("source and destination are the same Kafka topic")
 	}
 	canonical := struct {
-		Version      int
-		Source       identity
-		Destination  identity
-		Window       WindowSpec
-		CutoffMS     int64
-		Partitioning string           `json:",omitempty"`
-		Partitions   *PartitionFilter `json:",omitempty"`
-	}{Version: 1, Source: source, Destination: destination, Window: p.Window, CutoffMS: p.CutoffMS}
+		Version     int
+		Source      identity
+		Destination identity
+		Window      WindowSpec
+		// CutoffMS is the fixed identity field name for unbounded Kafka and archive queries.
+		Disorder         *int64                 `json:",omitempty"`
+		Offsets          *OffsetRange           `json:",omitempty"`
+		PartitionOffsets []PartitionOffsetRange `json:",omitempty"`
+		MaxStalenessMS   int64                  `json:"CutoffMS"`
+		Partitioning     string                 `json:",omitempty"`
+		Partitions       *PartitionFilter       `json:",omitempty"`
+	}{Version: 1, Source: source, Destination: destination, Window: p.Window, MaxStalenessMS: p.MaxStalenessMS}
+	if p.Source.Kind == "TOPIC" && p.Window.Upper != nil {
+		canonical.Version = 2
+	}
+	canonical.Offsets, canonical.PartitionOffsets = p.Offsets, p.PartitionOffsets
+	if p.MaxOutOfOrderMS != nil && *p.MaxOutOfOrderMS != p.defaultDisorderMS() {
+		canonical.Disorder = p.MaxOutOfOrderMS
+	}
+	if canonical.Disorder != nil || p.MaxStalenessMS < 0 || p.Offsets != nil || len(p.PartitionOffsets) > 0 {
+		canonical.Version = 3
+	}
 	if p.Destination.PreservesPartitions() {
 		canonical.Partitioning = Preserve
 	}

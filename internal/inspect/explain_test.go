@@ -126,7 +126,7 @@ func (f *filesMock) Destination(string) (archiveio.ArchiveInspection, error) {
 }
 
 func fixture() (*Service, plan.Plan, *factoryMock, *filesMock) {
-	p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC", Name: "input"}, Destination: plan.Endpoint{Kind: "TOPIC", Name: "output", Partitioning: plan.Key}, Group: "g", Policies: plan.Policies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}, Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 100}, Upper: &plan.Expression{LiteralMS: 1000}}, CutoffMS: 20}
+	p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC", Name: "input"}, Destination: plan.Endpoint{Kind: "TOPIC", Name: "output", Partitioning: plan.Key}, Group: "g", Policies: plan.Policies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}, Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 100}, Upper: &plan.Expression{LiteralMS: 1000}}, MaxStalenessMS: 20}
 	topic := func(name string) *topicMock {
 		return &topicMock{info: kafkaport.TopicDescription{ClusterID: "cluster", TopicID: name, Partitions: []int32{1, 0}, TimestampType: "CreateTime"}, positions: map[int32]int64{}, metadata: map[int32]kafkaport.Progress{}, low: map[int32]int64{0: 0, 1: 0}, high: map[int32]int64{0: 10, 1: 11}, stable: map[int32]int64{0: 9, 1: 10}, failure: errors.New("injected"), times: func(queries map[int32]int64) map[int32]int64 {
 			found := make(map[int32]int64)
@@ -138,7 +138,7 @@ func fixture() (*Service, plan.Plan, *factoryMock, *filesMock) {
 	}
 	factory := &factoryMock{connections: map[string]*topicMock{"input": topic("input-id"), "output": topic("output-id")}, failure: errors.New("open failed")}
 	files := &filesMock{}
-	positioning := kafkaport.NewPositionerFactory(fixedClock{time.UnixMilli(5000)}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	positioning := kafkaport.NewPositionerFactory(fixedClock{time.UnixMilli(5000)}, slog.New(slog.NewTextHandler(io.Discard, nil)), kafkaport.NewOffsetLookupFactory())
 	return NewExplainer(factory, files, positioning), p, factory, files
 }
 
@@ -153,19 +153,19 @@ func TestTopicPreviewUsesSavedPositionsAndOnlyRequiredStartLookups(t *testing.T)
 	// Given two partitions, one saved position, and different destination routing.
 	service, p, factory, _ := fixture()
 	source := factory.connections["input"]
-	source.positions[0], source.metadata[0] = 4, kafkaport.Progress{}
+	source.positions[0], source.metadata[0] = 4, kafkaport.Progress{End: number(8)}
 	factory.connections["output"].info.Partitions = []int32{0, 1, 2}
 	factory.connections["output"].info.TimestampType = "LogAppendTime"
 	// When previewing through the real shared positioner with mocked metadata ports.
 	report := preview(t, service, p)
 	// Then starts, bounds and error policies are explicit without estimating work or changing progress.
-	require.EqualValues(t, 1, report.Version)
+	require.EqualValues(t, 2, report.Version)
 	require.NotEmpty(t, report.Fingerprint)
 	require.Equal(t, "g", report.Group)
 	require.Len(t, report.Partitions, 2)
 	window := plan.Window{Lower: number(100), Upper: number(1000)}
 	want := []Partition{
-		{ID: 0, Start: 4, Saved: true, LogEnd: 10, Window: window, WindowOrigin: "literal"},
+		{ID: 0, Start: 4, EndOrigin: "saved", End: number(8), Saved: true, LogEnd: 10, Window: window, WindowOrigin: "literal"},
 		{ID: 1, Start: 3, LogEnd: 11, Window: window, WindowOrigin: "literal"},
 	}
 	require.Equal(t, want, report.Partitions)
@@ -312,7 +312,7 @@ func TestUpperBoundOnlyDoesNotRequestTimestampLookups(t *testing.T) {
 	// Given an upper-bound-only filter with a pre-epoch stopping threshold.
 	service, p, factory, _ := fixture()
 	p.Window = plan.WindowSpec{Upper: &plan.Expression{LiteralMS: -21}}
-	p.CutoffMS = 20
+	p.MaxStalenessMS = 20
 	// When previewing, then start at the earliest offset without looking up an end timestamp.
 	report := preview(t, service, p)
 	require.Len(t, factory.connections["input"].queries, 0)

@@ -4,18 +4,21 @@ package inspect
 import "github.com/pagrus7/kaferry/internal/plan"
 
 type Report struct {
-	Version                int           `json:"version"`
-	Fingerprint            string        `json:"fingerprint"`
-	Group                  string        `json:"group"`
-	OneOff                 bool          `json:"one_off"`
-	CutoffMS               int64         `json:"cutoff_ms"`
-	WorkerStopAfterRecords uint64        `json:"worker_stop_after_records,omitempty"`
-	Source                 Endpoint      `json:"source"`
-	Destination            Endpoint      `json:"destination"`
-	Partitions             []Partition   `json:"partitions"`
-	StartRule              string        `json:"start_rule,omitempty"`
-	RecordErrors           ErrorPolicies `json:"record_errors"`
-	Warnings               []string      `json:"warnings"`
+	Version                int                         `json:"version"`
+	Fingerprint            string                      `json:"fingerprint"`
+	Group                  string                      `json:"group"`
+	OneOff                 bool                        `json:"one_off"`
+	MaxOutOfOrderMS        *int64                      `json:"max_out_of_order_ms"`
+	Offsets                *plan.OffsetRange           `json:"offset_range,omitempty"`
+	PartitionOffsets       []plan.PartitionOffsetRange `json:"partition_offset_ranges,omitempty"`
+	MaxStalenessMS         int64                       `json:"max_staleness_ms"`
+	WorkerStopAfterRecords uint64                      `json:"worker_stop_after_records,omitempty"`
+	Source                 Endpoint                    `json:"source"`
+	Destination            Endpoint                    `json:"destination"`
+	Partitions             []Partition                 `json:"partitions"`
+	StartRule              string                      `json:"start_rule,omitempty"`
+	RecordErrors           ErrorPolicies               `json:"record_errors"`
+	Warnings               []string                    `json:"warnings"`
 }
 
 type ErrorPolicies struct {
@@ -54,6 +57,8 @@ type Partition struct {
 	Start        int64       `json:"start"`
 	LogStart     int64       `json:"log_start"`
 	LogEnd       int64       `json:"log_end"`
+	EndOrigin    string      `json:"end_origin,omitempty"`
+	End          *int64      `json:"captured_end,omitempty"`
 	Saved        bool        `json:"saved"`
 	Window       plan.Window `json:"window"`
 	WindowOrigin string      `json:"window_origin"`

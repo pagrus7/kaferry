@@ -30,7 +30,7 @@ The first `copy summary` reports `submitted: 3` and `confirmed: 3`. The status i
 ```json
 {
   "verdict": "stopped",
-  "reason": "file end reached",
+  "reason": "file selection completed",
   "partitions": [{"id": 0, "position": 3, "stop": {"reason": "eof", "at": 3}}]
 }
 ```
@@ -43,9 +43,10 @@ A named `GROUP` identifies saved progress. Kafka stores it as source consumer-gr
 
 | Input mode | What stops this worker? | Saved state and rerun |
 | --- | --- | --- |
-| Kafka without an end time | A signal or worker record threshold | Confirmed offsets; the same group resumes and follows new records |
-| Kafka with an end time | Per-partition [completion rules](../design/decisions.md#completion), or worker record threshold | Confirmed offsets, resolved window and stops; the same group resumes under those rules |
-| Completed archive files | End of the selected files, or worker record threshold | Fixed file selection and confirmed cursors; the same group retains its selection |
+| Kafka without an enabled completion rule | A signal or worker record threshold | Confirmed offsets; the same group resumes and follows new records, including when both timestamp rules are OFF |
+| Kafka with timestamp completion enabled | Per-partition [completion rules](../design/decisions.md#completion), or worker record threshold | Confirmed offsets, resolved window, ends and stops; the same group resumes under those rules |
+| Kafka with a fixed offset end | Reaching each saved exclusive end, or worker record threshold | Ends remain fixed; rerunning the same group excludes later appends |
+| Completed Avro files | Completing selected streams under EOF or explicit criteria, or worker record threshold | Fixed file selection and confirmed cursors; the same group retains its selection |
 
 A worker record threshold applies afresh to each invocation. A new archive group selects current completed files, including files already copied by other groups. See [identity rules](../design/decisions.md#identity) before changing a saved job.
 
@@ -76,7 +77,7 @@ WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
 ```
 
-`@alias` selects a connection; named `GROUP` saves progress for reruns. Omitting `GROUP` starts a fresh copy each run. A new window, `CUTOFF` or partitioning mode needs a new group.
+`@alias` selects a connection; named `GROUP` saves progress for reruns. Omitting `GROUP` starts a fresh copy each run. Changing the window, effective timestamp allowances, offset criteria or partitioning mode needs a new group. Kafka timestamp completion defaults to five minutes for arrival delay and disorder; `MAX_OUT_OF_ORDER` can override disorder independently. Copying starts immediately. [Completion and assumptions](../design/decisions.md#completion).
 
 ```sh
 kaferry explain --file copy.sql --config connections.toml
@@ -106,7 +107,7 @@ Keep passwords out of SQL literals and shell arguments. [Configuration rules](#c
 
 ## SQL settings
 
-`WITH` and `OPTIONS` are optional. Source `WITH` overrides `GROUP`, `START`, `CUTOFF`; destination `WITH` overrides partitioning or archive rotation. Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
+`WITH` and `OPTIONS` are optional. Kafka source `WITH` sets `GROUP`, `START`, `MAX_STALENESS` and `MAX_OUT_OF_ORDER`; archive source `WITH` sets `GROUP` and optional `MAX_OUT_OF_ORDER`. Sink properties configure partitioning or archive rotation. [Defaults by endpoint](reference.md#endpoint-with-properties). Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
 
 ## Permissions
 
@@ -143,7 +144,9 @@ kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM ARCHIVE 'archive/orders' WITH (GROUP = 'orders-restore');"
 ```
 
-Without timestamp bounds, Kafka starts at the earliest retained record; `START = LATEST` selects new ones. Saved progress takes precedence. Without an end time, Kafka follows. Archive replay selects current completed files and exits; the same group retains its selection. [Examples](../design/grammar.md#valid-examples).
+Without timestamp bounds, Kafka starts at the earliest retained record; `START = LATEST` selects new ones. Saved progress takes precedence. Without an enabled completion rule, Kafka follows. Archive replay selects current completed files and exits; the same group retains its selection. [Examples](../design/grammar.md#valid-examples).
+
+To copy the current readable Kafka backlog and exit, add `WHERE RECORD_OFFSET < LATEST`. Each partition saves its own exclusive end; rerunning the same group keeps those ends. Timestamp filters can restrict records within that snapshot without a lateness assumption. Use a new group for a fresh snapshot. [Offset examples](../design/grammar.md#valid-examples).
 
 Use `WHERE PARTITION IN (0, 2)` for fixed source IDs, or `NOT IN (0, 2)` for all others. Kafka discovers additions while workers run; archive replay pins matching files once and keeps that selection on resume. All workers share the same predicate. Listed IDs must exist in Kafka metadata or completed archive headers. Excluded Kafka partitions are not fetched or committed; excluded archive payloads are not read. [Selection rules](../design/decisions.md#source-partitions).
 
@@ -159,11 +162,11 @@ SIGINT/SIGTERM stop reading, allow 10 s for writes, then save progress. File flu
 kaferry status -c connections.toml -f copy.sql --json
 ```
 
-`stopped` means every currently selected partition has a saved stop reason, including worker record thresholds. More input may remain; time cutoffs can miss records within the range. Kafka activity is checked twice, without an atomic snapshot; file activity is not checked. Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](reference.md#saved-status).
+`stopped` means every currently selected partition has a saved stop reason, including worker record thresholds. More input may remain; staleness stops can miss records within the range. Kafka activity is checked twice, without an atomic snapshot; file activity is not checked. Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](reference.md#saved-status).
 
 ## Resume or start over
 
-Rerun with the same `GROUP`, endpoints, filter, `CUTOFF`, partitioning mode and checkpoint directory. Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
+Rerun with the same `GROUP`, endpoints, filter, `MAX_STALENESS`, partitioning mode and checkpoint directory. Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
 
 Keep output, checkpoints and locks. Archive files must stay unchanged until replay completes. [Archive recovery and moving replay](#archive-procedures).
 

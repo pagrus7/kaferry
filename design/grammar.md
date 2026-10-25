@@ -24,13 +24,16 @@ endpoint    = "TOPIC" string                       (* 'topic' or 'topic@alias' *
             | "ARCHIVE" string ;                   (* archive directory *)
 source_option = "GROUP" "=" ( string | "ONE_OFF" )
             | "START" "=" ( "EARLIEST" | "LATEST" )
-            | "CUTOFF" "=" interval ;
+            | ( "MAX_STALENESS" | "MAX_OUT_OF_ORDER" ) "=" ( interval | "OFF" ) ;
 sink_option = "PARTITIONING" "=" ( "PRESERVE" | "KEY" )
             | "ROTATE_AFTER_SIZE" "=" integer [ "k" | "m" | "g" ]
             | "ROTATE_AFTER_AGE" "=" interval ;
 
-where       = "WHERE" predicate { "AND" predicate } ;
-predicate   = between | bound | partition ;
+where       = "WHERE" ( predicates | branch { "OR" branch } [ "AND" predicates ] ) ;
+predicates  = predicate { "AND" predicate } ;
+branch      = "(" predicates ")" ;  (* disjoint PARTITION IN plus offset bounds only *)
+predicate   = between | bound | partition | offset ;
+offset      = "RECORD_OFFSET" compare integer | "RECORD_OFFSET" "<" "LATEST" ;
 partition   = "PARTITION" [ "NOT" ] "IN" "(" integer { "," integer } ")" ;
 between     = "RECORD_TIMESTAMP" "BETWEEN" time "AND" time ;
 bound       = "RECORD_TIMESTAMP" compare time ;
@@ -53,11 +56,14 @@ Planning or startup enforces:
 
 - Both endpoint `WITH` clauses and final `OPTIONS` are optional; if present, each must contain a setting. Omitted `GROUP` means `ONE_OFF`: generate and log a fresh group for each run. Explicit group names must be nonblank. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name. Settings, inline connection aliases and a connection's properties cannot repeat.
 - Archive rotation uses positive bytes (case-insensitive binary k/m/g suffixes) and positive intervals; defaults are 1g and one hour. `ARCHIVE 'directory'` names a filesystem directory containing a Kaferry archive.
-- Source `WITH` precedes `WHERE`. Without timestamp bounds, topic sources default to `START = EARLIEST`; `LATEST` reads new records. Timestamp bounds supply the starting rule and cannot be combined with explicit `START`. Saved progress takes precedence. Archive sources take no `START`. `CUTOFF` belongs to source `WITH`; record-error policies and worker stops belong to final `OPTIONS`.
+- Source `WITH` precedes `WHERE`. Without timestamp bounds, topic sources default to `START = EARLIEST`; `LATEST` reads new records. Timestamp bounds supply the starting rule and cannot be combined with explicit `START`. Saved progress takes precedence. Archive sources take no `START`. `MAX_STALENESS` and `MAX_OUT_OF_ORDER` belong to source `WITH`; record-error policies and worker stops belong to final `OPTIONS`.
 - `ON_ERROR` cannot be combined with any specific error policy.
 - `WORKER_STOP_AFTER_RECORDS` is from 1 to 9,007,199,254,740,992; it caps accepted writes per worker per invocation, not records read or a shared group total.
 - `PARTITIONING` requires a topic destination and defaults to `PRESERVE`: original partition N goes to destination N. Every selected input partition ID must exist, including IDs whose records the timestamp filter excludes. Counts need not match. `KEY` uses original key bytes and the destination key partitioner. Missing partitions fail under every error policy.
-- Intervals use nonnegative integers; `DAY` is 86,400 seconds. `CUTOFF` requires a topic source with an upper bound. `ON_REJECTED_TIMESTAMP` requires a topic destination; `ON_MISSING_TIMESTAMP` timestamp bounds in `WHERE`.
+- Intervals use nonnegative integers; `DAY` is 86,400 seconds. Both timestamp completion settings require an upper timestamp bound and reject an explicit offset end. `MAX_STALENESS` requires Kafka input. `OFF` disables the corresponding rule; zero is allowed. [Endpoint settings and defaults](../docs/reference.md#endpoint-with-properties).
+- Offset literals are nonnegative signed 64-bit integers. Comparisons normalize to an inclusive lower and exclusive upper bound; empty ranges and overflowing adjustments fail. Each grouped branch requires `PARTITION IN` and an upper offset bound; selectors must be disjoint. Unlisted partitions are excluded. Shared timestamp predicates follow the branches. Ungrouped timestamp `OR` is unsupported.
+- Kafka explicit numeric starts/ends must be within retained positions at initialization. `LATEST` freezes the readable committed end on first assignment; resume reuses it. A timestamp-derived start beyond that end becomes an empty snapshot. File offsets refer to original source offsets, not replay cursors; `LATEST` means the pinned selection's EOF.
+- `ON_REJECTED_TIMESTAMP` requires a topic destination; `ON_MISSING_TIMESTAMP` requires timestamp bounds in `WHERE`.
 - At most one `PARTITION [NOT] IN (...)` predicate; combine it with timestamp bounds using `AND` in either order. IDs are integers from 0 to 2147483647; lists are nonempty, sorted and deduplicated. Every listed ID must exist in source metadata at startup, including exclusions; archives use completed-file headers. `IN` selects fixed IDs; `NOT IN` selects all others. Kafka discovers additions while workers run; archives pin matching completed files once and keep that selection on resume.
 - At most one lower and one upper bound. Timestamps are RFC 3339 with `Z` or an explicit offset and at most millisecond precision. The normalized `[lo, hi)` must be non-empty.
 - At startup, reject a destination that is the same archive directory (including path aliases) or the same Kafka cluster ID and topic as the source.
@@ -138,11 +144,11 @@ WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z'
                            AND TIMESTAMP '2026-10-01T09:30:00Z';
 ```
 
-Topic→topic, relative window with cutoff. Saved progress keeps the resolved `NOW()` window for restarts; workers starting together can resolve different windows ([time window](decisions.md#time-window)):
+Topic→topic, relative window with staleness. Saved progress keeps the resolved `NOW()` window for restarts; workers starting together can resolve different windows ([time window](decisions.md#time-window)):
 
 ```sql
 INSERT INTO TOPIC 'clicks@analytics'
-SELECT * FROM TOPIC 'clicks@prod' WITH (GROUP = 'clicks-backfill-1', CUTOFF = INTERVAL '5' MINUTE)
+SELECT * FROM TOPIC 'clicks@prod' WITH (GROUP = 'clicks-backfill-1', MAX_STALENESS = INTERVAL '5' MINUTE)
 WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR
   AND RECORD_TIMESTAMP <  NOW()
 OPTIONS (ON_ERROR = SKIP);
@@ -154,6 +160,55 @@ Topic→topic, stop each worker after accepting 100 records for writing:
 INSERT INTO TOPIC 'orders@staging'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-sample', START = EARLIEST)
 OPTIONS (WORKER_STOP_AFTER_RECORDS = 100);
+```
+
+Copy the current readable Kafka prefix without timestamp lateness assumptions:
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-snapshot')
+WHERE RECORD_OFFSET < LATEST;
+```
+
+Use a shorter known disorder bound while allowing ten minutes for arrivals:
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod'
+WITH (GROUP = 'orders-live-hour', MAX_STALENESS = INTERVAL '10' MINUTE,
+      MAX_OUT_OF_ORDER = INTERVAL '10' SECOND)
+WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR
+  AND RECORD_TIMESTAMP < NOW();
+```
+
+Follow an ordered replay until timestamp progress establishes completion:
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod'
+WITH (GROUP = 'orders-replay', MAX_STALENESS = OFF,
+      MAX_OUT_OF_ORDER = INTERVAL '0' SECOND)
+WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-22T09:00:00Z'
+  AND RECORD_TIMESTAMP < TIMESTAMP '2026-10-22T10:00:00Z';
+```
+
+Select a different range for each source partition:
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-offset-repair')
+WHERE (PARTITION IN (0, 1) AND RECORD_OFFSET >= 100 AND RECORD_OFFSET < 500)
+   OR (PARTITION IN (2) AND RECORD_OFFSET >= 900 AND RECORD_OFFSET < LATEST);
+```
+
+File replay can use the same timestamp-disorder assumption explicitly. Without it, the complete pinned selection is examined:
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM ARCHIVE '/archive/orders'
+WITH (GROUP = 'orders-file-hour', MAX_OUT_OF_ORDER = INTERVAL '30' SECOND)
+WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-22T09:00:00Z'
+  AND RECORD_TIMESTAMP < TIMESTAMP '2026-10-22T10:00:00Z';
 ```
 
 ## Invalid examples
@@ -171,7 +226,7 @@ SQL errors identify the first error found by one-based line and character (code 
 | `OPTIONS (GROUP = 'g')` | `GROUP` belongs in source `WITH` |
 | `FROM TOPIC 'a' WITH (GROUP='g', ON_ERROR=SKIP)` | error policies belong in final `OPTIONS` |
 | `FROM ARCHIVE 'archive' WITH (GROUP='g', START=EARLIEST)` | `START` requires a topic source |
-| `FROM ARCHIVE 'archive' WITH (GROUP='g', CUTOFF=INTERVAL '1' MINUTE)` | `CUTOFF` requires a topic source |
+| `FROM ARCHIVE 'archive' WITH (GROUP='g', MAX_STALENESS=INTERVAL '1' MINUTE)` | `MAX_STALENESS` requires a topic source |
 | `FROM TOPIC 'a' WITH (GROUP='g', START=EARLIEST) WHERE RECORD_TIMESTAMP < NOW()` | `START` cannot be combined with timestamp bounds |
 | `FROM TOPIC 'a' WITH ()` | present clauses need at least one setting |
 | `FROM TOPIC 'a' WITH (GROUP='')` | explicit group names must be nonblank |

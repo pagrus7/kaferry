@@ -61,8 +61,8 @@ func (p *Plan) applyOption(option sql.Option) error {
 			return fmt.Errorf("START must be EARLIEST or LATEST")
 		}
 		p.Start = option.Value
-	case "CUTOFF":
-		return p.cutoffOption(option)
+	case "MAX_STALENESS", "MAX_OUT_OF_ORDER":
+		return p.stalenessOption(option)
 	case "WORKER_STOP_AFTER_RECORDS":
 		value, err := strconv.ParseUint(option.Value, 10, 64)
 		if err != nil || value == 0 || value > 1<<53 {
@@ -84,18 +84,31 @@ func (p *Plan) groupOption(option sql.Option) error {
 	return nil
 }
 
-func (p *Plan) cutoffOption(option sql.Option) error {
+func (p *Plan) stalenessOption(option sql.Option) error {
+	if option.Name == "MAX_OUT_OF_ORDER" {
+		if p.Window.Upper == nil {
+			return sql.At(option.Position, fmt.Errorf("MAX_OUT_OF_ORDER requires an upper timestamp bound in WHERE"))
+		}
+		if p.HasOffsetEnd() {
+			return sql.At(option.Position, fmt.Errorf("MAX_OUT_OF_ORDER cannot be combined with an explicit offset end"))
+		}
+		value, err := allowance(option)
+		if err == nil {
+			p.MaxOutOfOrderMS = &value
+		}
+		return err
+	}
 	if p.Source.Kind != "TOPIC" {
-		return sql.At(option.Position, fmt.Errorf("CUTOFF requires a topic source; remove CUTOFF for ARCHIVE sources"))
+		return sql.At(option.Position, fmt.Errorf("MAX_STALENESS requires a topic source; remove MAX_STALENESS for ARCHIVE sources"))
 	}
 	if p.Window.Upper == nil {
-		return sql.At(option.Position, fmt.Errorf("CUTOFF requires an upper timestamp bound in WHERE"))
+		return sql.At(option.Position, fmt.Errorf("MAX_STALENESS requires an upper timestamp bound in WHERE"))
 	}
-	if option.Interval == nil {
-		return fmt.Errorf("CUTOFF requires an interval")
+	if p.HasOffsetEnd() {
+		return sql.At(option.Position, fmt.Errorf("MAX_STALENESS cannot be combined with an explicit offset end"))
 	}
 	var err error
-	p.CutoffMS, err = intervalMS(*option.Interval)
+	p.MaxStalenessMS, err = allowance(option)
 	return err
 }
 

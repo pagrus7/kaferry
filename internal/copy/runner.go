@@ -51,7 +51,7 @@ func (r *Runner) Assign(assignments []Assignment) error {
 	}
 	for _, a := range assignments {
 		r.tracker.Assign(a.Cursor)
-		r.partitions[a.Cursor.Partition] = &partition{window: a.Window, position: a.Cursor.Position}
+		r.partitions[a.Cursor.Partition] = &partition{window: a.Window, position: a.Cursor.Position, high: a.Cursor.End, endSaved: a.Cursor.End != nil, stop: a.Cursor.Stop, stopSaved: a.Cursor.Stop != nil}
 		r.log.Info("partition assigned", "partition", a.Cursor.Partition, "position", a.Cursor.Position, "window", a.Window)
 	}
 	return nil
@@ -207,6 +207,9 @@ func (r *Runner) input(input Input) error {
 		p.position = cursor.Position
 		return err // A later visible record proves control/aborted gaps reached H.
 	}
+	if p.high != nil {
+		input.Next = min(input.Next, *p.high)
+	}
 	if !r.admits(input) {
 		r.deferred = &input
 		return nil
@@ -221,7 +224,7 @@ func (r *Runner) input(input Input) error {
 	}
 	p.position = input.Next
 	r.flow.observe(r.tracker)
-	if filtered, err := r.filter(p.window, input.Record, token); filtered || err != nil {
+	if filtered, err := r.filterInput(p.window, input.Record, token); filtered || err != nil {
 		return err
 	}
 
@@ -232,7 +235,10 @@ func (r *Runner) stopAtTimestamp(p *partition, input Input) (bool, error) {
 	if r.plan.Source.Kind != "TOPIC" {
 		return false, nil
 	}
-	stop, err := p.pastTimestamp(input.Record.TimestampMS, r.plan.CutoffMS)
+	if r.plan.DisorderMS() < 0 || r.plan.HasOffsetEnd() {
+		return false, nil
+	}
+	stop, err := p.pastTimestamp(input.Record.TimestampMS, r.plan.DisorderMS())
 	if !stop || err != nil {
 		return false, err
 	}
@@ -245,6 +251,19 @@ func (r *Runner) stopAtTimestamp(p *partition, input Input) (bool, error) {
 	return true, nil
 }
 
+func (r *Runner) filterInput(window plan.Window, record Record, token Token) (bool, error) {
+	if r.plan.Offsets != nil || len(r.plan.PartitionOffsets) > 0 {
+		if record.Source == nil {
+			return true, fmt.Errorf("offset criteria require original source provenance")
+		}
+		if bounds := r.plan.OffsetRange(record.Source.Partition); bounds != nil && !bounds.Contains(record.Source.Offset) {
+			r.tracker.Settle(token, true)
+			r.filtered++
+			return true, nil
+		}
+	}
+	return r.filter(window, record, token)
+}
 func (r *Runner) filter(window plan.Window, record Record, token Token) (bool, error) {
 	if record.TimestampMS == nil && (window.Lower != nil || window.Upper != nil) {
 		return true, r.recordError(token, &RecordError{Class: "missing_timestamp", Err: fmt.Errorf("record lacks required timestamp")})
@@ -337,6 +356,9 @@ func (r *Runner) eof(cursor Cursor) error {
 		r.deferredEOF = &cursor
 		return nil
 	}
+	if p.high != nil {
+		cursor.Position = min(cursor.Position, *p.high)
+	}
 	err := r.tracker.Advance(cursor)
 	if err != nil {
 		return err
@@ -349,13 +371,10 @@ func (r *Runner) tips() error {
 	wait, _ := time.ParseDuration(r.limits.TipWait)
 	sampled := false // Interleave watermark queries with consumer polling.
 	for id, p := range r.partitions {
-		if p.stop != nil || p.window.Upper == nil || r.plan.Source.Kind != "TOPIC" {
+		if p.stop != nil || r.plan.Source.Kind != "TOPIC" || p.high == nil && (p.window.Upper == nil || r.plan.MaxStalenessMS < 0) {
 			continue
 		}
-		action, err := p.tipAction(r.clock.Now(), r.plan.CutoffMS, wait)
-		if err != nil {
-			return err
-		}
+		action := p.tipAction(r.clock.Now(), r.plan.MaxStalenessMS, wait)
 		if action == tipSample {
 			if sampled {
 				continue
@@ -364,10 +383,7 @@ func (r *Runner) tips() error {
 			if err := r.sampleHigh(id, p); err != nil {
 				return err
 			}
-			action, err = p.tipAction(r.clock.Now(), r.plan.CutoffMS, wait)
-			if err != nil {
-				return err
-			}
+			action = p.tipAction(r.clock.Now(), r.plan.MaxStalenessMS, wait)
 		}
 		switch action {
 		case tipStop:
@@ -396,9 +412,12 @@ func (r *Runner) sampleHigh(id int32, p *partition) error {
 	if attempts := p.sampling.recovered(); attempts > 0 {
 		r.log.Info("tip watermark query recovered", "partition", id, "attempts", attempts)
 	}
-	p.sampled(high, r.clock.Now())
+	if high < p.position {
+		return fmt.Errorf("partition %d captured end %d is below consumed position %d", id, high, p.position)
+	}
+	p.sampled(high)
 	r.log.Info("tip watermark sampled", "partition", id, "high_watermark", high, "stable", p.stable, "position", p.position)
-	return nil
+	return r.commit([]int32{id})
 }
 func (r *Runner) flush() error {
 	if err := r.sink.Flush(); err != nil {

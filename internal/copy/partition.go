@@ -16,6 +16,7 @@ type partition struct {
 	stable      int64
 	atTip       bool
 	high        *int64
+	endSaved    bool
 	waitStarted time.Time
 	sampling    retrySchedule
 }
@@ -33,15 +34,18 @@ func (p *partition) reachedHigh(position int64) bool {
 	return p.high != nil && position >= *p.high
 }
 
-func (p *partition) pastTimestamp(stamp *int64, cutoff int64) (bool, error) {
+func (p *partition) pastTimestamp(stamp *int64, staleness int64) (bool, error) {
 	if stamp == nil || p.window.Upper == nil {
 		return false, nil
 	}
-	threshold, err := p.window.StopThreshold(cutoff)
+	threshold, err := p.window.StopThreshold(staleness)
 	return err == nil && *stamp > threshold, err
 }
 
 func (p *partition) reachedTip(position int64, fileSource bool) {
+	if position > p.position {
+		p.waitStarted = time.Time{}
+	}
 	p.atTip = true
 	p.position, p.stable = position, position
 	if fileSource {
@@ -49,30 +53,34 @@ func (p *partition) reachedTip(position int64, fileSource bool) {
 	}
 }
 
-func (p *partition) sampled(high int64, now time.Time) {
+func (p *partition) sampled(high int64) {
 	p.high = &high
-	p.waitStarted = now
 }
 
 // tipAction is called for active, bounded Kafka partitions. It decides whether
 // to sample, stop or time out. A successful sample
-// stays fixed until this assignment ends, even when later records arrive.
-func (p *partition) tipAction(now time.Time, cutoff int64, wait time.Duration) (tipAction, error) {
-	threshold, err := p.window.StopThreshold(cutoff)
-	if err != nil {
-		return tipWait, err
-	}
+// stays fixed across assignments through saved progress. The caller admits only
+// saved ends or enabled clock capture with an already validated upper threshold.
+func (p *partition) tipAction(now time.Time, staleness int64, wait time.Duration) tipAction {
 	if p.high == nil {
-		if p.atTip && now.UnixMilli() > threshold && p.sampling.due(now) {
-			return tipSample, nil
+		threshold := *p.window.Upper + staleness
+		if now.UnixMilli() > threshold && p.sampling.due(now) {
+			return tipSample
 		}
-		return tipWait, nil
+		return tipWait
 	}
 	if p.position >= *p.high {
-		return tipStop, nil
+		return tipStop
+	}
+	if !p.atTip {
+		p.waitStarted = time.Time{}
+		return tipWait
+	}
+	if p.waitStarted.IsZero() {
+		p.waitStarted = now
 	}
 	if now.Sub(p.waitStarted) > wait {
-		return tipTimeout, nil
+		return tipTimeout
 	}
-	return tipWait, nil
+	return tipWait
 }

@@ -65,15 +65,15 @@ func (w Window) Contains(timestampMS int64) bool {
 }
 
 // StopThreshold is the boundary a Kafka record timestamp must strictly exceed.
-func (w Window) StopThreshold(cutoff int64) (int64, error) {
+func (w Window) StopThreshold(staleness int64) (int64, error) {
 	if w.Upper == nil {
 		return 0, fmt.Errorf("time window has no upper bound")
 	}
-	return checkedAdd(*w.Upper, cutoff)
+	return checkedAdd(*w.Upper, staleness)
 }
 
 // ValidateStored rejects incomplete or altered persisted windows before reading.
-func (s WindowSpec) ValidateStored(w Window, cutoff int64) error {
+func (s WindowSpec) ValidateStored(w Window, staleness int64) error {
 	if (s.Lower == nil) != (w.Lower == nil) || (s.Upper == nil) != (w.Upper == nil) {
 		return fmt.Errorf("stored time window has different bounds")
 	}
@@ -88,8 +88,8 @@ func (s WindowSpec) ValidateStored(w Window, cutoff int64) error {
 	if w.Lower != nil && w.Upper != nil && *w.Lower >= *w.Upper {
 		return fmt.Errorf("stored time range is empty")
 	}
-	if w.Upper != nil {
-		_, err := checkedAdd(*w.Upper, cutoff)
+	if w.Upper != nil && staleness >= 0 {
+		_, err := checkedAdd(*w.Upper, staleness)
 		return err
 	}
 	return nil
@@ -209,4 +209,9 @@ func checkedAdd(a, b int64) (int64, error) {
 		return 0, fmt.Errorf("timestamp arithmetic overflows milliseconds")
 	}
 	return a + b, nil
+}
+
+// ValidateWindow checks resolved bounds and every enabled completion threshold.
+func (p Plan) ValidateWindow(w Window) error {
+	return p.Window.ValidateStored(w, max(p.MaxStalenessMS, p.DisorderMS()))
 }

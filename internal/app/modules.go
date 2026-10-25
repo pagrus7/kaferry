@@ -39,7 +39,7 @@ var PlanningModules = fx.Options(EnvironmentModule, SQLModule, ConfigurationModu
 
 var ProgressModule = fx.Module("progress", fx.Provide(copy.NewProgressFactory))
 var KafkaClientModule = fx.Module("kafka-client", fx.Provide(franz.NewClients))
-var PositioningModule = fx.Module("positioning", fx.Provide(kafkaport.NewPositionerFactory))
+var PositioningModule = fx.Module("positioning", fx.Provide(kafkaport.NewOffsetLookupFactory, kafkaport.NewPositionerFactory))
 var CommitMetadataModule = fx.Module("commit-metadata", fx.Provide(commitmeta.NewCodec))
 var KafkaModule = fx.Module("kafka", fx.Provide(franz.NewFactory,
 	func(f *franz.Factory) KafkaFactory { return f },
