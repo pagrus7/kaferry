@@ -11,17 +11,13 @@
 
 Copy Kafka records between topics and Kaferry archives with one SQL-like statement.
 
-Preserves raw bytes, nulls, ordered headers and timestamps where possible. No transformations or Schema Registry access. Copies records; topics, topic settings, ACLs and consumer-group offsets must be prepared separately.
+Preserves raw bytes, nulls and ordered headers.
 
 ## Install
 
 [Download a release](https://github.com/pagrus7/kaferry/releases/latest), verify `SHA256SUMS`, extract and put `kaferry` on `PATH`.
 
 Homebrew: `brew install pagrus7/tap/kaferry`. [Source builds, containers and redistribution](docs/install.md).
-
-## Known issues
-
-When Kaferry reads Kafka, franz-go v1.22.2 misreads record timestamps outside ±9,223,372,036,854 Unix milliseconds. [Kafka 4+ defaults and scope](design/client-compatibility.md#known-issues).
 
 ## Quick start
 
@@ -36,12 +32,8 @@ docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io
 
 With a fresh `kaferry-demo` volume, this copies the three bundled sample records into `output` and saves progress. The files remain after the container exits. [Inspect results, rerun and reset](docs/usage.md#first-copy-with-docker) · [Run without Docker](docs/usage.md#first-copy-without-kafka) · [Copy Kafka topics](docs/usage.md#copy-between-kafka-topics).
 
-## Before you run
+## Caveats
 
-- **Time windows:** The [staleness rule](design/decisions.md#completion) can miss records within the range, including those present before the run.
-- **Delivery:** at least once; crashes and rebalances can duplicate or reorder writes. Expired offsets or lost checkpoints can start fresh. Kafka input reads committed records.
-- **Destination:** original partition numbers are preserved. Ensure bytes and Schema Registry IDs work there. Broker settings can replace timestamps or delete old records. [Routing](design/decisions.md#kafka-output).
-- **Archives:** multiple capture workers; one replay process per group/checkpoint directory. Storage needs durable sync, atomic rename and locks. [File setup and resume](docs/usage.md#run-a-copy).
-- **Permissions:** [Source READ and destination WRITE grants](docs/usage.md#permissions).
+Before copying your own data, read the [caveats](docs/caveats.md) for time windows, delivery and resume, Kafka destinations, archive storage and timestamp limits.
 
 [Documentation index](docs/README.md) · [Settings and results](docs/reference.md) · [Tests and contributing](design/components.md) · [Security](SECURITY.md) · [MIT license](LICENSE); dependencies retain their licenses.
