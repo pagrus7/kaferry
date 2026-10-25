@@ -3,6 +3,7 @@ package archiveio
 import (
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,4 +83,40 @@ func TestSavedExcludedFileIsRejectedBeforeInspectionOrReplayReads(t *testing.T) 
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Equal(t, encoded, after)
+}
+
+func TestInspectionRejectsRelativeDisorderOverflowWithoutWriting(t *testing.T) {
+	for _, saved := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fresh", true: "saved"}[saved], func(t *testing.T) {
+			// Given a valid relative expression whose resolved upper plus disorder exceeds milliseconds.
+			directory := t.TempDir()
+			limits := config.Defaults("").Worker
+			limits.CheckpointDir = &directory
+			p := plan.Plan{Source: plan.Endpoint{Kind: "FILE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "FILE", Format: "avro", Name: filepath.Join(t.TempDir(), "output")}, Group: "g", Window: plan.WindowSpec{Upper: &plan.Expression{Now: true, AdjustmentMS: math.MaxInt64 - 807}}, MaxOutOfOrderMS: new(int64(1000))}
+			fp, err := p.Fingerprint("", "")
+			require.NoError(t, err)
+			if saved {
+				state := replay.State{Version: 1, Group: p.Group, Fingerprint: fp, Window: plan.Window{Upper: new(int64(math.MaxInt64 - 807))}, Complete: true, Files: []replay.Progress{}}
+				encoded, err := checkpoint.Encode(state, 64<<20)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(checkpoint.Path(directory, p.Group), encoded, 0600))
+			}
+			before, err := os.ReadDir(directory)
+			require.NoError(t, err)
+			// When inspecting, then reject before returning a text/JSON report or changing checkpoint state.
+			_, err = NewInspector(&clockMock{}).Source(p, fp, limits)
+			require.ErrorContains(t, err, "overflows milliseconds")
+			after, err := os.ReadDir(directory)
+			require.NoError(t, err)
+			require.Len(t, after, len(before))
+			// Execution rejects the same resolved threshold before saving initial progress.
+			_, err = NewFactory(&clockMock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil))).OpenSource(p, fp, limits, 0)
+			require.ErrorContains(t, err, "overflows milliseconds")
+			if !saved {
+				_, err = os.Stat(checkpoint.Path(directory, p.Group))
+				require.True(t, os.IsNotExist(err))
+			}
+
+		})
+	}
 }

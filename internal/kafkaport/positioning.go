@@ -90,10 +90,11 @@ func (p *positioner) Locate(ctx context.Context, parts []int32, saved map[int32]
 	if err := p.resolveTimes(ctx, assignments); err != nil {
 		return Positioning{}, err
 	}
-	if err := p.resolveEnds(ctx, assignments); err != nil {
+	readable, err := p.resolveEnds(ctx, assignments)
+	if err != nil {
 		return Positioning{}, err
 	}
-	if err := p.resolveOffsetRanges(ctx, assignments, saved); err != nil {
+	if err := p.resolveOffsetRanges(ctx, assignments, saved, readable); err != nil {
 		return Positioning{}, err
 	}
 	retention := make(map[int32]RetentionCheck)
@@ -150,14 +151,10 @@ func (p *positioner) window(id int32, saved map[int32]int64, metadata map[int32]
 			return window, progress, position, conflict("invalid resolved time window: %v", err)
 		}
 	}
-	if d := p.plan.DisorderMS(); d >= 0 && window.Upper != nil {
-		if _, err := window.StopThreshold(d); err != nil {
-			return window, progress, position, conflict("invalid disorder threshold: %v", err)
-		}
-	}
-	if err := p.plan.Window.ValidateStored(window, p.plan.MaxStalenessMS); err != nil {
+	if err := p.plan.ValidateWindow(window); err != nil {
 		return window, progress, position, conflict("invalid time window: %v", err)
 	}
+
 	if p.plan.Window.Relative() {
 		progress.Window = &window
 		p.log.Info("partition window positioned", "partition", id, "origin", origin, "window", window)
@@ -222,18 +219,18 @@ func (p *positioner) resolveTimes(ctx context.Context, assignments []copy.Assign
 	return nil
 }
 
-func (p *positioner) resolveEnds(ctx context.Context, assignments []copy.Assignment) error {
+func (p *positioner) resolveEnds(ctx context.Context, assignments []copy.Assignment) (map[int32]int64, error) {
 	if len(p.ends) == 0 {
-		return nil
+		return map[int32]int64{}, nil
 	}
 	stable, err := p.lookup.ReadableEnd(ctx, p.ends)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for n, assignment := range assignments {
 		if assignment.Cursor.Position < 0 {
 			assignments[n].Cursor.Position = stable[assignment.Cursor.Partition]
 		}
 	}
-	return nil
+	return stable, nil
 }

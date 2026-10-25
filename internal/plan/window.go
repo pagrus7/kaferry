@@ -210,3 +210,8 @@ func checkedAdd(a, b int64) (int64, error) {
 	}
 	return a + b, nil
 }
+
+// ValidateWindow checks resolved bounds and every enabled completion threshold.
+func (p Plan) ValidateWindow(w Window) error {
+	return p.Window.ValidateStored(w, max(p.MaxStalenessMS, p.DisorderMS()))
+}

@@ -56,7 +56,7 @@ func groupWindows(partitions []inspect.Partition) []windowGroup {
 	return groups
 }
 
-func renderWindows(output io.Writer, report inspect.Report) error {
+func renderWindows(output io.Writer, report inspect.Report) {
 	fmt.Fprintln(output, "\nTime window")
 	fmt.Fprintln(output, "  Uses: record timestamps, not payload event time.")
 	groups := groupWindows(report.Partitions)
@@ -79,9 +79,7 @@ func renderWindows(output io.Writer, report inspect.Report) error {
 				fmt.Fprintln(output, "    Fresh start: earliest retained offset; apply the time filter while reading.")
 			}
 		}
-		if err := renderCompletion(output, report, group.window); err != nil {
-			return err
-		}
+		renderCompletion(output, report, group.window)
 	}
 	if len(groups) > 8 {
 		fmt.Fprintf(output, "  %d more distinct windows; see --json.\n", len(groups)-8)
@@ -89,7 +87,6 @@ func renderWindows(output io.Writer, report inspect.Report) error {
 	if report.Source.Kind == "TOPIC" && len(groups) > 0 && groups[0].window.Upper != nil {
 		fmt.Fprintln(output, "  Stops apply to assigned partitions; they do not prove complete coverage of the time range.")
 	}
-	return nil
 }
 
 func renderBounds(output io.Writer, window plan.Window, origin string) {
@@ -111,34 +108,6 @@ func renderBounds(output io.Writer, window plan.Window, origin string) {
 	}
 }
 
-func renderStop(output io.Writer, source inspect.Endpoint, window plan.Window, staleness int64, stopAfter uint64) error {
-	if source.Kind == "FILE" {
-		rule := "end of this group's fixed selection of completed archive files"
-		if stopAfter > 0 {
-			rule = "worker record threshold or " + rule + ", whichever comes first"
-		}
-		fmt.Fprintf(output, "  Stop: %s; the window filters records.\n", rule)
-	} else if window.Upper == nil {
-		if stopAfter > 0 {
-			fmt.Fprintln(output, "  Stop: follow new records until the worker record threshold is reached or interrupted.")
-		} else {
-			fmt.Fprintln(output, "  Stop: no end time; follow new records until stopped.")
-		}
-	} else {
-		if stopAfter > 0 {
-			fmt.Fprintln(output, "  Stop: worker record threshold or all assigned partitions stopping, whichever comes first.")
-		}
-		threshold, err := window.StopThreshold(staleness)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(output, "  Stop threshold: %s (window end + %d ms max staleness).\n", formatBound(&threshold), staleness)
-		fmt.Fprintln(output, "    Per assigned partition: reuse a saved captured end. Otherwise, once the clock passes the threshold, save the current log end. Stop at that fixed end unless a record timestamp exceeds the threshold first.")
-		fmt.Fprintln(output, "    Open transactions can delay reading that end; worker.tip_wait bounds a stalled readable tip, not ordinary backlog processing.")
-	}
-	return nil
-}
-
 func formatBound(value *int64) string {
 	if value == nil {
 		return "unbounded"
@@ -146,49 +115,51 @@ func formatBound(value *int64) string {
 	return time.UnixMilli(*value).UTC().Format(time.RFC3339Nano)
 }
 
-func renderCompletion(output io.Writer, report inspect.Report, window plan.Window) error {
+// Inspection validates completion arithmetic before rendering the report.
+func renderCompletion(output io.Writer, report inspect.Report, window plan.Window) {
 	if report.Offsets != nil && report.Offsets.HasEnd() || len(report.PartitionOffsets) > 0 {
 		if report.Source.Kind == "FILE" {
 			fmt.Fprintln(output, "  Stop: selected archive EOF or the original source offset ends; timestamps filter records.")
 		} else {
 			fmt.Fprintln(output, "  Stop: fixed exclusive offset end per partition; timestamps filter records. LATEST previews can change before execution.")
 		}
-		return nil
+		return
 	}
-	d := report.MaxOutOfOrderMS
-	if report.Source.Kind == "FILE" || window.Upper == nil || d != nil && *d == report.MaxStalenessMS && report.MaxStalenessMS >= 0 {
-		if err := renderStop(output, report.Source, window, report.MaxStalenessMS, report.WorkerStopAfterRecords); err != nil {
-			return err
+	if report.Source.Kind == "FILE" {
+		rule := "end of this group's fixed selection of completed archive files"
+		if report.WorkerStopAfterRecords > 0 {
+			rule = "worker record threshold or " + rule + ", whichever comes first"
 		}
-		if report.Source.Kind == "FILE" && d != nil && window.Upper != nil {
-			threshold, err := window.StopThreshold(*d)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(output, "    Each original source partition can finish when its timestamp exceeds %s (MAX_OUT_OF_ORDER).\n", formatBound(&threshold))
+		fmt.Fprintf(output, "  Stop: %s; the window filters records.\n", rule)
+	} else if window.Upper == nil {
+		if report.WorkerStopAfterRecords > 0 {
+			fmt.Fprintln(output, "  Stop: follow new records until the worker record threshold is reached or interrupted.")
+		} else {
+			fmt.Fprintln(output, "  Stop: no end time; follow new records until stopped.")
 		}
-		return nil
-	}
-	if report.WorkerStopAfterRecords > 0 {
+		return
+	} else if report.WorkerStopAfterRecords > 0 {
 		fmt.Fprintln(output, "  Stop: worker record threshold or all assigned partitions stopping, whichever comes first.")
 	}
-	if d == nil {
+	if window.Upper == nil {
+		return
+	}
+	if d := report.MaxOutOfOrderMS; d == nil {
 		fmt.Fprintln(output, "  Timestamp stopping: OFF.")
 	} else {
-		threshold, err := window.StopThreshold(*d)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(output, "  Timestamp stop: record timestamp exceeds %s (window end + %d ms MAX_OUT_OF_ORDER).\n", formatBound(&threshold), *d)
+		threshold := *window.Upper + *d
+		fmt.Fprintf(output, "  Timestamp stop threshold: %s (window end + %d ms MAX_OUT_OF_ORDER), per original source partition.\n", formatBound(&threshold), *d)
+	}
+	if report.Source.Kind == "FILE" {
+		return
 	}
 	if report.MaxStalenessMS < 0 {
 		fmt.Fprintln(output, "  Wall-clock end capture: OFF; partitions without timestamp evidence keep following.")
-	} else {
-		threshold, err := window.StopThreshold(report.MaxStalenessMS)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(output, "  Capture replicated ends after %s (window end + %d ms MAX_STALENESS), or reuse saved ends. Drain each fixed end; this is not a runtime deadline.\n", formatBound(&threshold), report.MaxStalenessMS)
+		return
 	}
-	return nil
+	threshold := *window.Upper + report.MaxStalenessMS
+	fmt.Fprintf(output, "  Clock capture threshold: %s (window end + %d ms MAX_STALENESS).\n", formatBound(&threshold), report.MaxStalenessMS)
+	fmt.Fprintln(output, "    Per assigned partition: reuse a saved captured end. Otherwise, once the clock passes the threshold, save the current replicated end. Drain the fixed end unless timestamp evidence stops the partition first.")
+	fmt.Fprintln(output, "    Open transactions can delay reading that end; worker.tip_wait bounds a stalled readable tip, not ordinary backlog processing. This is not a runtime deadline.")
+	return
 }

@@ -43,9 +43,10 @@ A named `GROUP` identifies saved progress. Kafka stores it as source consumer-gr
 
 | Input mode | What stops this worker? | Saved state and rerun |
 | --- | --- | --- |
-| Kafka without an end time | A signal or worker record threshold | Confirmed offsets; the same group resumes and follows new records |
-| Kafka with an end time | Per-partition [completion rules](../design/decisions.md#completion), or worker record threshold | Confirmed offsets, resolved window and stops; the same group resumes under those rules |
-| Completed Avro files | End of the selected files, or worker record threshold | Fixed file selection and confirmed cursors; the same group retains its selection |
+| Kafka without an enabled completion rule | A signal or worker record threshold | Confirmed offsets; the same group resumes and follows new records, including when both timestamp rules are OFF |
+| Kafka with timestamp completion enabled | Per-partition [completion rules](../design/decisions.md#completion), or worker record threshold | Confirmed offsets, resolved window, ends and stops; the same group resumes under those rules |
+| Kafka with a fixed offset end | Reaching each saved exclusive end, or worker record threshold | Ends remain fixed; rerunning the same group excludes later appends |
+| Completed Avro files | Completing selected streams under EOF or explicit criteria, or worker record threshold | Fixed file selection and confirmed cursors; the same group retains its selection |
 
 A worker record threshold applies afresh to each invocation. A new archive group selects current completed files, including files already copied by other groups. See [identity rules](../design/decisions.md#identity) before changing a saved job.
 

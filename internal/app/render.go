@@ -23,9 +23,7 @@ func renderExplanation(output io.Writer, report inspect.Report, asJSON bool) err
 		renderEndpoint(&buffer, "Source", report.Source)
 		renderEndpoint(&buffer, "Destination", report.Destination)
 		renderProgress(&buffer, report)
-		if err := renderWindows(&buffer, report); err != nil {
-			return err
-		}
+		renderWindows(&buffer, report)
 		renderBehavior(&buffer, report)
 		if len(report.Warnings) > 0 {
 			fmt.Fprintln(&buffer, "\nAttention")

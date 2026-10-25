@@ -71,7 +71,7 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 			if tc.name == "worker threshold" {
 				require.Equal(t, "worker record threshold reached", r.Reason)
 			} else if tc.name == "mixed stops" {
-				require.Equal(t, "timestamp staleness threshold reached; worker record threshold reached", r.Reason)
+				require.Equal(t, "timestamp disorder threshold reached; worker record threshold reached", r.Reason)
 			}
 			require.EqualValues(t, 1, source.closed)
 			require.EqualValues(t, 1, f.connections["output"].closed)

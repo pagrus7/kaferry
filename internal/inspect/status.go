@@ -14,12 +14,12 @@ import (
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
-const StatusMeaning = "Stopped means every currently selected partition has a saved stop reason. More source records may remain; the staleness rule can miss records within the range."
+const StatusMeaning = "Stopped means every currently selected partition has a saved stop reason. More source records may remain; timestamp completion depends on the configured arrival-delay and disorder assumptions."
 
 var stopDescriptions = map[string]string{
-	"timestamp":         "timestamp staleness threshold reached",
-	"tip":               "captured topic end reached",
-	"eof":               "file end reached",
+	"timestamp":         "timestamp disorder threshold reached",
+	"tip":               "saved partition end reached",
+	"eof":               "file selection completed",
 	"worker_record_cap": "worker record threshold reached",
 }
 

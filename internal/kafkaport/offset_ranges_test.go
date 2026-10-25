@@ -1,6 +1,7 @@
 package kafkaport
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/pagrus7/kaferry/internal/plan"
@@ -76,4 +77,39 @@ func readableCalls(calls []offsetCall) int {
 		}
 	}
 	return n
+}
+
+func TestLatestBoundaryLookupFailureDoesNotProduceAnAssignment(t *testing.T) {
+	// Given readable-end failure after successful retained-boundary inspection.
+	failure := errors.New("readable end unavailable")
+	backend := &failedStableOffsets{countingOffsets: countingOffsets{low: 0, high: 10}, err: failure}
+	p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC"}, Start: "EARLIEST", Offsets: &plan.OffsetRange{Latest: true}}
+	// When resolving the snapshot, then propagate the error without usable initial progress.
+	got, err := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(backend, &countingTimes{}, p, "fp", "id").Locate(t.Context(), []int32{0}, nil, nil)
+	require.ErrorIs(t, err, failure)
+	require.Nil(t, got.Assignments)
+}
+
+func TestOffsetResumeRejectsMissingOrChangedFixedEnds(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		r    plan.OffsetRange
+		end  *int64
+		hint string
+	}{
+		{name: "missing", r: plan.OffsetRange{Latest: true}, hint: "missing its end"},
+		{name: "changed literal", r: plan.OffsetRange{Upper: new(int64(900))}, end: new(int64(800)), hint: "differs from query"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given saved progress whose fixed boundary is missing or inconsistent with its query.
+			backend := &countingOffsets{low: 100, high: 1000, stable: 950}
+			p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC"}, Start: "EARLIEST", Offsets: &tc.r}
+			saved := map[int32]Progress{1: {Fingerprint: "fp", TopicID: "id", End: tc.end}}
+			// When resuming, then reject it instead of silently capturing a later end.
+			got, err := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(backend, &countingTimes{}, p, "fp", "id").Locate(t.Context(), []int32{1}, map[int32]int64{1: 200}, saved)
+			require.ErrorContains(t, err, tc.hint)
+			require.Nil(t, got.Assignments)
+			require.Zero(t, readableCalls(backend.calls))
+		})
+	}
 }

@@ -6,38 +6,38 @@ import (
 	core "github.com/pagrus7/kaferry/internal/copy"
 )
 
-func (p *positioner) resolveOffsetRanges(ctx context.Context, assignments []core.Assignment, saved map[int32]int64) error {
+func (p *positioner) resolveOffsetRanges(ctx context.Context, assignments []core.Assignment, saved map[int32]int64, ends map[int32]int64) error {
 	if p.plan.Offsets == nil && len(p.plan.PartitionOffsets) == 0 {
 		return nil
 	}
 	var latest []int32
-	// Reuse the readable-end lookup already used by a LATEST start or timestamp no-match.
-	readableStarts := make(map[int32]bool, len(p.ends))
-	for _, id := range p.ends {
-		readableStarts[id] = true
-	}
-	reused := make(map[int32]int64)
+	// START=LATEST and an offset end use the same sampled reply.
 	for _, a := range assignments {
-		if r := p.plan.OffsetRange(a.Cursor.Partition); r != nil && r.Latest && a.Cursor.End == nil {
-			if readableStarts[a.Cursor.Partition] {
-				reused[a.Cursor.Partition] = a.Cursor.Position
-			}
-
-			if _, ok := reused[a.Cursor.Partition]; !ok {
-				latest = append(latest, a.Cursor.Partition)
+		id := a.Cursor.Partition
+		r := p.plan.OffsetRange(id)
+		if r == nil {
+			continue
+		}
+		if _, resuming := saved[id]; resuming && r.HasEnd() && a.Cursor.End == nil {
+			return conflict("partition %d saved offset range is missing its end", id)
+		}
+		if r.Upper != nil && a.Cursor.End != nil && *r.Upper != *a.Cursor.End {
+			return conflict("partition %d saved offset end differs from query", id)
+		}
+		if r.Latest && a.Cursor.End == nil {
+			if _, sampled := ends[id]; !sampled {
+				latest = append(latest, id)
 			}
 		}
 	}
-	ends := make(map[int32]int64)
 	if len(latest) > 0 {
-		var err error
-		ends, err = p.lookup.ReadableEnd(ctx, latest)
+		fresh, err := p.lookup.ReadableEnd(ctx, latest)
 		if err != nil {
 			return err
 		}
-	}
-	for id, end := range reused {
-		ends[id] = end
+		for id, end := range fresh {
+			ends[id] = end
+		}
 	}
 	for i := range assignments {
 		a := &assignments[i]
@@ -68,9 +68,6 @@ func (p *positioner) resolveOffsetRanges(ctx context.Context, assignments []core
 			if !resuming {
 				a.Cursor.Position = min(a.Cursor.Position, end)
 			}
-		}
-		if a.Cursor.End != nil && a.Cursor.Position > *a.Cursor.End {
-			return conflict("partition %d saved position exceeds its offset end", id)
 		}
 	}
 	return nil
