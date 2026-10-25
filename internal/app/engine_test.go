@@ -156,7 +156,7 @@ func TestEngineReportsArchivePublicationFailureBeforeCleanup(t *testing.T) {
 	f.fail = "publish"
 	engine := newEngine(f, f, f, engineLogger(), nil)
 	// When finishing, then publication cannot be hidden behind the void Close method.
-	err := engine.Run(t.Context(), enginePlan("FILE", "FILE"), config.Defaults(""), noopShutdown{})
+	err := engine.Run(t.Context(), enginePlan("ARCHIVE", "ARCHIVE"), config.Defaults(""), noopShutdown{})
 	require.ErrorIs(t, err, f.failure)
 	var exit *core.Exit
 	require.ErrorAs(t, err, &exit)
@@ -183,7 +183,7 @@ func TestEnginePublishesAfterRunnerCancellationAndPreservesBothErrors(t *testing
 			}
 			engine := newEngine(f, f, f, engineLogger(), nil)
 			// When the runner returns cancellation, then Finish still runs before releasing the output.
-			err := engine.Run(t.Context(), enginePlan("FILE", "FILE"), config.Defaults(""), noopShutdown{})
+			err := engine.Run(t.Context(), enginePlan("ARCHIVE", "ARCHIVE"), config.Defaults(""), noopShutdown{})
 			require.ErrorIs(t, err, context.Canceled)
 			if publicationFails {
 				require.ErrorIs(t, err, publication)
@@ -201,7 +201,7 @@ func engineLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discar
 
 func TestRuntimeCompositionAcceptsReplacementFactories(t *testing.T) {
 	// Given
-	for _, kinds := range [][2]string{{"TOPIC", "TOPIC"}, {"TOPIC", "FILE"}, {"FILE", "TOPIC"}, {"FILE", "FILE"}} {
+	for _, kinds := range [][2]string{{"TOPIC", "TOPIC"}, {"TOPIC", "ARCHIVE"}, {"ARCHIVE", "TOPIC"}, {"ARCHIVE", "ARCHIVE"}} {
 		t.Run(strings.Join(kinds[:], "-"), func(t *testing.T) {
 			f := newEngineFixture()
 			// A real interface value, without calling its embedded methods in this test.
@@ -221,7 +221,7 @@ func TestRuntimeCompositionAcceptsReplacementFactories(t *testing.T) {
 			// Then
 			require.NoError(t, runErr)
 			output := "topic-output"
-			if kinds[1] == "FILE" {
+			if kinds[1] == "ARCHIVE" {
 				output = "file-output"
 			}
 			if kinds[0] == "TOPIC" {
@@ -253,16 +253,16 @@ func TestEngineClosesOnlyAcquiredResourcesOnFailure(t *testing.T) {
 		{"TOPIC", "TOPIC", "cluster-destination", []string{"close-destination", "close-source"}},
 		{"TOPIC", "TOPIC", "members", []string{"close-destination", "close-source"}},
 		{"TOPIC", "TOPIC", "progress", []string{"close-destination", "close-source"}},
-		{"TOPIC", "FILE", "members", []string{"close-source"}},
-		{"TOPIC", "FILE", "progress", []string{"close-source"}},
-		{"TOPIC", "FILE", "topic-input", []string{"close-source"}},
-		{"TOPIC", "FILE", "file-output", []string{"close-topic-input", "close-source"}},
+		{"TOPIC", "ARCHIVE", "members", []string{"close-source"}},
+		{"TOPIC", "ARCHIVE", "progress", []string{"close-source"}},
+		{"TOPIC", "ARCHIVE", "topic-input", []string{"close-source"}},
+		{"TOPIC", "ARCHIVE", "file-output", []string{"close-topic-input", "close-source"}},
 		{"TOPIC", "TOPIC", "topic-output", []string{"close-topic-input", "close-destination", "close-source"}},
 		{"TOPIC", "TOPIC", "topic-input", []string{"close-destination", "close-source"}},
 		{"TOPIC", "TOPIC", "run", []string{"close-output", "close-topic-input", "close-destination", "close-source"}},
-		{"FILE", "TOPIC", "file-input", []string{"close-destination"}},
-		{"FILE", "FILE", "file-output", []string{"close-file-input"}},
-		{"FILE", "FILE", "run", []string{"close-output", "close-file-input"}},
+		{"ARCHIVE", "TOPIC", "file-input", []string{"close-destination"}},
+		{"ARCHIVE", "ARCHIVE", "file-output", []string{"close-file-input"}},
+		{"ARCHIVE", "ARCHIVE", "run", []string{"close-output", "close-file-input"}},
 	}
 	for _, test := range cases {
 		t.Run(test.source+"-"+test.destination+"-"+test.fail, func(t *testing.T) {
@@ -316,14 +316,14 @@ func TestEngineSkipsAcquisitionWhenStartupIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	// When preparing Kafka input and file output.
-	err := newEngine(f, f, f, engineLogger(), nil).Run(ctx, enginePlan("TOPIC", "FILE"), config.Config{}, noopShutdown{})
+	err := newEngine(f, f, f, engineLogger(), nil).Run(ctx, enginePlan("TOPIC", "ARCHIVE"), config.Config{}, noopShutdown{})
 	// Then no connection, file or saved progress is created.
 	require.ErrorIs(t, err, context.Canceled)
 	require.Len(t, f.trace, 0)
 }
 
 func TestStartupCancellationClosesInputWithoutCreatingOutput(t *testing.T) {
-	for _, kind := range []string{"TOPIC", "FILE"} {
+	for _, kind := range []string{"TOPIC", "ARCHIVE"} {
 		t.Run(kind, func(t *testing.T) {
 			// Given cancellation while the source adapter is being created.
 			f := newEngineFixture()
@@ -331,7 +331,7 @@ func TestStartupCancellationClosesInputWithoutCreatingOutput(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			stage, closed := "topic-input", []string{"close-topic-input", "close-source"}
-			if kind == "FILE" {
+			if kind == "ARCHIVE" {
 				stage, closed = "file-input", []string{"close-file-input"}
 			}
 			f.onStage = func(name string) {
@@ -341,7 +341,7 @@ func TestStartupCancellationClosesInputWithoutCreatingOutput(t *testing.T) {
 			}
 
 			// When starting a copy into a file.
-			err := newEngine(f, f, f, engineLogger(), nil).Run(ctx, enginePlan(kind, "FILE"), config.Config{}, noopShutdown{})
+			err := newEngine(f, f, f, engineLogger(), nil).Run(ctx, enginePlan(kind, "ARCHIVE"), config.Config{}, noopShutdown{})
 
 			// Then cancellation preserves its cause, closes acquired input, and creates no output.
 			index := slices.Index(f.trace, stage)
@@ -359,7 +359,7 @@ func TestOneOffUsesOneGroupAndDeletesOnlyOnSuccess(t *testing.T) {
 		t.Run("failure-"+fail, func(t *testing.T) {
 			f := newEngineFixture()
 			f.fail = fail
-			p := enginePlan("FILE", "FILE")
+			p := enginePlan("ARCHIVE", "ARCHIVE")
 			p.OneOff = true
 
 			// When
@@ -447,7 +447,7 @@ func TestEngineChecksOnlySelectedIDsAgainstDestinationAndRejectsMissingSourceIDs
 }
 
 func TestEngineBindsPreservedLayoutToTheInput(t *testing.T) {
-	for _, kind := range []string{"FILE", "TOPIC"} {
+	for _, kind := range []string{"ARCHIVE", "TOPIC"} {
 		t.Run(kind, func(t *testing.T) {
 			// Given a destination with room for every source partition.
 			f := newEngineFixture()
@@ -458,7 +458,7 @@ func TestEngineBindsPreservedLayoutToTheInput(t *testing.T) {
 			p.Destination.Partitioning = plan.Preserve
 			// When starting, then archive selection gets the layout bound or Kafka assignments get the validator.
 			require.NoError(t, newEngine(f, f, f, engineLogger(), nil).Run(t.Context(), p, config.Defaults(""), noopShutdown{}))
-			if kind == "FILE" {
+			if kind == "ARCHIVE" {
 				require.Equal(t, 4, f.partitionCount)
 			} else {
 				require.NotNil(t, f.routing)
@@ -476,7 +476,7 @@ func TestEngineBindsPreservedLayoutToTheInput(t *testing.T) {
 }
 
 func TestEngineMetadataFailurePrecedesProgressAndOutput(t *testing.T) {
-	for _, tc := range []struct{ name, source, fail string }{{"destination before archive checkpoint", "FILE", "partitions-destination"}, {"source before Kafka progress", "TOPIC", "partitions-input"}} {
+	for _, tc := range []struct{ name, source, fail string }{{"destination before archive checkpoint", "ARCHIVE", "partitions-destination"}, {"source before Kafka progress", "TOPIC", "partitions-input"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given metadata that becomes unavailable after the endpoint connections open.
 			f := newEngineFixture()

@@ -283,7 +283,7 @@ func TestMissingTimestampWithoutFilterUsesProducerClockAndCountsIt(t *testing.T)
 	dst := topic(t, a, 1)
 	path := filepath.Join(t.TempDir(), "source.avro")
 	writeArchiveRecords(t, path, []core.Record{{Key: nil, Value: []byte{}, TimestampType: "unknown"}})
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM FILE avro('%s') WITH (GROUP='unstamped') ", dst, path)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM ARCHIVE '%s' WITH (GROUP='unstamped') ", dst, path)
 	before := time.Now().UnixMilli()
 
 	// When

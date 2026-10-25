@@ -29,7 +29,7 @@ func TestLogAppendTimeDestinationRestampsUnpreservableValues(t *testing.T) {
 	before := time.Now().Add(-time.Second)
 
 	// When
-	execute(t, fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM FILE avro('%s') WITH (GROUP='%s-restore') ", dst, path, dst), configuration(t))
+	execute(t, fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM ARCHIVE '%s' WITH (GROUP='%s-restore') ", dst, path, dst), configuration(t))
 	c := consumer(t)
 
 	// Then
@@ -66,7 +66,7 @@ func TestTimestampLookupAcrossSegmentsAndPreEpochBound(t *testing.T) {
 	}{{"equal", stamp.Format(time.RFC3339Nano), 20}, {"preepoch", "1969-12-31T23:59:59.999Z", 40}} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "out.avro")
-			statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s-%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' ", path, src, src, test.name, test.lower, stamp.Add(time.Second).Format(time.RFC3339Nano))
+			statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s-%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' ", path, src, src, test.name, test.lower, stamp.Add(time.Second).Format(time.RFC3339Nano))
 
 			// When
 			execute(t, statement, cfg)

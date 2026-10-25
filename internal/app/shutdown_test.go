@@ -102,7 +102,7 @@ func TestShutdownDeadlineStopsBlockedCleanup(t *testing.T) {
 		f.store = f.input
 		f.source.beforeClose = func() { select {} }
 		budget := newShutdownBudget(context.Background(), 40*time.Millisecond, forceShutdown)
-		_ = newEngine(f, f, f, engineLogger(), nil).Run(context.Background(), enginePlan("TOPIC", "FILE"), config.Config{}, budget)
+		_ = newEngine(f, f, f, engineLogger(), nil).Run(context.Background(), enginePlan("TOPIC", "ARCHIVE"), config.Config{}, budget)
 		t.Fatal("blocked cleanup returned")
 	}
 	// Given a close operation that never returns, when normal completion starts cleanup,
@@ -157,7 +157,7 @@ func TestShutdownDeadlineNamesBlockedCheckpointDeletion(t *testing.T) {
 				select {}
 			}
 		}
-		p := enginePlan("FILE", "FILE")
+		p := enginePlan("ARCHIVE", "ARCHIVE")
 		p.OneOff = true
 		budget := newShutdownBudget(context.Background(), 40*time.Millisecond, forceShutdown)
 		_ = newEngine(fixture, fixture, fixture, engineLogger(), nil).Run(context.Background(), p, config.Config{}, budget)

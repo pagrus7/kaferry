@@ -54,7 +54,7 @@ func filePreview(t *testing.T) filePreviewFixture {
 	source, destination, config := filepath.Join(dir, "source.avro"), filepath.Join(dir, "out.avro"), filepath.Join(dir, "config.toml")
 	require.NoError(t, os.Mkdir(source, 0700))
 	require.NoError(t, os.WriteFile(config, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir = %q\n", dir)), 0600))
-	query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='preview') ", destination, source)
+	query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='preview') ", destination, source)
 	return filePreviewFixture{query: query, config: config, directory: dir, destination: destination}
 }
 
@@ -153,7 +153,7 @@ func TestExplainCLIReportsInputAndIdentityErrorsWithoutPartialOutput(t *testing.
 }
 
 func TestExplainUsesOnlyReadOnlyKafkaRequests(t *testing.T) {
-	for _, output := range []string{"TOPIC", "FILE", "SELF-COPY"} {
+	for _, output := range []string{"TOPIC", "ARCHIVE", "SELF-COPY"} {
 		t.Run(output, func(t *testing.T) {
 			// Given real protocol clients and two source partitions.
 			cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(2, "input"), kfake.SeedTopics(3, "output"))
@@ -184,8 +184,8 @@ func TestExplainUsesOnlyReadOnlyKafkaRequests(t *testing.T) {
 			})
 			directory := t.TempDir()
 			destination := "TOPIC 'output'"
-			if output == "FILE" {
-				destination = fmt.Sprintf("FILE avro('%s')", filepath.Join(directory, "archive.avro"))
+			if output == "ARCHIVE" {
+				destination = fmt.Sprintf("ARCHIVE '%s'", filepath.Join(directory, "archive.avro"))
 			} else if output == "SELF-COPY" {
 				destination = "TOPIC 'input'"
 			}

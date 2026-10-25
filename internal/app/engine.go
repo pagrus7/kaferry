@@ -201,7 +201,7 @@ func (e *inspectedEndpoint) close(stop copy.StopObserver) error {
 }
 
 func (e *runtimeEngine) prepareSource(ctx context.Context, p plan.Plan, fp string, limits config.Worker, connection kafkaport.Connection, partitionCount int) (archiveio.Input, error) {
-	if p.Source.Kind == "FILE" {
+	if p.Source.Kind == "ARCHIVE" {
 		return e.files.OpenSource(p, fp, limits, partitionCount)
 	}
 	if err := connection.CheckMembers(ctx, p.Group, kafkaport.GroupProtocol(p, fp)); err != nil {
@@ -216,7 +216,7 @@ func (e *runtimeEngine) prepareSource(ctx context.Context, p plan.Plan, fp strin
 }
 
 func (e *runtimeEngine) openSink(ctx context.Context, p plan.Plan, limits config.Worker, connection kafkaport.Connection) (copy.Sink, error) {
-	if p.Destination.Kind == "FILE" {
+	if p.Destination.Kind == "ARCHIVE" {
 		return e.files.OpenOutput(p.Destination, limits)
 	}
 	return connection.Sink(ctx, limits)

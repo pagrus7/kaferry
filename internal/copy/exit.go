@@ -42,7 +42,7 @@ func (r *Runner) interrupted() error {
 }
 
 func (r *Runner) bounded() bool {
-	return r.plan.WorkerStopAfterRecords > 0 || r.plan.Source.Kind == "FILE" || r.plan.Window.Upper != nil
+	return r.plan.WorkerStopAfterRecords > 0 || r.plan.Source.Kind == "ARCHIVE" || r.plan.Window.Upper != nil
 }
 
 func (r *Runner) readyToExit() bool {

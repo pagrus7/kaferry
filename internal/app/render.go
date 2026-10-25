@@ -61,7 +61,7 @@ func renderEndpoint(output io.Writer, label string, endpoint inspect.Endpoint) {
 		if filter.Exclude {
 			operator, additions = "NOT IN", "Added partitions are eligible while workers run."
 		}
-		if endpoint.Kind == "FILE" {
+		if endpoint.Kind == "ARCHIVE" {
 			additions = "New files require a new group; resume keeps the saved selection."
 		}
 		ids := filter.IDs[:min(8, len(filter.IDs))]
@@ -100,7 +100,7 @@ func renderProgress(output io.Writer, report inspect.Report) {
 		}
 	}
 	if report.Destination.File != nil {
-		fmt.Fprintln(output, "  Output: independent Avro files; worker completion publishes remaining files.")
+		fmt.Fprintln(output, "  Output: Kaferry archive files; worker completion publishes remaining files.")
 	}
 }
 

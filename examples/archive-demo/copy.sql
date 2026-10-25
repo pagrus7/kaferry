@@ -1,2 +1,2 @@
-INSERT INTO FILE avro('output')
-SELECT * FROM FILE avro('input') WITH (GROUP = 'archive-demo');
+INSERT INTO ARCHIVE 'output'
+SELECT * FROM ARCHIVE 'input' WITH (GROUP = 'archive-demo');

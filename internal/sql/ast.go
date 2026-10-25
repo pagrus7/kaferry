@@ -4,7 +4,7 @@ package sql
 type Endpoint struct {
 	Position        Position `json:"-"`
 	OptionsPosition Position `json:"-"`
-	Kind            string   // TOPIC or FILE
+	Kind            string   // TOPIC or ARCHIVE
 	Name            string
 	Format          string
 	Options         []Option

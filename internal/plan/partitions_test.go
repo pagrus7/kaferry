@@ -30,7 +30,7 @@ func TestPartitionIdentityIsCanonicalAndKeepsPositioningDefaults(t *testing.T) {
 }
 
 func TestPartitionValidationIsLocatedAndRedacted(t *testing.T) {
-	for _, source := range []string{"TOPIC 'a'", "FILE avro('private')"} {
+	for _, source := range []string{"TOPIC 'a'", "ARCHIVE 'private'"} {
 		// Given an overflowing partition literal for either supported source.
 		query := "INSERT INTO TOPIC 'b' SELECT * FROM " + source + "\nWHERE PARTITION IN (2147483648)"
 		ast, err := sql.NewParser().Parse(query)
@@ -47,7 +47,7 @@ func TestPartitionValidationIsLocatedAndRedacted(t *testing.T) {
 
 func TestFilePartitionPredicatesUseCanonicalQueryIdentity(t *testing.T) {
 	// Given equivalent file predicates with different list order and locations.
-	const base = "INSERT INTO FILE avro('out') SELECT * FROM FILE avro('in') "
+	const base = "INSERT INTO ARCHIVE 'out' SELECT * FROM ARCHIVE 'in' "
 	a := build(t, base+"WHERE PARTITION NOT IN (5,0,5)")
 	b := build(t, base+"\nWHERE PARTITION NOT IN (0,5)")
 	// When planning and fingerprinting, then preserve file start rules and canonical identity.

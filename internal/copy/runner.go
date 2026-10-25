@@ -341,7 +341,7 @@ func (r *Runner) eof(cursor Cursor) error {
 	if err != nil {
 		return err
 	}
-	p.reachedTip(cursor.Position, r.plan.Source.Kind == "FILE")
+	p.reachedTip(cursor.Position, r.plan.Source.Kind == "ARCHIVE")
 
 	return nil
 }

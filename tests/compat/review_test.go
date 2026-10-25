@@ -60,7 +60,7 @@ func TestLegacyTimestampLimitSkipsOnlyRejectedRecord(t *testing.T) {
 		records = append(records, core.Record{Key: []byte("same"), Value: []byte(fmt.Sprint(i)), TimestampMS: &ts, TimestampType: "create_time"})
 	}
 	writeArchiveRecords(t, path, records)
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM FILE avro('%s') WITH (GROUP='%s-legacy') OPTIONS (ON_REJECTED_TIMESTAMP=SKIP)", dst, path, dst)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM ARCHIVE '%s' WITH (GROUP='%s-legacy') OPTIONS (ON_REJECTED_TIMESTAMP=SKIP)", dst, path, dst)
 
 	// When restoring mixed valid and rejected timestamps into a producer batch.
 	execute(t, statement, configuration(t))

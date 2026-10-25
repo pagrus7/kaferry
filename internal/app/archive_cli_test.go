@@ -95,7 +95,7 @@ func TestArchiveCLIResumeUsesFixedSelectionAndSavesStopReason(t *testing.T) {
 	archiveFixture(t, src, 1, records)
 	cfg := filepath.Join(root, "worker.toml")
 	require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\nrecord_cap=2\npartition_record_cap=2\n", root)), 0600))
-	sql := fmt.Sprintf("INSERT INTO FILE avro('%s') WITH(ROTATE_AFTER_SIZE=1m, ROTATE_AFTER_AGE=INTERVAL '2' HOUR) SELECT * FROM FILE avro('%s') WITH(GROUP='resume')", dst, src)
+	sql := fmt.Sprintf("INSERT INTO ARCHIVE '%s' WITH(ROTATE_AFTER_SIZE=1m, ROTATE_AFTER_AGE=INTERVAL '2' HOUR) SELECT * FROM ARCHIVE '%s' WITH(GROUP='resume')", dst, src)
 	execute := func(command, statement string) (int, string) {
 		t.Helper()
 		var out bytes.Buffer
@@ -161,7 +161,7 @@ func TestArchivePartitionCLIInspectsCopiesAndResumesOnlyItsSelectedFiles(t *test
 			archiveFixture(t, src, 2, want)
 			cfg := filepath.Join(root, "worker.toml")
 			require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)), 0600))
-			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH(GROUP='selected') WHERE %s AND RECORD_TIMESTAMP < TIMESTAMP '2000-01-01T00:00:00Z'", dst, src, predicate)
+			query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH(GROUP='selected') WHERE %s AND RECORD_TIMESTAMP < TIMESTAMP '2000-01-01T00:00:00Z'", dst, src, predicate)
 			call := func(command, statement string, asJSON bool) (int, []byte, string) {
 				t.Helper()
 				var out, diagnostics bytes.Buffer
@@ -231,7 +231,7 @@ func TestArchiveCLIAllFilteredRecordsCanExceedPendingCap(t *testing.T) {
 	archiveFixture(t, src, 1, records)
 	cfg := filepath.Join(root, "worker.toml")
 	require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\nrecord_cap=2\npartition_record_cap=2\n", root)), 0600))
-	query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='filtered') WHERE RECORD_TIMESTAMP >= TIMESTAMP '2000-01-01T00:00:00Z' ", dst, src)
+	query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='filtered') WHERE RECORD_TIMESTAMP >= TIMESTAMP '2000-01-01T00:00:00Z' ", dst, src)
 	// When copying through the real engine, then it checkpoints filtered inputs and reaches EOF.
 	var out bytes.Buffer
 	require.Zero(t, Execute(t.Context(), []string{"run", "-e", query, "-c", cfg}, nil, &out, &out), out.String())
@@ -251,7 +251,7 @@ func TestArchivePartitionMissingIDsFailBeforeCheckpointOrOutput(t *testing.T) {
 		archiveFixture(t, src, 1, []avro.Record{{Source: avro.Source{Cluster: "cluster", Topic: "orders", TopicID: avro.TopicID{1}}, TimestampKind: "unknown"}})
 		cfg := filepath.Join(root, "worker.toml")
 		require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)), 0600))
-		query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH(GROUP='missing') WHERE PARTITION NOT IN (7)", dst, src)
+		query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH(GROUP='missing') WHERE PARTITION NOT IN (7)", dst, src)
 		var out bytes.Buffer
 		// When executing or inspecting, then the same validation classification applies and no selection is pinned.
 		require.Equal(t, 2, Execute(t.Context(), []string{command, "-e", query, "-c", cfg}, nil, &out, &out), out.String())
@@ -271,7 +271,7 @@ func TestArchiveCLIFreshPreviewDoesNotCreateRunState(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(src, "capture.partial"), nil, 0600))
 	cfg := filepath.Join(root, "worker.toml")
 	require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)), 0600))
-	query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='preview') WHERE RECORD_TIMESTAMP < NOW() ", dst, src)
+	query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='preview') WHERE RECORD_TIMESTAMP < NOW() ", dst, src)
 	before := time.Now().UnixMilli()
 	var stdout, diagnostics bytes.Buffer
 	// When explaining a query that has never run, then describe the current files without pinning them.
@@ -309,7 +309,7 @@ func TestArchiveCLIInspectionRejectsChangedSavedInputs(t *testing.T) {
 			archiveFixture(t, src, 1, []avro.Record{record, record})
 			cfg := filepath.Join(root, "worker.toml")
 			require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)), 0600))
-			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='saved') OPTIONS (WORKER_STOP_AFTER_RECORDS=1)", dst, src)
+			query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='saved') OPTIONS (WORKER_STOP_AFTER_RECORDS=1)", dst, src)
 			var output bytes.Buffer
 			require.Zero(t, Execute(t.Context(), []string{"run", "-e", query, "-c", cfg}, nil, &output, &output), output.String())
 			files, err := filepath.Glob(filepath.Join(src, "*.avro"))
@@ -318,7 +318,7 @@ func TestArchiveCLIInspectionRejectsChangedSavedInputs(t *testing.T) {
 			message := "selected archive input changed"
 			switch change {
 			case "query":
-				query = fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP='saved') WHERE RECORD_TIMESTAMP < NOW() ", dst, src)
+				query = fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='saved') WHERE RECORD_TIMESTAMP < NOW() ", dst, src)
 				message = "query identity mismatch"
 			case "missing":
 				require.NoError(t, os.Remove(files[0]))
@@ -350,7 +350,7 @@ func TestArchiveCLIOneOffDeletesOnlyCompletedProgress(t *testing.T) {
 			if capped {
 				options = " OPTIONS (WORKER_STOP_AFTER_RECORDS=1)"
 			}
-			query := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM FILE avro('%s') WITH (GROUP=ONE_OFF)%s", dst, src, options)
+			query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP=ONE_OFF)%s", dst, src, options)
 			var output bytes.Buffer
 			// When previewing, then no checkpoint path is invented for the generated group.
 			require.Zero(t, Execute(t.Context(), []string{"explain", "--json", "-e", query, "-c", cfg}, nil, &output, &output), output.String())

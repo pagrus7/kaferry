@@ -86,7 +86,7 @@ func (p *Plan) groupOption(option sql.Option) error {
 
 func (p *Plan) cutoffOption(option sql.Option) error {
 	if p.Source.Kind != "TOPIC" {
-		return sql.At(option.Position, fmt.Errorf("CUTOFF requires a topic source; remove CUTOFF for FILE sources"))
+		return sql.At(option.Position, fmt.Errorf("CUTOFF requires a topic source; remove CUTOFF for ARCHIVE sources"))
 	}
 	if p.Window.Upper == nil {
 		return sql.At(option.Position, fmt.Errorf("CUTOFF requires an upper timestamp bound in WHERE"))

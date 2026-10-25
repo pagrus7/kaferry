@@ -18,7 +18,7 @@ func explanationFixture() inspect.Report {
 	lo, hi := int64(1000), int64(2000)
 	return inspect.Report{Version: 1, Fingerprint: "query-id", Group: "backfill", CutoffMS: 1000, StartRule: "WINDOW",
 		Source:       inspect.Endpoint{Kind: "TOPIC", Name: "input", Connection: "prod", ClusterID: "cluster-id", TopicID: "topic-id", PartitionCount: 1},
-		Destination:  inspect.Endpoint{Kind: "FILE", Name: "out.avro", File: &inspect.FileSummary{}},
+		Destination:  inspect.Endpoint{Kind: "ARCHIVE", Name: "out.avro", File: &inspect.FileSummary{}},
 		Partitions:   []inspect.Partition{{ID: 0, Start: 4, LogEnd: 12, Saved: true, Window: plan.Window{Lower: &lo, Upper: &hi}, WindowOrigin: "literal"}},
 		RecordErrors: inspect.ErrorPolicies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}, Warnings: []string{}}
 }
@@ -53,7 +53,7 @@ func TestTextExplanationStructuresBehaviorAndEscapesNames(t *testing.T) {
 		require.Greater(t, position, previous)
 		previous = position
 	}
-	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "1970-01-01T00:00:03Z", "clock passes it and reading reaches a sampled log end", "Open transactions", "worker.tip_wait", "saved offset 1 expired", "Record errors: stop", "Output: independent Avro files"} {
+	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "1970-01-01T00:00:03Z", "clock passes it and reading reaches a sampled log end", "Open transactions", "worker.tip_wait", "saved offset 1 expired", "Record errors: stop", "Output: Kaferry archive files"} {
 		require.Contains(t, output, want)
 	}
 	for _, absent := range []string{"query-id", "topic-id", "lookup end", "span", "Run permissions", "\x1b"} {
@@ -129,7 +129,7 @@ func TestTextExplanationLimitedStopRules(t *testing.T) {
 			case "file":
 				position, window := int64(0), plan.Window{}
 				saved := false
-				report.Source = inspect.Endpoint{Kind: "FILE", File: &inspect.FileSummary{PositionRecords: &position, Window: &window, CheckpointExists: &saved}}
+				report.Source = inspect.Endpoint{Kind: "ARCHIVE", File: &inspect.FileSummary{PositionRecords: &position, Window: &window, CheckpointExists: &saved}}
 				report.Partitions = nil
 				want = "Stop: worker record threshold or end of this group's fixed selection of completed archive files, whichever comes first"
 			case "following topic":
@@ -151,7 +151,7 @@ func TestTextExplanationArchiveProgressAndSelection(t *testing.T) {
 			report := explanationFixture()
 			position, upper := int64(200), int64(2000)
 			window := plan.Window{Upper: &upper}
-			report.Source = inspect.Endpoint{Kind: "FILE", Name: "input.avro", File: &inspect.FileSummary{Exists: true, SizeBytes: 500, PositionRecords: &position, Window: &window, CheckpointExists: &saved}}
+			report.Source = inspect.Endpoint{Kind: "ARCHIVE", Name: "input.avro", File: &inspect.FileSummary{Exists: true, SizeBytes: 500, PositionRecords: &position, Window: &window, CheckpointExists: &saved}}
 			report.Partitions = nil
 			report.OneOff = !saved
 			if saved {
@@ -164,7 +164,7 @@ func TestTextExplanationArchiveProgressAndSelection(t *testing.T) {
 				require.Contains(t, output, want)
 			}
 			if saved {
-				for _, want := range []string{"saved file checkpoint", "saved.json", "independent Avro files", "worker completion publishes remaining files"} {
+				for _, want := range []string{"saved file checkpoint", "saved.json", "Kaferry archive files", "worker completion publishes remaining files"} {
 					require.Contains(t, output, want)
 				}
 			} else {
@@ -278,7 +278,7 @@ func TestExplanationStatesPartitionScopeAndBoundsOnlyTheTextList(t *testing.T) {
 func TestFilePartitionTextExplainsItsFixedSelection(t *testing.T) {
 	for _, exclude := range []bool{false, true} {
 		// Given either archive partition predicate.
-		endpoint := inspect.Endpoint{Kind: "FILE", Name: "archive", PartitionFilter: &plan.PartitionFilter{Exclude: exclude, IDs: []int32{5}}}
+		endpoint := inspect.Endpoint{Kind: "ARCHIVE", Name: "archive", PartitionFilter: &plan.PartitionFilter{Exclude: exclude, IDs: []int32{5}}}
 		var out bytes.Buffer
 		// When rendering, then use the same original-partition name and state that additions require another group.
 		renderEndpoint(&out, "Source", endpoint)

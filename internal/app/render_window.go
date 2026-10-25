@@ -112,7 +112,7 @@ func renderBounds(output io.Writer, window plan.Window, origin string) {
 }
 
 func renderStop(output io.Writer, source inspect.Endpoint, window plan.Window, cutoff int64, stopAfter uint64) error {
-	if source.Kind == "FILE" {
+	if source.Kind == "ARCHIVE" {
 		rule := "end of this group's fixed selection of completed archive files"
 		if stopAfter > 0 {
 			rule = "worker record threshold or " + rule + ", whichever comes first"
