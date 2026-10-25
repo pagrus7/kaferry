@@ -1,8 +1,108 @@
 # Using Kaferry
 
+## First copy without Kafka
+
+Install `kaferry` on `PATH` ([installation](install.md)). This tutorial uses a shell, `curl` and `tar`, three synthetic records, and local storage that supports sync, atomic rename and locks. It needs no broker or credentials. Choose a [release](https://github.com/pagrus7/kaferry/releases) that includes `archive-demo.tar.gz` and matches your binary. Set `version` below to that release tag, then run the block in a directory that does not already contain `archive-demo`:
+
+```sh
+version=vX.Y.Z
+curl -fLO "https://github.com/pagrus7/kaferry/releases/download/$version/archive-demo.tar.gz"
+tar -xzf archive-demo.tar.gz
+cd archive-demo
+```
+
+Checkout users can build the package from the repository root with `go run ./scripts/package_examples .cache/archive-demo.tar.gz`, then extract that file in a fresh directory. The input is a Kaferry-format Avro archive, not an arbitrary Avro file. Its values are `order-1`, `order-2`, `order-3`, at original offsets 0–2 in one partition. `copy.sql` copies them to `output` with the named group `archive-demo`; `tutorial.toml` stores replay progress in `checkpoints`.
+
+<!-- archive-tutorial-commands -->
+```sh
+mkdir -p checkpoints
+kaferry explain -c tutorial.toml -f copy.sql > explain.txt
+kaferry run -c tutorial.toml -f copy.sql 2> first-run.log
+cat first-run.log
+kaferry status -c tutorial.toml -f copy.sql --json > status.json
+cat status.json
+kaferry run -c tutorial.toml -f copy.sql 2> rerun.log
+cat rerun.log
+```
+
+The first `copy summary` reports `submitted: 3` and `confirmed: 3`. The status includes these fields (other fields are omitted here):
+
+```json
+{
+  "verdict": "stopped",
+  "reason": "file end reached",
+  "partitions": [{"id": 0, "position": 3, "stop": {"reason": "eof", "at": 3}}]
+}
+```
+
+This group consumed its fixed file selection and saved progress after output confirmation. Status reads saved progress; it does not compare destination contents. The rerun summary reports `submitted: 0` and `confirmed: 0`, and the output still contains three records. Keep `output` and `checkpoints` together: a completed checkpoint does not recreate deleted output. To repeat the tutorial from scratch, use another fresh copy of the example directory.
+
+## What a copy job means
+
+A named `GROUP` identifies saved progress. Kafka stores it as source consumer-group offsets and metadata; archive replay stores it in `worker.checkpoint_dir`. The query and endpoint identities must match when resuming. Omitting `GROUP` generates a new independent group every run.
+
+| Input mode | What stops this worker? | Saved state and rerun |
+| --- | --- | --- |
+| Kafka without an end time | A signal or worker record threshold | Confirmed offsets; the same group resumes and follows new records |
+| Kafka with an end time | Per-partition [completion rules](../design/decisions.md#completion), or worker record threshold | Confirmed offsets, resolved window and stops; the same group resumes under those rules |
+| Completed Avro files | End of the selected files, or worker record threshold | Fixed file selection and confirmed cursors; the same group retains its selection |
+
+A worker record threshold applies afresh to each invocation. A new archive group selects current completed files, including files already copied by other groups. See [identity rules](../design/decisions.md#identity) before changing a saved job.
+
 ## Configuration
 
-Use `-c connections.toml`; SQL overrides TOML. [Connections](../README.md#connections) · [Settings](../design/decisions.md#configuration-and-cli).
+Use `-c connections.toml`; SQL overrides TOML. [Settings](reference.md#configuration-and-cli).
+
+## Copy between Kafka topics
+
+Both topics must exist; the destination needs at least as many partitions as the source. Replace the addresses; add [authentication](#connections) as needed.
+
+**`connections.toml`:**
+
+```toml
+[connections.prod]
+'bootstrap.servers' = 'source.example:9092'
+
+[connections.backup]
+'bootstrap.servers' = 'destination.example:9092'
+```
+
+**`copy.sql`:** filter Kafka record timestamps, not payload times, from 09:00 inclusive to 10:00 exclusive (UTC).
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-backfill')
+WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
+  AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
+```
+
+`@alias` selects a connection; named `GROUP` saves progress for reruns. Omitting `GROUP` starts a fresh copy each run. A new window, `CUTOFF` or partitioning mode needs a new group.
+
+```sh
+kaferry explain --file copy.sql --config connections.toml
+kaferry run --file copy.sql --config connections.toml
+```
+
+## Connections
+
+Quote dotted TOML keys. [Supported properties](reference.md#connection-properties); SASL/PLAIN over TLS:
+
+```toml
+[connections.prod]
+'bootstrap.servers' = 'source.example:9093'
+'security.protocol' = 'SASL_SSL'
+'sasl.mechanism' = 'PLAIN'
+'sasl.username' = 'copier'
+'ssl.ca.location' = '/etc/kafka/ca.pem'
+```
+
+Set `PROD_PASSWORD` in the environment, then prefix the SQL statement with:
+
+```sql
+WITH CONNECTION prod AS ('sasl.password' = ENV('PROD_PASSWORD'))
+```
+
+Keep passwords out of SQL literals and shell arguments. [Configuration rules](#configuration).
 
 ## SQL settings
 
@@ -19,13 +119,13 @@ kaferry explain -c connections.toml -f copy.sql
 kaferry explain -c connections.toml -f copy.sql --json
 ```
 
-Shows endpoints, progress, windows and policies without joining, writing or locking. Records, bytes, duration and write access are not checked. [Output contract](../design/decisions.md#inspection).
+Shows endpoints, progress, windows and policies without joining, writing or locking. Records, bytes, duration and write access are not checked. [Output contract](reference.md#inspection).
 
 ## Run a copy
 
 Pass SQL with `-f file`, `-f -` (stdin) or `-e "SQL"`.
 
-**Archive retained records, then follow new ones.** Create the output directory:
+**Archive retained records, then follow new ones.** Create the parent directory:
 
 ```sh
 mkdir -p archive
@@ -59,13 +159,66 @@ SIGINT/SIGTERM stop reading, allow 10 s for writes, then save progress. File flu
 kaferry status -c connections.toml -f copy.sql --json
 ```
 
-`stopped` means every currently selected partition has a saved stop reason, including worker record thresholds. More input may remain; time cutoffs can miss records within the range. Kafka activity is checked twice, without an atomic snapshot; file activity is not checked. Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](../design/decisions.md#saved-status).
+`stopped` means every currently selected partition has a saved stop reason, including worker record thresholds. More input may remain; time cutoffs can miss records within the range. Kafka activity is checked twice, without an atomic snapshot; file activity is not checked. Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](reference.md#saved-status).
 
 ## Resume or start over
 
 Rerun with the same `GROUP`, endpoints, filter, `CUTOFF`, partitioning mode and checkpoint directory. Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
 
-Keep output, checkpoints and locks. Archive files must stay unchanged until replay completes. [Recovery rules](../design/archive.md#capture-and-recovery).
+Keep output, checkpoints and locks. Archive files must stay unchanged until replay completes. [Archive recovery and moving replay](#archive-procedures).
+
+## Archive procedures
+
+Keep archive data, capture recovery state, and replay progress separate:
+
+```text
+work/
+  archive/orders/
+    <writer>.<file>.avro       completed data
+    .<writer>.<file>.partial   private capture data
+    .kaferry/writers/          capture state and locks
+  checkpoints/                replay progress and locks
+```
+
+Set `[worker] checkpoint_dir = '/absolute/path/to/work/checkpoints'` when using this layout. The checkpoint directory must already exist and be outside the source archive.
+
+### Capture crashed
+
+Keep the whole archive directory, including hidden files, and retain the source Kafka group. Restart the same capture query. Startup recovers available writer namespaces under their locks, publishes acknowledged data, and then resumes copying. Do not delete private files, recovery state or lock files. Missing or corrupt acknowledged data stops recovery; preserve it for investigation rather than starting over in place. Records written before a crash but not saved in source progress can repeat. [Storage contract](../design/archive.md#capture-and-recovery).
+
+### Move replay to another machine
+
+1. Stop replay and all capture writers for this archive, and wait for successful exits. Recover a failed capture before moving its archive. Keep the destination’s existing output.
+2. Copy the entire source archive and checkpoint directory, including hidden files and lock files, to storage with the required sync, rename and lock guarantees. Selected archive files must remain byte-for-byte unchanged.
+3. Create the destination checkpoint directory if needed and set `worker.checkpoint_dir` to its new path. Update archive paths and connection details while keeping the named group, query and destination identity. For a file destination, move its existing output as well; paths alone do not prove that output is present.
+4. Run `explain` to check that saved progress is found, then rerun the same copy. Destination-confirmed records after the last saved checkpoint may repeat.
+
+Use only one replay process for a group/checkpoint directory. A different checkpoint directory with no saved state starts fresh and can duplicate output. [Checkpoint contract](../design/archive.md#checkpoints).
+
+### Capture is still running
+
+Replay selects completed files once. It does not read private files or add files published later to the same group. To include capture’s remaining records, stop every intended capture worker, wait for successful exits. If a capture failed, recover it before selecting replay input. Preview a fresh selection to check for private-file warnings:
+
+```sh
+kaferry explain -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM FILE avro('archive/orders') WITH (GROUP = ONE_OFF);"
+```
+
+This preview creates no group or checkpoint and does not expand an existing replay selection. These checks establish which archive files are available; they do not verify the intended Kafka source set.
+
+A new replay group selects current completed files and can copy previously replayed records again. Plan a fresh destination or account for those duplicates before using another group.
+
+## Troubleshooting
+
+Keep the SQL, named group, configuration, `explain` output, stderr logs and `status --json` output together when investigating. Avoid recording secrets in SQL or shell arguments.
+
+| Symptom | Evidence and interpretation | Next action and consequence |
+| --- | --- | --- |
+| Running, but destination does not grow | Read stderr `progress` events and `explain`: the worker may be following, have no assignment, filter records, or resume past available input. `run` writes no stdout. | Check source availability, selected partitions, saved start positions and filter counts. Correct the input or query; use a new group for a changed filter, which starts an independent copy. |
+| Copy fails on a record | Read the error and `copy summary`. Only identified synchronous validation failures support SKIP; delivery and storage failures stop the copy. | Fix the cause and resume the same group. Use SKIP only when deliberately dropping that rejected record; async broker failures cannot be skipped. [Policies](../design/decisions.md#errors). |
+| Rerun copies records again | Compare the logged group and saved progress. An unnamed run, missing checkpoint, expired offsets, or writes after the last save can repeat data. | Restore the intended progress and destination together, or resume the same named group. Previously repeated output remains and may need downstream handling. |
+| Replay omits recent capture output | Compare its fixed selection with completed files; private or later-published files are outside that selection. | Follow [capture completion](#capture-is-still-running). A new group can replay older files again. |
+| Status is `stopped`, but input remains | Read each partition’s saved `stop.reason`; a worker record threshold can stop before source end. | For a threshold stop, rerun the same job for another allowance. Interpret other reasons using the [completion contract](../design/decisions.md#completion). |
 
 ## Errors
 
@@ -89,7 +242,7 @@ export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT='https://collector.example/v1/metrics
 kaferry run -c connections.toml -f copy.sql
 ```
 
-Progress logs default to 30 s; `worker.progress_interval='0'` disables them. [Metric meanings and settings](../design/decisions.md#observability).
+Progress logs default to 30 s; `worker.progress_interval='0'` disables them. [Metric meanings and settings](reference.md#observability).
 
 ## Containers
 
@@ -101,4 +254,4 @@ docker run --rm --stop-timeout 35 --user "$(id -u):$(id -g)" \
   run --file /work/copy.sql --config /work/connections.toml
 ```
 
-Use container paths and reachable broker addresses. Set `worker.checkpoint_dir` to `/work/checkpoints` for resume; `--rm` deletes container-only files. The stop timeout must exceed `worker.shutdown_timeout` (30s by default). [Image verification and publishing](../releases/README.md#container-images).
+Use container paths and reachable broker addresses. Set `worker.checkpoint_dir` to `/work/checkpoints` for resume; `--rm` deletes container-only files. The stop timeout must exceed `worker.shutdown_timeout` (30s by default). [Image verification](install.md#container-images).

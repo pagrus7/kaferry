@@ -30,7 +30,7 @@ func build(t *testing.T, input string) Plan {
 func TestDocumentedExamples(t *testing.T) {
 	// Given published SQL examples and placeholder connection profiles.
 	connections := Profiles{"default": {"bootstrap.servers": "local:9092"}, "prod": {"bootstrap.servers": "prod:9092"}, "backup": {"bootstrap.servers": "backup:9092"}, "staging": {"bootstrap.servers": "staging:9092"}, "analytics": {"bootstrap.servers": "analytics:9092"}}
-	for _, name := range []string{"../../design/grammar.md", "../../README.md"} {
+	for _, name := range []string{"../../design/grammar.md", "../../docs/usage.md"} {
 		data, err := os.ReadFile(name)
 		require.NoError(t, err)
 		examples := strings.Split(string(data), "```sql\n")[1:]
@@ -60,7 +60,7 @@ func TestUsageCommandSQL(t *testing.T) {
 	heredoc := regexp.MustCompile(`(?s)<<'SQL'\n(.*?)\nSQL`).FindAllStringSubmatch(input, -1)
 	argument := regexp.MustCompile(`(?s)-e "(INSERT.*?)"`).FindAllStringSubmatch(input, -1)
 	examples := append(heredoc, argument...)
-	require.Len(t, examples, 2, "both runnable copy examples must be checked")
+	require.Len(t, examples, 3, "all embedded copy and preview examples must be checked")
 	for index, example := range examples {
 		t.Run(fmt.Sprint(index), func(t *testing.T) {
 			// When parsed and planned without opening files or brokers.

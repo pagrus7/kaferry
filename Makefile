@@ -34,8 +34,8 @@ fast: check
 	python3 scripts/install_smoke.py
 	$(MAKE) smoke KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry
 smoke: $(TEST_BINARY_PREREQUISITE)
-	python3 scripts/ci.py smoke $(GO) test -count=1 -json -tags=integration,load -run '^TestLoadObservability$$/^round-0$$/^disabled$$' ./tests/compat
-	python3 scripts/ci.py verify-tests smoke 'TestLoadObservability/round-0/disabled'
+	python3 scripts/ci.py smoke $(GO) test -count=1 -json -tags=integration,load -run '^(TestArchiveTutorial(Cancellation)?|TestLoadObservability)$$/^round-0$$/^disabled$$' ./tests/compat
+	python3 scripts/ci.py verify-tests smoke 'TestLoadObservability/round-0/disabled' 'TestArchiveTutorial' 'TestArchiveTutorialCancellation'
 broker:
 	docker compose -p kaferry-compat --profile cross-cluster up -d --wait --wait-timeout 60
 	# Listening sockets precede cold group-coordinator readiness.

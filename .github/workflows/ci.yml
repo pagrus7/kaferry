@@ -50,6 +50,8 @@ jobs:
       - run: make build
         env:
           CGO_ENABLED: "0"
+      - name: Run the documented archive tutorial and file-copy smoke
+        run: make smoke
       - name: Validate release license notices
         env:
           CGO_ENABLED: "0"

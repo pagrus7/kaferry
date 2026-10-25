@@ -9,6 +9,13 @@ import subprocess
 import tempfile
 
 
+def write_wrapper(path, root, image):
+    command = ["docker", "run", "--rm", "-i", "--network=host", "--user", f"{os.getuid()}:{os.getgid()}",
+               "--env", "HOME=/tmp", "--mount", f"type=bind,src={root},dst={root}"]
+    path.write_text("#!/bin/sh\nexec " + shlex.join(command) + ' --workdir "$PWD" ' + shlex.quote(image) + ' "$@"\n')
+    path.chmod(0o755)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image")
@@ -40,17 +47,14 @@ def main():
         raise ValueError(f"unexpected container version: {output!r}")
     root = Path.cwd().resolve()
     wrapper = root / ".cache/container-kaferry"
-    command = ["docker", "run", "--rm", "-i", "--network=host", "--user", f"{os.getuid()}:{os.getgid()}",
-               "--env", "HOME=/tmp", "--mount", f"type=bind,src={root},dst={root}", "--workdir", str(root), args.image]
-    wrapper.write_text("#!/bin/sh\nexec " + shlex.join(command) + ' "$@"\n')
-    wrapper.chmod(0o755)
+    write_wrapper(wrapper, root, args.image)
     temporary = root / ".cache/container-tmp"
     temporary.mkdir(exist_ok=True)
     env = dict(os.environ, TMPDIR=str(temporary), KAFERRY_TEST_BINARY=str(wrapper))
     # The wrapper is not the executable; exact image/binary identity was checked above.
     env.pop("KAFERRY_EXPECT_BINARY_SHA256", None)
     subprocess.run(["go", "test", "-count=1", "-tags=integration,load", "-run",
-                    "^TestLoadObservability$/^round-0$/^disabled$", "./tests/compat"], env=env, check=True)
+                    "^(TestArchiveTutorial(Cancellation)?|TestLoadObservability)$/^round-0$/^disabled$", "./tests/compat"], env=env, check=True)
     print("Container identity, licenses, CA certificates and file-copy fidelity verified")
 
 

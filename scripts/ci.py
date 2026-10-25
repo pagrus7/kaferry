@@ -12,7 +12,7 @@ import sys
 import time
 
 from quality import benchmarks, markdown
-from history import comparison
+from history import comparison, image_ids
 
 
 def verify_tests(log, expected):
@@ -124,9 +124,56 @@ def summarize(directory):
     print(text)
 
 
+def release_summary(evidence, archive, commit, version, output):
+    """Retain the release's measured suite results after temporary artifacts expire."""
+    import tarfile
+
+    with tarfile.open(archive, 'r:gz') as package:
+        binary = package.extractfile('kaferry').read()
+    digest = hashlib.sha256(binary).hexdigest()
+    scenarios = {
+        'integration': 'Kafka and archive copy, resume, signals and rebalances',
+        'load': 'Bounded Kafka/archive workloads, fidelity and work caps',
+        'fault': 'Broker outage and ownership changes',
+        'qualification': 'TLS/SASL, restricted ACLs and replicated leader failure',
+        'soak': 'Streaming fidelity, lag, memory and shutdown with destination stalls',
+    }
+    rows = [f'# Kaferry {version} qualification', '', f'Source: `{commit}`', '',
+            f'Linux AMD64 binary SHA-256: `{digest}`', '',
+            '| Suite | Exercised scenarios | Result | Seconds |', '| --- | --- | --- | ---: |']
+    environments = []
+    for suite, description in scenarios.items():
+        directory = evidence / f'qualification-{suite}'
+        env = json.loads((directory / f'{suite}.environment.json').read_text())
+        result = json.loads((directory / f'{suite}.result.json').read_text())
+        if env['commit'] != commit or env['binary_sha256'] != digest:
+            raise ValueError(f'{suite}: evidence does not match the release source and binary')
+        if result['exit_code'] != 0:
+            raise ValueError(f'{suite}: qualification did not pass')
+        if suite == 'qualification':
+            env['broker_images'] = (directory / 'qualification.broker-images.json').read_text().strip()
+        if not image_ids(env.get('broker_images')):
+            raise ValueError(f'{suite}: broker image evidence is unavailable')
+        environments.append((suite, env))
+        rows.append(f"| {suite} | {description} | PASS | {result['elapsed_seconds']:.1f} |")
+    rows += ['', '## Test environments', '']
+    for suite, env in environments:
+        rows += [f"- {suite}: {env['platform']}; {env['go']}; started {env['started_at']}. "
+                 f"[Workflow run]({env['run_url']})."]
+        rows += ['', f'{suite} broker images:', '', '```text', env['broker_images'], '```', '']
+        if suite == 'soak':
+            rows += ['', f"Configured soak duration: {env['soak_duration']}.", '']
+    rows += ['', 'These results cover the listed fixtures and scenarios. They do not establish behavior for every deployment. '
+             'Platform build information, SBOMs and provenance are separate release assets. '
+             'Detailed logs and measurements are retained temporarily in the linked workflow artifacts.', '']
+    output.write_text('\n'.join(rows))
+
+
 if __name__ == "__main__":
     output = Path(os.environ.get("KAFERRY_REPORT_DIR", "build-results"))
-    if sys.argv[1] == "summary":
+    if sys.argv[1] == "release-summary":
+        release_summary(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4], sys.argv[5], Path(sys.argv[6]))
+    elif sys.argv[1] == "summary":
         summarize(output)
     elif sys.argv[1] == 'verify-tests':
         verify_tests((output / f'{sys.argv[2]}.log').read_text(), sys.argv[3:])
