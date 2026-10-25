@@ -20,9 +20,13 @@ type TimestampOffsetMatch struct {
 // Timestamp replies contain one result per query; only a genuine no-match has Found=false.
 // A missing partition response is an error.
 type OffsetLookup interface {
+	// Earliest returns the earliest retained offset per partition.
 	Earliest(context.Context, []int32) (map[int32]int64, error)
+	// ReadableEnd returns the exclusive read-committed end per partition.
 	ReadableEnd(context.Context, []int32) (map[int32]int64, error)
+	// ReplicatedEnd returns the exclusive replicated end, including unresolved transactions.
 	ReplicatedEnd(context.Context, []int32) (map[int32]int64, error)
+	// AtOrAfterTimestamp returns the earliest retained match per query, or Found=false.
 	AtOrAfterTimestamp(context.Context, []TimestampOffsetQuery) ([]TimestampOffsetMatch, error)
 }
 type OffsetLookupFactory interface {
