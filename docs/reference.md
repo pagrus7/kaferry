@@ -115,7 +115,7 @@ Values are strings in TOML and SQL. Unknown keys, unsupported values and contrad
 | `security.protocol` | `PLAINTEXT` (default), `SSL`, `SASL_PLAINTEXT`, `SASL_SSL`. `ssl.*` keys require SSL or SASL_SSL; `sasl.*` keys require SASL_PLAINTEXT or SASL_SSL |
 | `sasl.mechanism` | PLAIN (default), SCRAM-SHA-256, SCRAM-SHA-512, OAUTHBEARER, AWS_MSK_IAM or GSSAPI |
 | `sasl.username`, `sasl.password` | Both required for PLAIN and SCRAM; rejected for other mechanisms |
-| `sasl.oauthbearer.token.endpoint.url`, `sasl.oauthbearer.client.id`, `sasl.oauthbearer.client.secret` | HTTPS token endpoint and client credentials for OAUTHBEARER. Tokens are reused until near expiration, then requested again when a broker authenticates; token requests have a 10 s timeout |
+| `sasl.oauthbearer.token.endpoint.url`, `sasl.oauthbearer.client.id`, `sasl.oauthbearer.client.secret` | HTTPS token endpoint without redirects and client credentials for OAUTHBEARER. Tokens are reused until near expiration, then requested again when a broker authenticates; token requests have a 10 s timeout |
 | `sasl.oauthbearer.scope` | Optional space-separated OAuth scopes |
 | `sasl.oauthbearer.ssl.ca.location` | Optional PEM CA file for the token endpoint; otherwise system roots. Independent of Kafka TLS settings |
 | `sasl.oauthbearer.token.file` | Alternative to OAuth client credentials: a file containing a bearer token, reread for each authentication. An external credential provider must replace it before expiry; cannot be combined with other OAuth settings |

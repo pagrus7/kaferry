@@ -98,7 +98,7 @@ func TestOAuthIssuerFailuresAndCancellationStayRedacted(t *testing.T) {
 			mechanism := safeMechanism{Mechanism: oauth.Oauth(provider.authenticate)}
 			// When authenticating, then report only the mechanism and preserve cancellation matching.
 			_, first, err := mechanism.Authenticate(t.Context(), "host:9093")
-			require.EqualError(t, err, "Kafka OAUTHBEARER authentication failed")
+			require.EqualError(t, err, "kafka OAUTHBEARER authentication failed")
 			require.Nil(t, first)
 			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
@@ -119,17 +119,17 @@ func TestOAuthTokenFileReloadAndChallengeRedaction(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, string(first), "auth=Bearer "+token+"\x01")
 		_, _, err = session.Challenge([]byte("private-token-echo"))
-		require.EqualError(t, err, "Kafka OAUTHBEARER authentication failed")
+		require.EqualError(t, err, "kafka OAUTHBEARER authentication failed")
 	}
 	// When rotation leaves an empty, malformed or missing file, then fail without exposing paths or tokens.
 	for _, contents := range []string{"", "private-token\x01injected", "private token"} {
 		require.NoError(t, os.WriteFile(path, []byte(contents), 0600))
 		_, _, err := mechanism.Authenticate(t.Context(), "host:9093")
-		require.EqualError(t, err, "Kafka OAUTHBEARER authentication failed")
+		require.EqualError(t, err, "kafka OAUTHBEARER authentication failed")
 	}
 	require.NoError(t, os.Remove(path))
 	_, _, err := mechanism.Authenticate(t.Context(), "host:9093")
-	require.EqualError(t, err, "Kafka OAUTHBEARER authentication failed")
+	require.EqualError(t, err, "kafka OAUTHBEARER authentication failed")
 }
 
 func TestAWSIAMUsesDefaultCredentialsAndSignsBrokerSessions(t *testing.T) {
@@ -183,7 +183,7 @@ func TestAWSIAMRetrievesRotatingCredentialsAndRedactsProviderErrors(t *testing.T
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.NotContains(t, err.Error(), "private")
 	_, _, err = mechanism.Authenticate(t.Context(), "broker:9098")
-	require.EqualError(t, err, "Kafka AWS_MSK_IAM authentication failed")
+	require.EqualError(t, err, "kafka AWS_MSK_IAM authentication failed")
 }
 
 func TestAWSIAMConfigurationErrorsStayRedacted(t *testing.T) {
@@ -194,30 +194,66 @@ func TestAWSIAMConfigurationErrorsStayRedacted(t *testing.T) {
 	mechanism := configuredMechanism(t, map[string]string{"sasl.mechanism": "AWS_MSK_IAM"})
 	// When the first broker authenticates, then SDK configuration errors do not expose file paths or contents.
 	_, _, err := mechanism.Authenticate(t.Context(), "b-1.fixture.kafka.us-east-1.amazonaws.com:9098")
-	require.EqualError(t, err, "Kafka AWS_MSK_IAM authentication failed")
+	require.EqualError(t, err, "kafka AWS_MSK_IAM authentication failed")
 }
 
 func TestExternalAuthenticationRejectsInconsistentConfiguration(t *testing.T) {
-	for name, values := range map[string]map[string]string{
-		"OAuth settings with PLAIN":    {"sasl.oauthbearer.client.id": "private-client"},
-		"Kerberos settings with PLAIN": {"sasl.kerberos.principal": "private-user@REALM"},
-		"username with IAM":            {"sasl.mechanism": "AWS_MSK_IAM", "sasl.username": "private-user"},
-		"OAuth HTTP endpoint":          {"sasl.mechanism": "OAUTHBEARER", "sasl.oauthbearer.token.endpoint.url": "http://private-issuer/token"},
-		"OAuth URL credentials":        {"sasl.mechanism": "OAUTHBEARER", "sasl.oauthbearer.token.endpoint.url": "https://private-user:private-secret@issuer/token"},
-		"OAuth missing credentials":    {"sasl.mechanism": "OAUTHBEARER", "sasl.oauthbearer.token.endpoint.url": "https://issuer/token"},
-		"OAuth mixed providers":        {"sasl.mechanism": "OAUTHBEARER", "sasl.oauthbearer.token.file": "private-token", "sasl.oauthbearer.client.id": "private-client"},
-		"Kerberos missing realm":       {"sasl.mechanism": "GSSAPI", "sasl.kerberos.principal": "private-user"},
-		"Kerberos missing keytab":      {"sasl.mechanism": "GSSAPI", "sasl.kerberos.principal": "private-user@REALM"},
+	for _, tc := range []struct{ name, mechanism, property, value, want string }{
+		{"OAuth settings with PLAIN", "PLAIN", "sasl.oauthbearer.client.id", "private-client", "requires sasl.mechanism=OAUTHBEARER"},
+		{"Kerberos settings with PLAIN", "PLAIN", "sasl.kerberos.principal", "private-user@REALM", "requires sasl.mechanism=GSSAPI"},
+		{"username with IAM", "AWS_MSK_IAM", "sasl.username", "private-user", "requires PLAIN or SCRAM authentication"},
+		{"OAuth HTTP endpoint", "OAUTHBEARER", "sasl.oauthbearer.token.endpoint.url", "http://private-issuer/token", "requires an HTTPS URL"},
+		{"OAuth URL credentials", "OAUTHBEARER", "sasl.oauthbearer.token.endpoint.url", "https://private-user:private-secret@issuer/token", "requires an HTTPS URL"},
+		{"OAuth missing credentials", "OAUTHBEARER", "sasl.oauthbearer.client.secret", "", "both are required for OAuth client credentials"},
+		{"OAuth mixed providers", "OAUTHBEARER", "sasl.oauthbearer.token.file", "private-token", "cannot be combined with OAuth client credentials settings"},
+		{"Kerberos missing realm", "GSSAPI", "sasl.kerberos.principal", "private-user", "requires a principal with a realm"},
+		{"Kerberos missing keytab", "GSSAPI", "sasl.kerberos.keytab", "", "keytab, configuration file and service name must not be empty"},
 	} {
-		t.Run(name, func(t *testing.T) {
-			// Given incompatible or incomplete authentication properties containing private values.
-			values["security.protocol"] = "SASL_SSL"
-			// When validating, then reject before opening output and never print the values.
-			err := componentFactory().Validate(testPlan(t, values), config.Defaults("").Worker)
-			require.Error(t, err)
+		t.Run(tc.name, func(t *testing.T) {
+			// Given otherwise valid settings with one inconsistent authentication property.
+			values := map[string]string{"security.protocol": "SASL_SSL", "sasl.mechanism": tc.mechanism}
+			switch tc.mechanism {
+			case "PLAIN":
+				values["sasl.username"], values["sasl.password"] = "private-user", "private-password"
+			case "OAUTHBEARER":
+				values["sasl.oauthbearer.token.endpoint.url"] = "https://issuer/token"
+				values["sasl.oauthbearer.client.id"], values["sasl.oauthbearer.client.secret"] = "private-client", "private-secret"
+			case "GSSAPI":
+				values["sasl.kerberos.principal"], values["sasl.kerberos.keytab"] = "private-user@REALM", "private-keytab"
+			}
+			values[tc.property] = tc.value
+			// When parsing without I/O, then reject that specific inconsistency without printing values.
+			_, err := parseSettings(testPlan(t, values).Source.Properties)
+			require.ErrorContains(t, err, tc.want)
 			require.NotContains(t, err.Error(), "private")
 		})
 	}
+}
+
+func TestOAuthRejectsRedirectsWithoutForwardingCredentials(t *testing.T) {
+	// Given an HTTPS issuer redirecting its token request to HTTP on the same hostname.
+	var received atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"access_token":"redirected-token","token_type":"Bearer"}`)
+	}))
+	defer destination.Close()
+	issuer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL, http.StatusTemporaryRedirect)
+	}))
+	defer issuer.Close()
+	ca := writeFixture(t, t.TempDir(), "issuer.pem", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.Certificate().Raw}))
+	mechanism := configuredMechanism(t, map[string]string{
+		"sasl.mechanism": "OAUTHBEARER", "sasl.oauthbearer.token.endpoint.url": issuer.URL,
+		"sasl.oauthbearer.client.id": "private-client", "sasl.oauthbearer.client.secret": "private-secret",
+		"sasl.oauthbearer.ssl.ca.location": ca,
+	})
+	// When authenticating, then stop before sending any request or credentials to HTTP.
+	_, first, err := mechanism.Authenticate(t.Context(), "broker:9093")
+	require.EqualError(t, err, "kafka OAUTHBEARER authentication failed")
+	require.Nil(t, first)
+	require.Zero(t, received.Load(), "redirect destination must receive no token request")
 }
 
 func TestOAuthTokenRequestHonorsCancellation(t *testing.T) {
@@ -236,6 +272,11 @@ func TestOAuthTokenRequestHonorsCancellation(t *testing.T) {
 	defer close(release)
 	provider := &oauthCredentials{client: issuer.Client()}
 	provider.config.ClientID, provider.config.ClientSecret, provider.config.TokenURL = "private-client", "private-secret", issuer.URL
+	// A cancelled caller must not begin a token request, including after waiting for the shared cache.
+	cancelled, stop := context.WithCancel(t.Context())
+	stop()
+	_, err := provider.authenticate(cancelled)
+	require.ErrorIs(t, err, context.Canceled)
 	mechanism := safeMechanism{Mechanism: oauth.Oauth(provider.authenticate)}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -302,5 +343,5 @@ func TestAuthenticationFilesAreCheckedBeforeOpeningOutput(t *testing.T) {
 	// Given usable local Kerberos files, when a KDC is unavailable, then redact the principal and network details.
 	mechanism := configuredMechanism(t, map[string]string{"sasl.mechanism": "GSSAPI", "sasl.kerberos.principal": "copier@KAFERRY.TEST", "sasl.kerberos.keytab": keyPath, "sasl.kerberos.config": krbConfig})
 	_, _, err = mechanism.Authenticate(t.Context(), "broker:9093")
-	require.EqualError(t, err, "Kafka GSSAPI authentication failed")
+	require.EqualError(t, err, "kafka GSSAPI authentication failed")
 }

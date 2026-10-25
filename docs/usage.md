@@ -125,7 +125,7 @@ Set `KAFKA_OAUTH_SECRET` in the environment and prefix the copy statement with:
 WITH CONNECTION prod AS ('sasl.oauthbearer.client.secret' = ENV('KAFKA_OAUTH_SECRET'))
 ```
 
-Kaferry obtains and renews tokens as brokers authenticate. If another credential agent supplies tokens, replace the endpoint and client settings with `'sasl.oauthbearer.token.file' = '/run/secrets/kafka-token'`. That agent must replace the file before the token expires; Kaferry reads it for each authentication.
+Kaferry obtains and renews tokens as brokers authenticate. If another credential agent supplies tokens, remove every other `sasl.oauthbearer.*` setting from TOML and SQL, then set `'sasl.oauthbearer.token.file' = '/run/secrets/kafka-token'`. That agent must replace the file before the token expires; Kaferry reads it for each authentication.
 
 ### AWS MSK IAM
 
@@ -138,7 +138,7 @@ Prepare AWS credentials through the standard AWS SDK chain: environment variable
 'sasl.mechanism' = 'AWS_MSK_IAM'
 ```
 
-The SDK retrieves and renews temporary credentials. Do not set `sasl.username` or `sasl.password`. In containers, pass the required AWS environment or mount profile files at paths selected by `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE`.
+The SDK renews temporary credentials when the selected provider supports renewal; environment credentials and static profile entries are loaded once. Do not set `sasl.username` or `sasl.password`. In containers, pass the required AWS environment or mount profile files at paths selected by `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE`.
 
 ### Kerberos
 

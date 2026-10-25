@@ -48,7 +48,9 @@ func (s oauthSettings) mechanism() (sasl.Mechanism, error) {
 	}
 	provider := &oauthCredentials{
 		config: clientcredentials.Config{ClientID: s.clientID, ClientSecret: s.secret, TokenURL: s.endpoint, Scopes: strings.Fields(s.scope)},
-		client: &http.Client{Transport: transport, Timeout: 10 * time.Second},
+		client: &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errors.New("oauth token endpoint redirects are unsupported")
+		}},
 	}
 	return safeMechanism{Mechanism: oauth.Oauth(provider.authenticate), cleanup: transport.CloseIdleConnections}, nil
 }

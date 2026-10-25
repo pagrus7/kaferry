@@ -98,8 +98,8 @@ func (s safeSession) Challenge(response []byte) (bool, []byte, error) {
 func authenticationError(mechanism string, cause error) error {
 	for _, err := range []error{context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(cause, err) {
-			return fmt.Errorf("Kafka %s authentication failed: %w", mechanism, err)
+			return fmt.Errorf("kafka %s authentication failed: %w", mechanism, err)
 		}
 	}
-	return fmt.Errorf("Kafka %s authentication failed", mechanism)
+	return fmt.Errorf("kafka %s authentication failed", mechanism)
 }
