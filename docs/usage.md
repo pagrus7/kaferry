@@ -2,17 +2,58 @@
 
 ## First copy with Docker
 
-Install Docker Engine or Docker Desktop and select Linux containers. This example needs no Kafka broker, Go toolchain or local Kaferry binary. Commands work in PowerShell and Unix shells. Replace `vX.Y.Z` with a release tag whose image includes the demo, and use a volume name that does not already contain an earlier demo:
-
 ```sh
-docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:vX.Y.Z run -c tutorial.toml -f copy.sql
-docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:vX.Y.Z status -c tutorial.toml -f copy.sql --json
-docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:vX.Y.Z run -c tutorial.toml -f copy.sql
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
 ```
 
-Docker creates the volume and fills it with the bundled SQL, configuration, three input records and an empty checkpoint directory. The first run reports `confirmed: 3`; status reports `stopped` with position `3`; the rerun reports `confirmed: 0`. The `output` archive and saved progress remain in the volume after each container exits. Status reads saved progress; it does not compare destination contents.
+```text
+{"time":"2026-10-25T22:39:06.595190641Z","level":"INFO","msg":"partition assigned","partition":0,"position":0,"window":{"lower":null,"upper":null}}
+{"time":"2026-10-25T22:39:06.602132061Z","level":"INFO","msg":"copy summary","submitted":3,"confirmed":3,"filtered":0,"skipped":0,"timestamp_stops":0,"tip_stops":0,"peak_uncommitted_records":3,"peak_uncommitted_bytes":534}
+```
 
-To delete the demo's input, output and saved progress, stop any demo containers and run `docker volume rm kaferry-demo`. The next run with that name starts fresh. Keep the same image tag while resuming a demo. [Copy between Kafka topics](#copy-between-kafka-topics) · [Run your own files in a container](#containers).
+The image includes [copy.sql](../examples/archive-demo/copy.sql), its configuration and three sample Kafka records stored in Avro files. The command copies these records from `input` to `output` and saves progress for the named group `archive-demo`. Docker keeps the files and checkpoints in the `kaferry-demo` volume after the container exits.
+
+```sh
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest status -c tutorial.toml -f copy.sql
+```
+
+```text
+Status: stopped
+Group: "archive-demo"
+Reason: file selection completed
+  Source: ARCHIVE "input"
+  Destination: ARCHIVE "output"
+
+Saved progress
+  Replay: input records 3; file selection completed at 3
+  Snapshot: 1 completed files, 1498 encoded bytes.
+
+Stopped means this group saved a stop reason for its fixed selection of archive files. A new group selects current completed files.
+Activity: not checked for files.
+```
+
+This reads the group's saved progress from the volume.
+
+```sh
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
+```
+
+```text
+{"time":"2026-10-25T22:39:07.066648988Z","level":"INFO","msg":"partition assigned","partition":0,"position":3,"window":{"lower":null,"upper":null}}
+{"time":"2026-10-25T22:39:07.066686447Z","level":"INFO","msg":"copy summary","submitted":0,"confirmed":0,"filtered":0,"skipped":0,"timestamp_stops":0,"tip_stops":0,"peak_uncommitted_records":0,"peak_uncommitted_bytes":0}
+```
+
+This resumes the same group from its saved position. The output remains in the volume across containers.
+
+```sh
+docker volume rm kaferry-demo
+```
+
+```text
+kaferry-demo
+```
+
+This deletes the demo's input, output and checkpoints. Running the first command again starts a fresh copy. [Copy between Kafka topics](#copy-between-kafka-topics) · [Run your own files in a container](#containers).
 
 ## First copy without Kafka
 
@@ -267,7 +308,7 @@ For released images (Linux AMD64/ARM64):
 
 ```sh
 docker run --rm --stop-timeout 35 --user "$(id -u):$(id -g)" \
-  --mount "type=bind,src=$PWD,dst=/work" ghcr.io/pagrus7/kaferry:vX.Y.Z \
+  --mount "type=bind,src=$PWD,dst=/work" ghcr.io/pagrus7/kaferry:latest \
   run --file /work/copy.sql --config /work/connections.toml
 ```
 

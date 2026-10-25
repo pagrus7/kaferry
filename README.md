@@ -25,13 +25,16 @@ When Kaferry reads Kafka, franz-go v1.22.2 misreads record timestamps outside ±
 
 ## Quick start
 
-With Docker running Linux containers, copy three bundled sample records without a broker or local Kaferry installation. Replace `vX.Y.Z` with your release tag:
-
 ```sh
-docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:vX.Y.Z run -c tutorial.toml -f copy.sql
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
 ```
 
-The first run confirms three records; rerunning confirms zero. [Check results and reset the Docker demo](docs/usage.md#first-copy-with-docker) · [Run without Docker](docs/usage.md#first-copy-without-kafka) · [Copy Kafka topics](docs/usage.md#copy-between-kafka-topics).
+```text
+{"time":"2026-10-25T22:39:06.595190641Z","level":"INFO","msg":"partition assigned","partition":0,"position":0,"window":{"lower":null,"upper":null}}
+{"time":"2026-10-25T22:39:06.602132061Z","level":"INFO","msg":"copy summary","submitted":3,"confirmed":3,"filtered":0,"skipped":0,"timestamp_stops":0,"tip_stops":0,"peak_uncommitted_records":3,"peak_uncommitted_bytes":534}
+```
+
+This copies the three bundled sample records into `output` and saves progress in the `kaferry-demo` volume. The files remain after the container exits. [Inspect results, rerun and reset](docs/usage.md#first-copy-with-docker) · [Run without Docker](docs/usage.md#first-copy-without-kafka) · [Copy Kafka topics](docs/usage.md#copy-between-kafka-topics).
 
 ## Before you run
 

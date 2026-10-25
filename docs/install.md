@@ -37,6 +37,6 @@ gh attestation verify oci://ghcr.io/pagrus7/kaferry@sha256:DIGEST \
   --signer-workflow pagrus7/kaferry/.github/workflows/containers.yml
 ```
 
-Use a registry login if needed. The image also carries SBOM/provenance records for inspection; attestations establish build origin, not application correctness. No `latest` tag is published.
+Use a registry login if needed. The image also carries SBOM/provenance records for inspection; attestations establish build origin, not application correctness. `ghcr.io/pagrus7/kaferry:latest` follows the current stable release after its image passes testing and attestation. Version tags and digests identify fixed images.
 
 [Run with mounted files and persistent checkpoints](usage.md#containers).
