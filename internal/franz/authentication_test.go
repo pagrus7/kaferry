@@ -187,8 +187,10 @@ func TestAWSIAMRetrievesRotatingCredentialsAndRedactsProviderErrors(t *testing.T
 }
 
 func TestAWSIAMConfigurationErrorsStayRedacted(t *testing.T) {
-	// Given an invalid shared AWS configuration containing a credential-like value.
-	path := writeFixture(t, t.TempDir(), "private-config", []byte("[private-invalid\n"))
+	// Given an explicitly selected private profile absent from otherwise valid shared configuration.
+	path := writeFixture(t, t.TempDir(), "private-config", []byte("[default]\nregion = us-east-1\n"))
+	t.Setenv("AWS_PROFILE", "private-missing-profile")
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 	t.Setenv("AWS_CONFIG_FILE", path)
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "absent"))
 	mechanism := configuredMechanism(t, map[string]string{"sasl.mechanism": "AWS_MSK_IAM"})
