@@ -140,8 +140,8 @@ func (c *connection) ValidatePartitions(ctx context.Context, ids []int32) error 
 func (c *connection) CheckMembers(ctx context.Context, group, protocol string) error {
 	return c.inspector.CheckMembers(ctx, group, protocol)
 }
-func (c *connection) ReadProgress(ctx context.Context, group, fp string, window plan.WindowSpec, cutoff int64) (map[int32]kafkaport.Progress, error) {
-	_, progress, err := c.inspector.Saved(ctx, group, fp, window, cutoff)
+func (c *connection) ReadProgress(ctx context.Context, group, fp string, window plan.WindowSpec, staleness int64) (map[int32]kafkaport.Progress, error) {
+	_, progress, err := c.inspector.Saved(ctx, group, fp, window, staleness)
 	return progress, err
 }
 func (c *connection) Close(context.Context) error { c.cancel(); c.inspector.client.Close(); return nil }

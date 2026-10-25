@@ -95,6 +95,11 @@ func renderProgress(output io.Writer, report inspect.Report) {
 			}
 		}
 		fmt.Fprintf(output, "  Resume: %d of %d partitions have saved offsets.\n", saved, len(report.Partitions))
+		for _, partition := range report.Partitions[:min(8, len(report.Partitions))] {
+			if partition.End != nil {
+				fmt.Fprintf(output, "  Partition %d: saved captured end %d.\n", partition.ID, *partition.End)
+			}
+		}
 		if fresh := len(report.Partitions) - saved; fresh > 0 {
 			fmt.Fprintf(output, "  Without saved offsets: %d partitions; %s\n", fresh, startRule(report.StartRule))
 		}

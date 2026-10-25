@@ -79,7 +79,7 @@ func renderWindows(output io.Writer, report inspect.Report) error {
 				fmt.Fprintln(output, "    Fresh start: earliest retained offset; apply the time filter while reading.")
 			}
 		}
-		if err := renderStop(output, report.Source, group.window, report.CutoffMS, report.WorkerStopAfterRecords); err != nil {
+		if err := renderStop(output, report.Source, group.window, report.MaxStalenessMS, report.WorkerStopAfterRecords); err != nil {
 			return err
 		}
 	}
@@ -111,7 +111,7 @@ func renderBounds(output io.Writer, window plan.Window, origin string) {
 	}
 }
 
-func renderStop(output io.Writer, source inspect.Endpoint, window plan.Window, cutoff int64, stopAfter uint64) error {
+func renderStop(output io.Writer, source inspect.Endpoint, window plan.Window, staleness int64, stopAfter uint64) error {
 	if source.Kind == "FILE" {
 		rule := "end of this group's fixed selection of completed archive files"
 		if stopAfter > 0 {
@@ -128,13 +128,13 @@ func renderStop(output io.Writer, source inspect.Endpoint, window plan.Window, c
 		if stopAfter > 0 {
 			fmt.Fprintln(output, "  Stop: worker record threshold or all assigned partitions stopping, whichever comes first.")
 		}
-		threshold, err := window.StopThreshold(cutoff)
+		threshold, err := window.StopThreshold(staleness)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(output, "  Stop threshold: %s (window end + %d ms cutoff).\n", formatBound(&threshold), cutoff)
-		fmt.Fprintln(output, "    Per assigned partition: stop when a record timestamp exceeds the threshold, or the clock passes it and reading reaches a sampled log end.")
-		fmt.Fprintln(output, "    Open transactions can delay reading that end; worker.tip_wait bounds the wait.")
+		fmt.Fprintf(output, "  Stop threshold: %s (window end + %d ms max staleness).\n", formatBound(&threshold), staleness)
+		fmt.Fprintln(output, "    Per assigned partition: stop when a record timestamp exceeds the threshold. Once the clock passes it, save the current log end and read toward that fixed end; the timestamp rule still applies.")
+		fmt.Fprintln(output, "    Open transactions can delay reading that end; worker.tip_wait bounds a stalled readable tip, not ordinary backlog processing.")
 	}
 	return nil
 }

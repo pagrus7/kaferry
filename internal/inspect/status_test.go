@@ -26,7 +26,7 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 			source := f.connections["input"]
 			for _, id := range []int32{0, 1} {
 				source.positions[id] = int64(id)
-				source.metadata[id] = kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: int64(id)}}
+				source.metadata[id] = kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: int64(id)}, End: new(int64(id))}
 			}
 			switch tc.name {
 			case "worker threshold", "active after worker stop", "partial worker stops", "mixed stops":
@@ -71,7 +71,7 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 			if tc.name == "worker threshold" {
 				require.Equal(t, "worker record threshold reached", r.Reason)
 			} else if tc.name == "mixed stops" {
-				require.Equal(t, "timestamp cutoff reached; worker record threshold reached", r.Reason)
+				require.Equal(t, "timestamp staleness threshold reached; worker record threshold reached", r.Reason)
 			}
 			require.EqualValues(t, 1, source.closed)
 			require.EqualValues(t, 1, f.connections["output"].closed)
@@ -84,6 +84,7 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 				require.Zero(t, r.Partitions[0].ID)
 				require.NotNil(t, r.Partitions[1].Position)
 				require.Equal(t, int64(1), *r.Partitions[1].Position)
+				require.Equal(t, new(int64(1)), r.Partitions[1].End)
 			}
 		})
 	}

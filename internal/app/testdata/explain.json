@@ -1,9 +1,9 @@
 {
-  "version": 1,
+  "version": 2,
   "fingerprint": "query-id",
   "group": "backfill",
   "one_off": false,
-  "cutoff_ms": 1000,
+  "max_staleness_ms": 1000,
   "source": {
     "kind": "TOPIC",
     "name": "input",
@@ -26,6 +26,7 @@
       "start": 4,
       "log_start": 0,
       "log_end": 12,
+      "captured_end": 12,
       "saved": true,
       "window": {
         "lower": 1000,

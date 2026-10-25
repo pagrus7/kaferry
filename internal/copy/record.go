@@ -49,6 +49,7 @@ type Cursor struct {
 	Partition int32
 	Position  int64
 	Stop      *Stop
+	End       *int64
 }
 type Input struct {
 	Cursor Cursor

@@ -92,7 +92,7 @@ func TestAllFileDirectionsAndResume(t *testing.T) {
 	dir := t.TempDir()
 	archive, clone := filepath.Join(dir, "archive.avro"), filepath.Join(dir, "clone.avro")
 	cfg := configuration(t)
-	statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", archive, src, src+"-archive", stamp.Add(time.Second).Format(time.RFC3339Nano))
+	statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", archive, src, src+"-archive", stamp.Add(time.Second).Format(time.RFC3339Nano))
 
 	// When
 	execute(t, statement, cfg)

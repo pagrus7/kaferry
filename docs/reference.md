@@ -12,17 +12,17 @@ Kafka JSON rows show the selected start and retained/log-end offsets; log end in
 
 Archive inspection reads completed-file headers, sizes and saved checkpoint data without scanning record payloads, taking locks or recovering private files. Source positions count confirmed input records. `ONE_OFF` never generates a group or reads an existing checkpoint; the preview says a fresh group would be used.
 
-`--json` emits version 1 with all partitions and warnings. Time bounds use signed Unix milliseconds; byte and offset fields are counts. Connection properties and SQL text are excluded.
+`--json` emits version 2 with all partitions and warnings. Time bounds use signed Unix milliseconds; byte and offset fields are counts. Connection properties and SQL text are excluded.
 
 | Fields | Meaning |
 | --- | --- |
-| `version`, `fingerprint`, `group`, `one_off`, `cutoff_ms` | Report format and query identity; one-off group is `ONE_OFF` |
+| `version`, `fingerprint`, `group`, `one_off`, `max_staleness_ms` | Report format and query identity; one-off group is `ONE_OFF` |
 | `start_rule` | Kafka fallback for partitions without progress: `WINDOW`, `EARLIEST` or `LATEST`; absent for file sources |
 | `record_errors` | Effective `FAIL`/`SKIP` policies: `missing_timestamp`, `rejected_timestamp`, `other_record`; SKIP applies before writing, not to delivery failures |
 | `source`, `destination` | `kind`, `name`, optional connection alias, cluster/topic IDs, partition count, destination timestamp type and `partitioning` (`PRESERVE` or `KEY` for a Kafka destination) |
 | Endpoint `file` | `exists`; source adds `size_bytes`, `file_count`, `position_records`, `window`, `window_origin`, `checkpoint`, `checkpoint_exists`. Destination `size_bytes` is zero; destination size and file count are not inspected |
 | `source.partition_filter` | Optional `{exclude, ids}` predicate; `exclude=true` means NOT IN. Kafka discovers eligible added partitions while workers run; archives retain their saved file selection |
-| `partitions` | Sorted `partition`, `start`, `log_start`, `log_end`, `saved`, `window`, `window_origin` |
+| `partitions` | Sorted `partition`, `start`, `log_start`, `log_end`, `saved`, `window`, `window_origin`; optional `captured_end` is the saved exclusive end offset |
 | `window` | Inclusive `lower`, exclusive `upper`; null means unbounded. `window_origin`: `literal`, `saved`, `adopted` or `resolved` for preview-only NOW |
 | `warnings` | Detected retention gaps and unavailable/changed destination timestamp behavior; may be empty |
 
@@ -32,9 +32,9 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 
 Verdicts: invalid/incompatible progress → `unknown`; incompatible active members → `unknown`; active members, unsettled group state or changed membership → `running`; no saved progress → `unknown`; any current partition without a saved stop → `incomplete`; otherwise → `stopped`. Added eligible partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. New archive files do not expand a saved replay selection. Status reports `unknown` (5) when a checkpoint or saved selection cannot be validated; other operational read failures exit 1 without a verdict.
 
-`stopped` means every currently selected partition has a saved stop reason. More source records may remain; the time cutoff can miss records within the range. Workers remain independent: they never wait for other workers' stops.
+`stopped` means every currently selected partition has a saved stop reason. More source records may remain; the staleness rule can miss records within the range. Workers remain independent: they never wait for other workers' stops.
 
-Kafka text lists up to eight partitions; file text reports replay progress. `--json` includes all. JSON version `1` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `stop`, `window`). Kafka positions are offsets; file positions count confirmed input records. File `size_bytes` and `file_count` describe the saved selection, or current completed files before the first run. Inspection checks selected headers and sizes for incomplete groups, not payload checksums. Status does not scan records or verify destination writes.
+Kafka text lists up to eight partitions; file text reports replay progress. `--json` includes all. JSON version `1` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `stop`, `window`, `captured_end`). Kafka positions are offsets; file positions count confirmed input records. File `size_bytes` and `file_count` describe the saved selection, or current completed files before the first run. Inspection checks selected headers and sizes for incomplete groups, not payload checksums. Status does not scan records or verify destination writes.
 
 ## Configuration and CLI
 
@@ -57,7 +57,7 @@ Optional keys in TOML's `[worker]` table; byte values are integers:
 | `delivery_timeout` | `'60s'` | Delivery deadline and queue-full wait |
 | `shutdown_timeout` | `'30s'` | Whole-process stop deadline |
 | `idle_exit` | `'30s'` | Wait after an empty assignment before exit 3 |
-| `tip_wait` | `'15m'` | Wait to reach sampled H |
+| `tip_wait` | `'15m'` | Continuous wait at the readable tip below the saved captured end; ordinary backlog processing resets it |
 | `progress_interval` | '30s' | Progress logs; '0' disables |
 | `checkpoint_dir` | `~/.kaferry/checkpoints` | File-source checkpoint directory |
 

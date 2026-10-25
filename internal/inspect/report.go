@@ -8,7 +8,7 @@ type Report struct {
 	Fingerprint            string        `json:"fingerprint"`
 	Group                  string        `json:"group"`
 	OneOff                 bool          `json:"one_off"`
-	CutoffMS               int64         `json:"cutoff_ms"`
+	MaxStalenessMS         int64         `json:"max_staleness_ms"`
 	WorkerStopAfterRecords uint64        `json:"worker_stop_after_records,omitempty"`
 	Source                 Endpoint      `json:"source"`
 	Destination            Endpoint      `json:"destination"`
@@ -54,6 +54,7 @@ type Partition struct {
 	Start        int64       `json:"start"`
 	LogStart     int64       `json:"log_start"`
 	LogEnd       int64       `json:"log_end"`
+	End          *int64      `json:"captured_end,omitempty"`
 	Saved        bool        `json:"saved"`
 	Window       plan.Window `json:"window"`
 	WindowOrigin string      `json:"window_origin"`

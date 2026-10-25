@@ -23,6 +23,7 @@ type Progress struct {
 	TopicID     string
 	Window      *plan.Window
 	Stop        *core.Stop
+	End         *int64
 }
 
 type Codec interface {
@@ -44,6 +45,7 @@ type wire struct {
 	TopicID     string  `json:"tid"`
 	Window      *window `json:"win,omitempty"`
 	Stop        *stop   `json:"stop,omitempty"`
+	End         *int64  `json:"end,omitempty"`
 }
 type window struct {
 	Lower *int64 `json:"lower"`
@@ -58,7 +60,7 @@ func (JSONCodec) Encode(p Progress) (string, error) {
 	if err := validate(p); err != nil {
 		return "", err
 	}
-	w := wire{Fingerprint: p.Fingerprint, TopicID: p.TopicID}
+	w := wire{Fingerprint: p.Fingerprint, TopicID: p.TopicID, End: p.End}
 	if p.Window != nil {
 		w.Window = &window{p.Window.Lower, p.Window.Upper}
 	}
@@ -70,7 +72,11 @@ func (JSONCodec) Encode(p Progress) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	encoded := prefix + string(data)
+	version := prefix
+	if p.End != nil {
+		version = "kaferry:3;"
+	}
+	encoded := version + string(data)
 	if len(encoded) > MaxBytes {
 		return "", &Error{Kind: "oversized"}
 	}
@@ -85,11 +91,16 @@ func (JSONCodec) Decode(encoded string) (Progress, error) {
 	if !strings.HasPrefix(encoded, "kaferry:") {
 		return p, &Error{Kind: "foreign"}
 	}
-	if !strings.HasPrefix(encoded, prefix) {
+	version := prefix
+	fields := []string{"fp", "tid", "win", "stop"}
+	if strings.HasPrefix(encoded, "kaferry:3;") {
+		version = "kaferry:3;"
+		fields = append(fields, "end")
+	} else if !strings.HasPrefix(encoded, prefix) {
 		return p, &Error{Kind: "unsupported version of"}
 	}
-	data := []byte(strings.TrimPrefix(encoded, prefix))
-	if !utf8.Valid(data) || checkObject(data, "fp", "tid", "win", "stop") != nil {
+	data := []byte(strings.TrimPrefix(encoded, version))
+	if !utf8.Valid(data) || checkObject(data, fields...) != nil {
 		return p, &Error{Kind: "invalid"}
 	}
 	var w wire
@@ -98,7 +109,10 @@ func (JSONCodec) Decode(encoded string) (Progress, error) {
 	if decoder.Decode(&w) != nil {
 		return p, &Error{Kind: "invalid"}
 	}
-	p = Progress{Fingerprint: w.Fingerprint, TopicID: w.TopicID}
+	p = Progress{Fingerprint: w.Fingerprint, TopicID: w.TopicID, End: w.End}
+	if version == "kaferry:3;" && w.End == nil {
+		return Progress{}, &Error{Kind: "invalid"}
+	}
 	if w.Window != nil {
 		p.Window = &plan.Window{Lower: w.Window.Lower, Upper: w.Window.Upper}
 	}
@@ -119,6 +133,9 @@ func validate(p Progress) error {
 		return &Error{Kind: "invalid"}
 	}
 	if p.Window != nil && p.Window.Lower != nil && p.Window.Upper != nil && *p.Window.Lower >= *p.Window.Upper {
+		return &Error{Kind: "invalid"}
+	}
+	if p.End != nil && (*p.End < 0 || p.Stop != nil && (p.Stop.At > *p.End || p.Stop.Reason == "tip" && p.Stop.At != *p.End)) {
 		return &Error{Kind: "invalid"}
 	}
 	if p.Stop != nil && (p.Stop.At < 0 || (p.Stop.Reason != "timestamp" && p.Stop.Reason != "tip" && p.Stop.Reason != "worker_record_cap")) {

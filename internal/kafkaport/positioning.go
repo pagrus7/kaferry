@@ -72,8 +72,15 @@ func (p *positioner) Locate(ctx context.Context, parts []int32, saved map[int32]
 		if err != nil {
 			return Positioning{}, err
 		}
+		if stored.End != nil && (*stored.End > p.high[part] || position > *stored.End) {
+			return Positioning{}, conflict("partition %d captured end is outside retained positions", part)
+		}
+		cursor := copy.Cursor{Partition: part, Position: position, End: stored.End}
+		if window.Upper != nil && stored.Stop != nil && stored.Stop.Reason != "worker_record_cap" {
+			cursor.Stop = stored.Stop
+		}
 		progress[part] = stored
-		assignments[n] = copy.Assignment{Cursor: copy.Cursor{Partition: part, Position: position}, Window: window}
+		assignments[n] = copy.Assignment{Cursor: cursor, Window: window}
 	}
 	if err := p.resolveTimes(ctx, assignments); err != nil {
 		return Positioning{}, err
@@ -147,7 +154,7 @@ func (p *positioner) window(id int32, saved map[int32]int64, metadata map[int32]
 			return window, progress, position, conflict("invalid resolved time window: %v", err)
 		}
 	}
-	if err := p.plan.Window.ValidateStored(window, p.plan.CutoffMS); err != nil {
+	if err := p.plan.Window.ValidateStored(window, p.plan.MaxStalenessMS); err != nil {
 		return window, progress, position, conflict("invalid time window: %v", err)
 	}
 	if p.plan.Window.Relative() {

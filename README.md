@@ -37,7 +37,7 @@ The first run confirms three records; rerunning the same named group confirms ze
 
 ## Before you run
 
-- **Time windows:** The [cutoff rule](design/decisions.md#completion) can miss records within the range, including those present before the run.
+- **Time windows:** The [staleness rule](design/decisions.md#completion) can miss records within the range, including those present before the run.
 - **Delivery:** at least once; crashes and rebalances can duplicate or reorder writes. Expired offsets or lost checkpoints can start fresh. Kafka input reads committed records.
 - **Destination:** original partition numbers are preserved. Ensure bytes and Schema Registry IDs work there. Broker settings can replace timestamps or delete old records. [Routing](design/decisions.md#kafka-output).
 - **Archives:** multiple capture workers; one replay process per group/checkpoint directory. Storage needs durable sync, atomic rename and locks. [File setup and resume](docs/usage.md#run-a-copy).

@@ -34,7 +34,7 @@ func TestParserDiagnosticsLocateTheOffendingToken(t *testing.T) {
 		{"invisible character", "\x00", "unexpected invisible or control character; remove it", Position{1, 1}},
 		{"format", "INSERT INTO FILE avro('out')\nSELECT * FROM FILE json('in')", "expected avro; found identifier", Position{2, 20}},
 		{"unit before invalid character", prefix + "WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' WEEK ?", "expected SECOND, MINUTE, HOUR or DAY; found identifier", Position{3, 48}},
-		{"unquoted interval", bare + "WITH(GROUP='g', CUTOFF=INTERVAL 5 MINUTE)", "expected single-quoted string; found integer", Position{3, 33}},
+		{"unquoted interval", bare + "WITH(GROUP='g', MAX_STALENESS=INTERVAL 5 MINUTE)", "expected single-quoted string; found integer", Position{3, 40}},
 		{"option before invalid character", prefix + "OPTIONS(STRAT ?)", "expected WORKER_STOP_AFTER_RECORDS, ON_ERROR, ON_MISSING_TIMESTAMP or ON_REJECTED_TIMESTAMP; found identifier", Position{3, 9}},
 		{"projection", "INSERT INTO FILE avro('out')\nSELECT 'secret' FROM FILE avro('in')", "expected \"*\"; found string literal", Position{2, 8}},
 		{"missing equals", bare + "WITH(GROUP 'g')", "expected \"=\"; found string literal", Position{3, 12}},
@@ -93,7 +93,7 @@ func TestParserDiagnosticsNeverEchoArbitraryInput(t *testing.T) {
 func TestASTCapturesEachAnchorBeforeAdvancingTokens(t *testing.T) {
 	// Given one statement exercising every source-location field.
 	input := "WITH CONNECTION prod AS ('sasl.password'=ENV('PASSWORD'), 'bootstrap.servers'='broker')\n" +
-		"INSERT INTO TOPIC 'out@prod'\nSELECT * FROM TOPIC 'in@prod' WITH (GROUP='g', CUTOFF=INTERVAL '3' MINUTE)\n" +
+		"INSERT INTO TOPIC 'out@prod'\nSELECT * FROM TOPIC 'in@prod' WITH (GROUP='g', MAX_STALENESS=INTERVAL '3' MINUTE)\n" +
 		"WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' + INTERVAL '1' HOUR\n" +
 		"AND RECORD_TIMESTAMP < NOW() - INTERVAL '2' SECOND\nOPTIONS(ON_ERROR=FAIL)"
 	// When parsing while preserving transient locations.
@@ -114,7 +114,7 @@ func TestASTCapturesEachAnchorBeforeAdvancingTokens(t *testing.T) {
 		{statement.Bounds[1].Position, "< NOW"}, {statement.Bounds[1].Time.Position, "NOW"},
 		{statement.Bounds[1].Time.Adjustments[0].Position, "'2'"},
 		{statement.Source.Options[0].Position, "GROUP"}, {statement.Source.Options[0].ValuePosition, "'g'"},
-		{statement.Source.Options[1].Position, "CUTOFF"}, {statement.Source.Options[1].ValuePosition, "INTERVAL '3'"},
+		{statement.Source.Options[1].Position, "MAX_STALENESS"}, {statement.Source.Options[1].ValuePosition, "INTERVAL '3'"},
 		{statement.Source.Options[1].Interval.Position, "'3'"},
 	} {
 		// Then each anchor points to its own token, never the following token.
@@ -137,4 +137,15 @@ func TestRemovedArchiveFormatIsRejectedWithoutLeakingPaths(t *testing.T) {
 		require.Equal(t, "expected avro; found identifier", diagnostic.Err.Error())
 		require.NotContains(t, err.Error(), "private/path")
 	}
+}
+
+func TestCutoffIsRejectedAtItsNameWithoutEchoingValues(t *testing.T) {
+	// Given an unsupported spelling with private input in its value.
+	query := "INSERT INTO TOPIC 'out' SELECT * FROM TOPIC 'in'\nWITH(CUTOFF=INTERVAL 'private_SENTINEL' MINUTE)"
+	// When parsing, then locate the setting name and keep its value private.
+	_, err := NewParser().Parse(query)
+	var diagnostic *Diagnostic
+	require.ErrorAs(t, err, &diagnostic)
+	require.Equal(t, Position{2, 6}, diagnostic.Position)
+	require.NotContains(t, err.Error(), "private_SENTINEL")
 }

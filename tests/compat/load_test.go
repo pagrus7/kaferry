@@ -66,13 +66,13 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			}
 			seedCancel()
 			binaryPath := testBinary(t)
-			statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), dst, src, src+"-load", stamp.Add(time.Second).Format(time.RFC3339Nano))
+			statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), dst, src, src+"-load", stamp.Add(time.Second).Format(time.RFC3339Nano))
 			args := []string{"run", "--file", "-"}
 			if configuration != "" {
 				path := filepath.Join(t.TempDir(), "worker.toml")
 				require.NoError(t, os.WriteFile(path, []byte(configuration), 0600))
 				args = append(args, "--config", path)
-				statement = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'), CONNECTION slow AS ('bootstrap.servers'='%s','linger.ms'='100') INSERT INTO TOPIC '%s@slow' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), broker(t), dst, src, src+"-load", stamp.Add(time.Second).Format(time.RFC3339Nano))
+				statement = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'), CONNECTION slow AS ('bootstrap.servers'='%s','linger.ms'='100') INSERT INTO TOPIC '%s@slow' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), broker(t), dst, src, src+"-load", stamp.Add(time.Second).Format(time.RFC3339Nano))
 			}
 			if scenario.name == "preserved partitions" {
 				statement = strings.Replace(statement, "WITH (PARTITIONING = KEY)", "", 1)

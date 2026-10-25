@@ -22,6 +22,7 @@ func TestStatusTextIsBoundedAndJSONRetainsAllPartitions(t *testing.T) {
 		row := inspect.SavedPartition{ID: int32(n)}
 		if n > 0 {
 			row.Position = &zero
+			row.End = &zero
 		}
 		if n > 1 {
 			row.Stop = &core.Stop{Reason: "tip"}
@@ -36,6 +37,7 @@ func TestStatusTextIsBoundedAndJSONRetainsAllPartitions(t *testing.T) {
 	require.EqualValues(t, 8, strings.Count(text.String(), "  Partition "))
 	require.Contains(t, text.String(), "4 more partitions")
 	require.Contains(t, text.String(), "offset 0")
+	require.Contains(t, text.String(), "captured end 0")
 	require.NotContains(t, text.String(), "group\nforged")
 	var decoded struct {
 		Version    int    `json:"version"`
@@ -43,6 +45,7 @@ func TestStatusTextIsBoundedAndJSONRetainsAllPartitions(t *testing.T) {
 		Partitions []struct {
 			ID       int32  `json:"id"`
 			Position *int64 `json:"position"`
+			End      *int64 `json:"captured_end"`
 			Stop     *struct {
 				Reason string `json:"reason"`
 				At     int64  `json:"at"`
@@ -56,6 +59,7 @@ func TestStatusTextIsBoundedAndJSONRetainsAllPartitions(t *testing.T) {
 	require.Nil(t, decoded.Partitions[0].Position)
 	require.NotNil(t, decoded.Partitions[1].Position)
 	require.Zero(t, *decoded.Partitions[1].Position)
+	require.Equal(t, &zero, decoded.Partitions[1].End)
 	require.Equal(t, "tip", decoded.Partitions[11].Stop.Reason)
 }
 

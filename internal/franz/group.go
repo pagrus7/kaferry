@@ -72,7 +72,7 @@ func (i *Inspector) Membership(ctx context.Context, group, protocol string) (kaf
 	return kafkaport.Membership{State: g.State, Foreign: compatibleMembers(g, i.topic, protocol) != nil, Idle: len(g.Members) == 0 && (g.State == "Empty" || g.State == "Dead")}, nil
 }
 
-func (i *Inspector) Saved(parent context.Context, group, fp string, window plan.WindowSpec, cutoff int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {
+func (i *Inspector) Saved(parent context.Context, group, fp string, window plan.WindowSpec, staleness int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {
 	if err := i.Refresh(parent); err != nil {
 		return nil, nil, err
 	}
@@ -93,7 +93,7 @@ func (i *Inspector) Saved(parent context.Context, group, fp string, window plan.
 	if err != nil {
 		return nil, nil, err
 	}
-	return i.decodeSaved(parts, fp, window, cutoff)
+	return i.decodeSaved(parts, fp, window, staleness)
 }
 
 func (i *Inspector) offsetParts(r *kmsg.OffsetFetchResponse, group string) (map[int32]kmsg.OffsetFetchResponseTopicPartition, error) {
@@ -129,7 +129,7 @@ func (i *Inspector) offsetParts(r *kmsg.OffsetFetchResponse, group string) (map[
 	return result, nil
 }
 
-func (i *Inspector) decodeSaved(parts map[int32]kmsg.OffsetFetchResponseTopicPartition, fp string, window plan.WindowSpec, cutoff int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {
+func (i *Inspector) decodeSaved(parts map[int32]kmsg.OffsetFetchResponseTopicPartition, fp string, window plan.WindowSpec, staleness int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {
 	positions := make(map[int32]int64)
 	metadata := make(map[int32]kafkaport.Progress)
 	for _, id := range i.parts {
@@ -147,8 +147,11 @@ func (i *Inspector) decodeSaved(parts map[int32]kmsg.OffsetFetchResponseTopicPar
 		if err != nil {
 			return nil, nil, err
 		}
-		if err = kafkaport.ValidateWindow(progress, window, cutoff); err != nil {
+		if err = kafkaport.ValidateWindow(progress, window, staleness); err != nil {
 			return nil, nil, err
+		}
+		if progress.End != nil && p.Offset > *progress.End {
+			return nil, nil, conflict("committed offset exceeds captured end")
 		}
 		if progress.Stop != nil && progress.Stop.At > p.Offset {
 			return nil, nil, conflict("stop exceeds committed offset")

@@ -61,8 +61,8 @@ func (p *Plan) applyOption(option sql.Option) error {
 			return fmt.Errorf("START must be EARLIEST or LATEST")
 		}
 		p.Start = option.Value
-	case "CUTOFF":
-		return p.cutoffOption(option)
+	case "MAX_STALENESS":
+		return p.stalenessOption(option)
 	case "WORKER_STOP_AFTER_RECORDS":
 		value, err := strconv.ParseUint(option.Value, 10, 64)
 		if err != nil || value == 0 || value > 1<<53 {
@@ -84,18 +84,18 @@ func (p *Plan) groupOption(option sql.Option) error {
 	return nil
 }
 
-func (p *Plan) cutoffOption(option sql.Option) error {
+func (p *Plan) stalenessOption(option sql.Option) error {
 	if p.Source.Kind != "TOPIC" {
-		return sql.At(option.Position, fmt.Errorf("CUTOFF requires a topic source; remove CUTOFF for FILE sources"))
+		return sql.At(option.Position, fmt.Errorf("MAX_STALENESS requires a topic source; remove MAX_STALENESS for FILE sources"))
 	}
 	if p.Window.Upper == nil {
-		return sql.At(option.Position, fmt.Errorf("CUTOFF requires an upper timestamp bound in WHERE"))
+		return sql.At(option.Position, fmt.Errorf("MAX_STALENESS requires an upper timestamp bound in WHERE"))
 	}
 	if option.Interval == nil {
-		return fmt.Errorf("CUTOFF requires an interval")
+		return fmt.Errorf("MAX_STALENESS requires an interval")
 	}
 	var err error
-	p.CutoffMS, err = intervalMS(*option.Interval)
+	p.MaxStalenessMS, err = intervalMS(*option.Interval)
 	return err
 }
 

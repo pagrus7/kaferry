@@ -51,7 +51,7 @@ func (r *Runner) Assign(assignments []Assignment) error {
 	}
 	for _, a := range assignments {
 		r.tracker.Assign(a.Cursor)
-		r.partitions[a.Cursor.Partition] = &partition{window: a.Window, position: a.Cursor.Position}
+		r.partitions[a.Cursor.Partition] = &partition{window: a.Window, position: a.Cursor.Position, high: a.Cursor.End, endSaved: a.Cursor.End != nil, stop: a.Cursor.Stop, stopSaved: a.Cursor.Stop != nil}
 		r.log.Info("partition assigned", "partition", a.Cursor.Partition, "position", a.Cursor.Position, "window", a.Window)
 	}
 	return nil
@@ -207,6 +207,9 @@ func (r *Runner) input(input Input) error {
 		p.position = cursor.Position
 		return err // A later visible record proves control/aborted gaps reached H.
 	}
+	if p.high != nil {
+		input.Next = min(input.Next, *p.high)
+	}
 	if !r.admits(input) {
 		r.deferred = &input
 		return nil
@@ -232,7 +235,7 @@ func (r *Runner) stopAtTimestamp(p *partition, input Input) (bool, error) {
 	if r.plan.Source.Kind != "TOPIC" {
 		return false, nil
 	}
-	stop, err := p.pastTimestamp(input.Record.TimestampMS, r.plan.CutoffMS)
+	stop, err := p.pastTimestamp(input.Record.TimestampMS, r.plan.MaxStalenessMS)
 	if !stop || err != nil {
 		return false, err
 	}
@@ -337,6 +340,9 @@ func (r *Runner) eof(cursor Cursor) error {
 		r.deferredEOF = &cursor
 		return nil
 	}
+	if p.high != nil {
+		cursor.Position = min(cursor.Position, *p.high)
+	}
 	err := r.tracker.Advance(cursor)
 	if err != nil {
 		return err
@@ -352,7 +358,7 @@ func (r *Runner) tips() error {
 		if p.stop != nil || p.window.Upper == nil || r.plan.Source.Kind != "TOPIC" {
 			continue
 		}
-		action, err := p.tipAction(r.clock.Now(), r.plan.CutoffMS, wait)
+		action, err := p.tipAction(r.clock.Now(), r.plan.MaxStalenessMS, wait)
 		if err != nil {
 			return err
 		}
@@ -364,7 +370,7 @@ func (r *Runner) tips() error {
 			if err := r.sampleHigh(id, p); err != nil {
 				return err
 			}
-			action, err = p.tipAction(r.clock.Now(), r.plan.CutoffMS, wait)
+			action, err = p.tipAction(r.clock.Now(), r.plan.MaxStalenessMS, wait)
 			if err != nil {
 				return err
 			}
@@ -396,9 +402,12 @@ func (r *Runner) sampleHigh(id int32, p *partition) error {
 	if attempts := p.sampling.recovered(); attempts > 0 {
 		r.log.Info("tip watermark query recovered", "partition", id, "attempts", attempts)
 	}
-	p.sampled(high, r.clock.Now())
+	if high < p.position {
+		return fmt.Errorf("partition %d captured end %d is below consumed position %d", id, high, p.position)
+	}
+	p.sampled(high)
 	r.log.Info("tip watermark sampled", "partition", id, "high_watermark", high, "stable", p.stable, "position", p.position)
-	return nil
+	return r.commit([]int32{id})
 }
 func (r *Runner) flush() error {
 	if err := r.sink.Flush(); err != nil {

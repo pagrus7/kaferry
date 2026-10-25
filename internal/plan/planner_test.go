@@ -96,9 +96,9 @@ func TestWindowBoundaries(t *testing.T) {
 
 func TestNowRemainsSymbolicAndUsesOneInstant(t *testing.T) {
 	// Given
-	p := build(t, "INSERT INTO TOPIC 'b' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a' WITH (GROUP='g', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP > NOW() - INTERVAL '1' HOUR AND RECORD_TIMESTAMP <= NOW() ")
+	p := build(t, "INSERT INTO TOPIC 'b' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a' WITH (GROUP='g', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP > NOW() - INTERVAL '1' HOUR AND RECORD_TIMESTAMP <= NOW() ")
 	require.True(t, p.Window.Relative())
-	require.Zero(t, p.CutoffMS)
+	require.Zero(t, p.MaxStalenessMS)
 	now := time.Date(2026, 10, 3, 0, 0, 0, 123000000, time.UTC)
 
 	// When
@@ -140,9 +140,9 @@ func TestInvalidTimeExpressions(t *testing.T) {
 	}
 }
 
-func TestPlannerRejectsOverflowingCutoff(t *testing.T) {
-	// Given valid SQL whose upper timestamp plus cutoff exceeds int64 milliseconds.
-	statement, err := sql.NewParser().Parse("INSERT INTO TOPIC 'b@staging' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='g', CUTOFF=INTERVAL '9223372036854775' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '9999-12-31T23:59:59Z' ")
+func TestPlannerRejectsOverflowingMaxStaleness(t *testing.T) {
+	// Given valid SQL whose upper timestamp plus staleness exceeds int64 milliseconds.
+	statement, err := sql.NewParser().Parse("INSERT INTO TOPIC 'b@staging' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='g', MAX_STALENESS=INTERVAL '9223372036854775' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '9999-12-31T23:59:59Z' ")
 	require.NoError(t, err)
 
 	// When compiling the copy plan, before any endpoint is opened.

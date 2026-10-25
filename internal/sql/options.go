@@ -14,7 +14,7 @@ const (
 func (s Scope) Names() []string {
 	switch s {
 	case SourceSettings:
-		return []string{"GROUP", "START", "CUTOFF"}
+		return []string{"GROUP", "START", "MAX_STALENESS"}
 	case DestinationSettings:
 		return []string{"ROTATE_AFTER_SIZE", "ROTATE_AFTER_AGE", "PARTITIONING"}
 	default:

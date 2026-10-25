@@ -35,7 +35,7 @@ func TestTimeBoundariesOutOfOrderAndTriggerReplay(t *testing.T) {
 	}{{"halfopen", fmt.Sprintf("RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s'", lo.Format(time.RFC3339Nano), hi.Format(time.RFC3339Nano)), []string{"1", "2", "3"}}, {"between", fmt.Sprintf("RECORD_TIMESTAMP BETWEEN TIMESTAMP '%s' AND TIMESTAMP '%s'", lo.Format(time.RFC3339Nano), hi.Format(time.RFC3339Nano)), []string{"1", "2", "3", "4"}}} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "out.avro")
-			statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s-%s', CUTOFF=INTERVAL '0' SECOND) WHERE %s ", path, src, src, test.name, test.filter)
+			statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s-%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE %s ", path, src, src, test.name, test.filter)
 
 			// When
 			execute(t, statement, cfg)
@@ -94,7 +94,7 @@ func TestExpiredAndAboveEndCommits(t *testing.T) {
 	cfg := configuration(t)
 	path := filepath.Join(t.TempDir(), "out.avro")
 	group := src + "-expired"
-	statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' ", path, src, group, stamp.Add(-time.Millisecond).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano))
+	statement := fmt.Sprintf("INSERT INTO FILE avro('%s') SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' ", path, src, group, stamp.Add(-time.Millisecond).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano))
 
 	// When
 	execute(t, statement, cfg)

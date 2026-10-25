@@ -312,7 +312,7 @@ func (p *parser) option(scope Scope) Option {
 	p.expect("=")
 	o.ValuePosition = p.current.Position
 	switch o.Name {
-	case "CUTOFF", "ROTATE_AFTER_AGE":
+	case "MAX_STALENESS", "ROTATE_AFTER_AGE":
 		i := p.interval()
 		o.Interval = &i
 	case "GROUP":

@@ -86,7 +86,7 @@ func TestExplainCLIInputFormsLeaveFilesUnchanged(t *testing.T) {
 			require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
 			require.Zero(t, code)
 			require.Zero(t, stderr.Len())
-			require.EqualValues(t, 1, report.Version)
+			require.EqualValues(t, 2, report.Version)
 			require.True(t, report.OneOff)
 			require.Equal(t, "ONE_OFF", report.Group, "preview must not generate a run's group")
 			require.NotNil(t, report.Source.File.PositionRecords)
@@ -189,7 +189,7 @@ func TestExplainUsesOnlyReadOnlyKafkaRequests(t *testing.T) {
 			} else if output == "SELF-COPY" {
 				destination = "TOPIC 'input'"
 			}
-			query := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='secret_SENTINEL_415') INSERT INTO %s SELECT * FROM TOPIC 'input' WITH (GROUP='preview', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS (ON_ERROR=SKIP)", strings.Join(cluster.ListenAddrs(), ","), destination, stamp.Format(time.RFC3339Nano), stamp.Add(time.Minute).Format(time.RFC3339Nano))
+			query := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='secret_SENTINEL_415') INSERT INTO %s SELECT * FROM TOPIC 'input' WITH (GROUP='preview', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS (ON_ERROR=SKIP)", strings.Join(cluster.ListenAddrs(), ","), destination, stamp.Format(time.RFC3339Nano), stamp.Add(time.Minute).Format(time.RFC3339Nano))
 			var stdout, stderr bytes.Buffer
 			// When the full Fx-composed command explains the copy.
 			code := Execute(ctx, []string{"explain", "-e", query, "--json"}, nil, &stdout, &stderr)

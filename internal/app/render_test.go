@@ -16,15 +16,15 @@ import (
 
 func explanationFixture() inspect.Report {
 	lo, hi := int64(1000), int64(2000)
-	return inspect.Report{Version: 1, Fingerprint: "query-id", Group: "backfill", CutoffMS: 1000, StartRule: "WINDOW",
+	return inspect.Report{Version: 2, Fingerprint: "query-id", Group: "backfill", MaxStalenessMS: 1000, StartRule: "WINDOW",
 		Source:       inspect.Endpoint{Kind: "TOPIC", Name: "input", Connection: "prod", ClusterID: "cluster-id", TopicID: "topic-id", PartitionCount: 1},
 		Destination:  inspect.Endpoint{Kind: "FILE", Name: "out.avro", File: &inspect.FileSummary{}},
-		Partitions:   []inspect.Partition{{ID: 0, Start: 4, LogEnd: 12, Saved: true, Window: plan.Window{Lower: &lo, Upper: &hi}, WindowOrigin: "literal"}},
+		Partitions:   []inspect.Partition{{ID: 0, Start: 4, LogEnd: 12, End: new(int64(12)), Saved: true, Window: plan.Window{Lower: &lo, Upper: &hi}, WindowOrigin: "literal"}},
 		RecordErrors: inspect.ErrorPolicies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}, Warnings: []string{}}
 }
 
 func TestExplanationJSONContract(t *testing.T) {
-	// Given the public version-one JSON report.
+	// Given the public version-two JSON report.
 	want, err := os.ReadFile("testdata/explain.json")
 	require.NoError(t, err)
 	var output bytes.Buffer
@@ -53,7 +53,7 @@ func TestTextExplanationStructuresBehaviorAndEscapesNames(t *testing.T) {
 		require.Greater(t, position, previous)
 		previous = position
 	}
-	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "1970-01-01T00:00:03Z", "clock passes it and reading reaches a sampled log end", "Open transactions", "worker.tip_wait", "saved offset 1 expired", "Record errors: stop", "Output: independent Avro files"} {
+	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "saved captured end 12", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "1970-01-01T00:00:03Z", "Once the clock passes it, save the current log end", "Open transactions", "worker.tip_wait", "saved offset 1 expired", "Record errors: stop", "Output: independent Avro files"} {
 		require.Contains(t, output, want)
 	}
 	for _, absent := range []string{"query-id", "topic-id", "lookup end", "span", "Run permissions", "\x1b"} {

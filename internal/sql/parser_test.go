@@ -32,7 +32,7 @@ func TestInvalidStatements(t *testing.T) {
 		strings.Replace(base, "GROUP = 'g'", "GROUP = 'g',", 1), strings.Replace(base, "avro('a')", "json('a')", 1),
 		base + " /* unfinished", "/* nested /* comment */ */ " + base, base + " '\n", base + " \x00", base + "\xff",
 		strings.Replace(base, "GROUP = 'g'", "ON_SOURCE_FILE_CHANGED = CONTINUE", 1),
-		strings.Replace(base, "GROUP = 'g'", "CUTOFF = INTERVAL '1' WEEK", 1),
+		strings.Replace(base, "GROUP = 'g'", "MAX_STALENESS = INTERVAL '1' WEEK", 1),
 		base + " WHERE RECORD_TIMESTAMP '>=' NOW()",
 		base + " WHERE RECORD_TIMESTAMP '<' NOW()",
 	}

@@ -76,7 +76,7 @@ WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
 ```
 
-`@alias` selects a connection; named `GROUP` saves progress for reruns. Omitting `GROUP` starts a fresh copy each run. A new window, `CUTOFF` or partitioning mode needs a new group.
+`@alias` selects a connection; named `GROUP` saves progress for reruns. Omitting `GROUP` starts a fresh copy each run. A new window, `MAX_STALENESS` or partitioning mode needs a new group. `MAX_STALENESS` defaults to five minutes; override it in source `WITH`, for example `MAX_STALENESS = INTERVAL '10' MINUTE`, for known buffering or timestamp disorder. Copying starts immediately. [Completion and assumptions](../design/decisions.md#completion).
 
 ```sh
 kaferry explain --file copy.sql --config connections.toml
@@ -106,7 +106,7 @@ Keep passwords out of SQL literals and shell arguments. [Configuration rules](#c
 
 ## SQL settings
 
-`WITH` and `OPTIONS` are optional. Source `WITH` overrides `GROUP`, `START`, `CUTOFF`; destination `WITH` overrides partitioning or Avro rotation. Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
+`WITH` and `OPTIONS` are optional. Source `WITH` overrides `GROUP`, `START`, `MAX_STALENESS`; destination `WITH` overrides partitioning or Avro rotation. Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
 
 ## Permissions
 
@@ -159,11 +159,11 @@ SIGINT/SIGTERM stop reading, allow 10 s for writes, then save progress. File flu
 kaferry status -c connections.toml -f copy.sql --json
 ```
 
-`stopped` means every currently selected partition has a saved stop reason, including worker record thresholds. More input may remain; time cutoffs can miss records within the range. Kafka activity is checked twice, without an atomic snapshot; file activity is not checked. Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](reference.md#saved-status).
+`stopped` means every currently selected partition has a saved stop reason, including worker record thresholds. More input may remain; staleness stops can miss records within the range. Kafka activity is checked twice, without an atomic snapshot; file activity is not checked. Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](reference.md#saved-status).
 
 ## Resume or start over
 
-Rerun with the same `GROUP`, endpoints, filter, `CUTOFF`, partitioning mode and checkpoint directory. Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
+Rerun with the same `GROUP`, endpoints, filter, `MAX_STALENESS`, partitioning mode and checkpoint directory. Saved `NOW()` bounds are reused. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
 
 Keep output, checkpoints and locks. Archive files must stay unchanged until replay completes. [Archive recovery and moving replay](#archive-procedures).
 

@@ -17,7 +17,7 @@ func TestRunnerThresholdEqualityDoesNotStopUntilWallTimePasses(t *testing.T) {
 	r, source, sink, store, clock := fixture(t)
 	upper, stamp := int64(1000), int64(2000)
 	r.plan.Source.Kind = "TOPIC"
-	r.plan.CutoffMS = 1000
+	r.plan.MaxStalenessMS = 1000
 	clock.now = time.UnixMilli(stamp)
 	source.high = 1
 	query := &watermarkSource{testSource: source}
@@ -42,7 +42,7 @@ func TestRunnerThresholdEqualityDoesNotStopUntilWallTimePasses(t *testing.T) {
 	require.NoError(t, r.commit(r.ids()))
 
 	// Then the tip rule stops and saves the next position, not a timestamp trigger.
-	if query.calls != 1 || !r.readyToExit() || r.tipStops != 1 || r.timestampStops != 0 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1, Stop: &Stop{Reason: "tip", At: 1}}}}) {
+	if query.calls != 1 || !r.readyToExit() || r.tipStops != 1 || r.timestampStops != 0 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1, End: new(int64(1))}}, {{Partition: 0, Position: 1, End: new(int64(1)), Stop: &Stop{Reason: "tip", At: 1}}}}) {
 		t.Fatal("incorrect tip completion", query.calls, r.tipStops, store.saves)
 	}
 }
@@ -71,7 +71,7 @@ func TestRunnerFixedTipWaitsForAcknowledgementAndDoesNotCopyLaterRecords(t *test
 	require.NoError(t, r.commit(r.ids()))
 
 	// Then only the first record was submitted and unresolved work prevents saving.
-	if query.calls != 1 || len(sink.writes) != 1 || r.readyToExit() || len(store.saves) != 0 || r.tracker.Confirmed(0).Position != 0 {
+	if query.calls != 1 || len(sink.writes) != 1 || r.readyToExit() || len(store.saves) != 1 || store.saves[0][0].Position != 0 || *store.saves[0][0].End != 3 || r.tracker.Confirmed(0).Position != 0 {
 		t.Fatal("copied past the tip or saved unresolved work", query.calls, sink.writes, store.saves)
 	}
 
@@ -81,7 +81,7 @@ func TestRunnerFixedTipWaitsForAcknowledgementAndDoesNotCopyLaterRecords(t *test
 	require.NoError(t, r.commit(r.ids()))
 
 	// Then completion saves exactly the original end and preserves diagnostic order.
-	if !r.readyToExit() || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 3, Stop: &Stop{Reason: "tip", At: 3}}}}) {
+	if !r.readyToExit() || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 0, End: new(int64(3))}}, {{Partition: 0, Position: 3, End: new(int64(3)), Stop: &Stop{Reason: "tip", At: 3}}}}) {
 		t.Fatal("sampled end changed", store.saves)
 	}
 	var messages []string
@@ -92,10 +92,11 @@ func TestRunnerFixedTipWaitsForAcknowledgementAndDoesNotCopyLaterRecords(t *test
 		messages = append(messages, attributes["msg"].(string))
 		details = append(details, attributes)
 	}
-	require.Equal(t, []string{"partition assigned", "tip watermark sampled", "partition stopped", "progress committed"}, messages, "completion diagnostics changed")
+	require.Equal(t, []string{"partition assigned", "tip watermark sampled", "progress committed", "partition stopped", "progress committed"}, messages, "completion diagnostics changed")
 	for i, expected := range []map[string]any{
 		{"partition": float64(0), "position": float64(0)},
 		{"partition": float64(0), "position": float64(0), "stable": float64(0), "high_watermark": float64(3)},
+		{"partition": float64(0), "position": float64(0)},
 		{"partition": float64(0), "position": float64(3), "reason": "tip", "high_watermark": float64(3)},
 		{"partition": float64(0), "position": float64(3)},
 	} {

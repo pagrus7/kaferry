@@ -53,7 +53,7 @@ func TestCodecAcceptsJSONWhitespaceAndFieldOrder(t *testing.T) {
 func TestCodecRejectsMalformedOrUnsupportedData(t *testing.T) {
 	for _, tc := range []struct{ name, text, kind string }{
 		{"foreign", "other;{}", "foreign"},
-		{"version", "kaferry:3;opaque", "unsupported version of"},
+		{"version", "kaferry:4;opaque", "unsupported version of"},
 		{"previous version", `kaferry:1;{"fp":"fp","tid":"id"}`, "unsupported version of"},
 		{"missing version", "kaferry:;{}", "unsupported version of"},
 		{"oversize", strings.Repeat("x", MaxBytes+1), "oversized"},
@@ -114,4 +114,29 @@ func TestCodecValidatesWritesAndSizeLimit(t *testing.T) {
 	// Then the reader accepts that exact limit.
 	_, err = NewCodec().Decode(text)
 	require.NoError(t, err)
+}
+
+func TestCapturedEndWireContract(t *testing.T) {
+	// Given a captured empty end, distinct from no captured end.
+	p := Progress{Fingerprint: "fp", TopicID: "id", End: new(int64(0))}
+	// When saving and restoring it, then version 3 preserves the boundary exactly.
+	text, err := NewCodec().Encode(p)
+	require.NoError(t, err)
+	require.Equal(t, `kaferry:3;{"fp":"fp","tid":"id","end":0}`, text)
+	got, err := NewCodec().Decode(text)
+	require.NoError(t, err)
+	require.Equal(t, p, got)
+	for _, text := range []string{
+		`kaferry:2;{"fp":"fp","tid":"id","end":0}`,
+		`kaferry:3;{"fp":"fp","tid":"id"}`,
+		`kaferry:3;{"fp":"fp","tid":"id","end":null}`,
+		`kaferry:3;{"fp":"fp","tid":"id","end":-1}`,
+		`kaferry:3;{"fp":"fp","tid":"id","end":1,"end":2}`,
+		`kaferry:3;{"fp":"fp","tid":"id","end":1,"stop":{"reason":"tip","at":2}}`,
+		`kaferry:3;{"fp":"fp","tid":"id","end":1,"stop":{"reason":"tip","at":0}}`,
+	} {
+		// Given malformed boundaries, when decoding, then reject without accepting a different range.
+		_, err := NewCodec().Decode(text)
+		require.Error(t, err)
+	}
 }

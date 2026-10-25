@@ -58,12 +58,12 @@ func TestTipSamplingRetriesWithoutStartingWaitOrBlockingOtherPartitions(t *testi
 	require.NoError(t, err)
 	err = r.tips()
 
-	// Then each partition completes and its successful sample starts the wait clock.
+	// Then each empty partition completes without starting a transaction wait.
 	if err != nil || query.calls != 4 {
 		t.Fatal(query.calls, err)
 	}
 	for _, p := range r.partitions {
-		if p.stop == nil || p.high == nil || !p.waitStarted.Equal(clock.Now()) {
+		if p.stop == nil || p.high == nil || !p.waitStarted.IsZero() {
 			t.Fatal("recovery did not complete", p)
 		}
 	}
@@ -127,7 +127,7 @@ func TestTipSamplingBackoffCapsResetsAndLimitsLogs(t *testing.T) {
 	err := r.tips()
 
 	// Then retry state resets, the partition completes, and logs remain bounded.
-	if err != nil || p.stop == nil || p.sampling.delay != 0 || p.sampling.attempts != 0 || !p.sampling.next.IsZero() || !p.sampling.logged.IsZero() || !p.waitStarted.Equal(clock.Now()) {
+	if err != nil || p.stop == nil || p.sampling.delay != 0 || p.sampling.attempts != 0 || !p.sampling.next.IsZero() || !p.sampling.logged.IsZero() || !p.waitStarted.IsZero() {
 		t.Fatal("retry state not reset", p, err)
 	}
 	if strings.Count(logs.String(), "tip watermark query retrying") != 2 || strings.Count(logs.String(), "tip watermark query recovered") != 1 {

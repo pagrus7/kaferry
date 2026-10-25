@@ -22,7 +22,7 @@ func partitionRows(p plan.Plan, located kafkaport.Positioning, saved map[int32]i
 				origin = "adopted"
 			}
 		}
-		rows = append(rows, Partition{ID: id, Start: assignment.Cursor.Position, Saved: exists, Window: assignment.Window, WindowOrigin: origin, LogStart: located.LogStart[id], LogEnd: located.LogEnd[id]})
+		rows = append(rows, Partition{ID: id, Start: assignment.Cursor.Position, End: assignment.Cursor.End, Saved: exists, Window: assignment.Window, WindowOrigin: origin, LogStart: located.LogStart[id], LogEnd: located.LogEnd[id]})
 		if exists && position < located.LogStart[id] {
 			warnings = append(warnings, fmt.Sprintf("Partition %d: saved offset %d expired; start is log start %d.", id, position, located.LogStart[id]))
 		} else if _, retention := located.Retention[id]; retention {

@@ -21,13 +21,15 @@ func TestCommitMetadataUsesTheCapturedProgress(t *testing.T) {
 	// Given a confirmed cursor and the metadata encoded for that commit.
 	id := [16]byte{1}
 	stop := &core.Stop{Reason: "tip", At: 42}
+	end := int64(42)
 	c := &Committer{codec: commitmeta.NewCodec(), topic: "input", group: "group", topicID: id, metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: topicID(id)}}}
-	offsets, encoded, err := c.snapshot([]core.Cursor{{Partition: 0, Position: 42, Stop: stop}})
+	offsets, encoded, err := c.snapshot([]core.Cursor{{Partition: 0, Position: 42, Stop: stop, End: &end}})
 	require.NoError(t, err)
 	require.EqualValues(t, 42, offsets["input"][0].Offset)
 	hook := c.metadataHook(encoded)
 	// When state changes before the asynchronous hook runs.
 	stop.At = 43
+	end = 43
 	c.metadata[0] = kafkaport.Progress{Fingerprint: "other"}
 	req := &kmsg.OffsetCommitRequest{Group: "group", MemberID: "member", Generation: 3, Topics: []kmsg.OffsetCommitRequestTopic{{TopicID: id, Partitions: []kmsg.OffsetCommitRequestTopicPartition{{Partition: 0, Offset: 42}}}}}
 	require.NoError(t, hook(req))
@@ -35,6 +37,7 @@ func TestCommitMetadataUsesTheCapturedProgress(t *testing.T) {
 	got, err := kafkaport.DecodeProgress(commitmeta.NewCodec(), req.Topics[0].Partitions[0].Metadata, "fp", topicID(id), false)
 	require.NoError(t, err)
 	require.Equal(t, &core.Stop{Reason: "tip", At: 42}, got.Stop)
+	require.Equal(t, new(int64(42)), got.End)
 	// When group ownership is lost, then no generationless commit can escape.
 	req.Generation = -1
 	var recoverable *core.Recoverable
@@ -51,7 +54,7 @@ func TestCommitterPreservesPartitionErrorsAndRejectsUnownedPositions(t *testing.
 		t.Fatal("commit error lost", err)
 	}
 	// When asked to save a lost partition or invalid position, then the client is never called.
-	for _, cursor := range []core.Cursor{{Partition: 2, Position: 2}, {Partition: 0, Position: -1}} {
+	for _, cursor := range []core.Cursor{{Partition: 2, Position: 2}, {Partition: 0, Position: -1}, {Partition: 0, Position: 2, End: new(int64(1))}} {
 		client.committed = nil
 		if _, err := c.Save(context.Background(), []core.Cursor{cursor}); err == nil || client.committed != nil {
 			t.Fatal("unsafe cursor reached broker", cursor, err)

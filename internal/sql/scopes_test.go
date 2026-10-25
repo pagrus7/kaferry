@@ -9,7 +9,7 @@ import (
 
 func TestSettingsIdentifyTheirEndpointOrCopyScope(t *testing.T) {
 	// Given every setting in its agreed clause.
-	input := "INSERT INTO FILE avro('out') WITH(ROTATE_AFTER_SIZE=2g,ROTATE_AFTER_AGE=INTERVAL '2' HOUR) SELECT * FROM TOPIC 'in' WITH(GROUP='g',CUTOFF=INTERVAL '1' MINUTE) WHERE RECORD_TIMESTAMP < NOW() OPTIONS(WORKER_STOP_AFTER_RECORDS=5,ON_ERROR=FAIL)"
+	input := "INSERT INTO FILE avro('out') WITH(ROTATE_AFTER_SIZE=2g,ROTATE_AFTER_AGE=INTERVAL '2' HOUR) SELECT * FROM TOPIC 'in' WITH(GROUP='g',MAX_STALENESS=INTERVAL '1' MINUTE) WHERE RECORD_TIMESTAMP < NOW() OPTIONS(WORKER_STOP_AFTER_RECORDS=5,ON_ERROR=FAIL)"
 	// When parsing, then endpoint and whole-copy settings remain separate.
 	s, err := NewParser().Parse(input)
 	require.NoError(t, err)
@@ -20,7 +20,7 @@ func TestSettingsIdentifyTheirEndpointOrCopyScope(t *testing.T) {
 		{"INSERT INTO TOPIC 'out' WITH(GROUP='secret') SELECT * FROM TOPIC 'in' WITH(GROUP='g',START=EARLIEST)", "GROUP=", "GROUP is a source setting; put it in WITH after the FROM endpoint"},
 		{"INSERT INTO TOPIC 'out' SELECT * FROM TOPIC 'in' WITH(GROUP='g',PARTITIONING=KEY)", "PARTITIONING=", "PARTITIONING is a destination setting; put it in WITH after the INTO endpoint"},
 		{"INSERT INTO TOPIC 'out' SELECT * FROM TOPIC 'in' WITH(GROUP='g',ON_ERROR=FAIL)", "ON_ERROR=", "ON_ERROR is a copy setting; put it in OPTIONS"},
-		{"INSERT INTO TOPIC 'out' SELECT * FROM TOPIC 'in' WITH(GROUP='g') OPTIONS(CUTOFF=INTERVAL '1' SECOND)", "CUTOFF=", "CUTOFF is a source setting; put it in WITH after the FROM endpoint"},
+		{"INSERT INTO TOPIC 'out' SELECT * FROM TOPIC 'in' WITH(GROUP='g') OPTIONS(MAX_STALENESS=INTERVAL '1' SECOND)", "MAX_STALENESS=", "MAX_STALENESS is a source setting; put it in WITH after the FROM endpoint"},
 		{"INSERT INTO FILE avro('out') WITH(ON_REJECTED_TIMESTAMP=SKIP) SELECT * FROM FILE avro('in') WITH(GROUP='g')", "ON_REJECTED_TIMESTAMP=", "ON_REJECTED_TIMESTAMP is a copy setting; put it in OPTIONS"},
 	} {
 		// Given a recognized setting in the wrong clause, when parsing, then name its correct clause at the setting.

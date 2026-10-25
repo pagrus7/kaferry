@@ -175,15 +175,20 @@ func TestSavedProgressRequiresEveryPartitionAndExactMetadata(t *testing.T) {
 }
 
 func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
-	for _, scenario := range []string{"valid", "fingerprint", "topic identity", "missing relative window", "stop beyond commit", "window shape", "literal mismatch", "cutoff overflow"} {
+	for _, scenario := range []string{"valid", "fingerprint", "topic identity", "missing relative window", "stop beyond commit", "window shape", "literal mismatch", "staleness overflow", "offset beyond captured end", "captured end without upper bound"} {
 		t.Run(scenario, func(t *testing.T) {
 			// Given committed progress whose query, window or output may be incompatible.
 			id := [16]byte{1}
 			progress := kafkaport.Progress{Fingerprint: "fp", TopicID: topicID(id)}
 			var spec plan.WindowSpec
-			var cutoff int64
+			var staleness int64
 			lower := int64(10)
 			switch scenario {
+			case "offset beyond captured end":
+				progress.End = new(int64(41))
+				spec.Upper = &plan.Expression{LiteralMS: 1000}
+			case "captured end without upper bound":
+				progress.End = new(int64(42))
 			case "fingerprint":
 				progress.Fingerprint = "other"
 			case "topic identity":
@@ -197,16 +202,16 @@ func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
 			case "literal mismatch":
 				progress.Window = &plan.Window{Lower: &lower}
 				spec.Lower = &plan.Expression{LiteralMS: lower + 1}
-			case "cutoff overflow":
+			case "staleness overflow":
 				upper := int64(math.MaxInt64)
 				progress.Window = &plan.Window{Upper: &upper}
 				spec.Upper = &plan.Expression{LiteralMS: upper}
-				cutoff = 1
+				staleness = 1
 			}
 			text := encodeMetadata(progress)
 			inspector := &Inspector{codec: commitmeta.NewCodec(), topicID: id, parts: []int32{0}}
 			// When startup or assignment validates saved progress through their common path.
-			positions, metadata, err := inspector.decodeSaved(map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 42, Metadata: &text}}, "fp", spec, cutoff)
+			positions, metadata, err := inspector.decodeSaved(map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 42, Metadata: &text}}, "fp", spec, staleness)
 			// Then only compatible progress can reach positioning.
 			if scenario == "valid" {
 				if err != nil || positions[0] != 42 || len(metadata) != 1 {

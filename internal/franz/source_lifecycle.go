@@ -37,7 +37,7 @@ func (s *Source) lifecycle(event lifecycleEvent) error {
 			return err
 		}
 	}
-	saved, metadata, err := s.inspector.Saved(ctx, s.plan.Group, s.fingerprint, s.plan.Window, s.plan.CutoffMS)
+	saved, metadata, err := s.inspector.Saved(ctx, s.plan.Group, s.fingerprint, s.plan.Window, s.plan.MaxStalenessMS)
 	if err != nil {
 		event.answer <- lifecycleAnswer{err: err}
 		return err

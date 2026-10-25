@@ -33,7 +33,7 @@ func TestCopyDestinationAcceptableRecordAboveProducerDefault(t *testing.T) {
 	payload := bytes.Repeat([]byte{0, 255}, 505000)
 	headers := []kgo.RecordHeader{{Key: "duplicate", Value: nil}, {Key: "duplicate", Value: []byte{}}}
 	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Key: []byte("large"), Value: payload, Headers: headers, Timestamp: stamp})
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s-large', CUTOFF=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", dst, src, src, stamp.Add(time.Second).Format(time.RFC3339Nano))
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s-large', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", dst, src, src, stamp.Add(time.Second).Format(time.RFC3339Nano))
 
 	// When copying with no explicit producer size setting.
 	execute(t, statement, configuration(t))

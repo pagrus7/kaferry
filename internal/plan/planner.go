@@ -65,7 +65,7 @@ type Plan struct {
 	Start                  string
 	Window                 WindowSpec
 	Partitions             *PartitionFilter
-	CutoffMS               int64
+	MaxStalenessMS         int64
 	WorkerStopAfterRecords uint64
 	Policies               Policies
 }
@@ -96,7 +96,7 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 		plan.Destination.Partitioning = Preserve
 	}
 	if plan.Source.Kind == "TOPIC" && plan.Window.Upper != nil {
-		plan.CutoffMS = 60000
+		plan.MaxStalenessMS = 300000
 	}
 	if err = plan.Destination.destinationOptions(statement.Destination.Options); err != nil {
 		return Plan{}, err
@@ -108,8 +108,8 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 		return Plan{}, err
 	}
 	if hi := plan.Window.Upper; hi != nil && !hi.Now {
-		if _, err := checkedAdd(hi.LiteralMS, plan.CutoffMS); err != nil {
-			return Plan{}, sql.At(optionPosition(statement.Source.Options, "CUTOFF", statement.WherePosition), fmt.Errorf("upper bound plus CUTOFF: %w", err))
+		if _, err := checkedAdd(hi.LiteralMS, plan.MaxStalenessMS); err != nil {
+			return Plan{}, sql.At(optionPosition(statement.Source.Options, "MAX_STALENESS", statement.WherePosition), fmt.Errorf("upper bound plus MAX_STALENESS: %w", err))
 		}
 	}
 	if plan.Source.Kind == "TOPIC" {
@@ -221,14 +221,18 @@ func (p Plan) Fingerprint(sourceClusterID, destinationClusterID string) (string,
 		return "", fmt.Errorf("source and destination are the same Kafka topic")
 	}
 	canonical := struct {
-		Version      int
-		Source       identity
-		Destination  identity
-		Window       WindowSpec
-		CutoffMS     int64
-		Partitioning string           `json:",omitempty"`
-		Partitions   *PartitionFilter `json:",omitempty"`
-	}{Version: 1, Source: source, Destination: destination, Window: p.Window, CutoffMS: p.CutoffMS}
+		Version     int
+		Source      identity
+		Destination identity
+		Window      WindowSpec
+		// CutoffMS is the fixed identity field name for unbounded Kafka and archive queries.
+		MaxStalenessMS int64            `json:"CutoffMS"`
+		Partitioning   string           `json:",omitempty"`
+		Partitions     *PartitionFilter `json:",omitempty"`
+	}{Version: 1, Source: source, Destination: destination, Window: p.Window, MaxStalenessMS: p.MaxStalenessMS}
+	if p.Source.Kind == "TOPIC" && p.Window.Upper != nil {
+		canonical.Version = 2
+	}
 	if p.Destination.PreservesPartitions() {
 		canonical.Partitioning = Preserve
 	}
