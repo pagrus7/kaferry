@@ -1,10 +1,6 @@
 # Client compatibility
 
-Kafka-client and deployment constraints. See [permissions](../docs/usage.md#permissions), [copy behavior](decisions.md), and [installation](../README.md#install).
-
-## Known issues
-
-When Kaferry reads Kafka, franz-go v1.22.2 misreads record timestamps outside ±9,223,372,036,854 Unix milliseconds. [Kafka 4+ rejects new far-future timestamps by default](https://kafka.apache.org/40/generated/topic_config.html#topicconfigs_message.timestamp.after.max.ms); existing records, extreme past timestamps and custom settings can still expose this limitation.
+Kafka-client and deployment constraints. See [copy caveats](../docs/caveats.md), [permissions](../docs/usage.md#permissions), [copy behavior](decisions.md), and [installation](../README.md#install).
 
 ## Tested configurations
 

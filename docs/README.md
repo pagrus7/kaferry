@@ -4,6 +4,7 @@ Start with [installation](install.md), then [copy three known records without Ka
 
 | Reader’s question | Guide |
 | --- | --- |
+| What should I check before copying my own data? | [Caveats](caveats.md) |
 | How do I run, stop, resume and check a copy? | [Usage](usage.md) |
 | How do I recover or move an archive replay? | [Archive procedures](usage.md#archive-procedures) |
 | Why is my copy idle, failing or repeating data? | [Troubleshooting](usage.md#troubleshooting) |
