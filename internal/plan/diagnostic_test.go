@@ -40,6 +40,7 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 		{"interval too large", files + "WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '9223372036854775808' SECOND", "'9223372036854775808'", "interval is too large; reduce its magnitude", nil, nil},
 		{"interval overflow", files + "WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '9223372036854775807' HOUR", "'9223372036854775807'", "interval arithmetic overflows milliseconds; reduce its magnitude", nil, nil},
 		{"MAX_STALENESS overflow", source(topics, "GROUP='g', MAX_STALENESS=INTERVAL '9223372036854775' SECOND") + "WHERE RECORD_TIMESTAMP < TIMESTAMP '9999-12-31T23:59:59Z'", "MAX_STALENESS", "upper bound plus MAX_STALENESS: timestamp arithmetic overflows milliseconds", nil, nil},
+		{"MAX_OUT_OF_ORDER overflow", source(topics, "GROUP='g', MAX_STALENESS=OFF, MAX_OUT_OF_ORDER=INTERVAL '9223372036854775' SECOND") + "WHERE RECORD_TIMESTAMP < TIMESTAMP '1970-01-01T00:00:01Z'", "MAX_OUT_OF_ORDER", "upper bound plus MAX_OUT_OF_ORDER: timestamp arithmetic overflows milliseconds", nil, nil},
 		{"default MAX_STALENESS overflow", topics + "WHERE RECORD_TIMESTAMP < TIMESTAMP '1970-01-01T00:00:00Z' + INTERVAL '9223372036854775' SECOND", "WHERE", "upper bound plus MAX_STALENESS: timestamp arithmetic overflows milliseconds", nil, nil},
 		{"empty range", files + "WHERE RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP < NOW()", "< NOW()", "time range is empty; lower bound at line 4, column 24 must precede upper bound at line 4, column 54", nil, nil},
 		{"conflicting policies", topics + "WHERE RECORD_TIMESTAMP < NOW()\nOPTIONS(ON_ERROR=SKIP, ON_MISSING_TIMESTAMP=FAIL)", "ON_MISSING_TIMESTAMP", "ON_ERROR cannot be combined with specific error policies; choose ON_ERROR or the specific policies; conflicting declaration at line 5, column 9", nil, nil},
@@ -78,6 +79,7 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 			require.Equal(t, position, diagnostic.Position)
 			require.Equal(t, tc.message, diagnostic.Err.Error())
 			require.NotContains(t, err.Error(), "private/path")
+			require.NotContains(t, err.Error(), "9223372036854775")
 		})
 	}
 }

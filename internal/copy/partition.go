@@ -59,33 +59,28 @@ func (p *partition) sampled(high int64) {
 
 // tipAction is called for active, bounded Kafka partitions. It decides whether
 // to sample, stop or time out. A successful sample
-// stays fixed across assignments through saved progress.
-func (p *partition) tipAction(now time.Time, staleness int64, wait time.Duration) (tipAction, error) {
+// stays fixed across assignments through saved progress. The caller admits only
+// saved ends or enabled clock capture with an already validated upper threshold.
+func (p *partition) tipAction(now time.Time, staleness int64, wait time.Duration) tipAction {
 	if p.high == nil {
-		if staleness < 0 {
-			return tipWait, nil
-		}
-		threshold, err := p.window.StopThreshold(staleness)
-		if err != nil {
-			return tipWait, err
-		}
+		threshold := *p.window.Upper + staleness
 		if now.UnixMilli() > threshold && p.sampling.due(now) {
-			return tipSample, nil
+			return tipSample
 		}
-		return tipWait, nil
+		return tipWait
 	}
 	if p.position >= *p.high {
-		return tipStop, nil
+		return tipStop
 	}
 	if !p.atTip {
 		p.waitStarted = time.Time{}
-		return tipWait, nil
+		return tipWait
 	}
 	if p.waitStarted.IsZero() {
 		p.waitStarted = now
 	}
 	if now.Sub(p.waitStarted) > wait {
-		return tipTimeout, nil
+		return tipTimeout
 	}
-	return tipWait, nil
+	return tipWait
 }

@@ -15,9 +15,6 @@ func (p *positioner) resolveOffsetRanges(ctx context.Context, assignments []core
 	for _, a := range assignments {
 		id := a.Cursor.Partition
 		r := p.plan.OffsetRange(id)
-		if r == nil {
-			continue
-		}
 		if _, resuming := saved[id]; resuming && r.HasEnd() && a.Cursor.End == nil {
 			return conflict("partition %d saved offset range is missing its end", id)
 		}
@@ -43,9 +40,6 @@ func (p *positioner) resolveOffsetRanges(ctx context.Context, assignments []core
 		a := &assignments[i]
 		id := a.Cursor.Partition
 		r := p.plan.OffsetRange(id)
-		if r == nil {
-			continue
-		}
 		if r.Latest && a.Cursor.End == nil {
 			p.high[id] = max(p.high[id], ends[id])
 		}

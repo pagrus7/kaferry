@@ -47,8 +47,7 @@ func TestPartitionSamplesOnlyAfterThresholdAndRetryDeadline(t *testing.T) {
 	now := time.UnixMilli(1100)
 	assertAction := func(want tipAction) {
 		t.Helper()
-		got, err := p.tipAction(now, 100, time.Second)
-		require.NoError(t, err)
+		got := p.tipAction(now, 100, time.Second)
 		require.Equal(t, want, got)
 	}
 
@@ -86,19 +85,15 @@ func TestPartitionTipTimeoutIsStrictAndCompletionWins(t *testing.T) {
 	now := time.UnixMilli(2000)
 	p.sampled(3)
 	p.reachedTip(0, false)
-	_, err := p.tipAction(now, 0, time.Second)
-	require.NoError(t, err)
+	p.tipAction(now, 0, time.Second)
 
 	// When the wait budget is exactly reached, then exceeded.
-	atDeadline, err := p.tipAction(now.Add(time.Second), 0, time.Second)
-	require.NoError(t, err)
-	afterDeadline, err := p.tipAction(now.Add(time.Second+time.Nanosecond), 0, time.Second)
-	require.NoError(t, err)
+	atDeadline := p.tipAction(now.Add(time.Second), 0, time.Second)
+	afterDeadline := p.tipAction(now.Add(time.Second+time.Nanosecond), 0, time.Second)
 	p.position = 3
-	completed, err := p.tipAction(now.Add(2*time.Second), 0, time.Second)
+	completed := p.tipAction(now.Add(2*time.Second), 0, time.Second)
 
 	// Then equality keeps waiting, timeout is strict, and a reached end completes.
-	require.NoError(t, err)
 	require.Equal(t, tipWait, atDeadline)
 	require.Equal(t, tipTimeout, afterDeadline)
 	require.Equal(t, tipStop, completed)
@@ -113,11 +108,10 @@ func TestPartitionEmptyAndFileEnds(t *testing.T) {
 
 	// When the empty log end is sampled and the file reaches its final cursor.
 	kafka.sampled(0)
-	action, err := kafka.tipAction(now, 0, time.Minute)
+	action := kafka.tipAction(now, 0, time.Minute)
 	file.reachedTip(80, true)
 
 	// Then Kafka can stop immediately and file EOF stops at its captured position.
-	require.NoError(t, err)
 	require.Equal(t, tipStop, action)
 	require.Equal(t, &Stop{Reason: "eof", At: 80}, file.stop)
 	require.True(t, file.atTip)

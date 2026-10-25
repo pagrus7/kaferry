@@ -374,10 +374,7 @@ func (r *Runner) tips() error {
 		if p.stop != nil || r.plan.Source.Kind != "TOPIC" || p.high == nil && (p.window.Upper == nil || r.plan.MaxStalenessMS < 0) {
 			continue
 		}
-		action, err := p.tipAction(r.clock.Now(), r.plan.MaxStalenessMS, wait)
-		if err != nil {
-			return err
-		}
+		action := p.tipAction(r.clock.Now(), r.plan.MaxStalenessMS, wait)
 		if action == tipSample {
 			if sampled {
 				continue
@@ -386,10 +383,7 @@ func (r *Runner) tips() error {
 			if err := r.sampleHigh(id, p); err != nil {
 				return err
 			}
-			action, err = p.tipAction(r.clock.Now(), r.plan.MaxStalenessMS, wait)
-			if err != nil {
-				return err
-			}
+			action = p.tipAction(r.clock.Now(), r.plan.MaxStalenessMS, wait)
 		}
 		switch action {
 		case tipStop:
