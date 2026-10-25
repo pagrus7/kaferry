@@ -21,15 +21,16 @@ Homebrew: `brew install pagrus7/tap/kaferry`. [Source builds, containers and red
 
 ## Quick start
 
-[Download and unpack the tutorial](docs/usage.md#first-copy-without-kafka) for three known records and no broker. From its `archive-demo` directory:
-
 ```sh
-mkdir -p checkpoints
-kaferry run -c tutorial.toml -f copy.sql
-kaferry status -c tutorial.toml -f copy.sql --json
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
 ```
 
-The first run confirms three records; rerunning the same named group confirms zero. [Kafka setup and copying](docs/usage.md#copy-between-kafka-topics) · [Authentication](docs/usage.md#connections).
+```text
+{"time":"2026-10-25T22:39:06.595190641Z","level":"INFO","msg":"partition assigned","partition":0,"position":0,"window":{"lower":null,"upper":null}}
+{"time":"2026-10-25T22:39:06.602132061Z","level":"INFO","msg":"copy summary","submitted":3,"confirmed":3,"filtered":0,"skipped":0,"timestamp_stops":0,"tip_stops":0,"peak_uncommitted_records":3,"peak_uncommitted_bytes":534}
+```
+
+With a fresh `kaferry-demo` volume, this copies the three bundled sample records into `output` and saves progress. The files remain after the container exits. [Inspect results, rerun and reset](docs/usage.md#first-copy-with-docker) · [Run without Docker](docs/usage.md#first-copy-without-kafka) · [Copy Kafka topics](docs/usage.md#copy-between-kafka-topics).
 
 ## Caveats
 

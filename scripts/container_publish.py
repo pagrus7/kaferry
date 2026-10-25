@@ -1,4 +1,4 @@
-"""Push an already-tested OCI archive, without replacing an existing version digest."""
+"""Push a tested OCI archive; only the latest alias may replace an existing digest."""
 
 import argparse
 import hashlib
@@ -13,12 +13,14 @@ def publish(archive, reference):
     existing = subprocess.run(["skopeo", "inspect", "--raw", "docker://" + reference], capture_output=True)
     if existing.returncode == 0:
         digest = "sha256:" + hashlib.sha256(existing.stdout).hexdigest()
-        if digest != expected:
+        if digest == expected:
+            return expected
+        if not reference.endswith(":latest"):
             raise ValueError("version tag already exists with a different digest; do not replace published images")
-        return expected
-    error = existing.stderr.decode(errors="replace").lower()
-    if not any(message in error for message in ("manifest unknown", "name unknown", "status code: 404")):
-        raise RuntimeError("cannot check existing version: " + error)
+    else:
+        error = existing.stderr.decode(errors="replace").lower()
+        if not any(message in error for message in ("manifest unknown", "name unknown", "status code: 404")):
+            raise RuntimeError("cannot check existing version: " + error)
     digest_file = Path(str(archive) + ".digest")
     subprocess.run(["skopeo", "copy", "--all", "--preserve-digests", "--digestfile", str(digest_file),
                     source, "docker://" + reference], check=True, stdout=sys.stderr)
