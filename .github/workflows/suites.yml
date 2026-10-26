@@ -81,7 +81,7 @@ jobs:
               ;;
             qualification)
               python3 scripts/ci.py qualification make qualification KAFERRY_TEST_OUTPUT=-json
-              python3 scripts/ci.py verify-tests qualification 'TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight' 'TestSaslTlsScramMechanisms/SCRAM-SHA-256' 'TestSaslTlsScramMechanisms/SCRAM-SHA-512' 'TestReplicatedClusterLeaderFailurePreservesCopy'
+              python3 scripts/ci.py verify-tests qualification 'TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight' 'TestSaslTlsScramMechanisms/SCRAM-SHA-256' 'TestSaslTlsScramMechanisms/SCRAM-SHA-512' 'TestSaslTlsExternalAuthentication/OAUTHBEARER' 'TestSaslTlsExternalAuthentication/GSSAPI' 'TestReplicatedClusterLeaderFailurePreservesCopy'
               ;;
             fault)
               python3 scripts/ci.py fault make fault KAFERRY_TEST_OUTPUT=-json

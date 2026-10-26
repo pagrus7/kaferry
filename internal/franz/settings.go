@@ -17,6 +17,8 @@ import (
 )
 
 type settings struct {
+	oauth                                            oauthSettings
+	kerberos                                         kerberosSettings
 	brokers, protocol, mechanism, username, password string
 	ca, certificate, key, hostname, clientID         string
 	compression                                      string
@@ -38,6 +40,7 @@ func invalidProperty(name, hint string) error {
 func parseSettings(properties plan.Properties) (settings, error) {
 	s := settings{protocol: "PLAINTEXT", mechanism: "PLAIN", hostname: "https", compression: "none", linger: 5 * time.Millisecond, request: 30 * time.Second, overhead: 2 * time.Second, metadata: 5 * time.Minute, session: 45 * time.Second, heartbeat: 3 * time.Second, rebalance: 5 * time.Minute, messageBytes: 1000000, fetchBytes: 50 << 20, partitionBytes: 1 << 20}
 	rules := s.rules()
+	s.kerberos.config, s.kerberos.service = "/etc/krb5.conf", "kafka"
 	values := properties.Values()
 	_, s.explicitMessageBytes = values["message.max.bytes"]
 	keys := slices.Sorted(maps.Keys(values))
@@ -61,7 +64,13 @@ type propertyRule func(string) error
 func (s *settings) rules() map[string]propertyRule {
 	return map[string]propertyRule{
 		"bootstrap.servers": textProperty(&s.brokers), "security.protocol": choiceProperty(&s.protocol, "PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"),
-		"sasl.mechanism": choiceProperty(&s.mechanism, "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"), "sasl.username": textProperty(&s.username), "sasl.password": textProperty(&s.password),
+		"sasl.mechanism": choiceProperty(&s.mechanism, "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512", "OAUTHBEARER", "AWS_MSK_IAM", "GSSAPI"), "sasl.username": textProperty(&s.username), "sasl.password": textProperty(&s.password),
+		"sasl.oauthbearer.token.endpoint.url": textProperty(&s.oauth.endpoint),
+		"sasl.oauthbearer.client.id":          textProperty(&s.oauth.clientID), "sasl.oauthbearer.client.secret": textProperty(&s.oauth.secret),
+		"sasl.oauthbearer.scope": textProperty(&s.oauth.scope), "sasl.oauthbearer.ssl.ca.location": textProperty(&s.oauth.ca),
+		"sasl.oauthbearer.token.file": textProperty(&s.oauth.tokenFile),
+		"sasl.kerberos.principal":     textProperty(&s.kerberos.principal), "sasl.kerberos.keytab": textProperty(&s.kerberos.keytab),
+		"sasl.kerberos.config": textProperty(&s.kerberos.config), "sasl.kerberos.service.name": textProperty(&s.kerberos.service),
 		"ssl.ca.location": textProperty(&s.ca), "ssl.certificate.location": textProperty(&s.certificate), "ssl.key.location": textProperty(&s.key),
 		"ssl.endpoint.identification.algorithm": choiceProperty(&s.hostname, "https", "none"), "client.id": textProperty(&s.clientID),
 		"message.max.bytes":  intProperty(&s.messageBytes, 1000, 1000000000),
@@ -155,8 +164,10 @@ func (s settings) validate(values map[string]string, keys []string) error {
 			}
 		}
 	}
-	if strings.HasPrefix(s.protocol, "SASL_") && (s.username == "" || s.password == "") {
-		return invalidProperty("sasl.username/sasl.password", "both are required for SASL")
+	if strings.HasPrefix(s.protocol, "SASL_") {
+		if err := s.validateAuthentication(keys); err != nil {
+			return err
+		}
 	}
 	if (s.certificate == "") != (s.key == "") {
 		return invalidProperty("ssl.certificate.location/ssl.key.location", "both are required for a client certificate")

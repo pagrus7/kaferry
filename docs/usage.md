@@ -216,6 +216,57 @@ WITH CONNECTION prod AS ('sasl.password' = ENV('PROD_PASSWORD'))
 
 Keep passwords out of SQL literals and shell arguments. [Configuration rules](#configuration).
 
+### OAuth bearer tokens
+
+For an OAuth issuer that accepts the client credentials grant, configure its HTTPS token endpoint:
+
+```toml
+[connections.prod]
+'bootstrap.servers' = 'source.example:9093'
+'security.protocol' = 'SASL_SSL'
+'sasl.mechanism' = 'OAUTHBEARER'
+'sasl.oauthbearer.token.endpoint.url' = 'https://identity.example/token'
+'sasl.oauthbearer.client.id' = 'kaferry'
+'sasl.oauthbearer.scope' = 'kafka.read kafka.write'
+```
+
+Set `KAFKA_OAUTH_SECRET` in the environment and prefix the copy statement with:
+
+```sql
+WITH CONNECTION prod AS ('sasl.oauthbearer.client.secret' = ENV('KAFKA_OAUTH_SECRET'))
+```
+
+Kaferry obtains and renews tokens as brokers authenticate. If another credential agent supplies tokens, remove every other `sasl.oauthbearer.*` setting from TOML and SQL, then set `'sasl.oauthbearer.token.file' = '/run/secrets/kafka-token'`. That agent must replace the file before the token expires; Kaferry reads it for each authentication.
+
+### AWS MSK IAM
+
+Prepare AWS credentials through the standard AWS SDK chain: environment variables, a shared profile selected by `AWS_PROFILE`, or the workload's IAM role. Configure an IAM-enabled MSK bootstrap address:
+
+```toml
+[connections.prod]
+'bootstrap.servers' = 'b-1.cluster.kafka.us-east-1.amazonaws.com:9098'
+'security.protocol' = 'SASL_SSL'
+'sasl.mechanism' = 'AWS_MSK_IAM'
+```
+
+The SDK renews temporary credentials when the selected provider supports renewal; environment credentials and static profile entries are loaded once. Do not set `sasl.username` or `sasl.password`. In containers, pass the required AWS environment or mount profile files at paths selected by `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE`.
+
+### Kerberos
+
+Obtain a client keytab and a `krb5.conf` that reaches your realm's key distribution center. The broker hostname must match its Kerberos service principal:
+
+```toml
+[connections.prod]
+'bootstrap.servers' = 'broker.example:9093'
+'security.protocol' = 'SASL_SSL'
+'sasl.mechanism' = 'GSSAPI'
+'sasl.kerberos.principal' = 'copier@EXAMPLE.COM'
+'sasl.kerberos.keytab' = '/run/secrets/copier.keytab'
+'sasl.kerberos.config' = '/etc/krb5.conf'
+```
+
+Kaferry acquires tickets with the keytab and renews them while the client runs. Mount both files when running in Docker. [Authentication settings](reference.md#connection-properties).
+
 ## SQL settings
 
 `WITH` and `OPTIONS` are optional. Kafka source `WITH` sets `GROUP`, `START`, `MAX_STALENESS` and `MAX_OUT_OF_ORDER`; archive source `WITH` sets `GROUP` and optional `MAX_OUT_OF_ORDER`. Sink properties configure partitioning or archive rotation. [Defaults by endpoint](reference.md#endpoint-with-properties). Final `OPTIONS` holds worker stops and error policies. [Full syntax](../design/grammar.md).
