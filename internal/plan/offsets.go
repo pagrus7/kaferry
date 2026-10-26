@@ -124,13 +124,20 @@ func (p *Plan) offsetCriteria(s sql.Statement) error {
 	}
 	selected := &PartitionFilter{}
 	seen := map[int32]bool{}
+	rangeIDs := 0
 	for _, b := range s.OffsetBranches {
 		if b.Partitions == nil || b.Partitions.Exclude {
-			return sql.At(b.Position, fmt.Errorf("each offset branch requires PARTITION IN"))
+			return sql.At(b.Position, fmt.Errorf("each offset branch requires PARTITION IN or BETWEEN"))
 		}
 		parts, err := partitionFilter(b.Partitions)
 		if err != nil {
 			return err
+		}
+		if b.Partitions.Range != nil {
+			rangeIDs += len(parts.IDs)
+			if rangeIDs > maxPartitionRangeIDs {
+				return sql.At(b.Partitions.Range.Upper.Position, fmt.Errorf("PARTITION BETWEEN predicates may name at most 65536 IDs per statement"))
+			}
 		}
 		r, err := normalizeOffsets(b.Bounds)
 		if err != nil {

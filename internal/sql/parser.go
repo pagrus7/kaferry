@@ -208,20 +208,9 @@ func (p *parser) predicates(s *Statement) {
 				return
 			}
 			p.next()
-			filter := &PartitionFilter{Position: position, Exclude: p.take("NOT")}
-			p.expect("IN")
-			p.expect("(")
-			for p.err == nil {
-				position := p.current.Position
-				filter.IDs = append(filter.IDs, PartitionID{Position: position, Value: p.text("integer")})
-				if !p.take(",") {
-					break
-				}
-			}
-			p.expect(")")
-			s.Partitions = filter
+			s.Partitions = p.partitionPredicate(position)
 		} else if p.take("RECORD_OFFSET") {
-			s.OffsetBounds = append(s.OffsetBounds, p.offsetBound())
+			s.OffsetBounds = append(s.OffsetBounds, p.offsetBounds()...)
 		} else {
 			p.expect("RECORD_TIMESTAMP")
 			s.Bounds = append(s.Bounds, p.bounds()...)

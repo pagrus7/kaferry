@@ -109,29 +109,28 @@ Each invocation accepts at most 100 records for writing in this process, or stop
 INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-offsets-0')
 WHERE PARTITION IN (0)
-  AND RECORD_OFFSET >= 100
-  AND RECORD_OFFSET <= 199;
+  AND RECORD_OFFSET BETWEEN 100 AND 199;
 ```
 
-Copies offsets 100 through 199, both included, from source partition 0; `<= 199` is equivalent to `< 200`. The partition must exist and retain start position 100 and end position 200 when the copy starts, or the copy fails. Offset gaps mean this need not produce 100 records.
+`BETWEEN 100 AND 199` includes both offsets, from source partition 0. The partition must exist and retain start position 100 and end position 200 when the copy starts, or the copy fails. Offset gaps mean this need not produce 100 records.
 
 ### Copy selected partitions
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-partitions')
-WHERE PARTITION IN (0, 2)
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-partition-range')
+WHERE PARTITION BETWEEN 0 AND 2
   AND RECORD_OFFSET < LATEST;
 ```
 
-Copies only source partitions 0 and 2 to their saved readable ends; both IDs must exist. Use `PARTITION NOT IN (0, 2)` to select every other partition; Kafka can discover added eligible partitions while the worker runs. [Partition selection](../design/decisions.md#source-partitions).
+Copies source partitions 0, 1 and 2 to their saved readable ends; all three IDs must exist. Use `IN (0, 2)` for only those two IDs, or `NOT BETWEEN 0 AND 2` for every other partition, including eligible additions while the worker runs. [Partition selection](../design/decisions.md#source-partitions).
 
 ### Use different offsets per partition
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-offset-repair')
-WHERE (PARTITION IN (0) AND RECORD_OFFSET >= 100 AND RECORD_OFFSET <= 199)
+WHERE (PARTITION IN (0) AND RECORD_OFFSET BETWEEN 100 AND 199)
    OR (PARTITION IN (2) AND RECORD_OFFSET >= 900 AND RECORD_OFFSET < LATEST);
 ```
 

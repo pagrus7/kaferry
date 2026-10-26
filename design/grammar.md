@@ -31,10 +31,12 @@ sink_option = "PARTITIONING" "=" ( "PRESERVE" | "KEY" )
 
 where       = "WHERE" ( predicates | branch { "OR" branch } [ "AND" predicates ] ) ;
 predicates  = predicate { "AND" predicate } ;
-branch      = "(" predicates ")" ;  (* disjoint PARTITION IN plus offset bounds only *)
+branch      = "(" predicates ")" ;  (* disjoint PARTITION IN/BETWEEN plus offset bounds only *)
 predicate   = between | bound | partition | offset ;
-offset      = "RECORD_OFFSET" compare integer | "RECORD_OFFSET" "<" "LATEST" ;
-partition   = "PARTITION" [ "NOT" ] "IN" "(" integer { "," integer } ")" ;
+offset      = "RECORD_OFFSET" ( compare integer | "<" "LATEST"
+            | "BETWEEN" integer "AND" integer ) ;
+partition   = "PARTITION" [ "NOT" ] ( "IN" "(" integer { "," integer } ")"
+            | "BETWEEN" integer "AND" integer ) ;
 between     = "RECORD_TIMESTAMP" "BETWEEN" time "AND" time ;
 bound       = "RECORD_TIMESTAMP" compare time ;
 compare     = ">=" | ">" | "<" | "<=" ;
@@ -61,10 +63,10 @@ Planning or startup enforces:
 - `WORKER_STOP_AFTER_RECORDS` is from 1 to 9,007,199,254,740,992; it caps accepted writes per worker per invocation, not records read or a shared group total.
 - `PARTITIONING` requires a topic destination and defaults to `PRESERVE`: original partition N goes to destination N. With `PRESERVE`, every selected input partition ID must exist at the destination, including IDs whose records the timestamp filter excludes. Counts need not match. `KEY` uses original key bytes and the destination key partitioner, allowing fewer destination partitions. Missing preserved partitions fail under every error policy.
 - Intervals use nonnegative integers; `DAY` is 86,400 seconds. Both timestamp completion settings require an upper timestamp bound and reject an explicit offset end. `MAX_STALENESS` requires Kafka input. `OFF` disables the corresponding rule; zero is allowed. [Endpoint settings and defaults](../docs/reference.md#endpoint-with-properties).
-- Offset literals are nonnegative signed 64-bit integers. Comparisons normalize to an inclusive lower and exclusive upper bound; empty ranges and overflowing adjustments fail. Each grouped branch requires `PARTITION IN` and an upper offset bound; selectors must be disjoint. Unlisted partitions are excluded. Shared timestamp predicates follow the branches. Ungrouped timestamp `OR` is unsupported.
+- Offset literals are nonnegative signed 64-bit integers. `BETWEEN lo AND hi` includes both ends and is equivalent to `>= lo AND <= hi`. Comparisons normalize to an inclusive lower and exclusive upper bound; empty ranges and overflowing adjustments fail. Each grouped branch requires `PARTITION IN` or `PARTITION BETWEEN` and an upper offset bound; selectors must be disjoint. Unlisted partitions are excluded. Shared timestamp predicates follow the branches. Ungrouped timestamp `OR` is unsupported.
 - Kafka explicit numeric starts/ends must be within retained positions at initialization. `LATEST` freezes the readable committed end on first assignment; resume reuses it. A timestamp-derived start beyond that end becomes an empty snapshot. File offsets refer to original source offsets, not replay cursors; `LATEST` means the pinned selection's EOF.
 - `ON_REJECTED_TIMESTAMP` requires a topic destination; `ON_MISSING_TIMESTAMP` requires timestamp bounds in `WHERE`.
-- At most one `PARTITION [NOT] IN (...)` predicate; combine it with timestamp bounds using `AND` in either order. IDs are integers from 0 to 2147483647; lists are nonempty, sorted and deduplicated. Every listed ID must exist in source metadata at startup, including exclusions; archives use completed-file headers. `IN` selects fixed IDs; `NOT IN` selects all others. Kafka discovers additions while workers run; archives pin matching completed files once and keep that selection on resume.
+- At most one partition predicate, using `PARTITION [NOT] IN (...)` or `PARTITION [NOT] BETWEEN lo AND hi`; combine it with timestamp bounds using `AND` in either order. IDs are integers from 0 to 2147483647; lists are nonempty, sorted and deduplicated. `BETWEEN` includes every ID from lo through hi, with at most 65,536 IDs across all partition `BETWEEN` predicates in one statement. Every named ID must exist in source metadata at startup, including exclusions; archives use completed-file headers. `IN` and `BETWEEN` select those IDs; `NOT IN` and `NOT BETWEEN` select all others. Kafka discovers additions while workers run; archives pin matching completed files once and keep that selection on resume.
 - At most one lower and one upper bound. Timestamps are RFC 3339 with `Z` or an explicit offset and at most millisecond precision. The normalized `[lo, hi)` must be non-empty.
 - At startup, reject a destination that is the same archive directory (including path aliases) or the same Kafka cluster ID and topic as the source.
 - A topic without `@alias` uses the connection `default`, which must exist.
@@ -197,7 +199,7 @@ Select a different range for each source partition:
 ```sql
 INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-offset-repair')
-WHERE (PARTITION IN (0, 1) AND RECORD_OFFSET >= 100 AND RECORD_OFFSET < 500)
+WHERE (PARTITION BETWEEN 0 AND 1 AND RECORD_OFFSET BETWEEN 100 AND 499)
    OR (PARTITION IN (2) AND RECORD_OFFSET >= 900 AND RECORD_OFFSET < LATEST);
 ```
 

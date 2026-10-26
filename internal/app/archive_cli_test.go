@@ -218,6 +218,43 @@ func TestArchivePartitionCLIInspectsCopiesAndResumesOnlyItsSelectedFiles(t *test
 	}
 }
 
+func TestBetweenCLICopiesInclusiveRangesAndResumesEquivalentSyntax(t *testing.T) {
+	// Given three archived partitions with records before, inside and after the range.
+	root := t.TempDir()
+	src, dst, cfg := filepath.Join(root, "input"), filepath.Join(root, "output"), filepath.Join(root, "worker.toml")
+	var want []avro.Record
+	for partition := range int32(3) {
+		source := avro.Source{Cluster: "cluster", Topic: "orders", TopicID: avro.TopicID{1}, Partition: partition}
+		var records []avro.Record
+		for offset := range int64(5) {
+			r := avro.Record{Source: source, Offset: offset, TimestampKind: "unknown", Value: []byte(fmt.Sprint(partition, ":", offset)), Headers: []avro.Header{}}
+			records = append(records, r)
+			if partition < 2 && offset >= 1 && offset <= 3 {
+				want = append(want, r)
+			}
+		}
+		archiveFixture(t, src, int(partition)+1, records)
+	}
+	require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)), 0600))
+	query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH(GROUP='between') WHERE PARTITION BETWEEN 0 AND 1 AND RECORD_OFFSET BETWEEN 1 AND 3", dst, src)
+	var out, diagnostics bytes.Buffer
+	// When the copy stops partway through the selected inclusive ranges.
+	code := Execute(t.Context(), []string{"run", "-c", cfg, "-e", query + " OPTIONS(WORKER_STOP_AFTER_RECORDS=3)"}, nil, &out, &diagnostics)
+	require.Zero(t, code, diagnostics.String())
+	require.Len(t, archiveRecords(t, dst), 3)
+	expanded := strings.Replace(query, "PARTITION BETWEEN 0 AND 1", "PARTITION IN (1, 0)", 1)
+	expanded = strings.Replace(expanded, "RECORD_OFFSET BETWEEN 1 AND 3", "RECORD_OFFSET >= 1 AND RECORD_OFFSET <= 3", 1)
+	diagnostics.Reset()
+	// Then the equivalent list/comparison spelling resumes the same checkpoint and copies only the rest.
+	code = Execute(t.Context(), []string{"run", "-c", cfg, "-e", expanded}, nil, &out, &diagnostics)
+	require.Zero(t, code, diagnostics.String())
+	require.Equal(t, want, archiveRecords(t, dst))
+	diagnostics.Reset()
+	code = Execute(t.Context(), []string{"run", "-c", cfg, "-e", query}, nil, &out, &diagnostics)
+	require.Zero(t, code, diagnostics.String())
+	require.Equal(t, want, archiveRecords(t, dst), "completed BETWEEN resume must not duplicate output")
+}
+
 func TestArchiveCLIAllFilteredRecordsCanExceedPendingCap(t *testing.T) {
 	// Given more filtered inputs than the worker's pending-record capacity.
 	root := t.TempDir()
