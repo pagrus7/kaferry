@@ -17,7 +17,7 @@ A Kaferry archive is a directory of Avro files containing Kafka records with the
 
 | Tool | Use it for |
 | --- | --- |
-| Kaferry | Copy a time range into a test topic, capture records to disk, or replay an archive into Kafka. Use a named group to stop and resume from saved progress. |
+| Kaferry | Copy a time range to another topic or cluster, capture records to disk, or replay an archive into Kafka. A [group name](docs/usage.md#what-a-copy-job-means) identifies the copy's saved progress; reuse it to resume. |
 | [MirrorMaker 2](https://kafka.apache.org/43/operations/geo-replication-cross-cluster-data-mirroring/) | Maintain continuous replication between Kafka clusters, including topic configurations, ACLs and consumer-group offsets. |
 | [kcat](https://github.com/edenhill/kcat) | Inspect records and cluster metadata, or produce and consume records through shell pipelines. |
 
