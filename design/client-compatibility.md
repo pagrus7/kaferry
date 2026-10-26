@@ -10,7 +10,7 @@ Kafka-client and deployment constraints. See [copy caveats](../docs/caveats.md),
 | Runtime client | `franz-go v1.22.2`, pure Go |
 | Broker integration | Linux AMD64 (CI) and macOS ARM64 |
 | Release builds and unit tests | Linux AMD64/ARM64 and macOS AMD64/ARM64 |
-| Client authentication | SASL/PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512 over TLS; mTLS handshakes in component tests |
+| Client authentication | PLAIN, SCRAM-SHA-256/512, OAuth client credentials and Kerberos keytabs over TLS; mTLS handshakes, OAuth renewal and AWS IAM signing/credential rotation in component tests. AWS IAM tests do not contact MSK |
 | Failover | Replication factor 3, minimum ISR 2, destination-leader failure |
 
 Test other brokers, authorizers and workloads before relying on them. Fixtures use plaintext internal broker/controller listeners; encrypted internal traffic is untested.
