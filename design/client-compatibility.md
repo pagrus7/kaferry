@@ -10,7 +10,7 @@ Kafka-client and deployment constraints. See [copy examples](../docs/usage.md#co
 | Runtime client | `franz-go v1.22.2`, pure Go |
 | Broker integration | Linux AMD64 (CI) and macOS ARM64 |
 | Release builds and unit tests | Linux AMD64/ARM64 and macOS AMD64/ARM64 |
-| Client authentication | SASL/PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512 over TLS; mTLS handshakes in component tests |
+| Client authentication | PLAIN, SCRAM-SHA-256/512, OAuth client credentials and Kerberos keytabs over TLS; mTLS handshakes, OAuth renewal and AWS IAM signing/credential rotation in component tests. AWS IAM tests do not contact MSK |
 | Failover | Replication factor 3, minimum ISR 2, destination-leader failure |
 
 Test other brokers, authorizers and workloads before relying on them. Fixtures use plaintext internal broker/controller listeners; encrypted internal traffic is untested.
@@ -42,6 +42,8 @@ When Kaferry reads Kafka, its client, franz-go v1.22.2, misreads record timestam
 ## Kafka requests
 
 [Factory.Open](../internal/franz/factory.go) creates one control client per Kafka endpoint. Files create none. [Inspector](../internal/franz/metadata.go) uses 10 s deadlines for startup and assignment, 2 s for input tip checks and 1 s for output partition checks.
+
+Group descriptions retry unavailable, loading or changed coordinators within one 10 s deadline. Authorization failures, incompatible members and invalid responses still fail inspection.
 
 `explain` uses Metadata, DescribeGroups and OffsetFetch for named source groups, ListOffsets, and optional destination DescribeConfigs. It creates no consumer or producer and sends no Fetch, group-membership or OffsetCommit requests. ONE_OFF skips group requests. It cannot verify the READ/WRITE grants needed by a later copy.
 

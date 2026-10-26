@@ -5,11 +5,13 @@ package compat
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -109,4 +111,38 @@ func (p *cliProcess) logs() string                  { _ = p.wait(); return p.out
 func (p *cliProcess) cpu() time.Duration {
 	_ = p.wait()
 	return p.command.ProcessState.UserTime() + p.command.ProcessState.SystemTime()
+}
+
+func tutorialShell(ctx context.Context, script string) *exec.Cmd {
+	command := exec.CommandContext(ctx, "sh", "-eu", "-c", script)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	command.WaitDelay = time.Second
+	return command
+}
+
+type copySummary struct {
+	Message     string `json:"msg"`
+	Submitted   int    `json:"submitted"`
+	Confirmed   int    `json:"confirmed"`
+	PeakRecords int    `json:"peak_uncommitted_records"`
+	PeakBytes   int64  `json:"peak_uncommitted_bytes"`
+}
+
+func summaryFrom(t *testing.T, output string) copySummary {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
+		var summary copySummary
+		if json.Unmarshal([]byte(line), &summary) == nil && summary.Message == "copy summary" {
+			return summary
+		}
+	}
+	t.Fatal("CLI omitted copy summary", output)
+	return copySummary{}
 }

@@ -44,7 +44,7 @@ func TestDocumentedExamples(t *testing.T) {
 				// When parsing and planning without opening endpoints.
 				statement, err := sql.NewParser().Parse(input)
 				require.NoError(t, err)
-				_, err = NewPlanner(environment{"DR_PASSWORD": "secret", "PROD_PASSWORD": "secret"}).Build(statement, connections)
+				_, err = NewPlanner(environment{"DR_PASSWORD": "secret", "PROD_PASSWORD": "secret", "KAFKA_OAUTH_SECRET": "secret"}).Build(statement, connections)
 				// Then each example is valid with the actual parser and planner.
 				require.NoError(t, err)
 			})
@@ -60,7 +60,7 @@ func TestUsageCommandSQL(t *testing.T) {
 	heredoc := regexp.MustCompile(`(?s)<<'SQL'\n(.*?)\nSQL`).FindAllStringSubmatch(input, -1)
 	argument := regexp.MustCompile(`(?s)-e "(INSERT.*?)"`).FindAllStringSubmatch(input, -1)
 	examples := append(heredoc, argument...)
-	require.Len(t, examples, 3, "all embedded copy and preview examples must be checked")
+	require.Len(t, examples, 4, "all embedded copy and preview examples must be checked")
 	for index, example := range examples {
 		t.Run(fmt.Sprint(index), func(t *testing.T) {
 			// When parsed and planned without opening files or brokers.

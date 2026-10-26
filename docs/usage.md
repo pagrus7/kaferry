@@ -1,98 +1,60 @@
 # Using Kaferry
 
-## First copy with Docker
+For existing Kafka topics, start with the [copy examples](#copy-between-kafka-topics).
 
+## Local Kafka playground
+
+Install `kaferry` on PATH ([installation](install.md)) and start Docker. Use a fresh working directory, a free local port 9092 and an unused `kaferry-kafka-demo` container name. This example starts one disposable Kafka broker on loopback, creates two single-partition topics and produces three acknowledged records. It needs no Kafka credentials, Go, Compose or tutorial download. Without Docker, use the [archive demo](#first-copy-without-kafka).
+
+<!-- kafka-quickstart-setup -->
 ```sh
-docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
+docker run -d --name kaferry-kafka-demo -p 127.0.0.1:9092:9092 apache/kafka:3.9.2
+docker exec kaferry-kafka-demo /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic orders --partitions 1 --replication-factor 1
+docker exec kaferry-kafka-demo /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic orders-copy --partitions 1 --replication-factor 1
+printf 'order-1\norder-2\norder-3\n' | docker exec -i kaferry-kafka-demo /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic orders --sync --producer-property acks=all
+```
+
+Copy the current readable records and exit. `RECORD_OFFSET < LATEST` saves each partition's readable end on its first assignment; the same group keeps that end on reruns and excludes later appends.
+
+<!-- kafka-quickstart-copy -->
+```sh
+cat > copy.sql <<'SQL'
+WITH CONNECTION default AS ('bootstrap.servers' = 'localhost:9092')
+INSERT INTO TOPIC 'orders-copy'
+SELECT * FROM TOPIC 'orders' WITH (GROUP = 'demo')
+WHERE RECORD_OFFSET < LATEST;
+SQL
+kaferry run -f copy.sql
+```
+
+The copy summary reports `submitted: 3` and `confirmed: 3`. Read the destination:
+
+<!-- kafka-quickstart-read -->
+```sh
+docker exec kaferry-kafka-demo /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic orders-copy --from-beginning --max-messages 3 --timeout-ms 10000
 ```
 
 ```text
-{"time":"2026-10-25T22:39:06.595190641Z","level":"INFO","msg":"partition assigned","partition":0,"position":0,"window":{"lower":null,"upper":null}}
-{"time":"2026-10-25T22:39:06.602132061Z","level":"INFO","msg":"copy summary","submitted":3,"confirmed":3,"filtered":0,"skipped":0,"timestamp_stops":0,"tip_stops":0,"peak_uncommitted_records":3,"peak_uncommitted_bytes":534}
+order-1
+order-2
+order-3
 ```
 
-This output is from a fresh `kaferry-demo` volume. If you ran the README example, continue with the status command below.
+Rerun the same query and group. It reports `submitted: 0` and `confirmed: 0`; the destination still contains three records:
 
-The image includes [copy.sql](../examples/archive-demo/copy.sql), its configuration and three sample Kafka records stored in Avro files. The command copies these records from `input` to `output` and saves progress for the named group `archive-demo`. A checkpoint records replay progress in a file. Docker keeps it with the input and output in the `kaferry-demo` volume after the container exits.
-
+<!-- kafka-quickstart-rerun -->
 ```sh
-docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest status -c tutorial.toml -f copy.sql
+kaferry run -f copy.sql
 ```
 
-```text
-Status: stopped
-Group: "archive-demo"
-Reason: file selection completed
-  Source: ARCHIVE "input"
-  Destination: ARCHIVE "output"
+Remove the demo container and its data when finished:
 
-Saved progress
-  Replay: input records 3; file selection completed at 3
-  Snapshot: 1 completed files, 1498 encoded bytes.
-
-Stopped means this group saved a stop reason for its fixed selection of archive files. A new group selects current completed files.
-Activity: not checked for files.
-```
-
-This reads the group's saved progress from the volume.
-
+<!-- kafka-quickstart-cleanup -->
 ```sh
-docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
+docker rm -fv kaferry-kafka-demo
 ```
 
-```text
-{"time":"2026-10-25T22:39:07.066648988Z","level":"INFO","msg":"partition assigned","partition":0,"position":3,"window":{"lower":null,"upper":null}}
-{"time":"2026-10-25T22:39:07.066686447Z","level":"INFO","msg":"copy summary","submitted":0,"confirmed":0,"filtered":0,"skipped":0,"timestamp_stops":0,"tip_stops":0,"peak_uncommitted_records":0,"peak_uncommitted_bytes":0}
-```
-
-This resumes the same group from its saved position. The output remains in the volume across containers.
-
-```sh
-docker volume rm kaferry-demo
-```
-
-```text
-kaferry-demo
-```
-
-This deletes the demo's input, output and checkpoints. Running the first command again starts a fresh copy. [Copy between Kafka topics](#copy-between-kafka-topics) · [Run your own files in a container](#containers).
-
-## First copy without Kafka
-
-Install `kaferry` on `PATH` ([installation](install.md)). This tutorial uses a shell, `curl` and `tar`, three synthetic records, and a fresh directory on local disk ([archive storage requirements](#archive-a-topic-and-replay-it)). It needs no broker or credentials. Choose a [release](https://github.com/pagrus7/kaferry/releases) that includes `archive-demo.tar.gz` and matches your binary. Set `version` below to that release tag, then run the block in a directory that does not already contain `archive-demo`:
-
-```sh
-version=vX.Y.Z
-curl -fLO "https://github.com/pagrus7/kaferry/releases/download/$version/archive-demo.tar.gz"
-tar -xzf archive-demo.tar.gz
-cd archive-demo
-```
-
-Checkout users can build the package from the repository root with `go run ./scripts/package_examples .cache/archive-demo.tar.gz`, then extract that file in a fresh directory. The input is a Kaferry archive: Avro containers with a fixed Kafka record schema and raw key/value bytes. Its values are `order-1`, `order-2`, `order-3`, at original offsets 0–2 in one partition. `copy.sql` copies them to `output` with the named group `archive-demo`; `tutorial.toml` stores replay progress in `checkpoints`.
-
-<!-- archive-tutorial-commands -->
-```sh
-mkdir -p checkpoints
-kaferry explain -c tutorial.toml -f copy.sql > explain.txt
-kaferry run -c tutorial.toml -f copy.sql 2> first-run.log
-cat first-run.log
-kaferry status -c tutorial.toml -f copy.sql --json > status.json
-cat status.json
-kaferry run -c tutorial.toml -f copy.sql 2> rerun.log
-cat rerun.log
-```
-
-The first `copy summary` reports `submitted: 3` and `confirmed: 3`. The status includes these fields (other fields are omitted here):
-
-```json
-{
-  "verdict": "stopped",
-  "reason": "file selection completed",
-  "partitions": [{"id": 0, "position": 3, "stop": {"reason": "eof", "at": 3}}]
-}
-```
-
-This group consumed its fixed file selection and saved progress after output confirmation. Status reads saved progress; it does not compare destination contents. The rerun summary reports `submitted: 0` and `confirmed: 0`, and the output still contains three records. Keep `output` and `checkpoints` together: a completed checkpoint does not recreate deleted output. To repeat the tutorial from scratch, use another fresh copy of the example directory.
+[Copy your own Kafka topics](#copy-between-kafka-topics) · [Inspect saved progress](#stop-and-check-results).
 
 ## Copy between Kafka topics
 
@@ -108,7 +70,7 @@ Replace the addresses in **`connections.toml`**; add [authentication](#connectio
 'bootstrap.servers' = 'destination.example:9092'
 ```
 
-Choose one example below and save it as **`copy.sql`**. `@prod` and `@backup` select the connection profiles above. Preview, run and check saved progress with:
+Choose one example below and save it as **`copy.sql`**. `@prod` and `@backup` select the connection profiles above; a topic without `@alias`, as in the playground, uses the connection named `default`. Preview, run and check saved progress with:
 
 ```sh
 kaferry explain -c connections.toml -f copy.sql
@@ -219,32 +181,103 @@ SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-follow');
 
 Copies the retained backlog, then follows new records until you press Ctrl+C. Add `START = LATEST` inside source `WITH` to skip the backlog for a fresh group; saved progress takes precedence on resume. A partition filter without an offset end also keeps following.
 
-## Connections
-
-Quote dotted TOML keys. [Supported properties](reference.md#connection-properties); SASL/PLAIN over TLS:
-
-```toml
-[connections.prod]
-'bootstrap.servers' = 'source.example:9093'
-'security.protocol' = 'SASL_SSL'
-'sasl.mechanism' = 'PLAIN'
-'sasl.username' = 'copier'
-'ssl.ca.location' = '/etc/kafka/ca.pem'
-```
-
-Set `PROD_PASSWORD` in the environment, then prefix the SQL statement with:
-
-```sql
-WITH CONNECTION prod AS ('sasl.password' = ENV('PROD_PASSWORD'))
-```
-
-Keep passwords out of SQL literals and shell arguments. SQL connection properties override TOML; use `-c connections.toml` to load profiles. [Configuration](reference.md#configuration-and-cli).
-
-## Permissions
-
-Kafka needs source topic/group READ and destination WRITE (including DESCRIBE); some brokers also need cluster IDEMPOTENT_WRITE. Without a named `GROUP`, grant group READ on the `kaferry-` prefix. File-only copies need no Kafka grants. [Optional DESCRIBE_CONFIGS](../design/client-compatibility.md#optional-destination-configuration).
-
 ## Archive a topic and replay it
+
+### First copy with Docker
+
+```sh
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
+```
+
+```text
+{"time":"2026-10-25T22:39:06.595190641Z","level":"INFO","msg":"partition assigned","partition":0,"position":0,"window":{"lower":null,"upper":null}}
+{"time":"2026-10-25T22:39:06.602132061Z","level":"INFO","msg":"copy summary","submitted":3,"confirmed":3,"filtered":0,"skipped":0,"timestamp_stops":0,"tip_stops":0,"peak_uncommitted_records":3,"peak_uncommitted_bytes":534}
+```
+
+This output is from a fresh `kaferry-demo` volume. If you ran the README example, continue with the status command below.
+
+The image includes [copy.sql](../examples/archive-demo/copy.sql), its configuration and three sample Kafka records stored in Avro files. The command copies these records from `input` to `output` and saves progress for the named group `archive-demo`. A checkpoint records replay progress in a file. Docker keeps it with the input and output in the `kaferry-demo` volume after the container exits.
+
+```sh
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest status -c tutorial.toml -f copy.sql
+```
+
+```text
+Status: stopped
+Group: "archive-demo"
+Reason: file selection completed
+  Source: ARCHIVE "input"
+  Destination: ARCHIVE "output"
+
+Saved progress
+  Replay: input records 3; file selection completed at 3
+  Snapshot: 1 completed files, 1498 encoded bytes.
+
+Stopped means this group saved a stop reason for its fixed selection of archive files. A new group selects current completed files.
+Activity: not checked for files.
+```
+
+This reads the group's saved progress from the volume.
+
+```sh
+docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
+```
+
+```text
+{"time":"2026-10-25T22:39:07.066648988Z","level":"INFO","msg":"partition assigned","partition":0,"position":3,"window":{"lower":null,"upper":null}}
+{"time":"2026-10-25T22:39:07.066686447Z","level":"INFO","msg":"copy summary","submitted":0,"confirmed":0,"filtered":0,"skipped":0,"timestamp_stops":0,"tip_stops":0,"peak_uncommitted_records":0,"peak_uncommitted_bytes":0}
+```
+
+This resumes the same group from its saved position. The output remains in the volume across containers.
+
+```sh
+docker volume rm kaferry-demo
+```
+
+```text
+kaferry-demo
+```
+
+This deletes the demo's input, output and checkpoints. Running the first command again starts a fresh copy. [Copy between Kafka topics](#copy-between-kafka-topics) · [Run your own files in a container](#containers).
+
+### First copy without Kafka
+
+Install `kaferry` on `PATH` ([installation](install.md)). This tutorial uses a shell, `curl` and `tar`, three synthetic records, and a fresh directory on local disk ([archive storage requirements](#archive-your-own-topic)). It needs no broker or credentials. Choose a [release](https://github.com/pagrus7/kaferry/releases) that includes `archive-demo.tar.gz` and matches your binary. Set `version` below to that release tag, then run the block in a directory that does not already contain `archive-demo`:
+
+```sh
+version=vX.Y.Z
+curl -fLO "https://github.com/pagrus7/kaferry/releases/download/$version/archive-demo.tar.gz"
+tar -xzf archive-demo.tar.gz
+cd archive-demo
+```
+
+Checkout users can build the package from the repository root with `go run ./scripts/package_examples .cache/archive-demo.tar.gz`, then extract that file in a fresh directory. The input is a Kaferry archive: Avro containers with a fixed Kafka record schema and raw key/value bytes. Its values are `order-1`, `order-2`, `order-3`, at original offsets 0–2 in one partition. `copy.sql` copies them to `output` with the named group `archive-demo`; `tutorial.toml` stores replay progress in `checkpoints`.
+
+<!-- archive-tutorial-commands -->
+```sh
+mkdir -p checkpoints
+kaferry explain -c tutorial.toml -f copy.sql > explain.txt
+kaferry run -c tutorial.toml -f copy.sql 2> first-run.log
+cat first-run.log
+kaferry status -c tutorial.toml -f copy.sql --json > status.json
+cat status.json
+kaferry run -c tutorial.toml -f copy.sql 2> rerun.log
+cat rerun.log
+```
+
+The first `copy summary` reports `submitted: 3` and `confirmed: 3`. The status includes these fields (other fields are omitted here):
+
+```json
+{
+  "verdict": "stopped",
+  "reason": "file selection completed",
+  "partitions": [{"id": 0, "position": 3, "stop": {"reason": "eof", "at": 3}}]
+}
+```
+
+This group consumed its fixed file selection and saved progress after output confirmation. Status reads saved progress; it does not compare destination contents. The rerun summary reports `submitted: 0` and `confirmed: 0`, and the output still contains three records. Keep `output` and `checkpoints` together: a completed checkpoint does not recreate deleted output. To repeat the tutorial from scratch, use another fresh copy of the example directory.
+
+### Archive your own topic
 
 Use storage where successful saves survive a crash, file replacement happens as one operation, and locks prevent competing processes from updating the same state. Verify these guarantees across hosts for shared storage. [Storage contract](../design/archive.md#layout-and-ownership).
 
@@ -271,6 +304,82 @@ SELECT * FROM ARCHIVE 'archive/orders' WITH (GROUP = 'orders-restore');"
 Replay selects current completed files and exits after reading that selection; the same group keeps its selection and progress. Keep the checkpoint directory and existing output to resume; new archive files require a new group and can cause older records to be copied again. [Archive recovery and moving replay](#archive-procedures).
 
 Pass SQL with `-f file`, `-f -` (stdin), or `-e "SQL"`, as above. [Archive rotation, routing and more SQL examples](../design/grammar.md#valid-examples).
+
+## Connections
+
+Quote dotted TOML keys. [Supported properties](reference.md#connection-properties); SASL/PLAIN over TLS:
+
+```toml
+[connections.prod]
+'bootstrap.servers' = 'source.example:9093'
+'security.protocol' = 'SASL_SSL'
+'sasl.mechanism' = 'PLAIN'
+'sasl.username' = 'copier'
+'ssl.ca.location' = '/etc/kafka/ca.pem'
+```
+
+Set `PROD_PASSWORD` in the environment, then prefix the SQL statement with:
+
+```sql
+WITH CONNECTION prod AS ('sasl.password' = ENV('PROD_PASSWORD'))
+```
+
+Keep passwords out of SQL literals and shell arguments. SQL connection properties override TOML; use `-c connections.toml` to load profiles. [Configuration](reference.md#configuration-and-cli).
+
+### OAuth bearer tokens
+
+For an OAuth issuer that accepts the client credentials grant, configure its HTTPS token endpoint:
+
+```toml
+[connections.prod]
+'bootstrap.servers' = 'source.example:9093'
+'security.protocol' = 'SASL_SSL'
+'sasl.mechanism' = 'OAUTHBEARER'
+'sasl.oauthbearer.token.endpoint.url' = 'https://identity.example/token'
+'sasl.oauthbearer.client.id' = 'kaferry'
+'sasl.oauthbearer.scope' = 'kafka.read kafka.write'
+```
+
+Set `KAFKA_OAUTH_SECRET` in the environment and prefix the copy statement with:
+
+```sql
+WITH CONNECTION prod AS ('sasl.oauthbearer.client.secret' = ENV('KAFKA_OAUTH_SECRET'))
+```
+
+Kaferry obtains and renews tokens as brokers authenticate. If another credential agent supplies tokens, remove every other `sasl.oauthbearer.*` setting from TOML and SQL, then set `'sasl.oauthbearer.token.file' = '/run/secrets/kafka-token'`. That agent must replace the file before the token expires; Kaferry reads it for each authentication.
+
+### AWS MSK IAM
+
+Prepare AWS credentials through the standard AWS SDK chain: environment variables, a shared profile selected by `AWS_PROFILE`, or the workload's IAM role. Configure an IAM-enabled MSK bootstrap address:
+
+```toml
+[connections.prod]
+'bootstrap.servers' = 'b-1.cluster.kafka.us-east-1.amazonaws.com:9098'
+'security.protocol' = 'SASL_SSL'
+'sasl.mechanism' = 'AWS_MSK_IAM'
+```
+
+The SDK renews temporary credentials when the selected provider supports renewal; environment credentials and static profile entries are loaded once. Do not set `sasl.username` or `sasl.password`. In containers, pass the required AWS environment or mount profile files at paths selected by `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE`.
+
+### Kerberos
+
+Obtain a client keytab and a `krb5.conf` that reaches your realm's key distribution center. The broker hostname must match its Kerberos service principal:
+
+```toml
+[connections.prod]
+'bootstrap.servers' = 'broker.example:9093'
+'security.protocol' = 'SASL_SSL'
+'sasl.mechanism' = 'GSSAPI'
+'sasl.kerberos.principal' = 'copier@EXAMPLE.COM'
+'sasl.kerberos.keytab' = '/run/secrets/copier.keytab'
+'sasl.kerberos.config' = '/etc/krb5.conf'
+```
+
+Kaferry acquires tickets with the keytab and renews them while the client runs. Mount both files when running in Docker. [Authentication settings](reference.md#connection-properties).
+
+## Permissions
+
+Kafka needs source topic/group READ and destination WRITE (including DESCRIBE); some brokers also need cluster IDEMPOTENT_WRITE. Without a named `GROUP`, grant group READ on the `kaferry-` prefix. File-only copies need no Kafka grants. [Optional DESCRIBE_CONFIGS](../design/client-compatibility.md#optional-destination-configuration).
 
 ## Stop and check results
 
@@ -310,7 +419,7 @@ Keep the whole archive directory, including hidden files, and retain the source 
 ### Move replay to another machine
 
 1. Stop replay and all capture writers for this archive, and wait for successful exits. Recover a failed capture before moving its archive. Keep the destination’s existing output.
-2. Copy the entire source archive and checkpoint directory, including hidden files and lock files, to storage meeting the [archive requirements](#archive-a-topic-and-replay-it). Selected archive files must remain byte-for-byte unchanged.
+2. Copy the entire source archive and checkpoint directory, including hidden files and lock files, to storage meeting the [archive requirements](#archive-your-own-topic). Selected archive files must remain byte-for-byte unchanged.
 3. Create the destination checkpoint directory if needed and set `worker.checkpoint_dir` to its new path. Update archive paths and connection details while keeping the named group, query and destination identity. For a file destination, move its existing output as well; paths alone do not prove that output is present.
 4. Run `explain` to check that saved progress is found, then rerun the same copy. Destination-confirmed records after the last saved checkpoint may repeat.
 

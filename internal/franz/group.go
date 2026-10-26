@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
@@ -15,6 +16,23 @@ import (
 func (i *Inspector) describeGroup(parent context.Context, group string) (kmsg.DescribeGroupsResponseGroup, error) {
 	ctx, cancel := requestContext(parent)
 	defer cancel()
+	for {
+		if err := ctx.Err(); err != nil {
+			return kmsg.DescribeGroupsResponseGroup{}, err
+		}
+		description, err := i.describeGroupOnce(ctx, group)
+		if !errors.Is(err, kerr.CoordinatorNotAvailable) && !errors.Is(err, kerr.CoordinatorLoadInProgress) && !errors.Is(err, kerr.NotCoordinator) {
+			return description, err
+		}
+		select {
+		case <-ctx.Done():
+			return kmsg.DescribeGroupsResponseGroup{}, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func (i *Inspector) describeGroupOnce(ctx context.Context, group string) (kmsg.DescribeGroupsResponseGroup, error) {
 	req := kmsg.NewPtrDescribeGroupsRequest()
 	req.Groups = []string{group}
 	response, err := req.RequestWith(ctx, i.client)
