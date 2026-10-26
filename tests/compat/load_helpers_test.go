@@ -35,26 +35,6 @@ func loadRecordCount(t *testing.T, name string, fallback, maximum int) int {
 	return count
 }
 
-type copySummary struct {
-	Message     string `json:"msg"`
-	Submitted   int    `json:"submitted"`
-	Confirmed   int    `json:"confirmed"`
-	PeakRecords int    `json:"peak_uncommitted_records"`
-	PeakBytes   int64  `json:"peak_uncommitted_bytes"`
-}
-
-func summaryFrom(t *testing.T, output string) copySummary {
-	t.Helper()
-	for _, line := range strings.Split(output, "\n") {
-		var summary copySummary
-		if json.Unmarshal([]byte(line), &summary) == nil && summary.Message == "copy summary" {
-			return summary
-		}
-	}
-	t.Fatal("CLI omitted copy summary", output)
-	return copySummary{}
-}
-
 type streamRecords struct {
 	topic                  string
 	stamp                  time.Time

@@ -104,20 +104,6 @@ func TestArchiveTutorial(t *testing.T) {
 	require.Equal(t, input, archiveRecords(t, filepath.Join(directory, "output")), "rerun must preserve exactly the three original records")
 }
 
-func tutorialShell(ctx context.Context, script string) *exec.Cmd {
-	command := exec.CommandContext(ctx, "sh", "-eu", "-c", script)
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	command.Cancel = func() error {
-		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
-	}
-	command.WaitDelay = time.Second
-	return command
-}
-
 func TestArchiveTutorialCancellation(t *testing.T) {
 	if pidFile := os.Getenv("KAFERRY_TUTORIAL_HANG_PID"); pidFile != "" {
 		// The child holds a lock and the inherited output pipes while it hangs.

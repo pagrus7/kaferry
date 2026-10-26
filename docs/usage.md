@@ -1,5 +1,59 @@
 # Using Kaferry
 
+## Local Kafka playground
+
+Install `kaferry` on PATH ([installation](install.md)) and start Docker. Use a fresh working directory, a free local port 9092 and an unused `kaferry-kafka-demo` container name. This example starts one disposable Kafka broker on loopback, creates two single-partition topics and produces three acknowledged records. It needs no Kafka credentials, Go, Compose or tutorial download.
+
+<!-- kafka-quickstart-setup -->
+```sh
+docker run -d --name kaferry-kafka-demo -p 127.0.0.1:9092:9092 apache/kafka:3.9.2
+docker exec kaferry-kafka-demo /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic orders --partitions 1 --replication-factor 1
+docker exec kaferry-kafka-demo /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic orders-copy --partitions 1 --replication-factor 1
+printf 'order-1\norder-2\norder-3\n' | docker exec -i kaferry-kafka-demo /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic orders --sync --producer-property acks=all
+```
+
+Copy the current readable records and exit. `RECORD_OFFSET < LATEST` saves each partition's readable end on its first assignment; the same group keeps that end on reruns and excludes later appends.
+
+<!-- kafka-quickstart-copy -->
+```sh
+cat > copy.sql <<'SQL'
+WITH CONNECTION default AS ('bootstrap.servers' = 'localhost:9092')
+INSERT INTO TOPIC 'orders-copy'
+SELECT * FROM TOPIC 'orders' WITH (GROUP = 'demo')
+WHERE RECORD_OFFSET < LATEST;
+SQL
+kaferry run -f copy.sql
+```
+
+The copy summary reports `submitted: 3` and `confirmed: 3`. Read the destination:
+
+<!-- kafka-quickstart-read -->
+```sh
+docker exec kaferry-kafka-demo /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic orders-copy --from-beginning --max-messages 3 --timeout-ms 10000
+```
+
+```text
+order-1
+order-2
+order-3
+```
+
+Rerun the same query and group. It reports `submitted: 0` and `confirmed: 0`; the destination still contains three records:
+
+<!-- kafka-quickstart-rerun -->
+```sh
+kaferry run -f copy.sql
+```
+
+Remove the demo container and its data when finished:
+
+<!-- kafka-quickstart-cleanup -->
+```sh
+docker rm -fv kaferry-kafka-demo
+```
+
+[Copy your own Kafka topics](#copy-between-kafka-topics) · [Preview a copy](#preview-a-copy) · [Inspect saved progress](#stop-and-check-results).
+
 ## First copy with Docker
 
 ```sh
