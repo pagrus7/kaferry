@@ -279,6 +279,8 @@ This group consumed its fixed file selection and saved progress after output con
 
 ### Archive your own topic
 
+Prepare the connection profiles, topics and permissions from [Kafka setup](#copy-between-kafka-topics) before these commands.
+
 Use storage where successful saves survive a crash, file replacement happens as one operation, and locks prevent competing processes from updating the same state. Verify these guarantees across hosts for shared storage. [Storage contract](../design/archive.md#layout-and-ownership).
 
 **Archive retained records, then follow new ones.** Create the parent directory:
