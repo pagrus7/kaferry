@@ -16,6 +16,20 @@ type OffsetBranch struct {
 	Bounds     []OffsetBound
 }
 
+func (p *parser) offsetBounds() []OffsetBound {
+	if !p.is("BETWEEN") {
+		return []OffsetBound{p.offsetBound()}
+	}
+	position := p.current.Position
+	p.next()
+	lower := OffsetBound{Position: position, ValuePosition: p.current.Position, Operator: ">="}
+	lower.Value = p.text("integer")
+	p.expect("AND")
+	upper := OffsetBound{Position: p.current.Position, ValuePosition: p.current.Position, Operator: "<="}
+	upper.Value = p.text("integer")
+	return []OffsetBound{lower, upper}
+}
+
 func (p *parser) offsetBound() OffsetBound {
 	b := OffsetBound{Position: p.current.Position}
 	b.Operator = p.oneOf(">=", ">", "<", "<=")
@@ -44,7 +58,7 @@ func (p *parser) where(s *Statement) {
 			return
 		}
 		if len(branch.Bounds) != 0 {
-			p.err = At(branch.Bounds[0].Position, fmt.Errorf("partition range branches accept PARTITION IN and RECORD_OFFSET bounds; put shared timestamp bounds after the branches"))
+			p.err = At(branch.Bounds[0].Position, fmt.Errorf("partition offset branches cannot contain timestamp bounds; put shared timestamp bounds after the branches"))
 			return
 		}
 		s.OffsetBranches = append(s.OffsetBranches, OffsetBranch{Position: position, Partitions: branch.Partitions, Bounds: branch.OffsetBounds})

@@ -75,6 +75,12 @@ type PartitionFilter struct {
 	Position Position `json:"-"`
 	Exclude  bool
 	IDs      []PartitionID
+	Range    *PartitionRange
+}
+
+type PartitionRange struct {
+	Lower PartitionID
+	Upper PartitionID
 }
 
 type Parser interface {

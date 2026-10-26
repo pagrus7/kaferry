@@ -17,7 +17,7 @@ A Kaferry archive is a directory of Avro files containing Kafka records with the
 
 | Tool | Use it for |
 | --- | --- |
-| Kaferry | Copy a time range to another topic or cluster, capture records to disk, or replay an archive into Kafka. A [group name](docs/usage.md#what-a-copy-job-means) identifies the copy's saved progress; reuse it to resume. |
+| Kaferry | Copy a time range to another topic or cluster, capture records to disk, or replay an archive into Kafka. A [group name](docs/usage.md#resume-or-start-over) identifies the copy's saved progress; reuse it to resume. |
 | [MirrorMaker 2](https://kafka.apache.org/43/operations/geo-replication-cross-cluster-data-mirroring/) | Maintain continuous replication between Kafka clusters, including topic configurations, ACLs and consumer-group offsets. |
 | [kcat](https://github.com/edenhill/kcat) | Inspect records and cluster metadata, or produce and consume records through shell pipelines. |
 
@@ -40,8 +40,8 @@ docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io
 
 With a fresh `kaferry-demo` volume, this copies the three bundled sample records into `output` and saves progress. The files remain after the container exits. [Inspect results, rerun and reset](docs/usage.md#first-copy-with-docker) · [Run without Docker](docs/usage.md#first-copy-without-kafka) · [Try Kafka locally](docs/usage.md#local-kafka-playground).
 
-## Caveats
+## Examples
 
-Before copying your own data, read the [caveats](docs/caveats.md) for time windows, delivery and resume, Kafka destinations, archive storage and timestamp limits.
+[Current records](docs/usage.md#copy-between-kafka-topics) · [Offset range](docs/usage.md#copy-an-offset-range) · [Selected partitions](docs/usage.md#copy-selected-partitions) · [Time range](docs/usage.md#copy-records-in-a-time-range) · [Archive and replay](docs/usage.md#archive-your-own-topic).
 
 [Documentation index](docs/README.md) · [Settings and results](docs/reference.md) · [Tests and contributing](design/components.md) · [Security](SECURITY.md) · [MIT license](LICENSE); dependencies retain their licenses.

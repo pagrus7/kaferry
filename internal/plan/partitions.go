@@ -18,24 +18,56 @@ type PartitionFilter struct {
 // ErrMissingPartition identifies a listed ID absent from source metadata.
 var ErrMissingPartition = errors.New("PARTITION predicate names an ID absent from source metadata")
 
+// Bound the number of IDs that compact BETWEEN predicates can create per statement.
+const maxPartitionRangeIDs = 65536
+
 func partitionFilter(ast *sql.PartitionFilter) (*PartitionFilter, error) {
 	if ast == nil {
 		return nil, nil
+	}
+	if ast.Range != nil {
+		lower, err := partitionID(ast.Range.Lower)
+		if err != nil {
+			return nil, err
+		}
+		upper, err := partitionID(ast.Range.Upper)
+		if err != nil {
+			return nil, err
+		}
+		if upper < lower {
+			return nil, sql.At(ast.Range.Upper.Position, fmt.Errorf("PARTITION range upper bound must not precede its lower bound"))
+		}
+		if upper-lower+1 > maxPartitionRangeIDs {
+			return nil, sql.At(ast.Range.Upper.Position, fmt.Errorf("PARTITION BETWEEN predicates may name at most 65536 IDs per statement"))
+		}
+		f := &PartitionFilter{Exclude: ast.Exclude, IDs: make([]int32, upper-lower+1)}
+		for n := range f.IDs {
+			f.IDs[n] = int32(lower + int64(n))
+		}
+		return f, nil
 	}
 	if len(ast.IDs) == 0 {
 		return nil, sql.At(ast.Position, fmt.Errorf("PARTITION requires a nonempty integer list"))
 	}
 	f := &PartitionFilter{Exclude: ast.Exclude}
 	for _, id := range ast.IDs {
-		value, err := strconv.ParseInt(id.Value, 10, 32)
-		if err != nil || value < 0 {
-			return nil, sql.At(id.Position, fmt.Errorf("PARTITION requires integers from 0 to 2147483647"))
+		value, err := partitionID(id)
+		if err != nil {
+			return nil, err
 		}
 		f.IDs = append(f.IDs, int32(value))
 	}
 	slices.Sort(f.IDs)
 	f.IDs = slices.Compact(f.IDs)
 	return f, nil
+}
+
+func partitionID(id sql.PartitionID) (int64, error) {
+	value, err := strconv.ParseInt(id.Value, 10, 32)
+	if err != nil || value < 0 {
+		return 0, sql.At(id.Position, fmt.Errorf("PARTITION requires integers from 0 to 2147483647"))
+	}
+	return value, nil
 }
 
 func (f *PartitionFilter) Matches(id int32) bool {

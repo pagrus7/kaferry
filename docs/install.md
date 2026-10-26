@@ -1,6 +1,6 @@
 # Installing Kaferry
 
-Choose a release binary, Homebrew, a source build or a container. After installation, check `kaferry --version`. [First copy](usage.md#first-copy-without-kafka).
+Choose a release binary, Homebrew, a source build or a container. After installation, check `kaferry --version`. [First copy](usage.md#local-kafka-playground).
 
 ## Release binaries
 
