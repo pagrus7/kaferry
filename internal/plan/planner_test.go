@@ -60,7 +60,7 @@ func TestUsageCommandSQL(t *testing.T) {
 	heredoc := regexp.MustCompile(`(?s)<<'SQL'\n(.*?)\nSQL`).FindAllStringSubmatch(input, -1)
 	argument := regexp.MustCompile(`(?s)-e "(INSERT.*?)"`).FindAllStringSubmatch(input, -1)
 	examples := append(heredoc, argument...)
-	require.Len(t, examples, 3, "all embedded copy and preview examples must be checked")
+	require.Len(t, examples, 4, "all embedded copy and preview examples must be checked")
 	for index, example := range examples {
 		t.Run(fmt.Sprint(index), func(t *testing.T) {
 			// When parsed and planned without opening files or brokers.

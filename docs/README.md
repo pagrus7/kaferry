@@ -1,6 +1,6 @@
 # Kaferry documentation
 
-Start with [installation](install.md), then [copy three known records without Kafka](usage.md#first-copy-without-kafka).
+Start with [installation](install.md), then [copy records with local Kafka](usage.md#local-kafka-playground) or [try the bundled Docker archive demo](usage.md#first-copy-with-docker).
 
 | Reader’s question | Guide |
 | --- | --- |

@@ -37,6 +37,8 @@ Size preflight counts an uncompressed single-record batch and the clientâ€™s 4â€
 
 [Factory.Open](../internal/franz/factory.go) creates one control client per Kafka endpoint. Files create none. [Inspector](../internal/franz/metadata.go) uses 10 s deadlines for startup and assignment, 2 s for input tip checks and 1 s for output partition checks.
 
+Group descriptions retry unavailable, loading or changed coordinators within one 10 s deadline. Authorization failures, incompatible members and invalid responses still fail inspection.
+
 `explain` uses Metadata, DescribeGroups and OffsetFetch for named source groups, ListOffsets, and optional destination DescribeConfigs. It creates no consumer or producer and sends no Fetch, group-membership or OffsetCommit requests. ONE_OFF skips group requests. It cannot verify the READ/WRITE grants needed by a later copy.
 
 | API | Purpose / timing |

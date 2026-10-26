@@ -89,10 +89,18 @@ Time-window arithmetic, boundaries and overflow use deterministic unit tests in 
 
 ### Coverage limits
 
-- Broker tests start after their group coordinator is ready; they do not cover cold coordinator startup.
+- Most broker tests start after their group coordinator is ready. `TestKafkaQuickStart` starts its own fresh broker and exercises the first group lookup before the offsets topic exists.
 - Component tests in `make check` withhold coordinator, join, offset, commit and fetch replies and check cleanup.
 
 See [client limits](client-compatibility.md#operational-limits) for deployment constraints.
+
+To run the documented [local Kafka playground](../docs/usage.md#local-kafka-playground) alone, use Docker with port 9092 free and no `kaferry-kafka-demo` container. No fixture brokers are needed:
+
+```sh
+KAFERRY_QUICKSTART=1 go test -count=1 -tags=integration -run '^TestKafkaQuickStart$' -v ./tests/compat
+```
+
+PR and release integration jobs enable this test and verify that it ran; ordinary local integration runs skip it unless requested.
 
 ### Test results
 

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/pagrus7/kaferry/internal/commitmeta"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
@@ -45,7 +47,9 @@ func TestGroupInspectionAllowsCompatibleWorkersAndRejectsConflicts(t *testing.T)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given the requested group's members or a failed inspection.
+			requests := 0
 			client := &metadataMock{request: func(_ context.Context, r kmsg.Request) (kmsg.Response, error) {
+				requests++
 				require.Equal(t, []string{"group"}, r.(*kmsg.DescribeGroupsRequest).Groups, "inspected the wrong group")
 				if tc.failure != nil && tc.code == 0 {
 					return nil, tc.failure
@@ -65,6 +69,130 @@ func TestGroupInspectionAllowsCompatibleWorkersAndRejectsConflicts(t *testing.T)
 			} else if !errors.Is(err, tc.failure) {
 				t.Fatal("incorrect group admission", err)
 			}
+			require.Equal(t, 1, requests, "non-coordinator failures must not be retried")
+		})
+	}
+}
+
+func TestGroupInspectionRetriesCoordinatorErrors(t *testing.T) {
+	for _, failure := range []*kerr.Error{kerr.CoordinatorNotAvailable, kerr.CoordinatorLoadInProgress, kerr.NotCoordinator} {
+		for _, responseError := range []bool{false, true} {
+			name := failure.Message + "/request"
+			if responseError {
+				name = failure.Message + "/response"
+			}
+			t.Run(name, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					// Given a coordinator error followed by compatible group members.
+					requests := 0
+					client := &metadataMock{request: func(_ context.Context, request kmsg.Request) (kmsg.Response, error) {
+						requests++
+						require.Equal(t, []string{"group"}, request.(*kmsg.DescribeGroupsRequest).Groups)
+						group := kmsg.DescribeGroupsResponseGroup{Group: "group", Protocol: "cooperative-sticky", Members: []kmsg.DescribeGroupsResponseGroupMember{{ClientID: "kaferry-worker"}}}
+						if requests == 1 {
+							if !responseError {
+								return nil, failure
+							}
+							group.ErrorCode = failure.Code
+						}
+						return &kmsg.DescribeGroupsResponse{Groups: []kmsg.DescribeGroupsResponseGroup{group}}, nil
+					}}
+					inspector := &Inspector{client: client, topic: "input"}
+					// When inspecting the group before joining.
+					err := inspector.CheckMembers(t.Context(), "group", "cooperative-sticky")
+					// Then retry the request and admit only after the successful description.
+					require.NoError(t, err)
+					require.Equal(t, 2, requests)
+				})
+			})
+		}
+	}
+}
+
+func TestGroupInspectionRetriesShareOneDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// Given a coordinator that stays unavailable for the whole request budget.
+		var deadline time.Time
+		requests := 0
+		client := &metadataMock{request: func(ctx context.Context, _ kmsg.Request) (kmsg.Response, error) {
+			requests++
+			current, ok := ctx.Deadline()
+			require.True(t, ok)
+			if requests == 1 {
+				deadline = current
+			}
+			require.Equal(t, deadline, current, "a retry must not extend the request deadline")
+			return nil, kerr.CoordinatorNotAvailable
+		}}
+		inspector := &Inspector{client: client, topic: "input"}
+		started := time.Now()
+		// When the inspection exhausts its shared budget.
+		err := inspector.CheckMembers(t.Context(), "group", "cooperative-sticky")
+		// Then it fails after ten seconds, without treating the group as absent.
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Greater(t, requests, 1)
+		require.Equal(t, 10*time.Second, time.Since(started))
+	})
+}
+
+func TestGroupInspectionCancellationStopsRequests(t *testing.T) {
+	for _, before := range []bool{false, true} {
+		synctest.Test(t, func(t *testing.T) {
+			// Given cancellation before inspection or immediately after a coordinator error.
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if before {
+				cancel()
+			}
+			requests := 0
+			client := &metadataMock{request: func(context.Context, kmsg.Request) (kmsg.Response, error) {
+				requests++
+				cancel()
+				return nil, kerr.CoordinatorNotAvailable
+			}}
+			inspector := &Inspector{client: client, topic: "input"}
+			// When checking group membership.
+			err := inspector.CheckMembers(ctx, "group", "cooperative-sticky")
+			// Then cancellation fails inspection and no further request is sent.
+			require.ErrorIs(t, err, context.Canceled)
+			want := 1
+			if before {
+				want = 0
+			}
+			require.Equal(t, want, requests)
+		})
+	}
+}
+
+func TestGroupInspectionValidatesTheResponseAfterRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		groups []kmsg.DescribeGroupsResponseGroup
+		want   string
+	}{
+		{"foreign member", []kmsg.DescribeGroupsResponseGroup{{Group: "group", Members: []kmsg.DescribeGroupsResponseGroupMember{{ClientID: "other-consumer"}}}}, "foreign active member"},
+		{"access denied", []kmsg.DescribeGroupsResponseGroup{{Group: "group", ErrorCode: kerr.GroupAuthorizationFailed.Code}}, "GROUP_AUTHORIZATION_FAILED"},
+		{"missing group", nil, "missing group description"},
+		{"wrong group", []kmsg.DescribeGroupsResponseGroup{{Group: "other"}}, "missing group description"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				// Given an unavailable coordinator followed by an inadmissible response.
+				requests := 0
+				client := &metadataMock{request: func(context.Context, kmsg.Request) (kmsg.Response, error) {
+					requests++
+					if requests == 1 {
+						return nil, kerr.CoordinatorNotAvailable
+					}
+					return &kmsg.DescribeGroupsResponse{Groups: tc.groups}, nil
+				}}
+				inspector := &Inspector{client: client, topic: "input"}
+				// When the coordinator recovers.
+				err := inspector.CheckMembers(t.Context(), "group", "cooperative-sticky")
+				// Then retrying never bypasses membership, authorization or response checks.
+				require.ErrorContains(t, err, tc.want)
+				require.Equal(t, 2, requests)
+			})
 		})
 	}
 }
