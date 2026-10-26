@@ -9,9 +9,17 @@
 [![Go coverage](https://codecov.io/gh/pagrus7/kaferry/branch/main/graph/badge.svg?flag=go)](https://codecov.io/gh/pagrus7/kaferry)
 [![Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml/badge.svg?branch=main)](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml)
 
-Copy Kafka records between topics and Kaferry archives with one SQL-like statement.
+Copy Kafka records between topics and disk archives with one SQL-like statement.
 
-Preserves raw bytes, nulls and ordered headers.
+A Kaferry archive is a directory of Avro files containing Kafka records with their original topic, partition and offset. Copies preserve raw bytes, nulls and ordered headers.
+
+## Choosing a tool
+
+| Tool | Use it for |
+| --- | --- |
+| Kaferry | Copy a time range into a test topic, capture records to disk, or replay an archive into Kafka. Use a named group to stop and resume from saved progress. |
+| [MirrorMaker 2](https://kafka.apache.org/43/operations/geo-replication-cross-cluster-data-mirroring/) | Maintain continuous replication between Kafka clusters, including topic configurations, ACLs and consumer-group offsets. |
+| [kcat](https://github.com/edenhill/kcat) | Inspect records and cluster metadata, or produce and consume records through shell pipelines. |
 
 ## Install
 
