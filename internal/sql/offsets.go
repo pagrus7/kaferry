@@ -58,7 +58,7 @@ func (p *parser) where(s *Statement) {
 			return
 		}
 		if len(branch.Bounds) != 0 {
-			p.err = At(branch.Bounds[0].Position, fmt.Errorf("partition range branches accept PARTITION IN and RECORD_OFFSET bounds; put shared timestamp bounds after the branches"))
+			p.err = At(branch.Bounds[0].Position, fmt.Errorf("partition offset branches cannot contain timestamp bounds; put shared timestamp bounds after the branches"))
 			return
 		}
 		s.OffsetBranches = append(s.OffsetBranches, OffsetBranch{Position: position, Partitions: branch.Partitions, Bounds: branch.OffsetBounds})

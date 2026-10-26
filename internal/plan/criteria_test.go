@@ -80,7 +80,7 @@ func TestCriteriaDiagnosticsAreLocatedAndRedacted(t *testing.T) {
 		{"WHERE (PARTITION NOT IN(0) AND RECORD_OFFSET<10)", "(", "requires PARTITION IN"},
 		{"WHERE (RECORD_OFFSET<10)", "(", "requires PARTITION IN"},
 		{"WHERE (PARTITION IN(0) AND RECORD_OFFSET>=10)", "(", "requires an upper offset"},
-		{"WHERE (PARTITION IN(0) AND RECORD_TIMESTAMP<NOW())", "<NOW()", "branches accept"},
+		{"WHERE (PARTITION IN(0) AND RECORD_TIMESTAMP<NOW())", "<NOW()", "cannot contain timestamp bounds"},
 		{"WHERE (PARTITION IN(0) AND RECORD_OFFSET<10) AND RECORD_OFFSET>=1", "WHERE", "shared partition or offset"},
 	} {
 		t.Run(tc.tail, func(t *testing.T) {
