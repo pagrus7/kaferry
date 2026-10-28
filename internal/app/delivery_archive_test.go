@@ -126,7 +126,10 @@ func TestStreamingAllEndpointsAndArchiveRotation(t *testing.T) {
 				}
 				outputRoot := ""
 				if outputKind == "ARCHIVE" {
-					outputRoot = filepath.Join(t.TempDir(), "nested", "output")
+					parent := t.TempDir()
+					alias := filepath.Join(t.TempDir(), "mount")
+					require.NoError(t, os.Symlink(parent, alias))
+					outputRoot = filepath.Join(alias, "output")
 					targetEndpoint = "ARCHIVE '" + outputRoot + "' WITH (ROTATE_AFTER_SIZE = 1000, ROTATE_AFTER_AGE = INTERVAL '1' SECOND)"
 				}
 				statement := fmt.Sprintf("INSERT INTO %s SELECT * FROM %s WITH (GROUP = 'matrix-%d') WHERE RECORD_OFFSET < LATEST;", targetEndpoint, sourceEndpoint, time.Now().UnixNano())

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/pagrus7/kaferry/internal/archive/avro"
+	"github.com/pagrus7/kaferry/internal/archive/capture"
 	"github.com/pagrus7/kaferry/internal/archive/replay"
 	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/pagrus7/kaferry/internal/delivery"
@@ -56,6 +57,11 @@ func (f *Factory) OpenSource(ctx context.Context, s *delivery.Session, w config.
 	return &replayInput{Source: source, ProgressStore: store, binding: b}, nil
 }
 func (f *Factory) OpenOutput(s *delivery.Session, w config.Worker, log delivery.Log) (Output, error) {
+	root, err := (capture.NativeFiles{}).ResolveRoot(s.Plan.Destination.Name)
+	if err != nil {
+		return nil, err
+	}
+	s.Plan.Destination.Name = root
 	backend := NewCapture(s, f.clock, log, f.writer)
 	s.Backend = backend
 	sink, err := backend.Sink(w)

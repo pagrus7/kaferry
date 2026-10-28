@@ -115,19 +115,13 @@ func (j *captureOutput) Acquire(ctx context.Context, id int32) (part delivery.Pa
 }
 func mkdirDurable(path string) error {
 	if err := os.Mkdir(path, 0700); err != nil {
-		if errors.Is(err, os.ErrNotExist) && filepath.Dir(path) != path {
-			if err := mkdirDurable(filepath.Dir(path)); err != nil {
-				return err
-			}
-			return mkdirDurable(path)
-		}
 		if errors.Is(err, os.ErrExist) {
 			info, err := os.Stat(path)
 			if err != nil {
 				return err
 			}
 			if info.IsDir() {
-				return nil
+				return (capture.NativeFiles{}).SyncDirectory(filepath.Dir(path))
 			}
 		}
 		return err
