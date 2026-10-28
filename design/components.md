@@ -76,7 +76,7 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 | --- | --- | --- |
 | `make check` | Vet and race-enabled unit/mock/component tests, kfake and shutdown subprocesses; no broker | Every PR/main; all release platforms |
 | `make fast` | Local fast checks: formatting, check, script/docs checks, build/licenses and file-copy smoke | Optional before push; CI runs these entrypoints |
-| `make transactions` | Real three-broker commit/abort marker delays, takeover and disk recovery; Docker required | Every PR/main |
+| `make transactions` | Real three-broker coordinator failover, commit/abort marker delays, takeover and disk recovery; Docker required | Every PR/main |
 | `make broker` | Start disposable source/destination Kafka clusters | Fixture setup |
 | `make integration` | Broker/CLI paths, fidelity, resume and rebalances; start brokers first | Every PR/main; release |
 | `make fault` | Outages and ownership loss; start brokers first | Code PRs, nightly, weekly, release |

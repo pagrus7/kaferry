@@ -66,4 +66,4 @@ metrics:
 	$(GO) run github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0 -top 10 $$(rg --files cmd internal -g '*.go' -g '!**/*_test.go')
 
 transactions:
-	KAFERRY_MARKER_FIXTURE=1 CGO_ENABLED=1 $(GO) test -count=1 -timeout=6m -race -run '^TestCoordinatorDecidedCaptureRecoveryWithDelayedMarkers$$' $(KAFERRY_TEST_OUTPUT) ./internal/app
+	KAFERRY_MARKER_FIXTURE=1 CGO_ENABLED=1 $(GO) test -count=1 -timeout=6m -race -run '^Test(CoordinatorDecidedCaptureRecoveryWithDelayedMarkers|ReplicatedCopyContinuesAcrossCoordinatorOutage)$$' $(KAFERRY_TEST_OUTPUT) ./internal/app

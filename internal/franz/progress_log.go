@@ -3,11 +3,13 @@ package franz
 import (
 	"context"
 	"errors"
+	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/delivery"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"io"
 	"time"
 )
 
@@ -172,6 +174,9 @@ func (j *ProgressLog) Ensure(ctx context.Context, ids []int32) error {
 			return errors.New("progress topic requires cleanup.policy=compact without delete")
 		}
 	}
+	if metadata.Topics[j.topic].ID != j.session.Identity.ProgressTopic {
+		return errors.New("progress topic identity changed")
+	}
 	count := len(metadata.Topics[j.topic].Partitions)
 	needed := count
 	for _, id := range ids {
@@ -183,17 +188,59 @@ func (j *ProgressLog) Ensure(ctx context.Context, ids []int32) error {
 			return err
 		}
 		if err = result.Error(); err != nil {
-			current, readErr := admin.Metadata(ctx, j.topic)
+			request := kmsg.NewPtrMetadataRequest()
+			request.AllowAutoTopicCreation = false
+			request.Topics = []kmsg.MetadataRequestTopic{{Topic: &j.topic}}
+			current, readErr := request.RequestWith(ctx, client)
 			if readErr != nil {
 				return errors.Join(err, readErr)
 			}
-			if topic, ok := current.Topics[j.topic]; !ok || topic.Err != nil || topic.ID != j.session.Identity.ProgressTopic || len(topic.Partitions) < needed {
+			if len(current.Topics) != 1 || current.Topics[0].ErrorCode != 0 || current.Topics[0].TopicID != j.session.Identity.ProgressTopic || len(current.Topics[0].Partitions) < needed {
 				return err
 			}
 		}
-		return nil
 	}
-	return nil
+	required := 1
+	for _, id := range ids {
+		required = max(required, int(id)+1)
+	}
+	// New producers can load metadata from any broker. Wait for partition growth
+	// on every available broker before a manual partitioner can choose the ID.
+	request := kmsg.NewPtrMetadataRequest()
+	request.AllowAutoTopicCreation = false
+	request.Topics = []kmsg.MetadataRequestTopic{{Topic: &j.topic}}
+	for {
+		ready, available := true, false
+		for _, broker := range metadata.Brokers {
+			probe, cancel := context.WithTimeout(ctx, time.Second)
+			raw, err := client.Broker(int(broker.NodeID)).Request(probe, request)
+			cancel()
+			if err != nil {
+				if brokerUnreachable(err) || kgo.IsRetryableBrokerErr(err) || errors.Is(err, context.DeadlineExceeded) {
+					continue
+				}
+				return err
+			}
+			available = true
+			response := raw.(*kmsg.MetadataResponse)
+			if len(response.Topics) != 1 || response.Topics[0].TopicID != j.session.Identity.ProgressTopic {
+				return errors.New("progress topic identity changed")
+			}
+			topic := response.Topics[0]
+			if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
+				return err
+			}
+			ready = ready && len(topic.Partitions) >= required
+		}
+		if ready && available {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 func (j *ProgressLog) ReadValue(ctx context.Context, id int32, key string, barrier bool) ([]byte, error) {
 	options := append(append([]kgo.Opt{}, j.options...), kgo.RecordPartitioner(kgo.ManualPartitioner()))
@@ -226,30 +273,63 @@ func (j *ProgressLog) ReadValue(ctx context.Context, id int32, key string, barri
 	if end == 0 {
 		return nil, nil
 	}
+	for {
+		value, err := j.readThrough(ctx, plain, id, key, end)
+		if err == nil {
+			return value, nil
+		}
+		var transient *core.Recoverable
+		if !errors.As(transientFailure(err), &transient) && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// Retry scans from the beginning after transport or leader changes; the original
+// barrier remains fixed, and no partial value is accepted as authority.
+func (j *ProgressLog) readThrough(ctx context.Context, plain *kgo.Client, id int32, key string, end int64) ([]byte, error) {
 	var value valueReader
 	position := int64(0)
+	// A direct request avoids cached routing after a leader has stopped.
+	metadataRequest := kmsg.NewPtrMetadataRequest()
+	metadataRequest.AllowAutoTopicCreation = false
+	metadataRequest.Topics = []kmsg.MetadataRequestTopic{{Topic: &j.topic}}
+	metadata, err := metadataRequest.RequestWith(ctx, plain)
+	if err != nil {
+		return nil, err
+	}
+	if len(metadata.Topics) != 1 || metadata.Topics[0].TopicID != j.session.Identity.ProgressTopic {
+		return nil, errors.New("progress topic identity changed")
+	}
+	topic := metadata.Topics[0]
+	if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
+		return nil, err
+	}
+	var part *kmsg.MetadataResponseTopicPartition
+	for i := range topic.Partitions {
+		if topic.Partitions[i].Partition == id {
+			part = &topic.Partitions[i]
+			break
+		}
+	}
+	if part == nil {
+		return nil, errors.New("progress partition disappeared")
+	}
+	if err := kerr.ErrorForCode(part.ErrorCode); err != nil {
+		return nil, err
+	}
 	for position < end {
-		metadata, err := kadm.NewClient(plain).Metadata(ctx, j.topic)
-		if err != nil {
-			return nil, err
-		}
-		if err := metadata.Topics.Error(); err != nil {
-			return nil, err
-		}
-		topic := metadata.Topics[j.topic]
-		if topic.ID != j.session.Identity.ProgressTopic {
-			return nil, errors.New("progress topic identity changed")
-		}
-		part, ok := topic.Partitions[id]
-		if !ok {
-			return nil, errors.New("progress partition disappeared")
-		}
 		request := kmsg.NewPtrFetchRequest()
 		request.ReplicaID, request.IsolationLevel, request.SessionEpoch = -1, 1, -1
 		request.MaxWaitMillis, request.MinBytes, request.MaxBytes = 50, 1, 2<<20
 		partition := kmsg.NewFetchRequestTopicPartition()
 		partition.Partition, partition.FetchOffset, partition.CurrentLeaderEpoch, partition.PartitionMaxBytes = id, position, part.LeaderEpoch, 2<<20
-		request.Topics = []kmsg.FetchRequestTopic{{Topic: j.topic, TopicID: topic.ID, Partitions: []kmsg.FetchRequestTopicPartition{partition}}}
+		request.Topics = []kmsg.FetchRequestTopic{{Topic: j.topic, TopicID: topic.TopicID, Partitions: []kmsg.FetchRequestTopicPartition{partition}}}
 		raw, err := plain.Broker(int(part.Leader)).Request(ctx, request)
 		if err != nil {
 			return nil, err

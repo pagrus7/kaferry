@@ -36,6 +36,16 @@ type kafkaOutput struct {
 }
 
 func (o *kafkaOutput) Acquire(ctx context.Context, id int32) (delivery.Partition, error) {
+	p, err := o.openPartition(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	o.mu.Lock()
+	o.partitions[id] = p
+	o.mu.Unlock()
+	return p, nil
+}
+func (o *kafkaOutput) openPartition(ctx context.Context, id int32) (*kafkaPartition, error) {
 	options := append([]kgo.Opt{}, o.options...)
 	options = append(options, o.settings.producerOptions()...)
 	partitioner := kgo.StickyKeyPartitioner(nil)
@@ -58,9 +68,6 @@ func (o *kafkaOutput) Acquire(ctx context.Context, id int32) (delivery.Partition
 		return nil, err
 	}
 	p := &kafkaPartition{tx: &progressTransaction{client: client, log: o.log, id: id}, output: o, frame: frame}
-	o.mu.Lock()
-	o.partitions[id] = p
-	o.mu.Unlock()
 	return p, nil
 }
 func (o *kafkaOutput) Read(ctx context.Context, id int32) (*delivery.Frame, error) {
@@ -144,19 +151,8 @@ func (j *kafkaOutput) flush(ctx context.Context) error {
 		if len(l.queue) == 0 {
 			continue
 		}
-		if !l.tx.open {
-			if err := l.tx.client.BeginTransaction(); err != nil {
-				l.failed = err
-				return err
-			}
-			l.tx.open = true
-		}
-		// Every delivery from this synchronous preparation is reported together.
-		// Commit checks that its cursor covers every record in the transaction.
 		batch := l.queue
 		l.queue = nil
-		completed := make(chan struct{}, len(batch))
-		failures := make([]error, len(batch))
 		waitContext, cancel := context.WithCancel(ctx)
 		for _, entry := range batch {
 			if deadline, ok := entry.ctx.Deadline(); ok {
@@ -166,41 +162,79 @@ func (j *kafkaOutput) flush(ctx context.Context) error {
 				}
 			}
 		}
-		for i, entry := range batch {
-			l.tx.client.Produce(entry.ctx, entry.record, func(_ *kgo.Record, err error) { failures[i] = err; completed <- struct{}{} })
-		}
-		received := 0
-		for received < len(batch) {
-			select {
-			case <-completed:
-				received++
-			case <-waitContext.Done():
-				// A transactional producer cannot cancel ambiguous in-flight records
-				// individually. Closing leaves the transaction uncommitted; the next
-				// owner fences it before deciding the authoritative resume position.
-				l.failed = waitContext.Err()
-				l.tx.client.Close()
-				l.tx.open = false
-				for received < len(batch) {
-					<-completed
+		for {
+			if !l.tx.open {
+				if err := l.tx.client.BeginTransaction(); err != nil {
+					cancel()
+					l.failed = err
+					for _, entry := range batch {
+						entry.callback(entry.record, err)
+					}
+					return err
+				}
+				l.tx.open = true
+			}
+			completed := make(chan struct{}, len(batch))
+			failures := make([]error, len(batch))
+			for i, entry := range batch {
+				l.tx.client.Produce(entry.ctx, entry.record, func(_ *kgo.Record, err error) { failures[i] = err; completed <- struct{}{} })
+			}
+			received := 0
+			for received < len(batch) {
+				select {
+				case <-completed:
 					received++
+				case <-waitContext.Done():
+					l.failed = waitContext.Err()
+					l.tx.client.Close()
+					l.tx.open = false
+					for received < len(batch) {
+						<-completed
+						received++
+					}
 				}
 			}
-		}
-		cancel()
-		first := l.failed
-		for i, entry := range batch {
-			first = errors.Join(first, failures[i])
-			if failures[i] == nil {
-				l.ready = max(l.ready, entry.next)
+			first := l.failed
+			retryMissingBroker := l.failed == nil && l.ready == 0 && waitContext.Err() == nil
+			for _, err := range failures {
+				first = errors.Join(first, err)
+				// franz-go's missing-broker error has no exported sentinel. It
+				// occurs when coordinator metadata loses a stopped broker.
+				if err != nil && err.Error() != "unknown broker" {
+					retryMissingBroker = false
+				}
 			}
-		}
-		for _, entry := range batch {
-			entry.callback(entry.record, first)
-		}
-		if first != nil {
-			l.failed = first
-			return first
+			if first != nil && retryMissingBroker {
+				// This batch has not committed and no earlier batch awaits commit.
+				// A new producer fences this one and aborts its pending transaction.
+				// Retry after reloading the same cursor, with the original deadlines.
+				l.tx.client.Close()
+				l.tx.open = false
+				replacement, err := j.openPartition(waitContext, id)
+				if err == nil && !reflect.DeepEqual(l.frame, replacement.frame) {
+					err = errors.New("output authority changed during producer recovery")
+					_ = replacement.tx.Close()
+				}
+				if err == nil {
+					l.tx, l.frame = replacement.tx, replacement.frame
+					continue
+				}
+				first = errors.Join(first, err)
+			}
+			cancel()
+			if first == nil {
+				for _, entry := range batch {
+					l.ready = max(l.ready, entry.next)
+				}
+			}
+			for _, entry := range batch {
+				entry.callback(entry.record, first)
+			}
+			if first != nil {
+				l.failed = first
+				return first
+			}
+			break
 		}
 		j.session.Hook("flushed", id)
 	}

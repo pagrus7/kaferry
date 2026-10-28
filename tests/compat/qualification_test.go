@@ -295,7 +295,18 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	for i := range 16 {
 		publish(t, p, &kgo.Record{Topic: src, Partition: 0, Key: []byte("stable"), Value: []byte(fmt.Sprint(i)), Timestamp: stamp})
 	}
-	waitEnd(t, a, dst, 16)
+	reader := secureReader(t, dst)
+	check := func(i int) {
+		t.Helper()
+		message := read(t, reader)
+		if string(message.Value) != fmt.Sprint(i) || !bytes.Equal(message.Key, []byte("stable")) || !message.Timestamp.Equal(stamp) {
+			t.Fatal("failover lost, duplicated, reordered or changed a record", i, message)
+		}
+	}
+	// Establish committed output before testing failover from an idle transaction boundary.
+	for i := range 16 {
+		check(i)
+	}
 
 	// When the destination leader stops while the copy is running.
 	if data, err := exec.Command("docker", "stop", "-t", "1", container).CombinedOutput(); err != nil {
@@ -319,12 +330,8 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	}
 
 	// Then remaining replicas delivered every record and shutdown committed the stream.
-	reader := secureReader(t, dst)
-	for i := range 64 {
-		message := read(t, reader)
-		if string(message.Value) != fmt.Sprint(i) || !bytes.Equal(message.Key, []byte("stable")) || !message.Timestamp.Equal(stamp) {
-			t.Fatal("failover lost, duplicated, reordered or changed a record", i, message)
-		}
+	for i := 16; i < 64; i++ {
+		check(i)
 	}
 	progressReader := kadm.NewClient(secureClient(t, secureProperties(t, "admin", "fixture-admin-secret")))
 	progress := committedPartitions(t, progressReader, group, src, 1)

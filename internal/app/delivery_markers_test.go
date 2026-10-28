@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -22,6 +23,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -127,32 +129,7 @@ func markerCompose(t *testing.T, args ...string) {
 	require.NoError(t, err, "%s", logs)
 }
 func TestCoordinatorDecidedCaptureRecoveryWithDelayedMarkers(t *testing.T) {
-	if os.Getenv("KAFERRY_MARKER_FIXTURE") != "1" {
-		t.Skip("set KAFERRY_MARKER_FIXTURE=1 for the disposable inter-broker marker fixture")
-	}
-	network := newMarkerNetwork(t)
-	t.Cleanup(func() {
-		network.unblock()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "docker", "compose", "-p", "kaferry-marker-qualification", "-f", "../../tests/transactions/compose.yaml", "logs", "--no-color")
-		brokerLogs, logErr := cmd.CombinedOutput()
-		if logErr != nil {
-			t.Errorf("fixture logs: %v", logErr)
-		}
-		if directory := os.Getenv("KAFERRY_REPORT_DIR"); directory != "" {
-			if err := os.WriteFile(filepath.Join(directory, "transaction-markers-brokers.log"), brokerLogs, 0600); err != nil {
-				t.Errorf("save fixture logs: %v", err)
-			}
-		}
-		cmd = exec.CommandContext(ctx, "docker", "compose", "-p", "kaferry-marker-qualification", "-f", "../../tests/transactions/compose.yaml", "down", "-v")
-		logs, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Errorf("fixture cleanup: %v %s", err, logs)
-		}
-	})
-	markerCompose(t, "up", "-d", "--wait", "--wait-timeout", "90")
-	brokers := []string{"127.0.0.1:45092", "127.0.0.1:46092", "127.0.0.1:47092"}
+	network, brokers := startMarkerFixture(t)
 	for _, commit := range []bool{true, false} {
 		t.Run(map[bool]string{true: "commit", false: "abort"}[commit], func(t *testing.T) {
 			// Given an acknowledged prefix on disk and one more synced capture batch.
@@ -196,7 +173,7 @@ func TestCoordinatorDecidedCaptureRecoveryWithDelayedMarkers(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				t.Fatal("coordinator did not send transaction markers")
 			}
-			identity := productionReaderIdentity(t, p, cfg, "progress")
+			identity := captureIdentity(t, p)
 			s := delivery.New(p, cfg.Worker)
 			s.Identity = identity
 			txid := s.TransactionID(0, "progress")
@@ -275,7 +252,7 @@ func TestCoordinatorDecidedCaptureRecoveryWithDelayedMarkers(t *testing.T) {
 		}
 	}
 }
-func productionReaderIdentity(t *testing.T, p plan.Plan, cfg config.Config, topic string) delivery.Identity {
+func captureIdentity(t *testing.T, p plan.Plan) delivery.Identity {
 	t.Helper()
 	paths, err := filepath.Glob(filepath.Join(p.Destination.Name, ".kaferry", "writers", "*", "state.json"))
 	require.NoError(t, err)
@@ -285,4 +262,131 @@ func productionReaderIdentity(t *testing.T, p plan.Plan, cfg config.Config, topi
 	e, err := checkpoint.Decode[archiveEnvelope](data, 96<<20)
 	require.NoError(t, err)
 	return e.Identity
+}
+
+func startMarkerFixture(t *testing.T) (*markerNetwork, []string) {
+	t.Helper()
+	if os.Getenv("KAFERRY_MARKER_FIXTURE") != "1" {
+		t.Skip("set KAFERRY_MARKER_FIXTURE=1 for the disposable replicated transaction fixture")
+	}
+	network := newMarkerNetwork(t)
+	t.Cleanup(func() {
+		network.unblock()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "docker", "compose", "-p", "kaferry-marker-qualification", "-f", "../../tests/transactions/compose.yaml", "logs", "--no-color")
+		brokerLogs, logErr := cmd.CombinedOutput()
+		if logErr != nil {
+			t.Errorf("fixture logs: %v", logErr)
+		}
+		if directory := os.Getenv("KAFERRY_REPORT_DIR"); directory != "" {
+			if err := os.WriteFile(filepath.Join(directory, "transaction-"+t.Name()+"-brokers.log"), brokerLogs, 0600); err != nil {
+				t.Errorf("save fixture logs: %v", err)
+			}
+		}
+		cmd = exec.CommandContext(ctx, "docker", "compose", "-p", "kaferry-marker-qualification", "-f", "../../tests/transactions/compose.yaml", "down", "-v")
+		logs, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Errorf("fixture cleanup: %v %s", err, logs)
+		}
+	})
+	markerCompose(t, "up", "-d", "--wait", "--wait-timeout", "90")
+	brokers := []string{"127.0.0.1:45092", "127.0.0.1:46092", "127.0.0.1:47092"}
+	return network, brokers
+}
+
+func TestReplicatedCopyContinuesAcrossCoordinatorOutage(t *testing.T) {
+	_, brokers := startMarkerFixture(t)
+	admin := kadm.NewClient(client(t, brokers))
+	created, err := admin.CreateTopics(testContext(t), 1, 3, map[string]*string{"min.insync.replicas": kadm.StringPtr("2")}, "input", "output")
+	require.NoError(t, err)
+	require.NoError(t, created.Error())
+	created, err = admin.CreateTopics(testContext(t), 1, 3, map[string]*string{"min.insync.replicas": kadm.StringPtr("2"), "cleanup.policy": kadm.StringPtr("compact")}, "progress")
+	require.NoError(t, err)
+	require.NoError(t, created.Error())
+	awaitReplicatedTopics(t, brokers, nil, "input", "output", "progress")
+	// Given a running copy with an acknowledged sixteen-record prefix.
+	seed(t, brokers, 1, 16)
+	p := query(t, brokers, brokers, "", "")
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer cancel()
+	var logs bytes.Buffer
+	var prepared atomic.Bool
+	ready := make(chan struct{})
+	var readyOnce sync.Once
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, p, config.Defaults(""), Options{ProgressTopic: "progress", Logger: slog.New(slog.NewJSONHandler(&logs, nil)), Hook: func(point string, _ int32) {
+			if point == "flushed" {
+				prepared.Store(true)
+			}
+			if point == "committed" && prepared.Load() {
+				readyOnce.Do(func() { close(ready) })
+			}
+		}})
+	}()
+	finished := false
+	t.Cleanup(func() {
+		cancel()
+		if !finished {
+			<-done
+		}
+	})
+	select {
+	case <-ready:
+	case err := <-done:
+		finished = true
+		t.Fatalf("worker stopped before initial commit: %v %s", err, logs.String())
+	case <-ctx.Done():
+		t.Fatal("initial output was not committed")
+	}
+	metadata, err := admin.BrokerMetadata(testContext(t))
+	require.NoError(t, err)
+	identity := delivery.Identity{SourceCluster: metadata.Cluster}
+	session := delivery.New(p, config.Defaults("").Worker)
+	session.Identity = identity
+	id := session.TransactionID(0, "progress")
+	coordinator := admin.FindTxnCoordinators(testContext(t), id)[id]
+	require.NoError(t, coordinator.Err)
+	container := fmt.Sprintf("kaferry-marker-qualification-marker-%d-1", coordinator.NodeID)
+	require.Contains(t, []int32{1, 2, 3}, coordinator.NodeID)
+	// When its transaction coordinator stays down while more selected records arrive.
+	data, err := exec.Command("docker", "stop", "-t", "1", container).CombinedOutput()
+	require.NoError(t, err, "%s", data)
+	t.Cleanup(func() {
+		data, err := exec.Command("docker", "start", container).CombinedOutput()
+		require.NoError(t, err, "%s", data)
+	})
+	producer := client(t, brokers)
+	for offset := 16; offset < 64; offset++ {
+		require.NoError(t, producer.ProduceSync(testContext(t), recordFor("input", 0, fmt.Sprintf("0:%d", offset))).FirstErr())
+	}
+	reader := client(t, brokers, kgo.FetchIsolationLevel(kgo.ReadCommitted()), kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"output": {0: kgo.NewOffset().AtStart()}}))
+	got := map[string]int{}
+	for len(got) < 64 {
+		select {
+		case err := <-done:
+			finished = true
+			t.Fatalf("worker stopped during coordinator outage: %v %s", err, logs.String())
+		default:
+		}
+		poll, stop := context.WithTimeout(ctx, 200*time.Millisecond)
+		fetch := reader.PollRecords(poll, 100)
+		stop()
+		if err := fetch.Err(); err != nil && err != context.DeadlineExceeded {
+			require.NoError(t, err)
+		}
+		for _, record := range fetch.Records() {
+			got[string(record.Value)]++
+		}
+		require.NoError(t, ctx.Err())
+	}
+	cancel()
+	err = <-done
+	finished = true
+	require.NoError(t, err, "%s", logs.String())
+	// Then every selected occurrence is committed once without restarting the worker.
+	for offset := range 64 {
+		require.Equal(t, 1, got[fmt.Sprintf("0:%d", offset)])
+	}
 }

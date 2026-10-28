@@ -54,19 +54,20 @@ func (c *Committer) Save(ctx context.Context, cursors []core.Cursor) (map[int32]
 			}
 		}
 	})
-	if failure == nil {
-		updates := make([]delivery.Frame, 0, len(cursors))
-		for _, cursor := range cursors {
-			if err, present := results[cursor.Partition]; present && err == nil {
-				updates = append(updates, delivery.Frame{Cursor: cursor, Metadata: encoded[cursor.Partition]})
-			}
+	if failure != nil {
+		return results, fmt.Errorf("save source-group offsets: %w", failure)
+	}
+	updates := make([]delivery.Frame, 0, len(cursors))
+	for _, cursor := range cursors {
+		if err, present := results[cursor.Partition]; present && err == nil {
+			updates = append(updates, delivery.Frame{Cursor: cursor, Metadata: encoded[cursor.Partition]})
 		}
-		if len(updates) > 0 {
-			if c.delivery == nil {
-				failure = errors.New("output authority required for progress commit")
-			} else {
-				failure = c.delivery.CommitBatch(ctx, updates)
-			}
+	}
+	if len(updates) > 0 {
+		if c.delivery == nil {
+			failure = errors.New("output authority required for progress commit")
+		} else if err := c.delivery.CommitBatch(ctx, updates); err != nil {
+			failure = fmt.Errorf("commit output with progress: %w", err)
 		}
 	}
 	return results, failure
