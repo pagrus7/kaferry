@@ -3,6 +3,7 @@ package franz
 import (
 	"context"
 	"errors"
+	"fmt"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/delivery"
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -62,11 +63,33 @@ func (j *ProgressLog) Open(ctx context.Context, id int32) (delivery.Transaction,
 	if err != nil {
 		return nil, err
 	}
-	if _, _, err = client.ProducerID(ctx); err != nil {
+	if err = fenceProducer(ctx, client); err != nil {
 		client.Close()
 		return nil, err
 	}
 	return &progressTransaction{client: client, log: j, id: id}, nil
+}
+
+// Producer initialization fences the previous owner before authority is read.
+// Retry connection and coordinator failures here, before any output transaction starts.
+func fenceProducer(ctx context.Context, client TransactionClient) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, _, err := client.ProducerID(ctx)
+		if err == nil {
+			return nil
+		}
+		if !brokerUnreachable(err) && !kgo.IsRetryableBrokerErr(err) && !kerr.IsRetriable(err) {
+			return fmt.Errorf("initialize transactional producer: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 func (j *ProgressLog) Publish(ctx context.Context, id int32, writer, key string, value []byte) error {
 	options := append(append([]kgo.Opt{}, j.options...), kgo.RecordPartitioner(kgo.ManualPartitioner()), kgo.TransactionalID("kaferry-publication-v1-"+writer))

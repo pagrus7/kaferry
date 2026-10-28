@@ -58,7 +58,7 @@ func (o *kafkaOutput) openPartition(ctx context.Context, id int32) (*kafkaPartit
 	if err != nil {
 		return nil, err
 	}
-	if _, _, err = client.ProducerID(ctx); err != nil {
+	if err = fenceProducer(ctx, client); err != nil {
 		client.Close()
 		return nil, err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -168,4 +169,66 @@ func TestMissingBrokerDoesNotDiscardEarlierPreparedBatch(t *testing.T) {
 	// When the job restarts, then both A and B are committed exactly once.
 	require.NoError(t, Run(testContext(t), p, cfg, Options{ProgressTopic: "progress"}))
 	require.Equal(t, map[string]int{"0:0": 1, "0:1": 1}, output(t, destination, 1))
+}
+
+type fencingRetryClients struct {
+	franz.Clients
+	failures atomic.Int64
+}
+
+func (c *fencingRetryClients) Transaction(options ...kgo.Opt) (franz.TransactionClient, error) {
+	client, err := c.Clients.Transaction(options...)
+	if err != nil {
+		return nil, err
+	}
+	return &fencingRetryProducer{TransactionClient: client, owner: c}, nil
+}
+
+type fencingRetryProducer struct {
+	franz.TransactionClient
+	owner  *fencingRetryClients
+	failed bool
+}
+
+func (p *fencingRetryProducer) ProducerID(ctx context.Context) (int64, int16, error) {
+	if !p.failed {
+		p.failed = true
+		p.owner.failures.Add(1)
+		return 0, 0, net.ErrClosed
+	}
+	return p.TransactionClient.ProducerID(ctx)
+}
+func TestResumeRetriesProducerFencingBeforeLoadingProgress(t *testing.T) {
+	for _, archive := range []bool{false, true} {
+		t.Run(fmt.Sprint("archive=", archive), func(t *testing.T) {
+			// Given an acknowledged prefix and a restarted connection failing the first producer initialization.
+			source, destination := clusters(t, 1)
+			seed(t, source, 1, 6)
+			p := query(t, source, destination, "WHERE RECORD_OFFSET<LATEST", "")
+			root := ""
+			if archive {
+				root = t.TempDir()
+				p, _ = capturePlan(t, source, root, "fencing-retry", false)
+			}
+			p.WorkerStopAfterRecords = 2
+			cfg := config.Defaults("")
+			require.NoError(t, Run(testContext(t), p, cfg, Options{ProgressTopic: "progress"}))
+			clients := &fencingRetryClients{Clients: franz.NewClients()}
+			p.WorkerStopAfterRecords = 0
+			// When the job resumes, then producer fencing retries before authority is loaded and every occurrence commits once.
+			require.NoError(t, Run(testContext(t), p, cfg, Options{ProgressTopic: "progress", Clients: clients}))
+			require.Positive(t, clients.failures.Load())
+			got := map[string]int{}
+			if archive {
+				got = archiveValues(t, root)
+			} else {
+				got = output(t, destination, 1)
+			}
+			expected := map[string]int{}
+			for offset := range 6 {
+				expected[fmt.Sprintf("0:%d", offset)] = 1
+			}
+			require.Equal(t, expected, got)
+		})
+	}
 }
