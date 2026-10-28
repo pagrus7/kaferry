@@ -163,16 +163,13 @@ func (j *kafkaOutput) flush(ctx context.Context) error {
 			}
 		}
 		for {
-			if !l.tx.open {
-				if err := l.tx.client.BeginTransaction(); err != nil {
-					cancel()
-					l.failed = err
-					for _, entry := range batch {
-						entry.callback(entry.record, err)
-					}
-					return err
+			if err := l.tx.begin(); err != nil {
+				cancel()
+				l.failed = err
+				for _, entry := range batch {
+					entry.callback(entry.record, err)
 				}
-				l.tx.open = true
+				return err
 			}
 			completed := make(chan struct{}, len(batch))
 			failures := make([]error, len(batch))

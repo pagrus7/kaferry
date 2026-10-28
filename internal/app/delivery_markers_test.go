@@ -386,7 +386,9 @@ func TestReplicatedCopyContinuesAcrossCoordinatorOutage(t *testing.T) {
 	finished = true
 	require.NoError(t, err, "%s", logs.String())
 	// Then every selected occurrence is committed once without restarting the worker.
+	expected := map[string]int{}
 	for offset := range 64 {
-		require.Equal(t, 1, got[fmt.Sprintf("0:%d", offset)])
+		expected[fmt.Sprintf("0:%d", offset)] = 1
 	}
+	require.Equal(t, expected, output(t, brokers, 1))
 }

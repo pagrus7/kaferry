@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/internal/config"
+	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/franz"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/pagrus7/kaferry/internal/sql"
@@ -129,4 +130,42 @@ func TestProducerRecoveryRejectsProgressAdvancedByReplacementOwner(t *testing.T)
 	for offset := range 6 {
 		require.Equal(t, 1, got[fmt.Sprintf("0:%d", offset)])
 	}
+}
+
+func TestMissingBrokerDoesNotDiscardEarlierPreparedBatch(t *testing.T) {
+	// Given A was prepared, while a fixed clock keeps its progress commit pending.
+	source, destination := clusters(t, 1)
+	seed(t, source, 1, 1)
+	p := query(t, source, destination, "", "")
+	p.WorkerStopAfterRecords = 2
+	cfg := config.Defaults("")
+	cfg.Worker.RecordCap, cfg.Worker.PartitionRecordCap = 8, 8
+	clock := &controlledClock{}
+	clock.milliseconds.Store(time.Now().UnixMilli())
+	clients := &missingBrokerClients{Clients: franz.NewClients()}
+	clients.failed.Store(true)
+	producer := client(t, source)
+	var batches atomic.Int64
+	var seedErr error
+	// When B arrives after A's flush and fails preparation, then the adapter must not replace the producer and discard A.
+	err := Run(testContext(t), p, cfg, Options{ProgressTopic: "progress", Clients: clients, Clock: clock, Hook: func(point string, _ int32) {
+		if point == "flushed" && batches.Add(1) == 1 {
+			clients.failed.Store(false)
+			seedErr = producer.ProduceSync(testContext(t), recordFor("input", 0, "0:1")).FirstErr()
+		}
+	}})
+	require.NoError(t, seedErr)
+	require.ErrorContains(t, err, "unknown broker")
+	require.EqualValues(t, 1, batches.Load())
+	require.EqualValues(t, 1, clients.created.Load(), "an earlier prepared batch prevents producer replacement")
+	require.True(t, clients.failed.Load(), "B must encounter the injected failure")
+	require.Empty(t, output(t, destination, 1))
+	report, err := (Inspection{Options: Options{ProgressTopic: "progress"}}).Explain(testContext(t), p, cfg.Worker, core.NoopStopObserver{})
+	require.NoError(t, err)
+	require.Len(t, report.Partitions, 1)
+	require.True(t, report.Partitions[0].Saved)
+	require.Zero(t, report.Partitions[0].Start, "authority must not advance past the aborted A+B transaction")
+	// When the job restarts, then both A and B are committed exactly once.
+	require.NoError(t, Run(testContext(t), p, cfg, Options{ProgressTopic: "progress"}))
+	require.Equal(t, map[string]int{"0:0": 1, "0:1": 1}, output(t, destination, 1))
 }

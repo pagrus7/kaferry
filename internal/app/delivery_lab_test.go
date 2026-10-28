@@ -143,12 +143,12 @@ func seed(t *testing.T, brokers []string, parts, perPart int) {
 	require.NoError(t, c.ProduceSync(testContext(t), records...).FirstErr())
 }
 
-// committedRecords drains every selected partition through its captured stable
-// end, including control records, so late duplicates cannot hide behind a set.
+// committedRecords drains read_committed records through the captured physical
+// end, including control records, so delayed markers and trailing duplicates cannot hide.
 func committedRecords(t *testing.T, brokers []string, parts int, options ...kgo.Opt) []*kgo.Record {
 	t.Helper()
 	admin := kadm.NewClient(client(t, brokers, options...))
-	ends, err := admin.ListCommittedOffsets(testContext(t), "output")
+	ends, err := admin.ListEndOffsets(testContext(t), "output")
 	require.NoError(t, err)
 	require.NoError(t, ends.Error())
 	result := []*kgo.Record{}
