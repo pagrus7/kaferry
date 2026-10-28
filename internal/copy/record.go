@@ -79,6 +79,7 @@ type Token struct {
 	Partition  int32
 	Generation uint64
 	Sequence   uint64
+	Next       int64
 }
 type Delivery struct {
 	Token Token

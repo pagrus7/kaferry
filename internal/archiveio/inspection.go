@@ -21,7 +21,13 @@ type Inspector struct {
 func NewInspector(clock core.Clock) *Inspector {
 	return &Inspector{clock: clock}
 }
-func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result SourceInspection, err error) {
+func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (SourceInspection, error) {
+	return i.source(p, fp, w, nil, false)
+}
+func (i *Inspector) SavedSource(p plan.Plan, fp string, w config.Worker, saved *replay.State) (SourceInspection, error) {
+	return i.source(p, fp, w, saved, true)
+}
+func (i *Inspector) source(p plan.Plan, fp string, w config.Worker, saved *replay.State, authority bool) (result SourceInspection, err error) {
 	directory, err := checkpointDirectory(w)
 	if err != nil {
 		return result, err
@@ -30,10 +36,14 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result Sour
 		return result, err
 	}
 	result.Exists = true
-	var saved *replay.State
 	if !p.OneOff {
 		result.CheckpointPath = checkpoint.Path(directory, p.Group)
-		saved, err = replay.ReadCheckpoint(directory, p.Group, replay.NativeGroupFiles{})
+		if !authority {
+			saved, err = replay.ReadCheckpoint(directory, p.Group, replay.NativeGroupFiles{})
+			if err == nil && saved != nil {
+				err = errors.New("replay checkpoint lacks delivery authority")
+			}
+		}
 		if err != nil {
 			return result, &Conflict{Err: err}
 		}

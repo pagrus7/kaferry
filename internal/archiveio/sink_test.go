@@ -14,7 +14,7 @@ type captureMock struct {
 	flushes, finishes, closes      int
 }
 
-func (m *captureMock) Append(r avro.Record) error {
+func (m *captureMock) Append(r avro.Record, _ core.Cursor) error {
 	if m.appendErr != nil {
 		return m.appendErr
 	}

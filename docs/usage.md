@@ -4,13 +4,14 @@ For existing Kafka topics, start with the [copy examples](#copy-between-kafka-to
 
 ## Local Kafka playground
 
-Install `kaferry` on PATH ([installation](install.md)) and start Docker. Use a fresh working directory, a free local port 9092 and an unused `kaferry-kafka-demo` container name. This example starts one disposable Kafka broker on loopback, creates two single-partition topics and produces three acknowledged records. It needs no Kafka credentials, Go, Compose or tutorial download. Without Docker, use the [archive demo](#first-copy-without-kafka).
+Install `kaferry` on PATH ([installation](install.md)) and start Docker. Use a fresh working directory, a free local port 9092 and an unused `kaferry-kafka-demo` container name. This example starts one disposable Kafka broker on loopback, creates the data topics and a progress topic and produces three acknowledged records. It needs no Kafka credentials, Go, Compose or tutorial download. Without Docker, use the [archive demo](#first-copy-without-kafka).
 
 <!-- kafka-quickstart-setup -->
 ```sh
 docker run -d --name kaferry-kafka-demo -p 127.0.0.1:9092:9092 apache/kafka:3.9.2
 docker exec kaferry-kafka-demo /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic orders --partitions 1 --replication-factor 1
 docker exec kaferry-kafka-demo /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic orders-copy --partitions 1 --replication-factor 1
+docker exec kaferry-kafka-demo /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic kaferry-progress --partitions 1 --replication-factor 1 --config cleanup.policy=compact
 printf 'order-1\norder-2\norder-3\n' | docker exec -i kaferry-kafka-demo /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic orders --sync --producer-property acks=all
 ```
 
@@ -31,7 +32,7 @@ The copy summary reports `submitted: 3` and `confirmed: 3`. Read the destination
 
 <!-- kafka-quickstart-read -->
 ```sh
-docker exec kaferry-kafka-demo /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic orders-copy --from-beginning --max-messages 3 --timeout-ms 10000
+docker exec kaferry-kafka-demo /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic orders-copy --consumer-property isolation.level=read_committed --from-beginning --max-messages 3 --timeout-ms 10000
 ```
 
 ```text
@@ -56,9 +57,28 @@ docker rm -fv kaferry-kafka-demo
 
 [Copy your own Kafka topics](#copy-between-kafka-topics) · [Inspect saved progress](#stop-and-check-results).
 
+## Prepare authoritative progress
+
+For every copy involving Kafka, provision a progress topic with `cleanup.policy=compact` and no `delete` policy. Kafka output uses the **destination cluster**; Kafka capture to archive uses the **source cluster**. Keep this topic separate from all data topics and retain it for the job's lifetime. Kaferry grows its partitions when assignments require more. With Kafka's command-line tools, replace the bootstrap address:
+
+```sh
+kafka-topics.sh --bootstrap-server destination.example:9092 --create \
+  --topic kaferry-progress --partitions 1 --replication-factor 3 \
+  --config cleanup.policy=compact
+```
+
+Choose a replication factor supported by your cluster. If using another topic name, add this to the copy's TOML:
+
+```toml
+[worker]
+progress_topic = 'copy-progress'
+```
+
+Retain the source, committed output and progress together. A named job rejects legacy, incompatible or incomplete delivery state before accepting output. Use a new group for an independent copy. Consumers of Kafka output must set `isolation.level=read_committed`. Each source partition commits independently; there is no atomic whole-query snapshot. [State and recovery contract](../design/delivery.md).
+
 ## Copy between Kafka topics
 
-Install `kaferry` on `PATH` ([installation](install.md)). Create both topics first; topic settings, ACLs and consumer-group offsets are not copied. These examples keep original partition numbers, so the destination needs every selected source partition ID; add `WITH (PARTITIONING = KEY)` after the destination topic to route by key instead ([routing](../design/decisions.md#kafka-output)).
+Install `kaferry` on `PATH` ([installation](install.md)). Create both data topics and the [progress topic](#prepare-authoritative-progress) first; topic settings, ACLs and consumer-group offsets are not copied. These examples keep original partition numbers, so the destination needs every selected source partition ID; add `WITH (PARTITIONING = KEY)` after the destination topic to route by key instead ([routing](../design/decisions.md#kafka-output)).
 
 Replace the addresses in **`connections.toml`**; add [authentication](#connections) and the required [permissions](#permissions). Kaferry copies raw bytes: ensure their formats and Schema Registry IDs work at the destination. Destination broker settings can replace timestamps or delete old records soon after copying; see [Kafka output](../design/decisions.md#kafka-output) and [client limits](../design/client-compatibility.md#kafka-input-timestamps).
 
@@ -90,7 +110,7 @@ WHERE RECORD_OFFSET < LATEST;
 
 An offset is a position within one partition. `LATEST` is its readable end, excluded from the copy: an end of 10 means `< LATEST` includes offset 9. Kaferry saves each partition's end when first assigned; an open transaction can hold it below records already written, and partitions capture their ends separately.
 
-Only committed records still retained by Kafka can be copied. The named `GROUP` saves progress in the source Kafka group: rerunning it keeps the saved ends and excludes later appends. A new group, or omitting `GROUP`, starts an independent copy and can duplicate existing output; see [resuming](#resume-or-start-over).
+Only committed records still retained by Kafka can be copied. The named `GROUP` identifies authoritative progress committed with output on the destination cluster: rerunning it keeps the saved ends and excludes later appends. A new group, or omitting `GROUP`, starts an independent copy and can duplicate existing output; see [resuming](#resume-or-start-over).
 
 ### Try a small copy first
 
@@ -278,6 +298,8 @@ This group consumed its fixed file selection and saved progress after output con
 
 ### Archive your own topic
 
+Prepare the [progress topic on the source cluster](#prepare-authoritative-progress) before capture.
+
 Prepare the connection profiles, topics and permissions from [Kafka setup](#copy-between-kafka-topics) before these commands.
 
 Use storage where successful saves survive a crash, file replacement happens as one operation, and locks prevent competing processes from updating the same state. Verify these guarantees across hosts for shared storage. [Storage contract](../design/archive.md#layout-and-ownership).
@@ -380,6 +402,8 @@ Kaferry acquires tickets with the keytab and renews them while the client runs. 
 
 ## Permissions
 
+Execution needs progress-topic READ/WRITE/DESCRIBE, compact-policy configuration reads, partition growth and transactional-ID WRITE on the cluster that owns progress, in addition to ordinary source/group and destination access. Inspection needs progress-topic READ and metadata access but performs no writes. [Placement and setup](#prepare-authoritative-progress).
+
 Kafka needs source topic/group READ and destination WRITE (including DESCRIBE); some brokers also need cluster IDEMPOTENT_WRITE. Without a named `GROUP`, grant group READ on the `kaferry-` prefix. File-only copies need no Kafka grants. [Optional DESCRIBE_CONFIGS](../design/client-compatibility.md#optional-destination-configuration).
 
 ## Stop and check results
@@ -396,7 +420,7 @@ kaferry status -c connections.toml -f copy.sql --json
 
 Rerun the same query with the same named `GROUP`, endpoints and checkpoint directory. Saved time windows and offset ends are reused; changing filters, completion allowances or routing needs a new group ([identity rules](../design/decisions.md#identity)). For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
 
-Keep existing output and saved progress. Kafka stores progress in source consumer-group offsets; archive replay uses checkpoint files. Expired offsets or missing checkpoints can start a fresh copy; crashes and Kafka rebalances can repeat or reorder writes. Keep selected completed archive files unchanged and retain lock files until replay completes. [Archive recovery and moving replay](#archive-procedures).
+Keep existing output and saved progress. Kafka output stores authority in the destination progress topic; Kafka capture uses the source progress topic; archive-only copies save authority locally. Source-group offsets and replay checkpoint mirrors do not override that authority. Resume fences the prior producer before reading progress and does not repeat committed output. Keep selected completed archive files unchanged and retain lock files until replay completes. [Archive recovery and moving replay](#archive-procedures).
 
 ## Archive procedures
 
@@ -415,14 +439,14 @@ Set `[worker] checkpoint_dir = '/absolute/path/to/work/checkpoints'` when using 
 
 ### Capture crashed
 
-Keep the whole archive directory, including hidden files, and retain the source Kafka group. Restart the same capture query. Startup recovers available writer namespaces under their locks, publishes acknowledged data, and then resumes copying. Do not delete private files, recovery state or lock files. Missing or corrupt acknowledged data stops recovery; preserve it for investigation rather than starting over in place. Records written before a crash but not saved in source progress can repeat. [Storage contract](../design/archive.md#capture-and-recovery).
+Keep the whole archive directory, including hidden files, and retain the source Kafka group. Restart the same capture query. Startup fences its assigned producer, waits for complete committed authority, and recovers that disk under its locks before copying. Do not delete private files, recovery state or lock files. Missing or corrupt acknowledged data stops recovery; preserve it for investigation rather than starting over in place. Private bytes outside the committed prefix are discarded only after authority is complete. Recover separate old disks with the [takeover procedure](#recover-a-capture-disk-after-takeover). [Storage contract](../design/archive.md#capture-and-recovery).
 
 ### Move replay to another machine
 
 1. Stop replay and all capture writers for this archive, and wait for successful exits. Recover a failed capture before moving its archive. Keep the destination’s existing output.
 2. Copy the entire source archive and checkpoint directory, including hidden files and lock files, to storage meeting the [archive requirements](#archive-your-own-topic). Selected archive files must remain byte-for-byte unchanged.
 3. Create the destination checkpoint directory if needed and set `worker.checkpoint_dir` to its new path. Update archive paths and connection details while keeping the named group, query and destination identity. For a file destination, move its existing output as well; paths alone do not prove that output is present.
-4. Run `explain` to check that saved progress is found, then rerun the same copy. Destination-confirmed records after the last saved checkpoint may repeat.
+4. Run `explain` to check that saved progress is found, then rerun the same copy. Retain the `.eos` binding beside the replay checkpoint so the destination-owned physical cursor can be found.
 
 Use only one replay process for a group/checkpoint directory. A different checkpoint directory with no saved state starts fresh and can duplicate output. [Checkpoint contract](../design/archive.md#checkpoints).
 
@@ -447,7 +471,7 @@ Keep the SQL, named group, configuration, `explain` output, stderr logs and `sta
 | --- | --- | --- |
 | Running, but destination does not grow | Read stderr `progress` events and `explain`: the worker may be following, have no assignment, filter records, or resume past available input. `run` writes no stdout. | Check source availability, selected partitions, saved start positions and filter counts. Correct the input or query; use a new group for a changed filter, which starts an independent copy. |
 | Copy fails on a record | Read the error and `copy summary`. Only identified synchronous validation failures support SKIP; delivery and storage failures stop the copy. | Fix the cause and resume the same group. Use SKIP only when deliberately dropping that rejected record; async broker failures cannot be skipped. [Policies](../design/decisions.md#errors). |
-| Rerun copies records again | Compare the logged group and saved progress. An unnamed run, missing checkpoint, expired offsets, or writes after the last save can repeat data. | Restore the intended progress and destination together, or resume the same named group. Previously repeated output remains and may need downstream handling. |
+| Rerun copies records again | Compare the logged group and saved progress. An unnamed run or a new group/checkpoint directory starts an independent copy. Missing authority for an initialized job fails rather than silently restarting. | Retain the intended authority and output together, and resume the same named group. |
 | Replay omits recent capture output | Compare its fixed selection with completed files; private or later-published files are outside that selection. | Follow [capture completion](#capture-is-still-running). A new group can replay older files again. |
 | Status is `stopped`, but input remains | Read each partition’s saved `stop.reason`; a worker record threshold can stop before source end. | For a threshold stop, rerun the same job for another allowance. Interpret other reasons using the [completion contract](../design/decisions.md#completion). |
 
@@ -457,7 +481,17 @@ Errors stop the copy. `ON_ERROR = SKIP` drops identified records rejected before
 
 ## Workers
 
-Kafka-source workers use identical SQL and a dedicated `GROUP`. Use fixed timestamps; `NOW()` can differ. Stop workers before upgrading. Archive captures can use local or shared storage. Replay uses one process per group/checkpoint directory. Rerun unassigned workers to pick up unfinished work.
+Kafka-source workers use identical SQL and a dedicated `GROUP`. Use fixed timestamps; `NOW()` can differ. Stop workers before upgrading. Archive captures can use local or shared storage; retain every capture disk during takeover. Replay uses one process per group/checkpoint directory. Rerun unassigned workers to pick up unfinished work.
+
+## Recover a capture disk after takeover
+
+Kafka capture workers can use separate durable disks. Retain every disk that contains committed output; Kafka cannot reconstruct a permanently lost disk. To publish the old disk's committed prefix, first start a replacement worker using the same named group, source, query and progress topic. On the recovered host, keep the entire output directory, including hidden state, and use its original capture SQL:
+
+```sh
+kaferry run --recover-local -c connections.toml -f capture.sql
+```
+
+Recovery requires a different writer's committed takeover claim to be visible. If transaction markers or authority are incomplete, it refuses without changing record files. Retry after that transaction settles. Recovery publishes only the old disk's committed bytes and cannot advance the replacement's source cursor. It never joins the source group. [Archive recovery contract](../design/delivery.md#archive-output).
 
 ## Monitoring
 

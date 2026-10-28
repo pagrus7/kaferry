@@ -16,6 +16,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/commitmeta"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/delivery"
 	adapter "github.com/pagrus7/kaferry/internal/franz"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
@@ -110,12 +111,21 @@ func probeSourceProgress(t *testing.T, name, group string) (*adapter.Source, cor
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	lookups := kafkaport.NewOffsetLookupFactory()
 	factory := adapter.NewFactory(commitmeta.NewCodec(), clients, kafkaport.NewPositionerFactory(core.RealClock{}, logger, lookups), core.RealClock{}, logger, lookups)
-	connection, err := factory.Open(context.Background(), p.Source)
+	session := delivery.New(p, config.Defaults("").Worker)
+	session.Identity.Group = group
+	session.Identity.Fingerprint = "pause-probe"
+
+	connection, err := factory.ForQuery(session).Open(context.Background(), p.Source)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = connection.Close(context.Background()) })
 	if _, err = connection.ClusterID(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	log, err := connection.(kafkaport.DeliveryConnection).ProgressLog(t.Context(), session, "kaferry-progress")
+	require.NoError(t, err)
+	require.NoError(t, log.Ensure(t.Context(), nil))
+	session.Backend = &probeAuthority{session: session, log: log}
+	t.Cleanup(func() { _ = session.Close() })
 	input, store, err := connection.Source(context.Background(), p, "pause-probe", config.Defaults(t.TempDir()).Worker, nil)
 	require.NoError(t, err)
 	source := input.(*adapter.Source)
@@ -186,3 +196,57 @@ func TestCooperativeReassignmentResumesOnlyNewPartitions(t *testing.T) {
 	}
 	t.Fatal("application pause survived reassignment or EOF was not restored", seen)
 }
+
+type probeAuthority struct {
+	session *delivery.Session
+	log     delivery.Log
+}
+type probePartition struct {
+	owner *probeAuthority
+	tx    delivery.Transaction
+	frame *delivery.Frame
+}
+
+func (p *probeAuthority) Prepare(ctx context.Context, ids []int32) error {
+	return p.log.Ensure(ctx, ids)
+}
+func (p *probeAuthority) Read(ctx context.Context, id int32) (*delivery.Frame, error) {
+	return (delivery.Reader{Session: p.session, Log: p.log}).Read(ctx, id)
+}
+func (p *probeAuthority) Acquire(ctx context.Context, id int32) (delivery.Partition, error) {
+	tx, err := p.log.Open(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	data, err := p.log.ReadValue(ctx, id, p.session.Key("state"), true)
+	if err != nil {
+		_ = tx.Close()
+		return nil, err
+	}
+	var f *delivery.Frame
+	if data != nil {
+		decoded, err := p.session.Decode(data)
+		if err != nil {
+			_ = tx.Close()
+			return nil, err
+		}
+		f = &decoded
+	}
+	return &probePartition{owner: p, tx: tx, frame: f}, nil
+}
+func (p *probePartition) Saved() *delivery.Frame { return p.frame }
+func (p *probePartition) Commit(ctx context.Context, f delivery.Frame) error {
+	data, err := delivery.Encode(f)
+	if err != nil {
+		return err
+	}
+	if err = p.tx.Write(ctx, p.owner.session.Key("state"), data); err != nil {
+		return err
+	}
+	if err = p.tx.Commit(ctx); err != nil {
+		return err
+	}
+	p.frame = &f
+	return nil
+}
+func (p *probePartition) Close() error { return p.tx.Close() }

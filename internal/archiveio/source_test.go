@@ -1,7 +1,6 @@
 package archiveio
 
 import (
-	"context"
 	"errors"
 	"github.com/pagrus7/kaferry/internal/archive/replay"
 	core "github.com/pagrus7/kaferry/internal/copy"
@@ -65,12 +64,6 @@ func TestReplaySourceBackpressureEOFAndConfirmedStop(t *testing.T) {
 	event, err = source.Poll(time.Millisecond)
 	require.NoError(t, err)
 	require.EqualValues(t, 11, event.Input.Next)
-	// When the destination confirms a stop, then only that prefix and its reason are saved.
-	stop := &core.Stop{Reason: "worker_record_cap", At: 11}
-	_, err = source.Save(t.Context(), []core.Cursor{{Position: 11, Stop: stop}})
-	require.NoError(t, err)
-	require.EqualValues(t, 11, session.confirmed)
-	require.Equal(t, stop, session.stop)
 	session.err = io.EOF
 	event, err = source.Poll(time.Millisecond)
 	require.NoError(t, err)
@@ -85,13 +78,5 @@ func TestReplaySourcePropagatesFailureAndRejectsInvalidCommit(t *testing.T) {
 	source := NewSource(session, &clockMock{}, "")
 	// When reading or saving, then the original error is retained and no invented prefix is committed.
 	_, err := source.Poll(time.Millisecond)
-	require.ErrorIs(t, err, failure)
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, err = source.Save(ctx, []core.Cursor{{}})
-	require.ErrorIs(t, err, context.Canceled)
-	_, err = source.Save(t.Context(), []core.Cursor{{Partition: 1}})
-	require.ErrorContains(t, err, "one virtual source cursor")
-	_, err = source.Save(t.Context(), []core.Cursor{{Position: 3}})
 	require.ErrorIs(t, err, failure)
 }

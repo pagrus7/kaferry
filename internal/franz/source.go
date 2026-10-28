@@ -8,6 +8,7 @@ import (
 	"time"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/delivery"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -19,6 +20,7 @@ type sourceMetadata interface {
 	Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]int64, map[int32]kafkaport.Progress, error)
 }
 type Source struct {
+	delivery             *delivery.Session
 	client               ConsumerClient
 	routing              kafkaport.PartitionValidator
 	inspector            sourceMetadata

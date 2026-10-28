@@ -15,7 +15,7 @@ import (
 )
 
 const MaxBytes = 4096
-const prefix = "kaferry:2;"
+const prefix = "kaferry:4;"
 
 // Progress is independent of the serialized field names and representation.
 type Progress struct {
@@ -72,11 +72,7 @@ func (JSONCodec) Encode(p Progress) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	version := prefix
-	if p.End != nil {
-		version = "kaferry:3;"
-	}
-	encoded := version + string(data)
+	encoded := prefix + string(data)
 	if len(encoded) > MaxBytes {
 		return "", &Error{Kind: "oversized"}
 	}
@@ -91,15 +87,11 @@ func (JSONCodec) Decode(encoded string) (Progress, error) {
 	if !strings.HasPrefix(encoded, "kaferry:") {
 		return p, &Error{Kind: "foreign"}
 	}
-	version := prefix
-	fields := []string{"fp", "tid", "win", "stop"}
-	if strings.HasPrefix(encoded, "kaferry:3;") {
-		version = "kaferry:3;"
-		fields = append(fields, "end")
-	} else if !strings.HasPrefix(encoded, prefix) {
+	if !strings.HasPrefix(encoded, prefix) {
 		return p, &Error{Kind: "unsupported version of"}
 	}
-	data := []byte(strings.TrimPrefix(encoded, version))
+	fields := []string{"fp", "tid", "win", "stop", "end"}
+	data := []byte(strings.TrimPrefix(encoded, prefix))
 	if !utf8.Valid(data) || checkObject(data, fields...) != nil {
 		return p, &Error{Kind: "invalid"}
 	}
@@ -110,9 +102,6 @@ func (JSONCodec) Decode(encoded string) (Progress, error) {
 		return p, &Error{Kind: "invalid"}
 	}
 	p = Progress{Fingerprint: w.Fingerprint, TopicID: w.TopicID, End: w.End}
-	if version == "kaferry:3;" && w.End == nil {
-		return Progress{}, &Error{Kind: "invalid"}
-	}
 	if w.Window != nil {
 		p.Window = &plan.Window{Lower: w.Window.Lower, Upper: w.Window.Upper}
 	}

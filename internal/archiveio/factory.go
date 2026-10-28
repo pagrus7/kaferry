@@ -1,18 +1,18 @@
 package archiveio
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/pagrus7/kaferry/internal/archive/avro"
+	"github.com/pagrus7/kaferry/internal/archive/replay"
+	"github.com/pagrus7/kaferry/internal/checkpoint"
+	"github.com/pagrus7/kaferry/internal/delivery"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/pagrus7/kaferry/internal/archive/avro"
-	"github.com/pagrus7/kaferry/internal/archive/capture"
-	"github.com/pagrus7/kaferry/internal/archive/replay"
-	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
@@ -27,53 +27,59 @@ type Factory struct {
 func NewFactory(clock core.Clock, writer checkpoint.AtomicWriter, log *slog.Logger) *Factory {
 	return &Factory{clock: clock, writer: writer, log: log}
 }
-func (f *Factory) OpenSource(p plan.Plan, fp string, w config.Worker, partitionCount int) (Input, error) {
+func (f *Factory) OpenSource(ctx context.Context, s *delivery.Session, w config.Worker, count int) (Input, error) {
 	directory, err := checkpointDirectory(w)
 	if err != nil {
 		return nil, err
 	}
-	if err = separatePaths(p, directory); err != nil {
+	if err = separatePaths(s.Plan, directory); err != nil {
 		return nil, err
 	}
-	codec, err := avro.New(w.ArchiveBlockMaxBytes)
+	// Validate fresh input headers and partition criteria before output can acquire files.
+	if _, err = os.Stat(checkpoint.Path(directory, s.Plan.Group) + ".eos"); errors.Is(err, os.ErrNotExist) {
+		codec, err := avro.New(w.ArchiveBlockMaxBytes)
+		if err != nil {
+			return nil, &Conflict{Err: err}
+		}
+		if _, err = replay.NewCatalog(s.Plan.Source.Name, codec, replay.NativeFiles{}).Inspect(s.Plan.Partitions); err != nil {
+			return nil, &Conflict{Err: err}
+		}
+	}
+	b := NewBinding(s, f.writer, f.clock, f.log)
+	if err := b.Open(w); err != nil {
+		return nil, &Conflict{Err: errors.Join(err, b.Close())}
+	}
+	source, store, err := b.Source(ctx, w, count)
 	if err != nil {
-		return nil, err
+		return nil, &Conflict{Err: errors.Join(err, s.Close(), b.Close())}
 	}
-	catalog := replay.NewCatalog(p.Source.Name, codec, replay.NativeFiles{})
-	pool, err := replay.NewPool(catalog, replay.Limits{OpenFiles: w.ArchiveReplayOpenFiles, Blocks: w.ArchiveReplayBlocks})
-	if err != nil {
-		return nil, err
-	}
-	journal, err := replay.NewJournal(directory, p.Group, replay.NativeGroupFiles{}, f.writer)
-	if err != nil {
-		_ = pool.Close()
-		return nil, &Conflict{Err: err}
-	}
-	session, err := replay.NewSession(replay.Query{Group: p.Group, Fingerprint: fp, Window: p.Window, Partitions: p.Partitions, Offsets: p.Offsets, PartitionOffsets: p.PartitionOffsets, MaxOutOfOrderMS: p.MaxOutOfOrderMS, PartitionCount: partitionCount}, f.clock, journal, catalog, pool, w.RecordCap)
-	if err != nil {
-		return nil, &Conflict{Err: errors.Join(err, pool.Close(), journal.Close())}
-	}
-	if session.PrivateFiles > 0 {
-		f.log.Warn("archive snapshot excludes unfinished files", "private_files", session.PrivateFiles)
-	}
-	return NewSource(session, f.clock, checkpoint.Path(directory, p.Group)), nil
+	return &replayInput{Source: source, ProgressStore: store, binding: b}, nil
 }
-func (f *Factory) OpenOutput(endpoint plan.Endpoint, w config.Worker) (Output, error) {
-	codec, err := avro.New(w.ArchiveBlockMaxBytes)
+func (f *Factory) OpenOutput(s *delivery.Session, w config.Worker, log delivery.Log) (Output, error) {
+	backend := NewCapture(s, f.clock, log, f.writer)
+	s.Backend = backend
+	sink, err := backend.Sink(w)
 	if err != nil {
 		return nil, err
 	}
-	files := capture.NativeFiles{}
-	store, err := capture.Open(endpoint.Name, codec, files, capture.NewJournal(files, f.writer))
-	if err != nil {
-		return nil, err
-	}
-	writer, err := capture.New(store, f.clock, capture.Policy{RotateAfterSize: endpoint.RotateAfterSize, RotateAfterAge: time.Duration(endpoint.RotateAfterAgeMS) * time.Millisecond, MaxOpenFiles: w.ArchiveCaptureOpenFiles})
-	if err != nil {
-		return nil, errors.Join(err, store.Close())
-	}
-	return NewSink(writer, w.RecordCap), nil
+	return &captureSink{Sink: sink}, nil
 }
+func (f *Factory) Recover(ctx context.Context, s *delivery.Session, log delivery.Log, stop core.StopObserver) error {
+	return NewCapture(s, f.clock, log, f.writer).Recover(ctx, stop)
+}
+
+type replayInput struct {
+	core.Source
+	core.ProgressStore
+	binding *Binding
+}
+
+func (r *replayInput) Close() error            { return errors.Join(r.Source.Close(), r.binding.Close()) }
+func (r *replayInput) DeleteCheckpoint() error { return r.binding.Delete() }
+
+type captureSink struct{ core.Sink }
+
+func (s *captureSink) Finish() error { return s.Sink.(*Sink).Finish() }
 
 func checkpointDirectory(w config.Worker) (string, error) {
 	var directory string

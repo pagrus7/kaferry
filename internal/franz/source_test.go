@@ -3,6 +3,8 @@ package franz
 import (
 	"context"
 	"errors"
+	"github.com/pagrus7/kaferry/internal/config"
+	"github.com/pagrus7/kaferry/internal/delivery"
 	"reflect"
 	"testing"
 	"time"
@@ -98,7 +100,10 @@ func sourceFixture(t *testing.T) (*Source, *consumerMock) {
 	p := testPlan(t, nil)
 	store := &Committer{codec: commitmeta.NewCodec(), client: client, topic: "input", group: p.Group, metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: "id"}}}
 	metadata := &sourceMetadataMock{}
-	s := &Source{lookup: kafkaport.NewOffsetLookupFactory().New(metadata, metadata), client: client, inspector: metadata, positioning: kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory()), store: store, bridge: newRebalanceBridge(ctx, "input"), pump: &fetchPump{fetched: make(chan fetchResult, 1)}, plan: p, fingerprint: "fp", topicID: "id", query: ctx, ctx: ctx, cancel: cancel, clientCancel: func() {}, life: &lifecycleMock{}, positions: map[int32]int64{0: 0}, paused: make(map[int32]bool), held: make(map[int32]*kgo.Record), retention: make(map[int32]kafkaport.RetentionCheck), log: quietLogger(), lastTip: time.Now()}
+	authority := delivery.New(p, config.Defaults("").Worker)
+	authority.Backend = &memoryAuthority{metadata: metadata}
+	store.delivery = authority
+	s := &Source{delivery: authority, lookup: kafkaport.NewOffsetLookupFactory().New(metadata, metadata), client: client, inspector: metadata, positioning: kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory()), store: store, bridge: newRebalanceBridge(ctx, "input"), pump: &fetchPump{fetched: make(chan fetchResult, 1)}, plan: p, fingerprint: "fp", topicID: "id", query: ctx, ctx: ctx, cancel: cancel, clientCancel: func() {}, life: &lifecycleMock{}, positions: map[int32]int64{0: 0}, paused: make(map[int32]bool), held: make(map[int32]*kgo.Record), retention: make(map[int32]kafkaport.RetentionCheck), log: quietLogger(), lastTip: time.Now()}
 	return s, client
 }
 func feed(s *Source, record *kgo.Record, err error) {
@@ -177,6 +182,7 @@ func TestSourceRevokesOnlyNamedPartitionsAndTreatsLostSeparately(t *testing.T) {
 	s.held[2] = &kgo.Record{Partition: 2}
 	// When partition zero is lost, then only its generation's state is removed.
 	event := lifecycleEvent{ids: []int32{0}, revoke: true, lost: true, answer: make(chan lifecycleAnswer, 1)}
+	s.delivery.Backend.(*memoryAuthority).metadata = s.inspector.(*sourceMetadataMock)
 	require.NoError(t, s.lifecycle(event))
 	life := s.life.(*lifecycleMock)
 	if !life.lost || !reflect.DeepEqual(life.revoked, []int32{0}) || len(s.positions) != 1 || s.positions[2] != 8 || s.held[0] != nil || s.held[2] == nil || !s.paused[2] {
@@ -201,6 +207,7 @@ func TestSourceCommitsResolvedStartBeforeExposingAssignment(t *testing.T) {
 			// Given an assignment starting at saved offset seven and an independent commit response.
 			s, client := sourceFixture(t)
 			s.inspector = &sourceMetadataMock{low: map[int32]int64{0: 0}, high: map[int32]int64{0: 10}, saved: map[int32]int64{0: 7}, progress: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: "id"}}}
+			s.delivery.Backend.(*memoryAuthority).metadata = s.inspector.(*sourceMetadataMock)
 			client.commitErr, client.commitResponse = tc.requestError, tc.response
 			event := lifecycleEvent{ids: []int32{0}, answer: make(chan lifecycleAnswer, 1)}
 			// When the core resolves and saves its initial position.
@@ -283,6 +290,7 @@ func TestEmptyAssignmentDoesNotInspectDestination(t *testing.T) {
 	s.routing = routing
 	event := lifecycleEvent{answer: make(chan lifecycleAnswer, 1)}
 	// When processing it, then an idle worker needs no destination request and still receives its assignment result.
+	s.delivery.Backend.(*memoryAuthority).metadata = s.inspector.(*sourceMetadataMock)
 	require.NoError(t, s.lifecycle(event))
 	require.Zero(t, routing.calls)
 	select {

@@ -82,7 +82,7 @@ func TestForeignProgressAndSelfCopyFailBeforeJoining(t *testing.T) {
 	}
 }
 
-func TestExpiredAndAboveEndCommits(t *testing.T) {
+func TestAdvisoryOffsetsCannotRewindOrSkipAuthoritativeProgress(t *testing.T) {
 	// Given
 	a := admin(t)
 	src := topic(t, a, 1)
@@ -109,7 +109,7 @@ func TestExpiredAndAboveEndCommits(t *testing.T) {
 	deleted, err := a.DeleteRecords(ctx, kadm.Offsets{src: {0: {Topic: src, Partition: 0, At: 3}}})
 	require.NoError(t, err)
 	require.NoError(t, deleted.Error())
-	// Rewinding an offset also clears the saved stop that referred to its old position.
+	// When advisory offsets are rewound below retention, the authoritative completed cursor still wins.
 	require.NotEmpty(t, part.Metadata, "missing metadata")
 	saved, err := commitmeta.NewCodec().Decode(part.Metadata)
 	require.NoError(t, err)
@@ -122,8 +122,8 @@ func TestExpiredAndAboveEndCommits(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, result.Error())
 	execute(t, statement, cfg)
-	if records := archiveRecords(t, path); len(records) != 9 {
-		t.Fatal("expired commit did not replay from log start", len(records))
+	if records := archiveRecords(t, path); len(records) != 6 {
+		t.Fatal("advisory rewind changed committed occurrence counts", len(records))
 	}
 	part.At = 999999
 	result, err = a.CommitOffsets(ctx, group, kadm.Offsets{src: {0: part.Offset}})
@@ -131,6 +131,30 @@ func TestExpiredAndAboveEndCommits(t *testing.T) {
 	require.NoError(t, result.Error())
 	var out bytes.Buffer
 	if code := app.Execute(ctx, []string{"run", "-e", statement, "-c", cfg}, nil, io.Discard, &out); code != 2 {
-		t.Fatalf("above-end offset exit=%d: %s", code, out.String())
+		t.Fatalf("inconsistent advisory offset was not rejected: exit=%d: %s", code, out.String())
 	}
+	require.Len(t, archiveRecords(t, path), 6, "inconsistent advisory state cannot change committed output")
+}
+
+func TestRetentionPastAuthoritativeCursorReportsTheGap(t *testing.T) {
+	// Given three committed occurrences followed by source retention beyond the saved cursor.
+	a := admin(t)
+	src := topic(t, a, 1)
+	dst := topic(t, a, 1)
+	producer := producer(t)
+	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	for offset := range 6 {
+		publish(t, producer, &kgo.Record{Topic: src, Partition: 0, Value: []byte(fmt.Sprint(offset)), Timestamp: stamp})
+	}
+	cfg := configuration(t)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s-retention') WHERE RECORD_OFFSET<LATEST", dst, src, src)
+	execute(t, statement+" OPTIONS(WORKER_STOP_AFTER_RECORDS=3)", cfg)
+	deleted, err := a.DeleteRecords(t.Context(), kadm.Offsets{src: {0: {Topic: src, Partition: 0, At: 4}}})
+	require.NoError(t, err)
+	require.NoError(t, deleted.Error())
+	// When resuming, then the missing input is reported and committed output is not repeated.
+	result := loggedWorker(t.Context(), statement, cfg)
+	require.Zero(t, result.code, result.detail)
+	require.Contains(t, result.detail, "expired source position")
+	require.EqualValues(t, 5, topicRecordCount(t, a, dst, 1))
 }

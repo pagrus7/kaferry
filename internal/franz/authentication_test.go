@@ -347,3 +347,114 @@ func TestAuthenticationFilesAreCheckedBeforeOpeningOutput(t *testing.T) {
 	_, _, err = mechanism.Authenticate(t.Context(), "broker:9093")
 	require.EqualError(t, err, "kafka GSSAPI authentication failed")
 }
+
+type pendingCredential struct {
+	entered chan struct{}
+	release chan struct{}
+	calls   atomic.Int64
+	closes  atomic.Int64
+}
+
+func (*pendingCredential) Name() string { return "GSSAPI" }
+func (c *pendingCredential) Authenticate(context.Context, string) (sasl.Session, []byte, error) {
+	if c.calls.Add(1) == 1 {
+		close(c.entered)
+	}
+	<-c.release
+	return pendingCredentialSession{}, nil, nil
+}
+func (c *pendingCredential) Close() { c.closes.Add(1) }
+
+type pendingCredentialSession struct{}
+
+func (pendingCredentialSession) Challenge([]byte) (bool, []byte, error) { return true, nil, nil }
+
+func TestAuthenticationFinishesBeforeCredentialDestruction(t *testing.T) {
+	// Given an authenticator that is still using credentials after its caller cancels.
+	provider := &pendingCredential{entered: make(chan struct{}), release: make(chan struct{})}
+	mechanism := &safeMechanism{Mechanism: provider}
+	var cleanups atomic.Int64
+	mechanism.cleanup = func() { cleanups.Add(1) }
+	released := false
+	defer func() {
+		if !released {
+			close(provider.release)
+		}
+	}()
+	authenticated := make(chan error, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() { _, _, err := mechanism.Authenticate(ctx, "broker:9093"); authenticated <- err }()
+	select {
+	case <-provider.entered:
+	case <-time.After(time.Second):
+		t.Fatal("authentication did not start")
+	}
+	cancel()
+	// When cleanup begins, then it cannot destroy the in-use provider.
+	closing, closed := make(chan struct{}), make(chan struct{})
+	go func() { close(closing); mechanism.Close(); close(closed) }()
+	<-closing
+	select {
+	case <-closed:
+		t.Fatal("credential cleanup returned while authentication was active")
+	case <-time.After(50 * time.Millisecond):
+	}
+	require.Zero(t, provider.closes.Load())
+	close(provider.release)
+	released = true
+	require.NoError(t, <-authenticated)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("credential cleanup did not finish")
+	}
+	require.EqualValues(t, 1, provider.closes.Load())
+	require.EqualValues(t, 1, cleanups.Load())
+	// Then late authentication is rejected and repeated cleanup does not destroy twice.
+	_, _, err := mechanism.Authenticate(t.Context(), "broker:9093")
+	require.ErrorIs(t, err, context.Canceled)
+	require.EqualValues(t, 1, provider.calls.Load())
+	mechanism.Close()
+	require.EqualValues(t, 1, provider.closes.Load())
+	require.EqualValues(t, 1, cleanups.Load())
+}
+
+func TestCancelledAuthenticationDoesNotStartAfterWaiting(t *testing.T) {
+	// Given an active authentication and a second caller waiting for the same provider.
+	provider := &pendingCredential{entered: make(chan struct{}), release: make(chan struct{})}
+	mechanism := &safeMechanism{Mechanism: provider}
+	first := make(chan error, 1)
+	go func() { _, _, err := mechanism.Authenticate(t.Context(), "broker:9093"); first <- err }()
+	released := false
+	defer func() {
+		if !released {
+			close(provider.release)
+		}
+	}()
+	select {
+	case <-provider.entered:
+	case <-time.After(time.Second):
+		t.Fatal("authentication did not start")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	second := make(chan error, 1)
+	waiting := make(chan struct{})
+	go func() { close(waiting); _, _, err := mechanism.Authenticate(ctx, "broker:9093"); second <- err }()
+	<-waiting
+	// When that caller is canceled before the active authentication finishes.
+	select {
+	case <-second:
+		t.Fatal("second authentication unexpectedly returned")
+	case <-time.After(20 * time.Millisecond):
+	}
+	cancel()
+	close(provider.release)
+	released = true
+	require.NoError(t, <-first)
+	// Then it never starts another credential operation after acquiring the provider.
+	require.ErrorIs(t, <-second, context.Canceled)
+	require.EqualValues(t, 1, provider.calls.Load())
+	mechanism.Close()
+}

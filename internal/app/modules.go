@@ -56,7 +56,7 @@ var ObservabilityModule = fx.Module("observability", fx.Provide(func(env *system
 }))
 var EngineModule = fx.Module("engine", fx.Provide(newEngine))
 var FileInspectionModule = fx.Module("file-inspection", fx.Provide(func(clock copy.Clock) inspect.Files { return archiveio.NewInspector(clock) }))
-var InspectionModule = fx.Module("inspection", fx.Provide(inspect.NewExplainer, func(s *inspect.Service) inspect.Explainer { return s }, func(s *inspect.Service) inspect.StatusReader { return s }))
+var InspectionModule = fx.Module("inspection", fx.Provide(newDeliveryInspection, func(s *deliveryInspection) inspect.Explainer { return s }, func(s *deliveryInspection) inspect.StatusReader { return s }))
 var CommandModule = fx.Module("command", fx.Provide(newCommand))
 var ClockModule = fx.Module("clock", fx.Provide(func() copy.Clock { return copy.RealClock{} }))
 var LoggingModule = fx.Module("logging", fx.Provide(func() *slog.Logger { return slog.New(slog.NewJSONHandler(os.Stderr, nil)) }))

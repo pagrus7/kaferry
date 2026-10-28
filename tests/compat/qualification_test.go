@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
@@ -83,9 +85,16 @@ func secureFixture(t *testing.T) (*kadm.Client, *kgo.Client, string, string, str
 		defer cancel()
 		_, _ = a.DeleteTopics(ctx, src, dst)
 	})
+	createdProgress, err := a.CreateTopics(ctx, 1, 3, map[string]*string{"cleanup.policy": kadm.StringPtr("compact"), "min.insync.replicas": kadm.StringPtr("2")}, "kaferry-progress")
+	require.NoError(t, err)
+	if e := createdProgress.Error(); !errors.Is(e, kerr.TopicAlreadyExists) {
+		require.NoError(t, e)
+	}
 	for _, acl := range []*kadm.ACLBuilder{
 		kadm.NewACLs().Topics(src).Operations(kadm.OpRead),
 		kadm.NewACLs().Topics(dst).Operations(kadm.OpWrite),
+		kadm.NewACLs().Topics("kaferry-progress").Operations(kadm.OpRead, kadm.OpWrite, kadm.OpDescribe, kadm.OpDescribeConfigs, kadm.OpAlter),
+		kadm.NewACLs().TransactionalIDs("kaferry-").ResourcePatternType(kadm.ACLPatternPrefixed).Operations(kadm.OpWrite),
 		kadm.NewACLs().Groups(prefix).Operations(kadm.OpRead).ResourcePatternType(kadm.ACLPatternPrefixed),
 	} {
 		results, err := a.CreateACLs(ctx, acl.Allow("User:copier").AllowHosts("*"))
