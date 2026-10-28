@@ -38,3 +38,19 @@ func TestCheckpointChunksRejectMissingAndCorruptData(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckpointChunkHeaderRejectsMalformedOrUnsupportedState(t *testing.T) {
+	for _, head := range []string{`{`, `{"Version":2,"Size":3,"Parts":1}`, `{"Version":1,"Size":0,"Parts":1}`, `{"Version":1,"Size":3,"Parts":4}`} {
+		t.Run(head, func(t *testing.T) {
+			// Given a saved chunk prefix with an invalid or unsupported header.
+			var reader valueReader
+			require.NoError(t, reader.accept("state", &kgo.Record{Key: []byte("state/chunk/0"), Value: []byte("abc")}))
+			// When the header arrives, then it fails without accepting authority or changing the saved chunk bytes.
+			require.Error(t, reader.accept("state", &kgo.Record{Key: []byte("state"), Value: []byte(head)}))
+			require.Nil(t, reader.head)
+			require.Equal(t, []byte("abc"), reader.chunks[0])
+			_, err := reader.value()
+			require.ErrorContains(t, err, "lack a committed header")
+		})
+	}
+}

@@ -148,3 +148,67 @@ func TestProgressReadRetriesLeaderRoutingWithoutRepeatingBarrier(t *testing.T) {
 		})
 	}
 }
+
+func TestProgressConcurrentGrowthRequiresSameSufficientTopic(t *testing.T) {
+	for _, layout := range []string{"sufficient", "insufficient", "recreated"} {
+		t.Run(layout, func(t *testing.T) {
+			// Given this worker saw one partition before another worker changed the topic layout.
+			cluster, log, client := progressLogFixture(t)
+			request := kmsg.NewPtrMetadataRequest()
+			request.Topics = []kmsg.MetadataRequestTopic{{Topic: new("progress")}}
+			old, err := request.RequestWith(t.Context(), client)
+			require.NoError(t, err)
+			admin := kadm.NewClient(client)
+			if layout == "recreated" {
+				deleted, err := admin.DeleteTopics(t.Context(), "progress")
+				require.NoError(t, err)
+				require.NoError(t, deleted.Error())
+				created, err := admin.CreateTopics(t.Context(), 3, 1, map[string]*string{"cleanup.policy": kadm.StringPtr("compact")}, "progress")
+				require.NoError(t, err)
+				require.NoError(t, created.Error())
+			} else {
+				count := 3
+				if layout == "insufficient" {
+					count = 2
+				}
+				grown, err := admin.UpdatePartitions(t.Context(), count, "progress")
+				require.NoError(t, err)
+				require.NoError(t, grown.Error())
+			}
+			var snapshots, attempts, produces atomic.Int64
+			cluster.ControlKey(int16(kmsg.Metadata), func(req kmsg.Request) (kmsg.Response, error, bool) {
+				cluster.KeepControl()
+				r := req.(*kmsg.MetadataRequest)
+				if len(r.Topics) != 1 || r.Topics[0].Topic == nil || *r.Topics[0].Topic != "progress" || snapshots.Add(1) != 1 {
+					return nil, nil, false
+				}
+				response := *old
+				response.SetVersion(req.GetVersion())
+				return &response, nil, true
+			})
+			cluster.ControlKey(int16(kmsg.CreatePartitions), func(req kmsg.Request) (kmsg.Response, error, bool) {
+				attempts.Add(1)
+				response := req.ResponseKind().(*kmsg.CreatePartitionsResponse)
+				response.Topics = []kmsg.CreatePartitionsResponseTopic{{Topic: "progress", ErrorCode: kerr.InvalidPartitions.Code}}
+				return response, nil, true
+			})
+			cluster.ControlKey(int16(kmsg.Produce), func(kmsg.Request) (kmsg.Response, error, bool) {
+				cluster.KeepControl()
+				produces.Add(1)
+				return nil, nil, false
+			})
+			// When our growth request loses the race, then only sufficient partitions with the original topic identity are accepted.
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			err = log.Ensure(ctx, []int32{2})
+			if layout == "sufficient" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, kerr.InvalidPartitions)
+			}
+			require.EqualValues(t, 1, attempts.Load())
+			require.GreaterOrEqual(t, snapshots.Load(), int64(2))
+			require.Zero(t, produces.Load())
+		})
+	}
+}

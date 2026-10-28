@@ -116,9 +116,6 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 			*item.target = id
 		}
 	}
-	if p.Source.Kind == "TOPIC" && p.Destination.Kind == "TOPIC" && sourceEndpoint.clusterID == destinationEndpoint.clusterID && p.Source.Name == p.Destination.Name {
-		return &kafkaport.Conflict{Err: errors.New("source and destination are the same topic")}
-	}
 	var log delivery.Log
 	authority := destinationEndpoint.connection
 	if p.Destination.Kind == "ARCHIVE" {

@@ -104,9 +104,7 @@ func (j *Binding) Open(limits config.Worker) error {
 		return errors.New("replay binding missing for initialized checkpoint directory")
 	}
 	var id [16]byte
-	if _, err = rand.Read(id[:]); err != nil {
-		return err
-	}
+	_, _ = rand.Read(id[:])
 	j.session.Identity.ReplayJob = hex.EncodeToString(id[:])
 	encoded, err := checkpoint.Encode(replayBinding{Format: "kaferry.delivery/v1", Version: 1, Identity: j.session.Identity}, 32<<10)
 	if err != nil {

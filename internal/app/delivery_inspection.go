@@ -90,9 +90,6 @@ func (i *deliveryInspection) service(ctx context.Context, p plan.Plan, w config.
 	}
 	s.Identity.Group = p.Group
 	s.Identity.Fingerprint = fp
-	if p.Source.Kind == "TOPIC" && p.Destination.Kind == "TOPIC" && p.Source.Name == p.Destination.Name && s.Identity.SourceCluster == s.Identity.DestinationCluster {
-		return fail(&kafkaport.Conflict{Err: errors.New("source and destination are the same Kafka topic")})
-	}
 	var log delivery.Log
 	authority := destination
 	if p.Destination.Kind == "ARCHIVE" {

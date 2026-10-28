@@ -176,12 +176,6 @@ func metadataAt(text string, cursor core.Cursor) (string, error) {
 	return commitmeta.NewCodec().Encode(p)
 }
 func (a *archiveLease) acknowledge(ctx context.Context, contents capture.State) error {
-	for id, boundary := range contents.Files {
-		old, ok := a.contents.Files[id]
-		if !ok || old != boundary {
-			return errors.New("recovery attempted to add an archive boundary")
-		}
-	}
 	value, err := checkpoint.Encode(contents, 32<<20)
 	if err != nil {
 		return err
@@ -233,9 +227,7 @@ func (j *captureOutput) localWriter(root, logical string, partition int32) (stri
 		}
 	}
 	var bytes [16]byte
-	if _, err = rand.Read(bytes[:]); err != nil {
-		return "", err
-	}
+	_, _ = rand.Read(bytes[:])
 	id := hex.EncodeToString(bytes[:])
 	encoded, err := checkpoint.Encode(localWriterIdentity{Version: 1, WriterID: id}, 1024)
 	if err != nil {

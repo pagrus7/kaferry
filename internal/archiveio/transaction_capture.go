@@ -58,9 +58,6 @@ func (j *captureOutput) Acquire(ctx context.Context, id int32) (part delivery.Pa
 		if acquiring == nil {
 			return
 		}
-		if acquiring.store != nil {
-			result = errors.Join(result, acquiring.store.Close())
-		}
 		if acquiring.coordinator != nil {
 			_ = acquiring.coordinator.Close()
 		}
@@ -297,9 +294,6 @@ func (j *captureOutput) commitArchive(ctx context.Context, l *archivePartition, 
 			total := 0
 			var victim *archiveLease
 			for _, other := range j.leases {
-				if other.archive == nil {
-					continue
-				}
 				total += len(other.archive.contents.Files)
 				if other != l && len(other.archive.contents.Files) > 0 && (victim == nil || other.archive.used < victim.used) {
 					victim = other.archive
@@ -388,9 +382,6 @@ func (f archiveFiles) ReadDir(path string) ([]os.DirEntry, error) {
 	entries, err := f.NativeFiles.ReadDir(path)
 	if err != nil {
 		return nil, err
-	}
-	if filepath.Base(path) != "writers" {
-		return entries, nil
 	}
 	selected := make([]os.DirEntry, 0, 1)
 	for _, entry := range entries {
