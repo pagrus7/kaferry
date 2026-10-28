@@ -256,9 +256,9 @@ func TestCaptureRejectsInvalidLocalWriterBindingBeforeAcquiringAuthority(t *test
 }
 
 func TestArchiveLoaderRejectsIncompatibleEnvelopeBeforeUsingBoundaries(t *testing.T) {
-	for _, invalid := range []string{"version", "identity", "partition", "missing frame", "invalid frame"} {
+	for _, invalid := range []string{"version", "identity", "partition", "missing frame", "invalid frame", "missing owner"} {
 		t.Run(invalid, func(t *testing.T) {
-			// Given approved private files and a semantically invalid local envelope with a valid checksum.
+			// Given approved private files and either an incompatible checksummed envelope or missing owner authority.
 			j, log, envelopes, _ := recoveryFixture(t)
 			e := envelopes[0]
 			path := filepath.Join(j.session.Plan.Destination.Name, ".kaferry", "writers", e.Capture.WriterID, "state.json")
@@ -274,15 +274,18 @@ func TestArchiveLoaderRejectsIncompatibleEnvelopeBeforeUsingBoundaries(t *testin
 				e.Frame = nil
 			case "invalid frame":
 				e.Frame.Version++
+			case "missing owner":
+				a.authority = nil
+				delete(log.values, authorityKey{e.Partition, j.session.Key("owner/" + e.Capture.WriterID)})
 			}
 			data, err := checkpoint.Encode(e, 96<<20)
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(path, data, 0600))
 			before, authority := archiveSnapshot(t, j.session.Plan.Destination.Name), cloneAuthority(log.values)
-			// When recovery loads it, then no saved boundary is used and no file or authority changes.
-			_, err = a.Load(path)
+			// When the archive loader checks saved state, then it refuses without returning boundaries or changing files or authority.
+			loaded, err := a.Load(path)
 			require.Error(t, err)
-			require.Nil(t, a.contents.Files)
+			require.Nil(t, loaded.Files)
 			require.Equal(t, before, archiveSnapshot(t, j.session.Plan.Destination.Name))
 			require.Equal(t, authority, log.values)
 		})
