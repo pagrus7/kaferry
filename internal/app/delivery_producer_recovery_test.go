@@ -218,7 +218,7 @@ func TestResumeRetriesProducerFencingBeforeLoadingProgress(t *testing.T) {
 			// When the job resumes, then producer fencing retries before authority is loaded and every occurrence commits once.
 			require.NoError(t, Run(testContext(t), p, cfg, Options{ProgressTopic: "progress", Clients: clients}))
 			require.Positive(t, clients.failures.Load())
-			got := map[string]int{}
+			var got map[string]int
 			if archive {
 				got = archiveValues(t, root)
 			} else {
