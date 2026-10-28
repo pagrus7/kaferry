@@ -51,7 +51,7 @@ Group descriptions retry unavailable, loading or changed coordinators within one
 | --- | --- |
 | Metadata | Startup: require existing topics, cluster identity, nonzero topic IDs and partitions. Assignment: recheck source identity. Output: refresh partition count |
 | DescribeGroups | Source startup: reject incompatible active members and assigned topics |
-| OffsetFetch | Startup and assignment: read and validate saved progress; only absent commits use the start rule |
+| OffsetFetch | Startup and assignment: read and validate advisory source-group metadata; authoritative progress selects resume positions |
 | ListOffsets | Batch retained/log-end bounds, timestamp starts, and stable ends |
 | Fetch | Read-committed authoritative progress during inspection/assignment and input during copying; separate bounded gap probes prove compacted/control-only tails without skipping retained records |
 | DescribeConfigs | Required compact-only progress-topic policy; optional destination size and timestamp preflight |

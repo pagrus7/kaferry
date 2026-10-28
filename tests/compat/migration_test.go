@@ -27,7 +27,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 		{"previous to candidate", previous, candidate}, {"candidate to previous", candidate, previous},
 	} {
 		t.Run(direction.name, func(t *testing.T) {
-			// Given two records and binaries that share the Kafka and Avro progress contracts.
+			// Given two source records and binaries with incompatible progress formats but a shared Avro schema.
 			admin := admin(t)
 			source := topic(t, admin, 1)
 			producer := producer(t)
@@ -54,8 +54,14 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 
 			// When the other binary encounters incompatible delivery authority, then it refuses before changing output.
 			runMigrationExpect(t, direction.second, limited(sql), config, 2, "unsupported version of commit metadata")
+			require.Equal(t, first, archiveRecords(t, archive))
+
+			// Given the original binary finishes capture, leaving two records for a partial replay.
+			runMigrationBinary(t, direction.first, limited(sql), config)
 			complete := archiveRecords(t, archive)
-			require.Equal(t, first, complete)
+			require.Len(t, complete, 2)
+			require.Equal(t, first, complete[:1])
+			require.Equal(t, []byte{0, 1}, complete[1].Key)
 
 			// Given a partially replayed archive with a saved record cursor.
 			cloneSQL := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='file-migration') ", clone, archive)

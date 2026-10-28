@@ -129,7 +129,7 @@ Kafka stores `kaferry:4;` followed by a UTF-8 JSON object with each committed of
 
 Absent `stop` means no saved stop. Zero is a valid offset or time bound. Unknown/duplicate fields, null fields other than window bounds, invalid values, foreign prefixes and unsupported versions are rejected. JSON whitespace and field order do not matter. The prefix identifies the exactly-once advisory metadata format. Optional `end` is a nonnegative exclusive captured end offset. A committed position or stop cannot exceed its captured end.
 
-The initial assignment commit preserves saved timestamp and end stops and clears worker record stops. A later commit includes it only after every earlier required write succeeds (Kafka acknowledgment or file fsync), including stops at unchanged offsets. Lost assignments never commit. Uncommitted preparation can replay; committed output and its cursor remain paired.
+The initial assignment commit preserves saved timestamp and end stops and clears worker record stops. The source-group commit verifies membership and may precede output durability. The adapter then commits output with authoritative progress, including stops at unchanged offsets; only that authority determines resume positions. Uncommitted preparation can replay; committed output and its cursor remain paired.
 
 ## Kafka output
 

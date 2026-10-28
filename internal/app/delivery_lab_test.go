@@ -17,6 +17,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 type environment struct{}
@@ -43,7 +44,8 @@ func topic(t *testing.T, brokers []string, name string, parts int32, compact boo
 		value := "compact"
 		settings["cleanup.policy"] = &value
 	}
-	admin := kadm.NewClient(client(t, brokers))
+	probeClient := client(t, brokers)
+	admin := kadm.NewClient(probeClient)
 	ctx := testContext(t)
 	for {
 		result, err := admin.CreateTopics(ctx, parts, 1, settings, name)
@@ -51,25 +53,34 @@ func topic(t *testing.T, brokers []string, name string, parts int32, compact boo
 		failure := result.Error()
 		if !errors.Is(failure, kerr.InvalidReplicationFactor) {
 			require.NoError(t, failure)
-			// Controller acknowledgement can precede broker metadata application.
+			// Every seed must have applied the created topic before random-seed startup checks.
 			require.Eventually(t, func() bool {
-				probe, cancel := context.WithTimeout(ctx, time.Second)
-				defer cancel()
-				metadata, err := admin.Metadata(probe, name)
-				if err != nil {
-					return false
-				}
-				created := metadata.Topics[name]
-				if created.Err != nil || created.ID == [16]byte{} || len(created.Partitions) != int(parts) {
-					return false
-				}
-				for _, partition := range created.Partitions {
-					if partition.Err != nil || partition.Leader < 0 {
+				request := kmsg.NewPtrMetadataRequest()
+				request.AllowAutoTopicCreation = false
+				request.Topics = []kmsg.MetadataRequestTopic{{Topic: &name}}
+				for _, broker := range probeClient.SeedBrokers() {
+					probe, cancel := context.WithTimeout(ctx, time.Second)
+					raw, err := broker.Request(probe, request)
+					cancel()
+					if err != nil {
 						return false
+					}
+					metadata := raw.(*kmsg.MetadataResponse)
+					if len(metadata.Topics) != 1 {
+						return false
+					}
+					created := metadata.Topics[0]
+					if created.ErrorCode != 0 || created.Topic == nil || *created.Topic != name || created.TopicID == [16]byte{} || created.TopicID != [16]byte(result[name].ID) || len(created.Partitions) != int(parts) {
+						return false
+					}
+					for _, partition := range created.Partitions {
+						if partition.ErrorCode != 0 || partition.Leader < 0 {
+							return false
+						}
 					}
 				}
 				return true
-			}, 10*time.Second, 10*time.Millisecond, "fixture topic is not ready")
+			}, 10*time.Second, 10*time.Millisecond, "fixture topic is not ready on every seed")
 			return
 		}
 		// A newly elected controller can briefly have no registered brokers.
