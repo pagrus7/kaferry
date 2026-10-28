@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/pagrus7/kaferry/internal/archive/replay"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/plan"
@@ -30,17 +31,25 @@ func TestAuthoritativeReadOnlyInspectionAllEndpoints(t *testing.T) {
 				topic(t, source.ListenAddrs(), "progress", 2, true)
 				topic(t, destination.ListenAddrs(), "output", 2, false)
 				topic(t, destination.ListenAddrs(), "progress", 2, true)
+				expected := map[string]int{}
 				input := "TOPIC 'input@src'"
 				output := "TOPIC 'output@dst'"
 				if src == "TOPIC" {
 					seed(t, source.ListenAddrs(), 2, 3)
+					for part := range 2 {
+						for offset := range 3 {
+							expected[fmt.Sprintf("%d:%d", part, offset)] = 1
+						}
+					}
 				} else {
 					root := t.TempDir()
-					archiveInput(t, root)
+					expected = archiveInput(t, root)
 					input = "ARCHIVE '" + root + "'"
 				}
+				outputRoot := ""
 				if dst == "ARCHIVE" {
-					output = "ARCHIVE '" + t.TempDir() + "'"
+					outputRoot = t.TempDir()
+					output = "ARCHIVE '" + outputRoot + "'"
 				}
 				statement := fmt.Sprintf("INSERT INTO %s SELECT * FROM %s WITH (GROUP='inspection') WHERE RECORD_OFFSET < LATEST", output, input)
 				ast, err := sql.NewParser().Parse(statement)
@@ -89,6 +98,22 @@ func TestAuthoritativeReadOnlyInspectionAllEndpoints(t *testing.T) {
 				require.Zero(t, mutations.Load())
 				// The missing mirror is repaired by a resume without duplicating output.
 				require.NoError(t, Run(testContext(t), p, cfg, options))
+				if dst == "ARCHIVE" {
+					require.Equal(t, expected, archiveValues(t, outputRoot))
+				} else {
+					require.Equal(t, expected, recordValues(committedRecords(t, destination.ListenAddrs(), 2)))
+				}
+				if src == "ARCHIVE" {
+					mirror, err := replay.ReadCheckpoint(directory, p.Group, replay.NativeGroupFiles{})
+					require.NoError(t, err)
+					require.NotNil(t, mirror)
+					var count int64
+					for _, n := range expected {
+						count += int64(n)
+					}
+					require.Equal(t, count, mirror.Position)
+					require.True(t, mirror.Complete)
+				}
 			})
 		}
 	}

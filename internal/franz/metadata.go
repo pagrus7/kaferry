@@ -171,3 +171,6 @@ func (i *Inspector) Config(parent context.Context) map[string]string {
 	}
 	return nil
 }
+
+// PartitionIDs returns the source layout refreshed by Saved during assignment.
+func (i *Inspector) PartitionIDs() []int32 { return append([]int32{}, i.parts...) }

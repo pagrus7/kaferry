@@ -99,8 +99,10 @@ func secureFixture(t *testing.T) (*kadm.Client, *kgo.Client, string, string, str
 	} {
 		results, err := a.CreateACLs(ctx, acl.Allow("User:copier").AllowHosts("*"))
 		require.NoError(t, err)
-		require.Len(t, results, 1)
-		require.NoError(t, results[0].Err)
+		require.NotEmpty(t, results)
+		for _, result := range results {
+			require.NoError(t, result.Err)
+		}
 	}
 	for _, mechanism := range []kadm.ScramMechanism{kadm.ScramSha256, kadm.ScramSha512} {
 		credentials, err := a.AlterUserSCRAMs(ctx, nil, []kadm.UpsertSCRAM{{User: "copier", Mechanism: mechanism, Iterations: 4096, Password: "fixture-copy-secret"}})

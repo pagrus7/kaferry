@@ -276,7 +276,11 @@ type Reader struct {
 }
 
 func (r Reader) Read(ctx context.Context, id int32) (*Frame, error) {
-	data, err := r.Log.ReadValue(ctx, id, r.Session.Key("state"), false)
+	return r.ReadBarrier(ctx, id, false)
+}
+
+func (r Reader) ReadBarrier(ctx context.Context, id int32, barrier bool) (*Frame, error) {
+	data, err := r.Log.ReadValue(ctx, id, r.Session.Key("state"), barrier)
 	if err != nil || data == nil {
 		return nil, err
 	}

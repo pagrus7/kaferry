@@ -218,19 +218,10 @@ func (p *probeAuthority) Acquire(ctx context.Context, id int32) (delivery.Partit
 	if err != nil {
 		return nil, err
 	}
-	data, err := p.log.ReadValue(ctx, id, p.session.Key("state"), true)
+	f, err := (delivery.Reader{Session: p.session, Log: p.log}).ReadBarrier(ctx, id, true)
 	if err != nil {
 		_ = tx.Close()
 		return nil, err
-	}
-	var f *delivery.Frame
-	if data != nil {
-		decoded, err := p.session.Decode(data)
-		if err != nil {
-			_ = tx.Close()
-			return nil, err
-		}
-		f = &decoded
 	}
 	return &probePartition{owner: p, tx: tx, frame: f}, nil
 }

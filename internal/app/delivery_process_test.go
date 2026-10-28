@@ -78,7 +78,7 @@ func TestStreamingCLIAllEndpoints(t *testing.T) {
 				// When separate processes stop at a worker cap and resume, then output stays exact.
 				invoke("run", statement+" OPTIONS(WORKER_STOP_AFTER_RECORDS=2)")
 				invoke("run", statement)
-				got := map[string]int{}
+				var got map[string]int
 				if dst == "TOPIC" {
 					got = output(t, destination, 2)
 				} else {

@@ -221,7 +221,7 @@ func (c *connection) Sink(query context.Context, limits config.Worker) (core.Sin
 		return nil, err
 	}
 	if c.factory.session == nil || c.factory.progress == nil {
-		return nil, errors.New("Kafka output authority is not configured")
+		return nil, errors.New("kafka output authority is not configured")
 	}
 	options, err := c.borrowedOptions()
 	if err != nil {

@@ -77,7 +77,7 @@ func TestStreamingBoundedLoadAllEndpoints(t *testing.T) {
 				}
 				state := t.TempDir()
 				configPath := filepath.Join(t.TempDir(), "load.toml")
-				configuration := fmt.Sprintf("[connections.src]\n'bootstrap.servers'=%q\n[connections.dst]\n'bootstrap.servers'=%q\n[worker]\ncheckpoint_dir=%q\nrecord_cap=256\npartition_record_cap=32\nbyte_cap=8388608\npartition_byte_cap=1048576\narchive_capture_open_files=8\nshutdown_timeout='10s'\n", strings.Join(source, ","), strings.Join(destination, ","), state)
+				configuration := fmt.Sprintf("[connections.src]\n'bootstrap.servers'=%q\n[connections.dst]\n'bootstrap.servers'=%q\n[worker]\nprogress_topic='progress'\ncheckpoint_dir=%q\nrecord_cap=256\npartition_record_cap=32\nbyte_cap=8388608\npartition_byte_cap=1048576\narchive_capture_open_files=8\nshutdown_timeout='10s'\n", strings.Join(source, ","), strings.Join(destination, ","), state)
 				require.NoError(t, os.WriteFile(configPath, []byte(configuration), 0600))
 				statement := fmt.Sprintf("INSERT INTO %s SELECT * FROM %s WITH(GROUP='load-%d') WHERE RECORD_OFFSET < LATEST", target, input, time.Now().UnixNano())
 				var peakRSS int64
@@ -89,7 +89,7 @@ func TestStreamingBoundedLoadAllEndpoints(t *testing.T) {
 						text += " OPTIONS(WORKER_STOP_AFTER_RECORDS=4096)"
 					}
 					ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-					cmd := exec.CommandContext(ctx, binary, "--progress-topic", "progress", "--", "run", "--config", configPath, "--file", "-")
+					cmd := exec.CommandContext(ctx, binary, "run", "--config", configPath, "--file", "-")
 					cmd.Stdin = strings.NewReader(text)
 					logs, err := cmd.CombinedOutput()
 					cancel()

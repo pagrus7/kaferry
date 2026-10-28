@@ -12,7 +12,7 @@ import (
 func (c *connection) borrowedOptions() ([]kgo.Opt, error) {
 	view, ok := c.inspector.client.(optionView)
 	if !ok {
-		return nil, errors.New("Kafka metadata client cannot share credentials")
+		return nil, errors.New("kafka metadata client cannot share credentials")
 	}
 	return commonSnapshot(view), nil
 }

@@ -11,7 +11,6 @@ import (
 
 type Replay interface {
 	Next() (replay.Item, error)
-	CheckpointStop(int64, *core.Stop) error
 	Saved() replay.State
 	Close() error
 }
@@ -19,13 +18,12 @@ type Replay interface {
 type Source struct {
 	session       Replay
 	clock         core.Clock
-	path          string
 	paused, ended bool
 	position      int64
 }
 
-func NewSource(session Replay, clock core.Clock, path string) *Source {
-	return &Source{session: session, clock: clock, path: path, position: session.Saved().Position}
+func NewSource(session Replay, clock core.Clock) *Source {
+	return &Source{session: session, clock: clock, position: session.Saved().Position}
 }
 func (s *Source) Start(life core.Lifecycle, _ core.Observer) error {
 	saved := s.session.Saved()

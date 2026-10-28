@@ -15,6 +15,7 @@ import (
 )
 
 type sourceMetadata interface {
+	PartitionIDs() []int32
 	kafkaport.OffsetReader
 	kafkaport.TimeReader
 	Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]int64, map[int32]kafkaport.Progress, error)

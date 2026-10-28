@@ -176,11 +176,11 @@ Supported exporter environment suffixes: `ENDPOINT`, `PROTOCOL` (`http/protobuf`
 
 Resources include `service.name=kaferry`, version, a generated `service.instance.id` and `messaging.consumer.group.name`. `OTEL_RESOURCE_ATTRIBUTES` adds deployment/query attributes; built-in identity takes precedence. Automatic attributes exclude SQL, record contents, file paths and credentials. Attributes increase the number of series; use stable deployment values.
 
-Metric names are experimental. All describe this worker's invocation; restarts and rebalances can replay records. Source partitions and topics are not metric attributes.
+Metric names are experimental. All describe this worker's invocation. The stderr `submitted` and `confirmed` counters have the same acceptance/preparation meanings as these metrics; restarts and rebalances can prepare uncommitted records again. Source partitions and topics are not metric attributes.
 
 | Metric (`kaferry.` prefix) | Meaning |
 | --- | --- |
-| `records.submitted`, `records.confirmed` | Separate cumulative counts accepted and acknowledged by the destination; not unique records |
+| `records.submitted`, `records.confirmed` | Separate cumulative counts accepted by the output adapter and prepared for a progress save. Confirmed records may still be uncommitted; neither measures unique committed output. |
 | `records.filtered`, `records.skipped` | Separate cumulative counts of examined records excluded by timestamp or offset filters, and dropped by error policy |
 | `buffer.entries`, `buffer.entry_limit` | Unsaved tracked progress entries and their worker cap; entries can include cursor gaps and exclude a record deferred before tracking |
 | `buffer.estimated_size`, `buffer.estimated_size_limit` | Tracked cap-accounting bytes and their cap; not payload/wire bytes or total memory |

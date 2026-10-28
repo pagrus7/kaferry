@@ -64,7 +64,7 @@ func (i *deliveryInspection) service(ctx context.Context, p plan.Plan, w config.
 		owners = append(owners, c)
 		exec, ok := c.(kafkaport.DeliveryConnection)
 		if !ok {
-			return fail(errors.New("Kafka endpoint cannot inspect delivery authority"))
+			return fail(errors.New("kafka endpoint cannot inspect delivery authority"))
 		}
 		cluster, err := exec.ClusterID(ctx)
 		if err != nil {

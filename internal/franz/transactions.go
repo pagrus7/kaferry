@@ -67,18 +67,7 @@ func (o *kafkaOutput) Read(ctx context.Context, id int32) (*delivery.Frame, erro
 	return o.log.readFrame(ctx, id, false)
 }
 func (j *ProgressLog) readFrame(ctx context.Context, id int32, barrier bool) (*delivery.Frame, error) {
-	data, err := j.ReadValue(ctx, id, j.session.Key("state"), barrier)
-	if err != nil || data == nil {
-		return nil, err
-	}
-	f, err := j.session.Decode(data)
-	if err != nil {
-		return nil, err
-	}
-	if f.Cursor.Partition != id {
-		return nil, errors.New("checkpoint partition disagrees with key")
-	}
-	return &f, nil
+	return (delivery.Reader{Session: j.session, Log: j}).ReadBarrier(ctx, id, barrier)
 }
 func (p *kafkaPartition) Saved() *delivery.Frame { return p.frame }
 func (p *kafkaPartition) Commit(ctx context.Context, f delivery.Frame) error {

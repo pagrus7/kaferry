@@ -182,8 +182,8 @@ func TestIsolatedCaptureDisksAndIndependentRecovery(t *testing.T) {
 			// The first host recovers while the replacement still owns the source partition.
 			if binary := os.Getenv("KAFERRY_LAB_BINARY"); binary != "" && point == "coordinated" {
 				path := filepath.Join(t.TempDir(), "recovery.toml")
-				require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("[connections.src]\n'bootstrap.servers'=%q\n", strings.Join(source, ","))), 0600))
-				command := exec.CommandContext(testContext(t), binary, "--archive-coordinator", "--recover-local", "--progress-topic", progress, "--", "run", "--config", path, "--file", "-")
+				require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("[connections.src]\n'bootstrap.servers'=%q\n[worker]\nprogress_topic=%q\n", strings.Join(source, ","), progress)), 0600))
+				command := exec.CommandContext(testContext(t), binary, "run", "--recover-local", "--config", path, "--file", "-")
 				command.Stdin = strings.NewReader(statement)
 				logs, err := command.CombinedOutput()
 				require.NoError(t, err, "%s", logs)

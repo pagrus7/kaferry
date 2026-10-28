@@ -168,7 +168,7 @@ func topicRecordCounts(t *testing.T, a *kadm.Client, topic string, partitions in
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	ends, err := a.ListCommittedOffsets(ctx, topic)
+	ends, err := a.ListEndOffsets(ctx, topic)
 	require.NoError(t, err)
 	require.NoError(t, ends.Error())
 	require.Len(t, ends[topic], partitions)

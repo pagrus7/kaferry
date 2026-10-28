@@ -62,7 +62,7 @@ func (f *Factory) OpenOutput(s *delivery.Session, w config.Worker, log delivery.
 	if err != nil {
 		return nil, err
 	}
-	return &captureSink{Sink: sink}, nil
+	return sink, nil
 }
 func (f *Factory) Recover(ctx context.Context, s *delivery.Session, log delivery.Log, stop core.StopObserver) error {
 	return NewCapture(s, f.clock, log, f.writer).Recover(ctx, stop)
@@ -76,10 +76,6 @@ type replayInput struct {
 
 func (r *replayInput) Close() error            { return errors.Join(r.Source.Close(), r.binding.Close()) }
 func (r *replayInput) DeleteCheckpoint() error { return r.binding.Delete() }
-
-type captureSink struct{ core.Sink }
-
-func (s *captureSink) Finish() error { return s.Sink.(*Sink).Finish() }
 
 func checkpointDirectory(w config.Worker) (string, error) {
 	var directory string

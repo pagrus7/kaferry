@@ -39,12 +39,12 @@ func TestRealGSSAPIPreparedCommitSurvivesBrokerRestart(t *testing.T) {
 
 func testPreparedCommitSurvivesBrokerRestart(t *testing.T, mechanism string) {
 	t.Helper()
-	brokers, ca, containers := os.Getenv("KAFERRY_QUAL_BROKERS"), os.Getenv("KAFERRY_QUAL_CA"), strings.Split(os.Getenv("KAFERRY_LAB_FAILOVER_CONTAINERS"), ",")
+	brokers, ca, containers := os.Getenv("KAFERRY_QUAL_BROKERS"), os.Getenv("KAFERRY_QUAL_CA"), strings.Split(os.Getenv("KAFERRY_QUAL_FAILOVER_CONTAINERS"), ",")
 	if brokers == "" || ca == "" || len(containers) != 3 {
-		t.Skip("requires secured three-broker fixture and KAFERRY_LAB_FAILOVER_CONTAINERS in broker-ID order")
+		t.Skip("requires secured three-broker fixture and KAFERRY_QUAL_FAILOVER_CONTAINERS in broker-ID order")
 	}
 	for index, name := range containers {
-		require.True(t, strings.HasPrefix(name, "kaferry-eos-"), "only disposable kaferry-eos-* containers may be stopped")
+		require.True(t, strings.HasPrefix(name, "kaferry-qualification-"), "only disposable kaferry-qualification-* containers may be stopped")
 		probeContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		raw, err := exec.CommandContext(probeContext, "docker", "inspect", "--format", "{{json .Config.Env}}", name).Output()
 		cancel()
@@ -62,7 +62,7 @@ func testPreparedCommitSurvivesBrokerRestart(t *testing.T, mechanism string) {
 		command, err := exec.CommandContext(probeContext, "docker", "inspect", "--format", "{{json .Config.Cmd}}", name).Output()
 		cancel()
 		require.NoError(t, err)
-		require.Contains(t, string(command), "while true", "restart fixture requires lab/compose.init.yaml")
+		require.Contains(t, string(command), "while true", "restart fixture requires the disposable broker supervisor")
 
 	}
 	roots := x509.NewCertPool()

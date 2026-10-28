@@ -28,6 +28,7 @@ type Options struct {
 	Hook          func(string, int32)
 	Observer      core.Observer
 	Clients       franz.Clients
+	Writer        checkpoint.AtomicWriter
 }
 type Identity = delivery.Identity
 type Frame = delivery.Frame
@@ -58,7 +59,11 @@ func deliveryFactories(o Options) (*franz.Factory, *archiveio.Factory, RunnerFac
 	if clients == nil {
 		clients = franz.NewClients()
 	}
-	return franz.NewFactory(commitmeta.NewCodec(), clients, positioning, clock, logger, kafkaport.NewOffsetLookupFactory()), archiveio.NewFactory(clock, checkpoint.DurableWriter{}, logger), newRunnerFactory(clock, logger, core.NewProgressFactory())
+	writer := o.Writer
+	if writer == nil {
+		writer = checkpoint.DurableWriter{}
+	}
+	return franz.NewFactory(commitmeta.NewCodec(), clients, positioning, clock, logger, kafkaport.NewOffsetLookupFactory()), archiveio.NewFactory(clock, writer, logger), newRunnerFactory(clock, logger, core.NewProgressFactory())
 }
 func Run(ctx context.Context, p plan.Plan, cfg config.Config, o Options) error {
 	cfg.Worker.ProgressTopic = "progress"

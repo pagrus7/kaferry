@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,11 +54,13 @@ func TestReplayCheckpointLargerThanKafkaRecordLimit(t *testing.T) {
 	cfg.Worker.RecordCap = 256
 	cfg.Worker.ArchiveReplayOpenFiles = 2
 	cfg.Worker.ArchiveReplayBlocks = 2
-	// When the cursor is committed in chunks, then restored after a worker stop.
-	require.NoError(t, Run(testContext(t), p, cfg, Options{ProgressTopic: "progress"}))
+	// When the large physical cursor is committed and restored, allow its bounded file validation and serialization to complete.
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	require.NoError(t, Run(ctx, p, cfg, Options{ProgressTopic: "progress"}))
 	require.Len(t, output(t, destination, 1), 3)
 	p.WorkerStopAfterRecords = 0
-	require.NoError(t, Run(testContext(t), p, cfg, Options{ProgressTopic: "progress"}))
+	require.NoError(t, Run(ctx, p, cfg, Options{ProgressTopic: "progress"}))
 	// Then the same pinned selection completes without treating chunks as output records.
 	got := output(t, destination, 1)
 	require.Len(t, got, count)

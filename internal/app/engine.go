@@ -107,7 +107,7 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 		if item.endpoint.connection != nil {
 			connection, ok := item.endpoint.connection.(kafkaport.DeliveryConnection)
 			if !ok {
-				return errors.New("Kafka endpoint cannot provide delivery authority")
+				return errors.New("kafka endpoint cannot provide delivery authority")
 			}
 			id, err := connection.TopicID(ctx)
 			if err != nil {

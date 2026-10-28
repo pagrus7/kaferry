@@ -126,7 +126,7 @@ func TestStreamingAllEndpointsAndArchiveRotation(t *testing.T) {
 				}
 				outputRoot := ""
 				if outputKind == "ARCHIVE" {
-					outputRoot = t.TempDir()
+					outputRoot = filepath.Join(t.TempDir(), "nested", "output")
 					targetEndpoint = "ARCHIVE '" + outputRoot + "' WITH (ROTATE_AFTER_SIZE = 1000, ROTATE_AFTER_AGE = INTERVAL '1' SECOND)"
 				}
 				statement := fmt.Sprintf("INSERT INTO %s SELECT * FROM %s WITH (GROUP = 'matrix-%d') WHERE RECORD_OFFSET < LATEST;", targetEndpoint, sourceEndpoint, time.Now().UnixNano())
@@ -146,7 +146,7 @@ func TestStreamingAllEndpointsAndArchiveRotation(t *testing.T) {
 				require.NoError(t, Run(testContext(t), p, cfg, Options{ProgressTopic: "progress"}))
 				require.NoError(t, Run(testContext(t), p, cfg, Options{ProgressTopic: "progress"}))
 				// Then ordinary archive readers or read_committed Kafka readers see each input occurrence once.
-				got := map[string]int{}
+				var got map[string]int
 				if outputKind == "ARCHIVE" {
 					got = archiveValues(t, outputRoot)
 				} else {

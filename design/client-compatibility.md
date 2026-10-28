@@ -45,7 +45,7 @@ When Kaferry reads Kafka, its client, franz-go v1.22.2, misreads record timestam
 
 Group descriptions retry unavailable, loading or changed coordinators within one 10 s deadline. Authorization failures, incompatible members and invalid responses still fail inspection.
 
-`explain` uses Metadata, DescribeGroups and OffsetFetch for named source groups, ListOffsets, and optional destination DescribeConfigs. It creates no consumer or producer and sends no Fetch, group-membership or OffsetCommit requests. ONE_OFF skips group requests. It cannot verify the READ/WRITE grants needed by a later copy.
+`explain` uses Metadata, DescribeGroups and OffsetFetch for named source groups, ListOffsets, and optional destination DescribeConfigs. It fetches authoritative progress records with read_committed, without reading source payloads, initializing transactional producers, joining groups or committing offsets. ONE_OFF skips group requests. It cannot verify the READ/WRITE grants needed by a later copy.
 
 | API | Purpose / timing |
 | --- | --- |
@@ -53,15 +53,16 @@ Group descriptions retry unavailable, loading or changed coordinators within one
 | DescribeGroups | Source startup: reject incompatible active members and assigned topics |
 | OffsetFetch | Startup and assignment: read and validate saved progress; only absent commits use the start rule |
 | ListOffsets | Batch retained/log-end bounds, timestamp starts, and stable ends |
-| Fetch | Read-committed input; separate bounded gap probes prove compacted/control-only tails without skipping retained records |
-| DescribeConfigs | Optional destination size and timestamp preflight |
+| Fetch | Read-committed authoritative progress during inspection/assignment and input during copying; separate bounded gap probes prove compacted/control-only tails without skipping retained records |
+| DescribeConfigs | Required compact-only progress-topic policy; optional destination size and timestamp preflight |
+| CreatePartitions | Grow the progress topic to cover assigned source partition IDs; requires topic ALTER |
 | OffsetCommit | Consumer member saves confirmed positions with its generation and query metadata |
 | JoinGroup / SyncGroup / Heartbeat / LeaveGroup | Ordinary consumer-group membership and ownership |
 | Produce / InitProducerId / EndTxn | Fence stable producers and atomically commit output with authoritative progress |
 
 While partitions are assigned, input checks stable ends once per second. Each check can also request 1 MiB from one partition behind its stable end, including partitions still receiving records. Kafka can return a larger first batch. These probes count against client quotas; a throttled empty reply proves no progress and retries on the next check. When writing, output checks the partition count if at least 30 s have passed since the last check.
 
-Completion samples the log end including open transactions. A stable offset alone never proves that records were consumed: gap probes parse batches and validate CRCs. Fixture administrators create, alter and delete test resources; those permissions are not CLI requirements.
+Completion samples the log end including open transactions. A stable offset alone never proves that records were consumed: gap probes parse batches and validate CRCs. Fixture administrators create and delete test topics. CLI execution additionally requires progress-topic ALTER when partition growth is needed; [setup and permissions](../docs/usage.md#prepare-authoritative-progress).
 
 ## Operational limits
 

@@ -59,7 +59,7 @@ func TestWallClockEndSaveWithUnpreparedOutput(t *testing.T) {
 			require.True(t, metadataOnly, "fixture must exercise a metadata-only save with unprepared output")
 			require.NoError(t, Run(testContext(t), p, config.Defaults(""), Options{ProgressTopic: "progress"}))
 			// Then no input is skipped or duplicated, and the saved end remains fixed.
-			got := map[string]int{}
+			var got map[string]int
 			if destinationKind == "TOPIC" {
 				got = output(t, destination, 1)
 			} else {

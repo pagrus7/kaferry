@@ -103,18 +103,7 @@ func (j *captureOutput) Read(ctx context.Context, id int32) (*delivery.Frame, er
 	return e.Frame, nil
 }
 func (j *captureOutput) readFrame(ctx context.Context, id int32, barrier bool) (*delivery.Frame, error) {
-	data, err := j.log.ReadValue(ctx, id, j.session.Key("state"), barrier)
-	if err != nil || data == nil {
-		return nil, err
-	}
-	f, err := j.session.Decode(data)
-	if err != nil {
-		return nil, err
-	}
-	if f.Cursor.Partition != id {
-		return nil, errors.New("checkpoint partition disagrees with key")
-	}
-	return &f, nil
+	return (delivery.Reader{Session: j.session, Log: j.log}).ReadBarrier(ctx, id, barrier)
 }
 func (j *captureOutput) coordinatorLease(ctx context.Context, id int32, writer string) (delivery.Transaction, *delivery.Frame, error) {
 	tx, err := j.log.Open(ctx, id)

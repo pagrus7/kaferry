@@ -115,6 +115,12 @@ func (j *captureOutput) Acquire(ctx context.Context, id int32) (part delivery.Pa
 }
 func mkdirDurable(path string) error {
 	if err := os.Mkdir(path, 0700); err != nil {
+		if errors.Is(err, os.ErrNotExist) && filepath.Dir(path) != path {
+			if err := mkdirDurable(filepath.Dir(path)); err != nil {
+				return err
+			}
+			return mkdirDurable(path)
+		}
 		if errors.Is(err, os.ErrExist) {
 			info, err := os.Stat(path)
 			if err != nil {
@@ -473,7 +479,7 @@ func (b *captureBuffer) Finish() error {
 	return nil
 }
 func (b *captureBuffer) Close() error { return nil }
-func (j *captureOutput) Sink(limits config.Worker) (core.Sink, error) {
+func (j *captureOutput) Sink(limits config.Worker) (*Sink, error) {
 	codec, err := avro.New(limits.ArchiveBlockMaxBytes)
 	if err != nil {
 		return nil, err

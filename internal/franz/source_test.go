@@ -3,6 +3,7 @@ package franz
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/pagrus7/kaferry/internal/config"
 	"github.com/pagrus7/kaferry/internal/delivery"
 	"reflect"
@@ -48,6 +49,7 @@ func (c *consumerMock) CommitOffsetsSync(_ context.Context, offsets map[string]m
 }
 
 type sourceMetadataMock struct {
+	parts             []int32
 	low, high, stable map[int32]int64
 	saved             map[int32]int64
 	progress          map[int32]kafkaport.Progress
@@ -299,5 +301,55 @@ func TestEmptyAssignmentDoesNotInspectDestination(t *testing.T) {
 		require.Empty(t, answer.assignments)
 	case <-time.After(time.Second):
 		t.Fatal("empty assignment was not returned to callback")
+	}
+}
+
+func (m *sourceMetadataMock) PartitionIDs() []int32 {
+	if m.parts != nil {
+		return append([]int32{}, m.parts...)
+	}
+	seen := map[int32]bool{0: true}
+	for id := range m.low {
+		seen[id] = true
+	}
+	for id := range m.high {
+		seen[id] = true
+	}
+	ids := make([]int32, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	return ids
+}
+func TestNewPartitionUsesAuthorityAfterAdvisoryOffsetExpiry(t *testing.T) {
+	for _, relative := range []bool{false, true} {
+		t.Run(fmt.Sprint(relative), func(t *testing.T) {
+			// Given authority on partition zero, no advisory offsets, and ownership only of a new partition.
+			source, client := sourceFixture(t)
+			source.plan.Window = plan.WindowSpec{}
+			source.plan.Start = "LATEST"
+			progress := kafkaport.Progress{Fingerprint: "fp", TopicID: "id"}
+			var expectedWindow plan.Window
+			if relative {
+				source.plan.Start = ""
+				source.plan.Window = plan.WindowSpec{Lower: &plan.Expression{Now: true, AdjustmentMS: -3600000}}
+				expectedWindow = plan.Window{Lower: new(int64(0))}
+				progress.Window = &expectedWindow
+			}
+			text, err := commitmeta.NewCodec().Encode(progress)
+			require.NoError(t, err)
+			metadata := &sourceMetadataMock{parts: []int32{0, 1}, low: map[int32]int64{0: 0, 1: 0}, high: map[int32]int64{0: 10, 1: 5}}
+			source.inspector = metadata
+			source.delivery.Plan = source.plan
+			source.delivery.Backend = &memoryAuthority{frames: map[int32]*delivery.Frame{0: {Version: delivery.Version, Identity: source.delivery.Identity, Cursor: core.Cursor{Partition: 0, Position: 3}, Metadata: text}}}
+			// When partition one is assigned, then retained backlog and the original window remain selected.
+			event := lifecycleEvent{ids: []int32{1}, answer: make(chan lifecycleAnswer, 1)}
+			require.NoError(t, source.lifecycle(event))
+			require.Equal(t, map[int32]int64{1: 0}, client.committed)
+			assignments := source.life.(*lifecycleMock).assignments
+			require.Len(t, assignments, 1)
+			require.EqualValues(t, 0, assignments[0].Cursor.Position)
+			require.Equal(t, expectedWindow, assignments[0].Window)
+		})
 	}
 }

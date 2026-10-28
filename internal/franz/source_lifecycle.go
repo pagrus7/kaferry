@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	core "github.com/pagrus7/kaferry/internal/copy"
@@ -66,17 +67,28 @@ func (s *Source) lifecycle(event lifecycleEvent) error {
 			}
 		}
 	}
-	// Progress on an unassigned partition establishes this group's START policy.
-	// Read its authority without taking ownership; never use advisory offsets to position input.
-	for id := range native {
-		selected := false
-		for _, assigned := range event.ids {
-			if assigned == id {
-				selected = true
+	// The lowest initialized partition establishes START policy and the window
+	// for new assignments. Its authority survives source-group offset expiry.
+	lowest := int32(-1)
+	for id := range saved {
+		if lowest < 0 || id < lowest {
+			lowest = id
+		}
+	}
+	parts := s.inspector.PartitionIDs()
+	slices.Sort(parts)
+	for _, id := range parts {
+		if lowest >= 0 && id >= lowest {
+			break
+		}
+		assigned := false
+		for _, current := range event.ids {
+			if id == current {
+				assigned = true
 				break
 			}
 		}
-		if selected {
+		if assigned {
 			continue
 		}
 		frame, e := s.delivery.Backend.Read(ctx, id)
@@ -94,6 +106,7 @@ func (s *Source) lifecycle(event lifecycleEvent) error {
 		}
 		saved[id] = positions[id]
 		metadata[id] = progress[id]
+		break
 	}
 	for id, progress := range nativeMetadata {
 		if _, owned := metadata[id]; !owned && progress.Window != nil {

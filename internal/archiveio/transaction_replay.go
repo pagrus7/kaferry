@@ -77,5 +77,5 @@ func (b *Binding) Source(ctx context.Context, limits config.Worker, partitionCou
 		_ = session.Close()
 		return nil, nil, err
 	}
-	return NewSource(session, b.clock, ""), replayProgress{binding: b}, nil
+	return NewSource(session, b.clock), replayProgress{binding: b}, nil
 }
