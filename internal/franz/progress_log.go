@@ -73,6 +73,8 @@ func (j *ProgressLog) Open(ctx context.Context, id int32) (delivery.Transaction,
 // Producer initialization fences the previous owner before authority is read.
 // Retry connection and coordinator failures here, before any output transaction starts.
 func fenceProducer(ctx context.Context, client TransactionClient) error {
+	ctx, cancel := requestContext(ctx)
+	defer cancel()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err

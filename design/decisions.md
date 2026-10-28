@@ -133,7 +133,7 @@ The initial assignment commit preserves saved timestamp and end stops and clears
 
 ## Kafka output
 
-- One transactional producer per owned source partition, with bounded initialization and client batching. Archive replay uses one virtual source partition.
+- One transactional producer per owned source partition, with client batching. Producer initialization retries connection and coordinator failures for up to ten seconds, or a shorter caller deadline. Archive replay uses one virtual source partition.
 - Default `PARTITIONING = PRESERVE`: write original partition N to destination partition N, keeping original key bytes, including nulls. Check all selected input partition IDs before output; Kafka assignments recheck the destination. Archive replay uses the fixed selection's original IDs, never its replay cursor. This includes selected partitions whose records the timestamp filter excludes. Destination counts may be larger; missing IDs fail under every policy. Topics must exist.
 - `WITH (PARTITIONING = KEY)` on the destination selects Java-compatible Murmur2 key routing; null keys use sticky routing. Equal non-null keys stay together with a stable partitioner/count. Preserved placement can differ from other destination producers' key routing. Destination partition-count changes are logged. Source offsets are never copied; destination offsets are new.
 - Layout checks are not atomic with publishing. Topic recreation or partition changes during a copy can fail after partial output; missing partitions never fall back to key routing.
