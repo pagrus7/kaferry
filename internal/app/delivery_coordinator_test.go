@@ -180,16 +180,19 @@ func TestIsolatedCaptureDisksAndIndependentRecovery(t *testing.T) {
 				t.Fatal("replacement did not pause between checkpoint chunks and head")
 			}
 			// The first host recovers while the replacement still owns the source partition.
-			if binary := os.Getenv("KAFERRY_LAB_BINARY"); binary != "" && point == "coordinated" {
-				path := filepath.Join(t.TempDir(), "recovery.toml")
-				require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("[connections.src]\n'bootstrap.servers'=%q\n[worker]\nprogress_topic=%q\n", strings.Join(source, ","), progress)), 0600))
-				command := exec.CommandContext(testContext(t), binary, "run", "--recover-local", "--config", path, "--file", "-")
-				command.Stdin = strings.NewReader(statement)
-				logs, err := command.CombinedOutput()
-				require.NoError(t, err, "%s", logs)
-			} else {
-				require.NoError(t, RecoverLocal(testContext(t), first, cfg, Options{ProgressTopic: progress}))
+			if point == "coordinated" {
+				t.Run("CLI", func(t *testing.T) {
+					binary := streamBinary(t)
+					path := filepath.Join(t.TempDir(), "recovery.toml")
+					require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("[connections.src]\n'bootstrap.servers'=%q\n[worker]\nprogress_topic=%q\n", strings.Join(source, ","), progress)), 0600))
+					command := exec.CommandContext(testContext(t), binary, "run", "--recover-local", "--config", path, "--file", "-")
+					command.Stdin = strings.NewReader(statement)
+					logs, err := command.CombinedOutput()
+					require.NoError(t, err, "%s", logs)
+				})
 			}
+			// Repeating publication-only recovery must preserve the same output.
+			require.NoError(t, RecoverLocal(testContext(t), first, cfg, Options{ProgressTopic: progress}))
 
 			close(resume)
 			released = true

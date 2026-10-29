@@ -1,11 +1,14 @@
 package archiveio
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"maps"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
 	"github.com/pagrus7/kaferry/internal/checkpoint"
@@ -64,14 +67,14 @@ func (w *captureStateWriter) Replace(path string, data []byte) error {
 	return w.DurableWriter.Replace(path, data)
 }
 
-func captureCommitFixture(t *testing.T) (*captureOutput, *archivePartition, *captureCommitLog, *captureStateWriter, string) {
+func captureCommitFixture(t *testing.T, clock core.Clock) (*captureOutput, *archivePartition, *captureCommitLog, *captureStateWriter, string) {
 	t.Helper()
 	p := plan.Plan{Group: "save", Source: plan.Endpoint{Kind: "TOPIC", Name: "orders"}, Destination: plan.Endpoint{Kind: "ARCHIVE", Name: filepath.Join(t.TempDir(), "archive")}}
 	s := delivery.New(p, config.Defaults("").Worker)
 	s.Identity = delivery.Identity{Group: p.Group, Fingerprint: "query", SourceCluster: "source", SourceTopic: [16]byte{1}}
 	log := &captureCommitLog{values: map[string][]byte{}, pending: map[string][]byte{}}
 	w := &captureStateWriter{}
-	j := NewCapture(s, core.RealClock{}, log, w)
+	j := NewCapture(s, clock, log, w)
 	part, err := j.Acquire(t.Context(), 0)
 	require.NoError(t, err)
 	a := part.(*archivePartition)
@@ -85,7 +88,7 @@ func captureCommitFixture(t *testing.T) (*captureOutput, *archivePartition, *cap
 
 func TestCaptureSavesEachBatchOnceAndPublishesBoundaries(t *testing.T) {
 	// Given a coordinated archive with one admitted record and no rotation.
-	j, part, log, w, metadata := captureCommitFixture(t)
+	j, part, log, w, metadata := captureCommitFixture(t, core.RealClock{})
 	codec, err := avro.New(j.session.Limits.ArchiveBlockMaxBytes)
 	require.NoError(t, err)
 	buffer := &captureBuffer{journal: j, codec: codec}
@@ -144,7 +147,7 @@ func TestArchiveSaveKeepsProgressPendingUntilEverySaveSucceeds(t *testing.T) {
 	for _, stage := range []string{"coordinator", "local", "mirror"} {
 		t.Run(stage, func(t *testing.T) {
 			// Given pending metadata and a failure at one persistence boundary.
-			j, part, log, w, metadata := captureCommitFixture(t)
+			j, part, log, w, metadata := captureCommitFixture(t, core.RealClock{})
 			a := part.archive
 			require.NoError(t, a.stage(core.Cursor{Position: 1}, metadata))
 			failure := errors.New("save failed")
@@ -160,6 +163,68 @@ func TestArchiveSaveKeepsProgressPendingUntilEverySaveSucceeds(t *testing.T) {
 			require.ErrorIs(t, a.Save(a.path, a.contents), failure)
 			require.NotNil(t, a.staged)
 			log.err, w.err, j.session.SaveMirror = nil, nil, nil
+		})
+	}
+}
+
+type captureClock struct{ now time.Time }
+
+func (c *captureClock) Now() time.Time        { return c.now }
+func (c *captureClock) Sleep(d time.Duration) { c.now = c.now.Add(d) }
+
+func TestQuietCaptureRotatesOnlyCommittedInput(t *testing.T) {
+	for _, queued := range []bool{false, true} {
+		t.Run(map[bool]string{false: "quiet", true: "queued input"}[queued], func(t *testing.T) {
+			// Given one saved private record and an optional later uncommitted record.
+			clock := &captureClock{now: time.Unix(1000, 0)}
+			j, part, log, _, metadata := captureCommitFixture(t, clock)
+			codec, err := avro.New(j.session.Limits.ArchiveBlockMaxBytes)
+			require.NoError(t, err)
+			buffer := &captureBuffer{journal: j, codec: codec}
+			r := avro.Record{Source: avro.Source{Cluster: "source", Topic: "orders", TopicID: avro.TopicID{1}}, TimestampKind: "unknown", Value: []byte("saved")}
+			require.NoError(t, buffer.Append(r, core.Cursor{Position: 1}))
+			require.NoError(t, buffer.Flush())
+			require.NoError(t, part.Commit(t.Context(), delivery.Frame{Cursor: core.Cursor{Position: 1}, Metadata: metadata}))
+			if queued {
+				r.Offset, r.Value = 1, []byte("pending")
+				require.NoError(t, buffer.Append(r, core.Cursor{Position: 2}))
+			}
+			files, err := filepath.Glob(filepath.Join(j.session.Plan.Destination.Name, "*.avro"))
+			require.NoError(t, err)
+			require.Empty(t, files)
+			// When input stays quiet past the default one-hour rotation age.
+			clock.now = clock.now.Add(time.Hour + time.Second)
+			require.NoError(t, buffer.Flush())
+			// Then the saved prefix is published without advancing the queued cursor.
+			files, err = filepath.Glob(filepath.Join(j.session.Plan.Destination.Name, "*.avro"))
+			require.NoError(t, err)
+			require.Len(t, files, 1)
+			data, err := os.ReadFile(files[0])
+			require.NoError(t, err)
+			reader, err := codec.Open(bytes.NewReader(data), int64(len(data)))
+			require.NoError(t, err)
+			block, err := reader.Block(reader.Start)
+			require.NoError(t, err)
+			require.EqualValues(t, 1, block.Count)
+			require.EqualValues(t, len(data), block.End)
+			record, err := block.Next()
+			require.NoError(t, err)
+			require.Equal(t, "saved", string(record.Value))
+			saved, err := j.Read(t.Context(), 0)
+			require.NoError(t, err)
+			require.EqualValues(t, 1, saved.Cursor.Position)
+			require.Empty(t, part.archive.contents.Files)
+			commits := log.commits
+			require.NoError(t, buffer.Flush())
+			require.Equal(t, commits, log.commits, "quiet maintenance must not rewrite unchanged progress")
+			if queued {
+				require.Len(t, part.archiveQueue, 1)
+				require.NoError(t, part.Commit(t.Context(), delivery.Frame{Cursor: core.Cursor{Position: 2}, Metadata: metadata}))
+				require.NoError(t, buffer.Finish())
+				files, err = filepath.Glob(filepath.Join(j.session.Plan.Destination.Name, "*.avro"))
+				require.NoError(t, err)
+				require.Len(t, files, 2)
+			}
 		})
 	}
 }

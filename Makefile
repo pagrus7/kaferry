@@ -10,7 +10,7 @@ SOAK_TEST_TIMEOUT ?= 1h
 ifeq ($(KAFERRY_TEST_BINARY),)
 TEST_BINARY_PREREQUISITE = build
 # A leading "load " is a GNU Make plugin directive.
-qualification load soak smoke: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/kaferry
+check qualification load soak smoke: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/kaferry
 endif
 export KAFERRY_TEST_OUTPUT
 
@@ -21,7 +21,7 @@ build:
 test:
 	$(GO) test ./...
 # Only race-instrumented tests enable CGO.
-check:
+check: $(TEST_BINARY_PREREQUISITE)
 	$(GO) vet ./...
 	CGO_ENABLED=1 $(GO) test -race ./...
 fast: check

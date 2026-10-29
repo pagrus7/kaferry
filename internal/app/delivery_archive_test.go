@@ -188,6 +188,9 @@ func TestCaptureFileBudgetAppliesAcrossSourcePartitions(t *testing.T) {
 	seed(t, source, 3, 4)
 	root := t.TempDir()
 	p, _ := capturePlan(t, source, root, fmt.Sprintf("file-budget-%d", time.Now().UnixNano()), false)
+	// Keep files open until the worker-wide budget forces publication.
+	p.Destination.RotateAfterSize = 1 << 30
+	p.Destination.RotateAfterAgeMS = time.Hour.Milliseconds()
 	cfg := config.Defaults("")
 	cfg.Worker.ArchiveCaptureOpenFiles = 1
 	cfg.Worker.RecordCap = 2
@@ -205,6 +208,7 @@ func TestCaptureFileBudgetAppliesAcrossSourcePartitions(t *testing.T) {
 	}}))
 	require.Equal(t, 1, peak)
 	require.Zero(t, open)
+	require.NoError(t, Run(testContext(t), p, cfg, Options{}))
 	got := archiveValues(t, root)
 	require.Len(t, got, 12)
 	for _, count := range got {

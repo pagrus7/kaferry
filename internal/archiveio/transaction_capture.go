@@ -435,6 +435,20 @@ func (b *captureBuffer) Flush() error {
 	b.journal.mu.Lock()
 	defer b.journal.mu.Unlock()
 	for _, l := range b.journal.leases {
+		if l.failed != nil {
+			return l.failed
+		}
+		if l.archive.failed != nil {
+			return l.archive.failed
+		}
+		// The writer contains only saved input; queued records stay in memory.
+		// Keep checking elapsed age even when there is no new cursor to commit.
+		if l.archive.writer != nil {
+			if err := l.archive.writer.Flush(); err != nil {
+				l.failed = err
+				return err
+			}
+		}
 		for i := range l.archiveQueue {
 			l.archiveQueue[i].prepared = true
 			l.ready = max(l.ready, l.archiveQueue[i].next)

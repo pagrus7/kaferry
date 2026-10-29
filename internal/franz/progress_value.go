@@ -60,6 +60,8 @@ type valueReader struct {
 	head   *valueHead
 	chunks map[int][]byte
 	bytes  int
+	seen   bool
+	err    error
 }
 
 func (r *valueReader) accept(key string, record *kgo.Record) error {
@@ -86,19 +88,33 @@ func (r *valueReader) accept(key string, record *kgo.Record) error {
 	if err != nil || index < 0 || index >= maxValueBytes {
 		return errors.New("invalid checkpoint chunk index")
 	}
-	if r.chunks == nil {
+	r.seen = true
+	// Writers emit chunk zero first and the head last in one transaction.
+	// Compaction can retain trailing chunks from older, smaller chunk sizes.
+	if index == 0 {
+		r.head, r.err, r.bytes = nil, nil, 0
 		r.chunks = make(map[int][]byte)
+	}
+	if r.chunks == nil {
+		return nil
 	}
 	r.bytes += len(record.Value) - len(r.chunks[index])
 	if r.bytes > maxValueBytes {
-		return errors.New("checkpoint chunks exceed 96 MiB")
+		// A later chunk zero can replace this incomplete historical generation.
+		// Drop its buffers now, and reject it if no replacement follows.
+		r.chunks = nil
+		r.err = errors.New("checkpoint chunks exceed 96 MiB")
+		return nil
 	}
 	r.chunks[index] = append([]byte{}, record.Value...)
 	return nil
 }
 func (r *valueReader) value() ([]byte, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
 	if r.head == nil {
-		if len(r.chunks) > 0 {
+		if r.seen {
 			return nil, errors.New("checkpoint chunks lack a committed header")
 		}
 		return nil, nil

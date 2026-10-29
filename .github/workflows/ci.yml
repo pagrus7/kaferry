@@ -36,9 +36,14 @@ jobs:
           cache: true
       - run: test -z "$(gofmt -l cmd internal tests)"
       - run: python3 scripts/ci.py vet go vet ./...
+      - run: make build
+        env:
+          CGO_ENABLED: "0"
       - run: python3 scripts/ci.py unit go test -count=1 -json -race -coverpkg=./... -coverprofile=build-results/coverage.out ./...
         env:
           CGO_ENABLED: "1"
+          KAFERRY_TEST_BINARY: ${{ github.workspace }}/bin/kaferry
+      - run: python3 scripts/ci.py verify-tests unit TestStreamingCLIAllEndpoints TestCLIOneOffLogsGroupAndRemovesReplayBinding TestCLIDeadlineAfterLostCommitReplyResumesExactly TestCLIExportsFinalMetricsForTransactionalProgress TestIsolatedCaptureDisksAndIndependentRecovery/coordinated/CLI
       - name: Coverage reports
         run: |
           python3 scripts/quality.py coverage
@@ -47,9 +52,6 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: go test -run '^$' -tags=integration,load,fault,qualification,migration ./tests/compat
-      - run: make build
-        env:
-          CGO_ENABLED: "0"
       - name: Run the documented archive tutorial and file-copy smoke
         run: make smoke
       - name: Validate release license notices

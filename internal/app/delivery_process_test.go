@@ -28,12 +28,36 @@ import (
 
 func streamBinary(t *testing.T) string {
 	t.Helper()
-	path := os.Getenv("KAFERRY_LAB_BINARY")
+	path := os.Getenv("KAFERRY_TEST_BINARY")
 	if path == "" {
-		t.Skip("set KAFERRY_LAB_BINARY to the built kaferry CLI")
+		t.Skip("set KAFERRY_TEST_BINARY to the built kaferry CLI")
 	}
 	return path
 }
+func TestCLIRejectsUnsupportedLocalRecovery(t *testing.T) {
+	for _, route := range []struct{ name, source, destination, group string }{
+		{"one-off capture", "TOPIC 'input'", "ARCHIVE '%s'", ""},
+		{"Kafka destination", "TOPIC 'input'", "TOPIC 'output'", " WITH (GROUP='recovery')"},
+		{"archive source", "ARCHIVE '%s'", "ARCHIVE '%s'", " WITH (GROUP='recovery')"},
+	} {
+		t.Run(route.name, func(t *testing.T) {
+			// Given a valid copy query whose route cannot publish local capture recovery.
+			directory := t.TempDir()
+			configPath := filepath.Join(directory, "config.toml")
+			require.NoError(t, os.WriteFile(configPath, []byte("[connections.default]\n'bootstrap.servers'='127.0.0.1:1'\n"), 0600))
+			input, target := filepath.Join(directory, "input"), filepath.Join(directory, "output")
+			statement := "INSERT INTO " + strings.ReplaceAll(route.destination, "%s", target) + " SELECT * FROM " + strings.ReplaceAll(route.source, "%s", input) + route.group
+			var stdout, stderr bytes.Buffer
+			// When dispatching --recover-local, then it rejects the route before opening endpoints.
+			code := Execute(testContext(t), []string{"run", "--recover-local", "--config", configPath, "--sql", statement}, nil, &stdout, &stderr)
+			require.Equal(t, 2, code, "%s", stderr.String())
+			require.Contains(t, stderr.String(), "local recovery requires Kafka capture and the original named group")
+			require.Empty(t, stdout.String())
+			require.NoDirExists(t, target)
+		})
+	}
+}
+
 func TestStreamingCLIAllEndpoints(t *testing.T) {
 	binary := streamBinary(t)
 	for _, src := range []string{"TOPIC", "ARCHIVE"} {
