@@ -9,6 +9,7 @@ import (
 	"github.com/pagrus7/kaferry/internal/checkpoint"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/plan"
 )
 
 type memoryCheckpoint struct{ state *replay.State }
@@ -57,7 +58,7 @@ func (b *Binding) Source(ctx context.Context, limits config.Worker, partitionCou
 	if err != nil {
 		return nil, nil, err
 	}
-	session, err := replay.NewSession(replay.Query{Group: j.Plan.Group, Fingerprint: j.Identity.Fingerprint, Window: j.Plan.Window, Partitions: j.Plan.Partitions, Offsets: j.Plan.Offsets, PartitionOffsets: j.Plan.PartitionOffsets, MaxOutOfOrderMS: j.Plan.MaxOutOfOrderMS, PartitionCount: partitionCount}, b.clock, memory, catalog, pool, limits.RecordCap)
+	session, err := replay.NewSession(replayQuery(j.Plan, j.Identity.Fingerprint, partitionCount), b.clock, memory, catalog, pool, limits.RecordCap)
 	if err != nil {
 		_ = pool.Close()
 		return nil, nil, err
@@ -78,4 +79,8 @@ func (b *Binding) Source(ctx context.Context, limits config.Worker, partitionCou
 		return nil, nil, err
 	}
 	return NewSource(session, b.clock), replayProgress{binding: b}, nil
+}
+
+func replayQuery(p plan.Plan, fp string, partitionCount int) replay.Query {
+	return replay.Query{Group: p.Group, Fingerprint: fp, Window: p.Window, Partitions: p.Partitions, Offsets: p.Offsets, PartitionOffsets: p.PartitionOffsets, MaxOutOfOrderMS: p.MaxOutOfOrderMS, PartitionCount: partitionCount}
 }

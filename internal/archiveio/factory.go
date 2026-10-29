@@ -42,7 +42,7 @@ func (f *Factory) OpenSource(ctx context.Context, s *delivery.Session, w config.
 		if err != nil {
 			return nil, &Conflict{Err: err}
 		}
-		if _, err = replay.NewCatalog(s.Plan.Source.Name, codec, replay.NativeFiles{}).Inspect(s.Plan.Partitions); err != nil {
+		if _, err = replay.NewCatalog(s.Plan.Source.Name, codec, replay.NativeFiles{}).Preview().Select(s.Plan.Partitions); err != nil {
 			return nil, &Conflict{Err: err}
 		}
 	}

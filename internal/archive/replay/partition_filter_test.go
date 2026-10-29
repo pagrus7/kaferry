@@ -20,7 +20,7 @@ func TestPartitionSelectionNeverReadsExcludedPayloads(t *testing.T) {
 		fs := &faultyFiles{Filesystem: NativeFiles{}, fault: "hash", target: excluded.name(), start: excluded.Start}
 		catalog := NewCatalog(root, codec(t), fs)
 		// When inspecting and selecting, then only matching files contribute data and metadata.
-		preview, err := catalog.Inspect(filter)
+		preview, err := catalog.Preview().Select(filter)
 		require.NoError(t, err)
 		require.Len(t, preview.Files, 1)
 		require.Equal(t, selected.Identity, preview.Files[0].Identity)
@@ -49,7 +49,7 @@ func TestExcludedArchiveHeadersStillRequireAValidFileIdentity(t *testing.T) {
 	// When selecting, inspecting or starting replay, then metadata validation still fails and no selection is pinned.
 	_, err := catalog.Select(filter)
 	require.ErrorContains(t, err, "filename disagrees with file identity")
-	_, err = catalog.Inspect(filter)
+	_, err = catalog.Preview().Select(filter)
 	require.ErrorContains(t, err, "filename disagrees with file identity")
 	q := query()
 	q.Partitions = filter
@@ -108,7 +108,7 @@ func TestMissingArchivePartitionIDsNeverPinASelection(t *testing.T) {
 		require.ErrorContains(t, err, "absent from source metadata")
 		require.Empty(t, store.writes)
 		require.Zero(t, blocks.reads)
-		_, err = catalog.Inspect(filter)
+		_, err = catalog.Preview().Select(filter)
 		require.ErrorContains(t, err, "absent from source metadata")
 	}
 }

@@ -26,27 +26,12 @@ var ErrGroupBusy = errors.New("replay group is already running")
 
 type NativeGroupFiles struct{}
 
-func (NativeGroupFiles) Read(path string, limit int64) (data []byte, result error) {
+func (NativeGroupFiles) Read(path string, limit int64) ([]byte, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { result = errors.Join(result, f.Close()) }()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() || info.Size() > limit {
-		return nil, errors.New("replay checkpoint must be a regular file within the size limit")
-	}
-	data, err = io.ReadAll(io.NewSectionReader(f, 0, info.Size()))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) != info.Size() {
-		return nil, io.ErrUnexpectedEOF
-	}
-	return data, nil
+	return checkpoint.Read(f, limit)
 }
 
 func (NativeGroupFiles) Acquire(path string) (lock io.Closer, result error) {
