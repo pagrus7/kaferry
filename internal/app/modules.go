@@ -44,7 +44,6 @@ var CommitMetadataModule = fx.Module("commit-metadata", fx.Provide(commitmeta.Ne
 var KafkaModule = fx.Module("kafka", fx.Provide(franz.NewFactory,
 	func(f *franz.Factory) KafkaFactory { return f },
 	func(f *franz.Factory) QueryValidator { return f },
-	func(f *franz.Factory) inspect.KafkaFactory { return f },
 ))
 var CheckpointModule = fx.Module("checkpoint", fx.Provide(func() checkpoint.AtomicWriter { return checkpoint.DurableWriter{} }))
 var ArchiveModule = fx.Module("archive", fx.Provide(func(clock copy.Clock, writer checkpoint.AtomicWriter, log *slog.Logger) FileFactory {

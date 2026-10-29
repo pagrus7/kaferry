@@ -18,14 +18,13 @@ import (
 
 type deliveryInspection struct {
 	kafka       KafkaFactory
-	read        inspect.KafkaFactory
 	files       *archiveio.Inspector
 	positioning kafkaport.PositionerFactory
 	clock       core.Clock
 }
 
-func newDeliveryInspection(kafka KafkaFactory, read inspect.KafkaFactory, positioning kafkaport.PositionerFactory, clock core.Clock) *deliveryInspection {
-	return &deliveryInspection{kafka: kafka, read: read, files: archiveio.NewInspector(clock), positioning: positioning, clock: clock}
+func newDeliveryInspection(kafka KafkaFactory, positioning kafkaport.PositionerFactory, clock core.Clock) *deliveryInspection {
+	return &deliveryInspection{kafka: kafka, files: archiveio.NewInspector(clock), positioning: positioning, clock: clock}
 }
 
 type frameReader interface {
@@ -37,8 +36,10 @@ func (i *deliveryInspection) service(ctx context.Context, p plan.Plan, w config.
 	factory := i.kafka.ForQuery(s)
 	owners := []kafkaport.Connection{}
 	cleanup := func() error {
+		closing := owners
+		owners = nil
 		var err error
-		for _, c := range owners {
+		for _, c := range closing {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			err = errors.Join(err, c.Close(ctx))
 			cancel()
@@ -49,11 +50,8 @@ func (i *deliveryInspection) service(ctx context.Context, p plan.Plan, w config.
 		return nil, cleanup, errors.Join(err, cleanup())
 	}
 	var source, destination kafkaport.DeliveryConnection
-	for _, dest := range []bool{false, true} {
-		endpoint := p.Source
-		if dest {
-			endpoint = p.Destination
-		}
+	var views [2]kafkaport.InspectionConnection
+	for index, endpoint := range []plan.Endpoint{p.Source, p.Destination} {
 		if endpoint.Kind != "TOPIC" {
 			continue
 		}
@@ -62,6 +60,11 @@ func (i *deliveryInspection) service(ctx context.Context, p plan.Plan, w config.
 			return fail(err)
 		}
 		owners = append(owners, c)
+		view, ok := c.(kafkaport.InspectionConnection)
+		if !ok {
+			return fail(errors.New("kafka endpoint cannot provide read-only inspection"))
+		}
+		views[index] = borrowedInspection{view}
 		exec, ok := c.(kafkaport.DeliveryConnection)
 		if !ok {
 			return fail(errors.New("kafka endpoint cannot inspect delivery authority"))
@@ -74,7 +77,7 @@ func (i *deliveryInspection) service(ctx context.Context, p plan.Plan, w config.
 		if err != nil {
 			return fail(err)
 		}
-		if dest {
+		if index == 1 {
 			s.Identity.DestinationCluster = cluster
 			s.Identity.DestinationTopic = id
 			destination = exec
@@ -122,7 +125,7 @@ func (i *deliveryInspection) service(ctx context.Context, p plan.Plan, w config.
 		}
 	}
 	files := &deliveryInspectionFiles{Inspector: i.files, ctx: ctx, reader: reader, bound: bound, bindingErr: bindingErr}
-	return inspect.NewExplainer(deliveryInspectionFactory{KafkaFactory: i.read, session: s, reader: reader}, files, i.positioning), cleanup, nil
+	return inspect.NewExplainer(deliveryInspectionFactory{source: views[0], destination: views[1], session: s, reader: reader}, files, i.positioning), cleanup, nil
 }
 func (i *deliveryInspection) Explain(ctx context.Context, p plan.Plan, w config.Worker, stop core.StopObserver) (report inspect.Report, result error) {
 	service, close, err := i.service(ctx, p, w)
@@ -142,22 +145,22 @@ func (i *deliveryInspection) Status(ctx context.Context, p plan.Plan, w config.W
 }
 
 type deliveryInspectionFactory struct {
-	inspect.KafkaFactory
-	session *delivery.Session
-	reader  frameReader
+	source, destination kafkaport.InspectionConnection
+	session             *delivery.Session
+	reader              frameReader
 }
 
-func (f deliveryInspectionFactory) OpenInspection(ctx context.Context, e plan.Endpoint) (kafkaport.InspectionConnection, error) {
-	c, err := f.KafkaFactory.OpenInspection(ctx, e)
-	if err != nil {
-		return nil, err
-	}
+func (f deliveryInspectionFactory) OpenInspection(_ context.Context, e plan.Endpoint) (kafkaport.InspectionConnection, error) {
 	p := f.session.Plan
 	if e.Kind == p.Source.Kind && e.Name == p.Source.Name && e.Alias == p.Source.Alias {
-		return &deliveryInspectionConnection{InspectionConnection: c, session: f.session, reader: f.reader}, nil
+		return &deliveryInspectionConnection{InspectionConnection: f.source, session: f.session, reader: f.reader}, nil
 	}
-	return c, nil
+	return f.destination, nil
 }
+
+type borrowedInspection struct{ kafkaport.InspectionConnection }
+
+func (borrowedInspection) Close(context.Context) error { return nil }
 
 type deliveryInspectionConnection struct {
 	kafkaport.InspectionConnection

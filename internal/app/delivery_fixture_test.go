@@ -109,7 +109,7 @@ func (i Inspection) service() *deliveryInspection {
 		clock = core.RealClock{}
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return newDeliveryInspection(kafka, kafka, kafkaport.NewPositionerFactory(clock, logger, kafkaport.NewOffsetLookupFactory()), clock)
+	return newDeliveryInspection(kafka, kafkaport.NewPositionerFactory(clock, logger, kafkaport.NewOffsetLookupFactory()), clock)
 }
 func (i Inspection) Explain(ctx context.Context, p plan.Plan, w config.Worker, stop core.StopObserver) (inspect.Report, error) {
 	w.ProgressTopic = i.Options.ProgressTopic

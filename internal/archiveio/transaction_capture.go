@@ -266,6 +266,7 @@ func (a *archiveLease) Save(path string, contents capture.State) error {
 	if err = a.journal.saveMirror(frame); err != nil {
 		return err
 	}
+	a.staged = nil
 	a.journal.session.Hook("checkpointed", a.id)
 	return nil
 }
@@ -330,10 +331,12 @@ func (j *captureOutput) commitArchive(ctx context.Context, l *archivePartition, 
 		l.failed = err
 		return err
 	}
-	// A filter-only or metadata-only save can have no changed file boundary.
-	if err := a.Save(a.path, a.contents); err != nil {
-		l.failed = err
-		return err
+	// Flush may leave progress pending when no file boundary changed.
+	if a.staged != nil {
+		if err := a.Save(a.path, a.contents); err != nil {
+			l.failed = err
+			return err
+		}
 	}
 	l.frame = a.frame
 	l.ready = 0
@@ -415,12 +418,7 @@ type captureBuffer struct {
 }
 
 func (b *captureBuffer) Append(record avro.Record, cursor core.Cursor) error {
-	// Validate using the production codec before accepting a skippable record.
-	writer, err := b.codec.NewWriter(io.Discard, avro.Identity{Version: 1, WriterID: delivery.Hash("validate")[:32], FileID: delivery.Hash("record")[:32], Source: record.Source, FirstOffset: record.Offset})
-	if err != nil {
-		return err
-	}
-	if err = writer.Append(record); err != nil {
+	if err := b.codec.ValidateRecord(record); err != nil {
 		return err
 	}
 	b.journal.mu.Lock()

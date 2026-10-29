@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +13,8 @@ import (
 	"github.com/pagrus7/kaferry/internal/archive/replay"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/delivery"
+	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/pagrus7/kaferry/internal/sql"
 	"github.com/stretchr/testify/require"
@@ -57,6 +61,7 @@ func TestAuthoritativeReadOnlyInspectionAllEndpoints(t *testing.T) {
 				p, err := plan.NewPlanner(environment{}).Build(ast, plan.Profiles{"src": {"bootstrap.servers": strings.Join(source.ListenAddrs(), ",")}, "dst": {"bootstrap.servers": strings.Join(destination.ListenAddrs(), ",")}})
 				require.NoError(t, err)
 				cfg := config.Defaults("")
+				cfg.Worker.ProgressTopic = "progress"
 				directory := t.TempDir()
 				cfg.Worker.CheckpointDir = &directory
 				options := Options{ProgressTopic: "progress"}
@@ -81,12 +86,25 @@ func TestAuthoritativeReadOnlyInspectionAllEndpoints(t *testing.T) {
 					}
 				}
 				// When status/explain inspect destination progress, then both agree without Kafka writes.
-				inspector := Inspection{Options: options}
+				inspector := (Inspection{Options: options}).service()
+				connections := &inspectionConnections{Factory: inspector.kafka}
+				inspector.kafka = connections
 				status, err := inspector.Status(testContext(t), p, cfg.Worker, core.NoopStopObserver{})
 				require.NoError(t, err)
 				require.Equal(t, "stopped", status.Verdict)
 				report, err := inspector.Explain(testContext(t), p, cfg.Worker, core.NoopStopObserver{})
 				require.NoError(t, err)
+				perCall := 0
+				if src == "TOPIC" {
+					perCall++
+				}
+				if dst == "TOPIC" {
+					perCall++
+				}
+				require.Len(t, connections.opened, 2*perCall)
+				for _, connection := range connections.opened {
+					require.Equal(t, 1, connection.closes)
+				}
 				if src == "TOPIC" {
 					for _, row := range report.Partitions {
 						require.True(t, row.Saved)
@@ -116,5 +134,102 @@ func TestAuthoritativeReadOnlyInspectionAllEndpoints(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+type inspectionConnections struct {
+	kafkaport.Factory
+	opened                           []*countedInspectionConnection
+	failOpen, failMetadata, failRead int
+	failure, closeFailure            error
+}
+
+func (f *inspectionConnections) ForQuery(s *delivery.Session) kafkaport.Factory {
+	f.Factory = f.Factory.ForQuery(s)
+	return f
+}
+
+func (f *inspectionConnections) Open(ctx context.Context, e plan.Endpoint) (kafkaport.Connection, error) {
+	index := len(f.opened) + 1
+	if index == f.failOpen {
+		return nil, f.failure
+	}
+	c, err := f.Factory.Open(ctx, e)
+	if err != nil {
+		return nil, err
+	}
+	view := &countedInspectionConnection{DeliveryConnection: c.(kafkaport.DeliveryConnection), InspectionConnection: c.(kafkaport.InspectionConnection), closeErr: f.closeFailure}
+	if index == f.failMetadata {
+		view.metadataErr = f.failure
+	}
+	if index == f.failRead {
+		view.readErr = f.failure
+	}
+	f.opened = append(f.opened, view)
+	return view, nil
+}
+
+type countedInspectionConnection struct {
+	kafkaport.DeliveryConnection
+	kafkaport.InspectionConnection
+	closes                         int
+	metadataErr, readErr, closeErr error
+}
+
+func (c *countedInspectionConnection) ClusterID(ctx context.Context) (string, error) {
+	if c.metadataErr != nil {
+		return "", c.metadataErr
+	}
+	return c.DeliveryConnection.ClusterID(ctx)
+}
+func (c *countedInspectionConnection) Describe(ctx context.Context, config bool) (kafkaport.TopicDescription, error) {
+	if c.readErr != nil {
+		return kafkaport.TopicDescription{}, c.readErr
+	}
+	return c.InspectionConnection.Describe(ctx, config)
+}
+func (c *countedInspectionConnection) CheckMembers(ctx context.Context, group, protocol string) error {
+	return c.InspectionConnection.CheckMembers(ctx, group, protocol)
+}
+func (c *countedInspectionConnection) Close(ctx context.Context) error {
+	c.closes++
+	return errors.Join(c.DeliveryConnection.Close(ctx), c.closeErr)
+}
+
+func TestInspectionClosesSharedConnectionsOnceOnFailure(t *testing.T) {
+	for _, stage := range []string{"second open", "second metadata", "destination describe", "close"} {
+		t.Run(stage, func(t *testing.T) {
+			// Given Kafka endpoints and a failure during acquisition, inspection or cleanup.
+			source, destination := clusters(t, 1)
+			p := query(t, source, destination, "WHERE RECORD_OFFSET < LATEST", "")
+			inspector := (Inspection{Options: Options{ProgressTopic: "progress"}}).service()
+			failure, closeFailure := errors.New("inspection failed"), errors.New("close failed")
+			connections := &inspectionConnections{Factory: inspector.kafka, failure: failure, closeFailure: closeFailure}
+			switch stage {
+			case "second open":
+				connections.failOpen = 2
+			case "second metadata":
+				connections.failMetadata = 2
+			case "destination describe":
+				connections.failRead = 2
+			}
+			inspector.kafka = connections
+			// When explain fails, then every acquired connection closes once and all close errors survive.
+			worker := config.Defaults("").Worker
+			worker.ProgressTopic = "progress"
+			_, err := inspector.Explain(testContext(t), p, worker, core.NoopStopObserver{})
+			require.ErrorIs(t, err, closeFailure)
+			if stage != "close" {
+				require.ErrorIs(t, err, failure)
+			}
+			want := 2
+			if stage == "second open" {
+				want = 1
+			}
+			require.Len(t, connections.opened, want)
+			for _, c := range connections.opened {
+				require.Equal(t, 1, c.closes)
+			}
+		})
 	}
 }
