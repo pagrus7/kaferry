@@ -22,7 +22,6 @@ import (
 
 type Options struct {
 	Clock         core.Clock
-	Stop          core.StopObserver
 	Logger        *slog.Logger
 	ProgressTopic string
 	Hook          func(string, int32)
