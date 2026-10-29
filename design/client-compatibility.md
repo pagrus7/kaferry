@@ -45,29 +45,30 @@ When Kaferry reads Kafka, its client, franz-go v1.22.2, misreads record timestam
 
 Group descriptions retry unavailable, loading or changed coordinators within one 10 s deadline. Authorization failures, incompatible members and invalid responses still fail inspection.
 
-`explain` uses Metadata, DescribeGroups and OffsetFetch for named source groups, ListOffsets, and optional destination DescribeConfigs. It creates no consumer or producer and sends no Fetch, group-membership or OffsetCommit requests. ONE_OFF skips group requests. It cannot verify the READ/WRITE grants needed by a later copy.
+`explain` uses Metadata, DescribeGroups and OffsetFetch for named source groups, ListOffsets, and optional destination DescribeConfigs. It fetches authoritative progress records with read_committed, without reading source payloads, initializing transactional producers, joining groups or committing offsets. ONE_OFF skips group requests. It cannot verify the READ/WRITE grants needed by a later copy.
 
 | API | Purpose / timing |
 | --- | --- |
 | Metadata | Startup: require existing topics, cluster identity, nonzero topic IDs and partitions. Assignment: recheck source identity. Output: refresh partition count |
 | DescribeGroups | Source startup: reject incompatible active members and assigned topics |
-| OffsetFetch | Startup and assignment: read and validate saved progress; only absent commits use the start rule |
+| OffsetFetch | Startup and assignment: read and validate advisory source-group metadata; authoritative progress selects resume positions |
 | ListOffsets | Batch retained/log-end bounds, timestamp starts, and stable ends |
-| Fetch | Read-committed input; separate bounded gap probes prove compacted/control-only tails without skipping retained records |
-| DescribeConfigs | Optional destination size and timestamp preflight |
+| Fetch | Read-committed authoritative progress during inspection/assignment and input during copying; separate bounded gap probes prove compacted/control-only tails without skipping retained records |
+| DescribeConfigs | Required compact-only progress-topic policy; optional destination size and timestamp preflight |
+| CreatePartitions | Grow the progress topic to cover assigned source partition IDs; requires topic ALTER |
 | OffsetCommit | Consumer member saves confirmed positions with its generation and query metadata |
 | JoinGroup / SyncGroup / Heartbeat / LeaveGroup | Ordinary consumer-group membership and ownership |
-| Produce / InitProducerId | Idempotent output and delivery acknowledgements |
+| Produce / InitProducerId / EndTxn | Fence stable producers and atomically commit output with authoritative progress |
 
 While partitions are assigned, input checks stable ends once per second. Each check can also request 1 MiB from one partition behind its stable end, including partitions still receiving records. Kafka can return a larger first batch. These probes count against client quotas; a throttled empty reply proves no progress and retries on the next check. When writing, output checks the partition count if at least 30 s have passed since the last check.
 
-Completion samples the log end including open transactions. A stable offset alone never proves that records were consumed: gap probes parse batches and validate CRCs. Fixture administrators create, alter and delete test resources; those permissions are not CLI requirements.
+Completion samples the log end including open transactions. A stable offset alone never proves that records were consumed: gap probes parse batches and validate CRCs. Fixture administrators create and delete test topics. CLI execution additionally requires progress-topic ALTER when partition growth is needed; [setup and permissions](../docs/usage.md#prepare-authoritative-progress).
 
 ## Operational limits
 
 - If Kafka reports that this worker is no longer a group member, it exits 1; rerun to rejoin.
 - Leaving the group allows up to 5 s. A failed leave exits 1, even if progress was already saved. Other workers may wait for the session timeout before receiving its partitions. Resume with the same named group.
 - If a gap check reports an unknown source topic or partition, the run stops; rerun after the topic is available. Source replica reassignment is untested and may trigger this.
-- A delivery timeout can occur after the broker appended the record. The failed record stays unconfirmed and can duplicate on restart; later records cannot advance that partition's saved prefix past it.
+- A delivery timeout can occur after the broker appended the record. The output transaction remains uncommitted; its replacement fences it before loading progress. Prepared records can replay without repeating committed output; later records cannot advance that partition's saved prefix past it.
 
 For retries, shutdown, memory and group checks, see [Errors](decisions.md#errors), [Delivery and progress](decisions.md#delivery-and-progress), [connection properties](../docs/reference.md#connection-properties) and [Identity](decisions.md#identity).

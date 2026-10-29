@@ -81,7 +81,7 @@ func (t *Tracker) observe(cursor Cursor, next, bytes int64, resolved bool) (Toke
 		return Token{}, nil
 	}
 	p.sequence++
-	token := Token{cursor.Partition, p.generation, p.sequence}
+	token := Token{Partition: cursor.Partition, Generation: p.generation, Sequence: p.sequence, Next: next}
 	e := &entry{token: token, next: next, bytes: bytes, resolved: resolved, position: cursor.Position}
 	p.entries = append(p.entries, e)
 	p.pending[token.Sequence] = e

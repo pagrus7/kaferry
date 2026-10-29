@@ -35,7 +35,7 @@ type delayedUnbufferingProducer struct {
 	promises             []func(*kgo.Record, error)
 }
 
-func (p *delayedUnbufferingProducer) TryProduce(_ context.Context, r *kgo.Record, callback func(*kgo.Record, error)) {
+func (p *delayedUnbufferingProducer) TryProduce(_ context.Context, r *kgo.Record, _ core.Cursor, callback func(*kgo.Record, error)) {
 	n := int64(len(r.Key) + len(r.Value))
 	if p.records.Load() >= p.maxRecords || p.bytes.Load()+n > p.maxBytes {
 		callback(r, kgo.ErrMaxBuffered)
@@ -87,7 +87,7 @@ func TestProducerHeadroomCoversPromiseBeforeClientUnbuffering(t *testing.T) {
 	}
 }
 
-func (p *producerMock) TryProduce(ctx context.Context, r *kgo.Record, callback func(*kgo.Record, error)) {
+func (p *producerMock) TryProduce(ctx context.Context, r *kgo.Record, _ core.Cursor, callback func(*kgo.Record, error)) {
 	p.contexts = append(p.contexts, ctx)
 	p.records = append(p.records, r)
 	p.callbacks = append(p.callbacks, callback)
@@ -162,7 +162,7 @@ func TestSinkCloseDoesNotWaitForUndrainedDeliveryReports(t *testing.T) {
 	// Given a pending write, a coalesced flush, and a delivery channel the core has not read.
 	s, client := sinkFixture(t)
 	require.NoError(t, s.Submit(core.Record{}, core.Token{}))
-	require.NoError(t, s.Flush())
+	require.ErrorIs(t, s.Flush(), context.DeadlineExceeded)
 	// When closing, then cancellation releases the flush and callback without needing the core to drain reports.
 	done := make(chan struct{})
 	go func() { s.Close(); close(done) }()

@@ -3,6 +3,9 @@ package franz
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/pagrus7/kaferry/internal/config"
+	"github.com/pagrus7/kaferry/internal/delivery"
 	"reflect"
 	"testing"
 	"time"
@@ -46,6 +49,7 @@ func (c *consumerMock) CommitOffsetsSync(_ context.Context, offsets map[string]m
 }
 
 type sourceMetadataMock struct {
+	parts             []int32
 	low, high, stable map[int32]int64
 	saved             map[int32]int64
 	progress          map[int32]kafkaport.Progress
@@ -98,7 +102,10 @@ func sourceFixture(t *testing.T) (*Source, *consumerMock) {
 	p := testPlan(t, nil)
 	store := &Committer{codec: commitmeta.NewCodec(), client: client, topic: "input", group: p.Group, metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: "id"}}}
 	metadata := &sourceMetadataMock{}
-	s := &Source{lookup: kafkaport.NewOffsetLookupFactory().New(metadata, metadata), client: client, inspector: metadata, positioning: kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory()), store: store, bridge: newRebalanceBridge(ctx, "input"), pump: &fetchPump{fetched: make(chan fetchResult, 1)}, plan: p, fingerprint: "fp", topicID: "id", query: ctx, ctx: ctx, cancel: cancel, clientCancel: func() {}, life: &lifecycleMock{}, positions: map[int32]int64{0: 0}, paused: make(map[int32]bool), held: make(map[int32]*kgo.Record), retention: make(map[int32]kafkaport.RetentionCheck), log: quietLogger(), lastTip: time.Now()}
+	authority := delivery.New(p, config.Defaults("").Worker)
+	authority.Backend = &memoryAuthority{metadata: metadata}
+	store.delivery = authority
+	s := &Source{delivery: authority, lookup: kafkaport.NewOffsetLookupFactory().New(metadata, metadata), client: client, inspector: metadata, positioning: kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory()), store: store, bridge: newRebalanceBridge(ctx, "input"), pump: &fetchPump{fetched: make(chan fetchResult, 1)}, plan: p, fingerprint: "fp", topicID: "id", query: ctx, ctx: ctx, cancel: cancel, clientCancel: func() {}, life: &lifecycleMock{}, positions: map[int32]int64{0: 0}, paused: make(map[int32]bool), held: make(map[int32]*kgo.Record), retention: make(map[int32]kafkaport.RetentionCheck), log: quietLogger(), lastTip: time.Now()}
 	return s, client
 }
 func feed(s *Source, record *kgo.Record, err error) {
@@ -177,6 +184,7 @@ func TestSourceRevokesOnlyNamedPartitionsAndTreatsLostSeparately(t *testing.T) {
 	s.held[2] = &kgo.Record{Partition: 2}
 	// When partition zero is lost, then only its generation's state is removed.
 	event := lifecycleEvent{ids: []int32{0}, revoke: true, lost: true, answer: make(chan lifecycleAnswer, 1)}
+	s.delivery.Backend.(*memoryAuthority).metadata = s.inspector.(*sourceMetadataMock)
 	require.NoError(t, s.lifecycle(event))
 	life := s.life.(*lifecycleMock)
 	if !life.lost || !reflect.DeepEqual(life.revoked, []int32{0}) || len(s.positions) != 1 || s.positions[2] != 8 || s.held[0] != nil || s.held[2] == nil || !s.paused[2] {
@@ -201,6 +209,7 @@ func TestSourceCommitsResolvedStartBeforeExposingAssignment(t *testing.T) {
 			// Given an assignment starting at saved offset seven and an independent commit response.
 			s, client := sourceFixture(t)
 			s.inspector = &sourceMetadataMock{low: map[int32]int64{0: 0}, high: map[int32]int64{0: 10}, saved: map[int32]int64{0: 7}, progress: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: "id"}}}
+			s.delivery.Backend.(*memoryAuthority).metadata = s.inspector.(*sourceMetadataMock)
 			client.commitErr, client.commitResponse = tc.requestError, tc.response
 			event := lifecycleEvent{ids: []int32{0}, answer: make(chan lifecycleAnswer, 1)}
 			// When the core resolves and saves its initial position.
@@ -283,6 +292,7 @@ func TestEmptyAssignmentDoesNotInspectDestination(t *testing.T) {
 	s.routing = routing
 	event := lifecycleEvent{answer: make(chan lifecycleAnswer, 1)}
 	// When processing it, then an idle worker needs no destination request and still receives its assignment result.
+	s.delivery.Backend.(*memoryAuthority).metadata = s.inspector.(*sourceMetadataMock)
 	require.NoError(t, s.lifecycle(event))
 	require.Zero(t, routing.calls)
 	select {
@@ -291,5 +301,55 @@ func TestEmptyAssignmentDoesNotInspectDestination(t *testing.T) {
 		require.Empty(t, answer.assignments)
 	case <-time.After(time.Second):
 		t.Fatal("empty assignment was not returned to callback")
+	}
+}
+
+func (m *sourceMetadataMock) PartitionIDs() []int32 {
+	if m.parts != nil {
+		return append([]int32{}, m.parts...)
+	}
+	seen := map[int32]bool{0: true}
+	for id := range m.low {
+		seen[id] = true
+	}
+	for id := range m.high {
+		seen[id] = true
+	}
+	ids := make([]int32, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	return ids
+}
+func TestNewPartitionUsesAuthorityAfterAdvisoryOffsetExpiry(t *testing.T) {
+	for _, relative := range []bool{false, true} {
+		t.Run(fmt.Sprint(relative), func(t *testing.T) {
+			// Given authority on partition zero, no advisory offsets, and ownership only of a new partition.
+			source, client := sourceFixture(t)
+			source.plan.Window = plan.WindowSpec{}
+			source.plan.Start = "LATEST"
+			progress := kafkaport.Progress{Fingerprint: "fp", TopicID: "id"}
+			var expectedWindow plan.Window
+			if relative {
+				source.plan.Start = ""
+				source.plan.Window = plan.WindowSpec{Lower: &plan.Expression{Now: true, AdjustmentMS: -3600000}}
+				expectedWindow = plan.Window{Lower: new(int64(0))}
+				progress.Window = &expectedWindow
+			}
+			text, err := commitmeta.NewCodec().Encode(progress)
+			require.NoError(t, err)
+			metadata := &sourceMetadataMock{parts: []int32{0, 1}, low: map[int32]int64{0: 0, 1: 0}, high: map[int32]int64{0: 10, 1: 5}}
+			source.inspector = metadata
+			source.delivery.Plan = source.plan
+			source.delivery.Backend = &memoryAuthority{frames: map[int32]*delivery.Frame{0: {Version: delivery.Version, Identity: source.delivery.Identity, Cursor: core.Cursor{Partition: 0, Position: 3}, Metadata: text}}}
+			// When partition one is assigned, then retained backlog and the original window remain selected.
+			event := lifecycleEvent{ids: []int32{1}, answer: make(chan lifecycleAnswer, 1)}
+			require.NoError(t, source.lifecycle(event))
+			require.Equal(t, map[int32]int64{1: 0}, client.committed)
+			assignments := source.life.(*lifecycleMock).assignments
+			require.Len(t, assignments, 1)
+			require.EqualValues(t, 0, assignments[0].Cursor.Position)
+			require.Equal(t, expectedWindow, assignments[0].Window)
+		})
 	}
 }

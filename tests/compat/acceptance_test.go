@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -147,7 +146,7 @@ func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
 	}
 	end, err := a.ListEndOffsets(ctx, dst)
 	info, ok := end.Lookup(dst, 0)
-	if err != nil || !ok || info.Offset != 1 {
+	if err != nil || !ok || info.Offset != 2 {
 		t.Fatal("recreated source wrote output", end, err)
 	}
 }
@@ -257,8 +256,8 @@ func TestConcurrentNowWindowsPersistAcrossWorkersAndRestart(t *testing.T) {
 	after := relativeWindows(t, committedPartitions(t, a, group, src, 2))
 	require.Equal(t, after, before, "restart changed saved per-partition windows")
 	end, err := a.ListEndOffsets(ctx, dst)
-	info, ok := end.Lookup(dst, 0)
-	if err != nil || !ok || info.Offset != 2 {
+	_, ok := end.Lookup(dst, 0)
+	if err != nil || !ok || topicRecordCount(t, a, dst, 1) != 2 {
 		t.Fatal("relative restart lost or recopied records", end, err)
 	}
 	waitMembers(t, a, group, 0, 0, nil)
@@ -266,15 +265,14 @@ func TestConcurrentNowWindowsPersistAcrossWorkersAndRestart(t *testing.T) {
 	if err != nil || len(deleted) != 1 || deleted[group].Err != nil {
 		t.Fatal("clear all fixture progress", deleted, err)
 	}
-	// Clearing all progress has the same startup semantics as offset retention expiry.
+	// When advisory source-group offsets expire, then authority still preserves the selected window and committed output.
 	result := loggedWorker(ctx, statement, "")
 	if result.code != 0 || !strings.Contains(result.detail, `"partitions_with_progress":0`) {
-		t.Fatal("empty group was not logged and initialized as a new run", result)
+		t.Fatal("advisory offset expiry did not preserve the job", result)
 	}
 	fresh := relativeWindows(t, committedPartitions(t, a, group, src, 2))
-	if reflect.DeepEqual(before, fresh) {
-		t.Fatal("cleared progress reused old NOW windows")
-	}
+	require.Equal(t, before, fresh, "source-group deletion must not reset authoritative windows")
+	require.EqualValues(t, 2, topicRecordCount(t, a, dst, 1))
 }
 
 func TestMissingTimestampWithoutFilterUsesProducerClockAndCountsIt(t *testing.T) {
@@ -305,19 +303,19 @@ func TestMissingTimestampWithoutFilterUsesProducerClockAndCountsIt(t *testing.T)
 // os.Exit bypasses drains/commits while other deliveries can remain outstanding.
 type crashingClients struct{ adapter.Clients }
 
-func (c crashingClients) Producer(options ...kgo.Opt) (adapter.ProducerClient, error) {
-	producer, err := c.Clients.Producer(options...)
+func (c crashingClients) Transaction(options ...kgo.Opt) (adapter.TransactionClient, error) {
+	producer, err := c.Clients.Transaction(options...)
 	if err != nil {
 		return nil, err
 	}
 	return &crashingProducer{producer}, nil
 }
 
-type crashingProducer struct{ adapter.ProducerClient }
+type crashingProducer struct{ adapter.TransactionClient }
 
-func (p *crashingProducer) TryProduce(ctx context.Context, record *kgo.Record, callback func(*kgo.Record, error)) {
-	p.ProducerClient.TryProduce(ctx, record, func(record *kgo.Record, err error) {
-		if err == nil {
+func (p *crashingProducer) Produce(ctx context.Context, record *kgo.Record, callback func(*kgo.Record, error)) {
+	p.TransactionClient.Produce(ctx, record, func(record *kgo.Record, err error) {
+		if err == nil && !strings.HasPrefix(record.Topic, "kaferry-progress") {
 			os.Exit(99)
 		}
 		callback(record, err)
@@ -364,13 +362,14 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 	execute(t, statement, cfg)
 	end, err := a.ListEndOffsets(ctx, dst)
 	info, ok := end.Lookup(dst, 0)
-	if err != nil || !ok || info.Offset <= 32 || info.Offset > 48 {
-		t.Fatal("crash duplicate exposure exceeded the partition cap", end, err)
-	}
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Greater(t, info.Offset, int64(32), "fixture retains aborted writes and control markers")
+	require.EqualValues(t, 32, topicRecordCount(t, a, dst, 1), "resume must expose each committed occurrence once")
 	c := consumer(t)
 	assign(t, c, dst, 1)
 	counts := make(map[string]int)
-	for range int(info.Offset) {
+	for range 32 {
 		record := read(t, c)
 		counts[string(record.Value)]++
 		if !bytes.Equal(record.Key, []byte("stable")) || !record.Timestamp.Equal(stamp) {
@@ -378,7 +377,7 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 		}
 	}
 	for i := range 32 {
-		if n := counts[fmt.Sprint(i)]; n < 1 || n > 2 {
+		if n := counts[fmt.Sprint(i)]; n != 1 {
 			t.Fatal("record lost or replayed more than once", i, n)
 		}
 	}

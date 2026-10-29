@@ -158,6 +158,7 @@ func TestExplainUsesOnlyReadOnlyKafkaRequests(t *testing.T) {
 			// Given real protocol clients and two source partitions.
 			cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(2, "input"), kfake.SeedTopics(3, "output"))
 			defer cluster.Close()
+			topic(t, cluster.ListenAddrs(), "kaferry-progress", 4, true)
 			producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.RecordPartitioner(kgo.ManualPartitioner()))
 			require.NoError(t, err)
 			defer producer.Close()

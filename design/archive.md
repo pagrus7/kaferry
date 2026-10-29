@@ -31,21 +31,21 @@ archive/
 
 Workers own unique namespaces and files. Storage may be local or shared; completed files can be collected unchanged. The storage must support durable sync, atomic rename and exclusive ownership locks across all users of that storage. Shared filesystem support requires checking these guarantees across hosts.
 
-Create a namespace with valid empty recovery state under a temporary name, sync it, then rename and sync its parent before creating data. Keep its stable lock while writing or recovering. Startup recovers every published namespace whose lock it can acquire; skip busy or unpublished namespaces. Keep acquired locks until recovery and one streamed scan for their unacknowledged private files finish. Recovery is independent of Kafka partition assignment. Never steal locks by age or replace lock files.
+Create a namespace with valid empty recovery state under a temporary name, sync it, then rename and sync its parent before creating data. Keep its stable lock while writing or recovering. Each assigned source partition owns a stable namespace lock. Kafka capture also fences its prior producer and commits a visible writer claim before loading per-writer authority. Publication-only recovery requires a visible replacement claim. [Coordination and state format](delivery.md#archive-output). Keep acquired locks until recovery and one streamed scan for their unacknowledged private files finish. Capture startup recovers its assigned partitions. After takeover, [`--recover-local`](../docs/usage.md#recover-a-capture-disk-after-takeover) publishes the old disk’s committed files without joining the source group. Never steal locks by age or replace lock files.
 
 ## Capture and recovery
 
 1. Write complete compressed blocks to private files; sync the data and new directory entries.
-2. Atomically save and sync required writer state containing each file's acknowledged boundary.
-3. Acknowledge the batch; Kafka source offsets can then be committed.
+2. Save each file boundary and the confirmed source cursor together: in a source-cluster transaction for Kafka capture, or one synced atomic replacement for archive-only copying.
+3. Publish only files covered by that saved authority. Source-group offsets remain advisory.
 
 Any write or sync failure stops capture without further acknowledgements. Required state is versioned and checked for corruption. A record-skip policy cannot bypass a storage failure.
 
-Writer state uses canonical JSON in a SHA-256 envelope. It stores version `1`, writer ID and each private file's full identity, acknowledged byte length and record count. Both saving and loading enforce a 16 MiB limit. State replacement syncs the new file and its directory before returning success.
+Writer state uses canonical JSON in a SHA-256 envelope. It stores version `1`, writer ID and each private file's full identity, acknowledged byte length and record count. Capture boundaries use a versioned delivery envelope; [limits and identities](delivery.md#state-format) apply. State replacement syncs the new file and its directory before returning success.
 
 Recovery validates each saved prefix. Truncate only its unacknowledged private tail, sync, and publish the prefix; start a new file for further capture. A completed file must match the saved identity and length and is never truncated. Missing, shortened or corrupt acknowledged data is fatal. Discard unlisted private files only when valid initialized state and ownership prove they were never acknowledged.
 
-Publishing renames synced private files without overwriting conflicting targets, syncs the data directory, then removes their state entries in one durable replacement per batch. Recovery state retains all boundaries until every rename is durable. A crash between output durability and Kafka commit can produce duplicates; retain them.
+Publishing renames synced private files without overwriting conflicting targets, syncs the data directory, then removes their state entries in one durable replacement per batch. Recovery state retains all boundaries until every rename is durable. A crash can leave private uncommitted bytes. Recovery uses the complete authoritative prefix before truncation or publication; incomplete authority leaves record files untouched.
 
 ## Rotation
 
@@ -73,7 +73,7 @@ Merge overlaps by original source identity, partition and offset. Preserve dupli
 
 ### Checkpoints
 
-Checkpoints use group-derived filenames and stable `.lock` files in `~/.kaferry/checkpoints`, or `worker.checkpoint_dir`. The directory must exist. A group and checkpoint directory identify one replay; another directory starts fresh and can duplicate output. The canonical JSON envelope contains `state` and its lowercase `sha256` digest. State version `1` stores `group`, query `fingerprint`, resolved `window`, confirmed `position`, `complete`, selected `files` and optional `stop` (`reason`, `at`). Stop reason `eof` means the fixed selection completed, including configured offset or timestamp stops; `worker_record_cap` means the requested worker threshold was reached. `at` equals the confirmed input-record count. Restart clears a previous threshold stop when new progress is saved.
+Checkpoints use group-derived filenames and stable `.lock` files in `~/.kaferry/checkpoints`, or `worker.checkpoint_dir`. The directory must exist. A group and checkpoint directory identify one replay; another directory starts fresh and can duplicate output. The replay checkpoint is an advisory inspection mirror; the `.eos` binding and destination-owned delivery frame provide authority. Move the binding with the checkpoint directory. The canonical JSON envelope contains `state` and its lowercase `sha256` digest. State version `1` stores `group`, query `fingerprint`, resolved `window`, confirmed `position`, `complete`, selected `files` and optional `stop` (`reason`, `at`). Stop reason `eof` means the fixed selection completed, including configured offset or timestamp stops; `worker_record_cap` means the requested worker threshold was reached. `at` equals the confirmed input-record count. Restart clears a previous threshold stop when new progress is saved.
 
 Each `files` entry contains:
 
@@ -84,6 +84,6 @@ Each `files` entry contains:
 
 Writer-state checksums are calculated on durability flushes and publication; replay-checkpoint checksums are calculated on progress saves. Every replay progress save rewrites and checksums the whole file list, so save time and bytes written grow with selection size. Appends do not hash JSON themselves. Frequent rotation can make these batches small. Idle flushes with no new writes do not save writer state. Selection validates every completed header and hashes only matching files. See [partition selection](decisions.md#source-partitions). An incomplete restart rechecks every selected file, including consumed files, before returning records. Explain/status read headers, sizes and saved JSON without hashing archive payloads. Completed files must remain immutable during replay.
 
-A checkpoint failure stops new reads. A source failure still allows saving earlier confirmed output. Destination-confirmed records after the last saved checkpoint can repeat after restart.
+A checkpoint failure stops new reads. A source failure still allows saving earlier confirmed output. Uncommitted preparation may replay; authoritative cursors keep committed output from repeating.
 
 The session retains the resolved time window for the caller's filter. By default it examines every selected record. Explicit timestamp disorder or offset ends can finish one original source stream across overlapping files; other streams remain eligible. [Completion](decisions.md#completion). No active-file reads, replay follow mode, global completion barrier or built-in consolidation.

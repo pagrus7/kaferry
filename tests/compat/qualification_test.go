@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
@@ -83,15 +85,24 @@ func secureFixture(t *testing.T) (*kadm.Client, *kgo.Client, string, string, str
 		defer cancel()
 		_, _ = a.DeleteTopics(ctx, src, dst)
 	})
+	createdProgress, err := a.CreateTopics(ctx, 1, 3, map[string]*string{"cleanup.policy": kadm.StringPtr("compact"), "min.insync.replicas": kadm.StringPtr("2")}, "kaferry-progress")
+	require.NoError(t, err)
+	if e := createdProgress.Error(); !errors.Is(e, kerr.TopicAlreadyExists) {
+		require.NoError(t, e)
+	}
 	for _, acl := range []*kadm.ACLBuilder{
 		kadm.NewACLs().Topics(src).Operations(kadm.OpRead),
 		kadm.NewACLs().Topics(dst).Operations(kadm.OpWrite),
+		kadm.NewACLs().Topics("kaferry-progress").Operations(kadm.OpRead, kadm.OpWrite, kadm.OpDescribe, kadm.OpDescribeConfigs, kadm.OpAlter),
+		kadm.NewACLs().TransactionalIDs("kaferry-").ResourcePatternType(kadm.ACLPatternPrefixed).Operations(kadm.OpWrite),
 		kadm.NewACLs().Groups(prefix).Operations(kadm.OpRead).ResourcePatternType(kadm.ACLPatternPrefixed),
 	} {
 		results, err := a.CreateACLs(ctx, acl.Allow("User:copier").AllowHosts("*"))
 		require.NoError(t, err)
-		require.Len(t, results, 1)
-		require.NoError(t, results[0].Err)
+		require.NotEmpty(t, results)
+		for _, result := range results {
+			require.NoError(t, result.Err)
+		}
 	}
 	for _, mechanism := range []kadm.ScramMechanism{kadm.ScramSha256, kadm.ScramSha512} {
 		credentials, err := a.AlterUserSCRAMs(ctx, nil, []kadm.UpsertSCRAM{{User: "copier", Mechanism: mechanism, Iterations: 4096, Password: "fixture-copy-secret"}})
@@ -284,7 +295,18 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	for i := range 16 {
 		publish(t, p, &kgo.Record{Topic: src, Partition: 0, Key: []byte("stable"), Value: []byte(fmt.Sprint(i)), Timestamp: stamp})
 	}
-	waitEnd(t, a, dst, 16)
+	reader := secureReader(t, dst)
+	check := func(i int) {
+		t.Helper()
+		message := read(t, reader)
+		if string(message.Value) != fmt.Sprint(i) || !bytes.Equal(message.Key, []byte("stable")) || !message.Timestamp.Equal(stamp) {
+			t.Fatal("failover lost, duplicated, reordered or changed a record", i, message)
+		}
+	}
+	// Establish committed output before testing failover from an idle transaction boundary.
+	for i := range 16 {
+		check(i)
+	}
 
 	// When the destination leader stops while the copy is running.
 	if data, err := exec.Command("docker", "stop", "-t", "1", container).CombinedOutput(); err != nil {
@@ -308,12 +330,8 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	}
 
 	// Then remaining replicas delivered every record and shutdown committed the stream.
-	reader := secureReader(t, dst)
-	for i := range 64 {
-		message := read(t, reader)
-		if string(message.Value) != fmt.Sprint(i) || !bytes.Equal(message.Key, []byte("stable")) || !message.Timestamp.Equal(stamp) {
-			t.Fatal("failover lost, duplicated, reordered or changed a record", i, message)
-		}
+	for i := 16; i < 64; i++ {
+		check(i)
 	}
 	progressReader := kadm.NewClient(secureClient(t, secureProperties(t, "admin", "fixture-admin-secret")))
 	progress := committedPartitions(t, progressReader, group, src, 1)

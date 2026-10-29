@@ -76,27 +76,10 @@ func (w *Writer) Append(record Record) error {
 	if record.Offset < w.last {
 		return ErrRotationRequired
 	}
-	if len(record.Headers) > w.codec.maxHeaders {
-		return &InvalidRecord{Err: errors.New("record exceeds header count limit")}
-	}
-	if recordBytes(record) > w.codec.limit {
-		return &InvalidRecord{Err: errors.New("record exceeds Avro block limit")}
-	}
 	// Finish encoding before changing the container; format-limit rejections leave valid pending data intact.
-	if w.datum == nil {
-		w.datum = lib.NewWriter(nil, 0, lib.WithWriterConfig(w.codec.api))
-	}
-	w.datum.Reset(nil)
-	w.datum.Error = nil
-	w.datum.WriteVal(w.codec.schema, record)
-	if err := w.datum.Error; err != nil {
-		w.datum = nil
+	data, err := w.encodeDatum(record)
+	if err != nil {
 		return err
-	}
-	data := w.datum.Buffer()
-	if int64(len(data)) > w.codec.limit {
-		w.datum = nil
-		return &InvalidRecord{Err: errors.New("record exceeds Avro block limit")}
 	}
 	if int64(len(w.pending))+int64(len(data)) > min(BlockTarget, w.codec.limit) {
 		if err := w.Flush(); err != nil {
@@ -113,6 +96,44 @@ func (w *Writer) Append(record Record) error {
 		return w.Flush()
 	}
 	return nil
+}
+
+// ValidateRecord checks source identity, record fields and encoded size without writing a container.
+func (c *Codec) ValidateRecord(record Record) error {
+	if err := record.Source.validate(); err != nil {
+		return err
+	}
+	if err := record.validate(); err != nil {
+		return err
+	}
+	w := Writer{codec: c}
+	_, err := w.encodeDatum(record)
+	return err
+}
+
+func (w *Writer) encodeDatum(record Record) ([]byte, error) {
+	if len(record.Headers) > w.codec.maxHeaders {
+		return nil, &InvalidRecord{Err: errors.New("record exceeds header count limit")}
+	}
+	if recordBytes(record) > w.codec.limit {
+		return nil, &InvalidRecord{Err: errors.New("record exceeds Avro block limit")}
+	}
+	if w.datum == nil {
+		w.datum = lib.NewWriter(nil, 0, lib.WithWriterConfig(w.codec.api))
+	}
+	w.datum.Reset(nil)
+	w.datum.Error = nil
+	w.datum.WriteVal(w.codec.schema, record)
+	if err := w.datum.Error; err != nil {
+		w.datum = nil
+		return nil, err
+	}
+	data := w.datum.Buffer()
+	if int64(len(data)) > w.codec.limit {
+		w.datum = nil
+		return nil, &InvalidRecord{Err: errors.New("record exceeds Avro block limit")}
+	}
+	return data, nil
 }
 
 func recordBytes(record Record) int64 {

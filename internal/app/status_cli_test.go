@@ -57,7 +57,7 @@ func TestStatusRejectsOneOffAndCorruptFileProgress(t *testing.T) {
 			} else {
 				var diagnostics bytes.Buffer
 				require.Zero(t, Execute(t.Context(), []string{"run", "-e", query, "-c", f.config}, nil, io.Discard, &diagnostics))
-				files, err := filepath.Glob(filepath.Join(f.directory, "*.json"))
+				files, err := filepath.Glob(filepath.Join(f.destination, ".kaferry", "writers", "*", "state.json"))
 				require.NoError(t, err)
 				require.Len(t, files, 1)
 				require.NoError(t, os.WriteFile(files[0], []byte("broken"), 0600))
@@ -82,6 +82,7 @@ func TestStatusKafkaRequestsAreReadOnly(t *testing.T) {
 	// Given a source topic, destination and a group without saved progress.
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"))
 	defer cluster.Close()
+	topic(t, cluster.ListenAddrs(), "kaferry-progress", 4, true)
 	var writes atomic.Int64
 	for _, key := range []kmsg.Key{kmsg.Produce, kmsg.Fetch, kmsg.JoinGroup, kmsg.OffsetCommit, kmsg.ConsumerGroupHeartbeat, kmsg.DescribeConfigs} {
 		cluster.ControlKey(int16(key), func(kmsg.Request) (kmsg.Response, error, bool) {

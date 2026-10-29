@@ -7,6 +7,7 @@ import (
 
 	"github.com/pagrus7/kaferry/internal/commitmeta"
 	core "github.com/pagrus7/kaferry/internal/copy"
+	"github.com/pagrus7/kaferry/internal/delivery"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -17,6 +18,7 @@ type offsetCommitter interface {
 	CommitOffsetsSync(context.Context, map[string]map[int32]kgo.EpochOffset, func(*kgo.Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error))
 }
 type Committer struct {
+	delivery     *delivery.Session
 	codec        commitmeta.Codec
 	client       offsetCommitter
 	topic, group string
@@ -52,6 +54,22 @@ func (c *Committer) Save(ctx context.Context, cursors []core.Cursor) (map[int32]
 			}
 		}
 	})
+	if failure != nil {
+		return results, fmt.Errorf("save source-group offsets: %w", failure)
+	}
+	updates := make([]delivery.Frame, 0, len(cursors))
+	for _, cursor := range cursors {
+		if err, present := results[cursor.Partition]; present && err == nil {
+			updates = append(updates, delivery.Frame{Cursor: cursor, Metadata: encoded[cursor.Partition]})
+		}
+	}
+	if len(updates) > 0 {
+		if c.delivery == nil {
+			failure = errors.New("output authority required for progress commit")
+		} else if err := c.delivery.CommitBatch(ctx, updates); err != nil {
+			failure = fmt.Errorf("commit output with progress: %w", err)
+		}
+	}
 	return results, failure
 }
 

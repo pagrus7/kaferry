@@ -4,7 +4,7 @@ Exact settings, inspection output, exit codes and metrics. For operating steps, 
 
 ## Inspection
 
-`explain` previews the same statement, configuration, identity and start-position rules as `run`. It never joins a group, consumes records, commits, creates/truncates files or takes locks. Observations can change during inspection; this is not an atomic snapshot or a guarantee that a later run succeeds. Write access is not checked. Records, output bytes and duration are not estimated.
+`explain` previews the same statement, configuration, identity and start-position rules as `run`. It reads metadata and authoritative progress without joining a group, consuming source records, initializing producers, committing, creating/truncating files or taking locks. Observations can change during inspection; this is not an atomic snapshot or a guarantee that a later run succeeds. Write access is not checked. Records, output bytes and duration are not estimated.
 
 Text sections show endpoints, progress, time windows, behavior and any warnings. They summarize saved/fresh partitions, resolved bounds, start/stop rules, destination routing and record-error policies. Identical bounds and origins share a window summary. At most eight window groups, eight partition IDs per group and eight warnings are printed; omitted counts point to `--json`. Cluster IDs are shown separately from connection aliases; fingerprints and topic IDs stay in JSON.
 
@@ -29,7 +29,9 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 
 ### Saved status
 
-`kaferry status` accepts the same query and configuration as `run`; a named `GROUP` is required. It reads saved progress without joining, consuming, producing, committing, creating files or taking locks. It needs no permissions beyond existing source/group DESCRIBE and endpoint metadata access. `ONE_OFF` requires the actual logged group name; a deleted file checkpoint has no saved status.
+`run --recover-local` publishes a recovered Kafka capture disk after a committed takeover; it requires the original named group and capture statement. [Procedure](usage.md#recover-a-capture-disk-after-takeover).
+
+`kaferry status` accepts the same query and configuration as `run`; a named `GROUP` is required. It reads saved progress without joining, consuming source records, producing, initializing transactional producers, committing, creating files or taking locks. Kafka authority requires progress-topic READ and metadata access in addition to source/group DESCRIBE. `ONE_OFF` requires the actual logged group name. Replay status remains available without its checkpoint mirror when the `.eos` binding and authoritative state remain.
 
 Verdicts: invalid/incompatible progress → `unknown`; incompatible active members → `unknown`; active members, unsettled group state or changed membership → `running`; no saved progress → `unknown`; any current partition without a saved stop → `incomplete`; otherwise → `stopped`. Added eligible partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. New archive files do not expand a saved replay selection. Status reports `unknown` (5) when a checkpoint or saved selection cannot be validated; other operational read failures exit 1 without a verdict.
 
@@ -99,9 +101,10 @@ Optional keys in TOML's `[worker]` table; byte values are integers:
 | `idle_exit` | `'30s'` | Wait after an empty assignment before exit 3 |
 | `tip_wait` | `'15m'` | Continuous wait at the readable tip below the saved captured end; ordinary backlog processing resets it |
 | `progress_interval` | '30s' | Progress logs; '0' disables |
+| `progress_topic` | `kaferry-progress` | Pre-provisioned compact-only Kafka authority; [cluster placement](usage.md#prepare-authoritative-progress) |
 | `checkpoint_dir` | `~/.kaferry/checkpoints` | File-source checkpoint directory |
 
-Caps must be positive; `max_frame_bytes` is at most 4,294,967,295. Durations are positive Go duration strings, except `progress_interval` permits zero; `delivery_timeout` is 1 ms–2,147,483,647 ms. `checkpoint_dir` must not be empty. Unknown keys fail.
+Caps must be positive; `max_frame_bytes` is at most 4,294,967,295. Durations are positive Go duration strings, except `progress_interval` permits zero; `delivery_timeout` is 1 ms–2,147,483,647 ms. `checkpoint_dir` and `progress_topic` must not be empty. Unknown keys fail.
 
 Caps include delivered records whose source progress is not yet saved. [Delivery and progress](../design/decisions.md#delivery-and-progress).
 
@@ -173,11 +176,11 @@ Supported exporter environment suffixes: `ENDPOINT`, `PROTOCOL` (`http/protobuf`
 
 Resources include `service.name=kaferry`, version, a generated `service.instance.id` and `messaging.consumer.group.name`. `OTEL_RESOURCE_ATTRIBUTES` adds deployment/query attributes; built-in identity takes precedence. Automatic attributes exclude SQL, record contents, file paths and credentials. Attributes increase the number of series; use stable deployment values.
 
-Metric names are experimental. All describe this worker's invocation; restarts and rebalances can replay records. Source partitions and topics are not metric attributes.
+Metric names are experimental. All describe this worker's invocation. The stderr `submitted` and `confirmed` counters have the same acceptance/preparation meanings as these metrics; restarts and rebalances can prepare uncommitted records again. Source partitions and topics are not metric attributes.
 
 | Metric (`kaferry.` prefix) | Meaning |
 | --- | --- |
-| `records.submitted`, `records.confirmed` | Separate cumulative counts accepted and acknowledged by the destination; not unique records |
+| `records.submitted`, `records.confirmed` | Separate cumulative counts accepted by the output adapter and prepared for a progress save. Confirmed records may still be uncommitted; neither measures unique committed output. |
 | `records.filtered`, `records.skipped` | Separate cumulative counts of examined records excluded by timestamp or offset filters, and dropped by error policy |
 | `buffer.entries`, `buffer.entry_limit` | Unsaved tracked progress entries and their worker cap; entries can include cursor gaps and exclude a record deferred before tracking |
 | `buffer.estimated_size`, `buffer.estimated_size_limit` | Tracked cap-accounting bytes and their cap; not payload/wire bytes or total memory |

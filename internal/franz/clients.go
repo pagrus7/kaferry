@@ -3,6 +3,7 @@ package franz
 import (
 	"context"
 
+	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -26,14 +27,23 @@ type ConsumerClient interface {
 	CloseAllowingRebalance()
 }
 type ProducerClient interface {
-	TryProduce(context.Context, *kgo.Record, func(*kgo.Record, error))
+	TryProduce(context.Context, *kgo.Record, core.Cursor, func(*kgo.Record, error))
 	Flush(context.Context) error
 	Close()
 }
+type TransactionClient interface {
+	Produce(context.Context, *kgo.Record, func(*kgo.Record, error))
+	Flush(context.Context) error
+	ProducerID(context.Context) (int64, int16, error)
+	BeginTransaction() error
+	EndTransaction(context.Context, kgo.TransactionEndTry) error
+	OptValue(any) any
+	Close()
+}
 type Clients interface {
+	Transaction(...kgo.Opt) (TransactionClient, error)
 	Metadata(...kgo.Opt) (MetadataClient, error)
 	Consumer(...kgo.Opt) (ConsumerClient, error)
-	Producer(...kgo.Opt) (ProducerClient, error)
 }
 type clients struct{}
 
@@ -46,10 +56,11 @@ func (clients) Metadata(opts ...kgo.Opt) (MetadataClient, error) {
 	return protocolClient{c}, nil
 }
 func (clients) Consumer(opts ...kgo.Opt) (ConsumerClient, error) { return kgo.NewClient(opts...) }
-func (clients) Producer(opts ...kgo.Opt) (ProducerClient, error) { return kgo.NewClient(opts...) }
 
 type protocolClient struct{ *kgo.Client }
 
 func (c protocolClient) RequestTo(ctx context.Context, broker int32, req kmsg.Request) (kmsg.Response, error) {
 	return c.Broker(int(broker)).Request(ctx, req)
 }
+
+func (clients) Transaction(opts ...kgo.Opt) (TransactionClient, error) { return kgo.NewClient(opts...) }

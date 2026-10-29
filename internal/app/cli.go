@@ -50,6 +50,9 @@ func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, st
 		fmt.Fprintln(stderr, "component composition failed")
 		return 2
 	}
+	if options.recoverLocal {
+		ctx = context.WithValue(ctx, recoveryKey{}, true)
+	}
 	if options.command == "status" {
 		var report inspect.StatusReport
 		report, err = command.Status(ctx, statement, options.configPath, budget)
@@ -96,11 +99,12 @@ func printCommandError(output io.Writer, source string, err error) {
 }
 
 type commandOptions struct {
-	command    string
-	json       bool
-	statement  string
-	file       string
-	configPath string
+	command      string
+	recoverLocal bool
+	json         bool
+	statement    string
+	file         string
+	configPath   string
 }
 
 func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
@@ -119,6 +123,9 @@ func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 	flags.StringVar(&options.file, "f", "", "statement file; - reads stdin")
 	flags.StringVar(&options.configPath, "config", "", "TOML configuration")
 	flags.StringVar(&options.configPath, "c", "", "TOML configuration")
+	if options.command == "run" {
+		flags.BoolVar(&options.recoverLocal, "recover-local", false, "publish this disk after a committed replacement capture owner")
+	}
 	if options.command != "run" {
 		flags.BoolVar(&options.json, "json", false, "print JSON")
 	}

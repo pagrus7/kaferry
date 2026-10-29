@@ -13,6 +13,7 @@ import (
 )
 
 type Worker struct {
+	ProgressTopic           string  `toml:"progress_topic"`
 	ArchiveCaptureOpenFiles int     `toml:"archive_capture_open_files"`
 	ArchiveReplayOpenFiles  int     `toml:"archive_replay_open_files"`
 	ArchiveReplayBlocks     int     `toml:"archive_replay_blocks"`
@@ -56,7 +57,7 @@ func Defaults(home string) Config {
 		directory := filepath.Join(home, ".kaferry", "checkpoints")
 		checkpointDir = &directory
 	}
-	return Config{Connections: make(plan.Profiles), Worker: Worker{ArchiveCaptureOpenFiles: 1024, ArchiveReplayOpenFiles: 32, ArchiveReplayBlocks: 8, ArchiveBlockMaxBytes: 64 << 20, PartitionRecordCap: 5000, PartitionByteCap: 16 << 20, RecordCap: 20000, ByteCap: 128 << 20, DeliveryTimeout: "60s", ShutdownTimeout: DefaultShutdownTimeout.String(), IdleExit: "30s", TipWait: "15m", CheckpointDir: checkpointDir, ProgressInterval: "30s"}}
+	return Config{Connections: make(plan.Profiles), Worker: Worker{ProgressTopic: "kaferry-progress", ArchiveCaptureOpenFiles: 1024, ArchiveReplayOpenFiles: 32, ArchiveReplayBlocks: 8, ArchiveBlockMaxBytes: 64 << 20, PartitionRecordCap: 5000, PartitionByteCap: 16 << 20, RecordCap: 20000, ByteCap: 128 << 20, DeliveryTimeout: "60s", ShutdownTimeout: DefaultShutdownTimeout.String(), IdleExit: "30s", TipWait: "15m", CheckpointDir: checkpointDir, ProgressInterval: "30s"}}
 }
 
 func (l *Loader) Load(path string) (Config, error) {
@@ -88,6 +89,9 @@ func (l *Loader) Load(path string) (Config, error) {
 }
 
 func (w Worker) Validate() error {
+	if w.ProgressTopic == "" {
+		return fmt.Errorf("worker.progress_topic must not be empty")
+	}
 	if w.ArchiveCaptureOpenFiles <= 0 || w.ArchiveReplayOpenFiles <= 0 || w.ArchiveReplayBlocks <= 0 {
 		return fmt.Errorf("worker archive file and block budgets must be positive")
 	}

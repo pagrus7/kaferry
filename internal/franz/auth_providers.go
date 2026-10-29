@@ -29,7 +29,7 @@ func (s oauthSettings) mechanism() (sasl.Mechanism, error) {
 		if _, err := readBearerToken(s.tokenFile); err != nil {
 			return nil, invalidProperty("sasl.oauthbearer.token.file", "cannot read a nonempty bearer token")
 		}
-		return safeMechanism{Mechanism: oauth.Oauth(func(context.Context) (oauth.Auth, error) {
+		return &safeMechanism{Mechanism: oauth.Oauth(func(context.Context) (oauth.Auth, error) {
 			token, err := readBearerToken(s.tokenFile)
 			return oauth.Auth{Token: token}, err
 		})}, nil
@@ -52,7 +52,7 @@ func (s oauthSettings) mechanism() (sasl.Mechanism, error) {
 			return errors.New("oauth token endpoint redirects are unsupported")
 		}},
 	}
-	return safeMechanism{Mechanism: oauth.Oauth(provider.authenticate), cleanup: transport.CloseIdleConnections}, nil
+	return &safeMechanism{Mechanism: oauth.Oauth(provider.authenticate), cleanup: transport.CloseIdleConnections}, nil
 }
 
 type oauthCredentials struct {
@@ -98,7 +98,7 @@ func validBearerToken(token string) bool {
 }
 
 func awsMechanism(provider aws.CredentialsProvider) sasl.Mechanism {
-	return safeMechanism{Mechanism: awssasl.ManagedStreamingIAM(func(ctx context.Context) (awssasl.Auth, error) {
+	return &safeMechanism{Mechanism: awssasl.ManagedStreamingIAM(func(ctx context.Context) (awssasl.Auth, error) {
 		credentials, err := provider.Retrieve(ctx)
 		return awssasl.Auth{AccessKey: credentials.AccessKeyID, SecretKey: credentials.SecretAccessKey, SessionToken: credentials.SessionToken}, err
 	})}
@@ -138,5 +138,5 @@ func (s kerberosSettings) mechanism() (sasl.Mechanism, error) {
 		client.Destroy()
 		return nil, invalidProperty("sasl.kerberos.config", "Kerberos client configuration is incomplete")
 	}
-	return safeMechanism{Mechanism: (kerberos.Auth{Client: client, Service: s.service}).AsMechanismWithClose()}, nil
+	return &safeMechanism{Mechanism: (kerberos.Auth{Client: client, Service: s.service}).AsMechanismWithClose()}, nil
 }

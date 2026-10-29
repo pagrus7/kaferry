@@ -5,13 +5,11 @@ import (
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
-// Input owns replay and its exclusively locked checkpoint store.
 type Input interface {
 	core.Source
 	core.ProgressStore
 	DeleteCheckpoint() error
 }
-
 type Output interface {
 	core.Sink
 	Finish() error

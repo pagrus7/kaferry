@@ -10,18 +10,18 @@ SOAK_TEST_TIMEOUT ?= 1h
 ifeq ($(KAFERRY_TEST_BINARY),)
 TEST_BINARY_PREREQUISITE = build
 # A leading "load " is a GNU Make plugin directive.
-qualification load soak smoke: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/kaferry
+check qualification load soak smoke: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/kaferry
 endif
 export KAFERRY_TEST_OUTPUT
 
-.PHONY: build test check fast smoke integration fault load soak qualification fuzz benchmark metrics broker broker-down
+.PHONY: build test check fast smoke integration fault load soak qualification fuzz benchmark metrics broker broker-down transactions
 build:
 	mkdir -p bin
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags='-s -w -buildid= -X github.com/pagrus7/kaferry/internal/app.version=$(KAFERRY_VERSION) -X github.com/pagrus7/kaferry/internal/app.revision=$(KAFERRY_REVISION)' -o bin/kaferry ./cmd/kaferry
 test:
 	$(GO) test ./...
 # Only race-instrumented tests enable CGO.
-check:
+check: $(TEST_BINARY_PREREQUISITE)
 	$(GO) vet ./...
 	CGO_ENABLED=1 $(GO) test -race ./...
 fast: check
@@ -64,3 +64,6 @@ benchmark:
 metrics:
 	@rg --files cmd internal -g '*.go' -g '!**/*_test.go' | xargs wc -l
 	$(GO) run github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0 -top 10 $$(rg --files cmd internal -g '*.go' -g '!**/*_test.go')
+
+transactions:
+	KAFERRY_MARKER_FIXTURE=1 CGO_ENABLED=1 $(GO) test -count=1 -timeout=6m -race -run '^Test(CoordinatorDecidedCaptureRecoveryWithDelayedMarkers|ReplicatedCopyContinuesAcrossCoordinatorOutage)$$' $(KAFERRY_TEST_OUTPUT) ./internal/app

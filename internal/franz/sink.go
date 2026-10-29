@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"math"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,8 +31,6 @@ type Sink struct {
 	cancel         context.CancelFunc
 	records, bytes atomic.Int64
 	fatal          atomic.Pointer[core.Delivery]
-	flushing       atomic.Bool
-	flushes        sync.WaitGroup
 	stamped        int64
 	partitionCount int
 	lastMetadata   time.Time
@@ -66,7 +63,7 @@ func (s *Sink) Submit(record core.Record, token core.Token) error {
 	s.bytes.Add(size)
 	// TryProduce never waits for a full client buffer. Timeouts may have appended
 	// a record; an unsuccessful delivery leaves its source position unconfirmed.
-	s.client.TryProduce(writeCtx, r, func(_ *kgo.Record, err error) {
+	s.client.TryProduce(writeCtx, r, core.Cursor{Partition: token.Partition, Position: token.Next}, func(_ *kgo.Record, err error) {
 		cancel()
 		select {
 		case s.reports <- core.Delivery{Token: token, Err: err}:
@@ -92,22 +89,13 @@ func (s *Sink) Deliveries() <-chan core.Delivery {
 	return s.reports
 }
 func (s *Sink) Flush() error {
-	if s.flushing.CompareAndSwap(false, true) {
-		s.flushes.Add(1)
-		go func() {
-			defer s.flushes.Done()
-			defer s.flushing.Store(false)
-			ctx, cancel := context.WithTimeout(s.ctx, time.Second)
-			defer cancel()
-			_ = s.client.Flush(ctx)
-		}()
-	}
-	return nil
+	ctx, cancel := context.WithTimeout(s.ctx, s.settings.delivery)
+	defer cancel()
+	return s.client.Flush(ctx)
 }
 func (s *Sink) Close() {
 	s.cancel()
 	s.client.Close()
-	s.flushes.Wait()
 	if s.stamped > 0 {
 		s.log.Warn("records received producer timestamps", "count", s.stamped)
 	}

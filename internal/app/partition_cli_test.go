@@ -29,6 +29,7 @@ func TestPartitionCLISelectsWithoutFetchingOrCommittingExcludedPartitions(t *tes
 			// Given records on four source partitions and a source predicate selecting only 0 and 2.
 			cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(4, "input", "output"))
 			defer cluster.Close()
+			topic(t, cluster.ListenAddrs(), "kaferry-progress", 4, true)
 			client, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.RecordPartitioner(kgo.ManualPartitioner()))
 			require.NoError(t, err)
 			defer client.Close()
@@ -75,7 +76,7 @@ func TestPartitionCLISelectsWithoutFetchingOrCommittingExcludedPartitions(t *tes
 			for id := range int32(4) {
 				if id == 0 || id == 2 {
 					require.EqualValues(t, 2, saved["input"][id].At)
-					require.EqualValues(t, 2, ends["output"][id].Offset)
+					require.EqualValues(t, 3, ends["output"][id].Offset, "two records and a transaction marker")
 				} else {
 					require.EqualValues(t, -1, saved["input"][id].At)
 					require.Zero(t, ends["output"][id].Offset)
@@ -89,6 +90,7 @@ func TestFilePartitionsLimitPreservedDestinationLayoutWithoutJoiningAGroup(t *te
 	// Given archive partitions 0 and 5 but a Kafka destination with only partition 0.
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "output"))
 	defer cluster.Close()
+	topic(t, cluster.ListenAddrs(), "kaferry-progress", 4, true)
 	root := t.TempDir()
 	src, cfg := filepath.Join(root, "input"), filepath.Join(root, "worker.toml")
 	source := avro.Source{Cluster: "archive", Topic: "orders", TopicID: avro.TopicID{1}}
@@ -119,6 +121,6 @@ func TestFilePartitionsLimitPreservedDestinationLayoutWithoutJoiningAGroup(t *te
 	defer cancel()
 	ends, err := kadm.NewClient(client).ListEndOffsets(ctx, "output")
 	require.NoError(t, err)
-	require.EqualValues(t, 1, ends["output"][0].Offset)
+	require.EqualValues(t, 2, ends["output"][0].Offset, "one record and a transaction marker")
 	require.Zero(t, joins.Load(), "file replay uses its checkpoint lock, not Kafka consumer-group membership")
 }
