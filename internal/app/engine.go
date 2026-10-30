@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
-	"github.com/pagrus7/kaferry/internal/delivery"
 	"log/slog"
 	"time"
 
@@ -20,11 +18,12 @@ import (
 type Engine interface {
 	Run(context.Context, plan.Plan, config.Config, Shutdown) error
 }
-type KafkaFactory = kafkaport.Factory
+type KafkaFactory interface {
+	Open(context.Context, plan.Endpoint) (kafkaport.Connection, error)
+}
 type FileFactory interface {
-	OpenSource(context.Context, *delivery.Session, config.Worker, int) (archiveio.Input, error)
-	OpenOutput(*delivery.Session, config.Worker, delivery.Log) (archiveio.Output, error)
-	Recover(context.Context, *delivery.Session, delivery.Log, copy.StopObserver) error
+	OpenSource(plan.Plan, string, config.Worker, int) (archiveio.Input, error)
+	OpenOutput(plan.Endpoint, config.Worker) (archiveio.Output, error)
 }
 type Execution interface{ Run(context.Context) error }
 type RunnerFactory interface {
@@ -36,24 +35,20 @@ type MetricsFactory interface {
 }
 
 type runtimeEngine struct {
-	sessions func(plan.Plan, config.Worker) *delivery.Session
-	kafka    KafkaFactory
-	files    FileFactory
-	runner   RunnerFactory
-	log      *slog.Logger
-	metrics  MetricsFactory
+	kafka   KafkaFactory
+	files   FileFactory
+	runner  RunnerFactory
+	log     *slog.Logger
+	metrics MetricsFactory
 }
 
 func newEngine(kafka KafkaFactory, files FileFactory, runner RunnerFactory, logger *slog.Logger, metrics MetricsFactory) Engine {
-	return &runtimeEngine{sessions: delivery.New, kafka: kafka, files: files, runner: runner, log: logger, metrics: metrics}
+	return &runtimeEngine{kafka: kafka, files: files, runner: runner, log: logger, metrics: metrics}
 }
 
 func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config, stop Shutdown) (result error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
-	}
-	if p.RecoverLocal && (p.OneOff || p.Source.Kind != "TOPIC" || p.Destination.Kind != "ARCHIVE") {
-		return &copy.Exit{Code: 2, Err: errors.New("local recovery requires Kafka capture and the original named group")}
 	}
 	if p.OneOff {
 		p.Group = oneOffGroup()
@@ -69,10 +64,6 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 		defer closeMetrics(session, stop)
 	}
 	limits := cfg.Worker
-	session := e.sessions(p, limits)
-	engine := *e
-	engine.kafka = e.kafka.ForQuery(session)
-	e = &engine
 	stop.Stage("inspecting Kafka endpoints")
 	sourceEndpoint, err := e.inspect(ctx, p.Source, stop)
 	if err != nil {
@@ -86,11 +77,6 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 	defer func() {
 		result = copy.CleanupResult(result, "close destination connection", destinationEndpoint.close(stop))
 	}()
-	defer func() {
-		stop.Begin()
-		stop.Stage("closing output transactions")
-		result = copy.CleanupResult(result, "close output transactions", session.Close())
-	}()
 	fp, err := p.Fingerprint(sourceEndpoint.clusterID, destinationEndpoint.clusterID)
 	if err != nil {
 		return &kafkaport.Conflict{Err: err}
@@ -99,70 +85,16 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 	if err != nil {
 		return err
 	}
-	session.Identity = delivery.Identity{Group: p.Group, Fingerprint: fp, SourceCluster: sourceEndpoint.clusterID, DestinationCluster: destinationEndpoint.clusterID}
-	for _, item := range []struct {
-		endpoint inspectedEndpoint
-		target   *[16]byte
-	}{{sourceEndpoint, &session.Identity.SourceTopic}, {destinationEndpoint, &session.Identity.DestinationTopic}} {
-		if item.endpoint.connection != nil {
-			connection, ok := item.endpoint.connection.(kafkaport.DeliveryConnection)
-			if !ok {
-				return errors.New("kafka endpoint cannot provide delivery authority")
-			}
-			id, err := connection.TopicID(ctx)
-			if err != nil {
-				return err
-			}
-			*item.target = id
-		}
-	}
-	var log delivery.Log
-	authority := destinationEndpoint.connection
-	if p.Destination.Kind == "ARCHIVE" {
-		authority = sourceEndpoint.connection
-	}
-	if authority != nil {
-		if limits.ProgressTopic == p.Destination.Name || limits.ProgressTopic == p.Source.Name && (p.Destination.Kind != "TOPIC" || sourceEndpoint.clusterID == destinationEndpoint.clusterID) {
-			return errors.New("progress topic must differ from data topics")
-		}
-		var err error
-		log, err = authority.(kafkaport.DeliveryConnection).ProgressLog(ctx, session, limits.ProgressTopic)
-		if err != nil {
-			return err
-		}
-		if err = log.Ensure(ctx, nil); err != nil {
-			return err
-		}
-	}
-	if p.RecoverLocal {
-		return e.files.Recover(ctx, session, log, stop)
-	}
-	sink, err := e.openSink(ctx, p, limits, destinationEndpoint.connection, session, log)
+	input, err := e.prepareSource(ctx, p, fp, limits, sourceEndpoint.connection, partitionCount)
 	if err != nil {
 		return err
 	}
-	defer func() { stop.Begin(); stop.Stage("closing output"); sink.Close() }()
-	var input archiveio.Input
-	if p.Source.Kind == "ARCHIVE" {
-		input, err = e.files.OpenSource(ctx, session, limits, partitionCount)
-		if err != nil {
-			return err
-		}
+	if input != nil {
 		defer func() {
 			stop.Begin()
-			stop.Stage("closing archive input")
-			result = copy.CleanupResult(result, "close output transactions", session.Close())
-			result = copy.CleanupResult(result, "close archive input", input.Close())
+			stop.Stage("closing file input")
+			result = copy.CleanupResult(result, "close file input", input.Close())
 		}()
-	} else {
-		if err = sourceEndpoint.connection.CheckMembers(ctx, p.Group, session.Protocol(kafkaport.GroupProtocol(p, fp))); err != nil {
-			return err
-		}
-		saved, err := sourceEndpoint.connection.ReadProgress(ctx, p.Group, fp, p.Window, p.MaxStalenessMS)
-		if err != nil {
-			return err
-		}
-		e.log.Info("source progress inspected", "group", p.Group, "partitions_with_progress", len(saved))
 	}
 	var source copy.Source
 	var store copy.ProgressStore
@@ -180,7 +112,6 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 		defer func() {
 			stop.Begin()
 			stop.Stage("closing Kafka input")
-			result = copy.CleanupResult(result, "close output transactions", session.Close())
 			result = copy.CleanupResult(result, "close Kafka input", source.Close())
 		}()
 		store = sourceProgress
@@ -188,6 +119,15 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	sink, err := e.openSink(ctx, p, limits, destinationEndpoint.connection)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		stop.Begin()
+		stop.Stage("closing output")
+		sink.Close()
+	}()
 	runErr := e.runner.New(source, sink, store, p, limits, stop, observer).Run(ctx)
 	if finalizer, ok := sink.(interface{ Finish() error }); ok {
 		stop.Begin()
@@ -260,9 +200,24 @@ func (e *inspectedEndpoint) close(stop copy.StopObserver) error {
 	return nil
 }
 
-func (e *runtimeEngine) openSink(ctx context.Context, p plan.Plan, limits config.Worker, connection kafkaport.Connection, s *delivery.Session, log delivery.Log) (copy.Sink, error) {
+func (e *runtimeEngine) prepareSource(ctx context.Context, p plan.Plan, fp string, limits config.Worker, connection kafkaport.Connection, partitionCount int) (archiveio.Input, error) {
+	if p.Source.Kind == "ARCHIVE" {
+		return e.files.OpenSource(p, fp, limits, partitionCount)
+	}
+	if err := connection.CheckMembers(ctx, p.Group, kafkaport.GroupProtocol(p, fp)); err != nil {
+		return nil, err
+	}
+	saved, err := connection.ReadProgress(ctx, p.Group, fp, p.Window, p.MaxStalenessMS)
+	if err != nil {
+		return nil, err
+	}
+	e.log.Info("source progress inspected", "group", p.Group, "partitions_with_progress", len(saved))
+	return nil, nil
+}
+
+func (e *runtimeEngine) openSink(ctx context.Context, p plan.Plan, limits config.Worker, connection kafkaport.Connection) (copy.Sink, error) {
 	if p.Destination.Kind == "ARCHIVE" {
-		return e.files.OpenOutput(s, limits, log)
+		return e.files.OpenOutput(p.Destination, limits)
 	}
 	return connection.Sink(ctx, limits)
 }

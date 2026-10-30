@@ -11,8 +11,6 @@ import (
 	"github.com/pagrus7/kaferry/internal/sql"
 )
 
-type recoveryKey struct{}
-
 // Command plans one statement before starting its execution.
 type Command interface {
 	Run(context.Context, string, string, Shutdown) error
@@ -41,7 +39,6 @@ func (c *command) Run(ctx context.Context, statement, configPath string, stop Sh
 	if err != nil {
 		return err
 	}
-	p.RecoverLocal, _ = ctx.Value(recoveryKey{}).(bool)
 	return c.engine.Run(ctx, p, limits, stop)
 }
 

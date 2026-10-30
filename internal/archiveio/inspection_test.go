@@ -48,7 +48,7 @@ func TestInspectionRejectsChangedSavedWindowWithoutWriting(t *testing.T) {
 	path := checkpoint.Path(directory, p.Group)
 	require.NoError(t, os.WriteFile(path, encoded, 0600))
 	// When inspecting, then reject the conflicting window without changing progress or creating a lock.
-	_, err = NewInspector(core.RealClock{}).SavedSource(p, fp, limits, &state)
+	_, err = NewInspector(core.RealClock{}).Source(p, fp, limits)
 	require.ErrorContains(t, err, "stored literal time bound differs")
 	var conflict *Conflict
 	require.ErrorAs(t, err, &conflict)
@@ -75,11 +75,11 @@ func TestSavedExcludedFileIsRejectedBeforeInspectionOrReplayReads(t *testing.T) 
 	path := checkpoint.Path(directory, p.Group)
 	require.NoError(t, os.WriteFile(path, encoded, 0600))
 	// When inspecting or executing, then reject the selection before trying to open its nonexistent data file.
-	_, err = NewInspector(core.RealClock{}).SavedSource(p, fp, limits, &state)
+	_, err = NewInspector(core.RealClock{}).Source(p, fp, limits)
 	require.ErrorContains(t, err, "excluded original partition")
 	factory := NewFactory(core.RealClock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	_, err = testFactorySource(t, factory, p, fp, limits)
-	require.ErrorContains(t, err, "absent from source metadata")
+	_, err = factory.OpenSource(p, fp, limits, 0)
+	require.ErrorContains(t, err, "excluded original partition")
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Equal(t, encoded, after)
@@ -95,9 +95,8 @@ func TestInspectionRejectsRelativeDisorderOverflowWithoutWriting(t *testing.T) {
 			p := plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: filepath.Join(t.TempDir(), "output")}, Group: "g", Window: plan.WindowSpec{Upper: &plan.Expression{Now: true, AdjustmentMS: math.MaxInt64 - 807}}, MaxOutOfOrderMS: new(int64(1000))}
 			fp, err := p.Fingerprint("", "")
 			require.NoError(t, err)
-			var state *replay.State
 			if saved {
-				state = &replay.State{Version: 1, Group: p.Group, Fingerprint: fp, Window: plan.Window{Upper: new(int64(math.MaxInt64 - 807))}, Complete: true, Files: []replay.Progress{}}
+				state := replay.State{Version: 1, Group: p.Group, Fingerprint: fp, Window: plan.Window{Upper: new(int64(math.MaxInt64 - 807))}, Complete: true, Files: []replay.Progress{}}
 				encoded, err := checkpoint.Encode(state, 64<<20)
 				require.NoError(t, err)
 				require.NoError(t, os.WriteFile(checkpoint.Path(directory, p.Group), encoded, 0600))
@@ -105,22 +104,14 @@ func TestInspectionRejectsRelativeDisorderOverflowWithoutWriting(t *testing.T) {
 			before, err := os.ReadDir(directory)
 			require.NoError(t, err)
 			// When inspecting, then reject before returning a text/JSON report or changing checkpoint state.
-			if saved {
-				_, err = NewInspector(&clockMock{}).SavedSource(p, fp, limits, state)
-			} else {
-				_, err = NewInspector(&clockMock{}).Source(p, fp, limits)
-			}
+			_, err = NewInspector(&clockMock{}).Source(p, fp, limits)
 			require.ErrorContains(t, err, "overflows milliseconds")
 			after, err := os.ReadDir(directory)
 			require.NoError(t, err)
 			require.Len(t, after, len(before))
 			// Execution rejects the same resolved threshold before saving initial progress.
-			_, err = testFactorySource(t, NewFactory(&clockMock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil))), p, fp, limits)
-			if saved {
-				require.ErrorContains(t, err, "legacy replay checkpoint")
-			} else {
-				require.ErrorContains(t, err, "overflows milliseconds")
-			}
+			_, err = NewFactory(&clockMock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil))).OpenSource(p, fp, limits, 0)
+			require.ErrorContains(t, err, "overflows milliseconds")
 			if !saved {
 				_, err = os.Stat(checkpoint.Path(directory, p.Group))
 				require.True(t, os.IsNotExist(err))

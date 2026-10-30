@@ -9,10 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"errors"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"
-	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -33,7 +31,6 @@ func admin(t *testing.T) *kadm.Client {
 
 func topic(t *testing.T, a *kadm.Client, partitions int) string {
 	t.Helper()
-	ensureProgressTopic(t, a)
 	name := fmt.Sprintf("kaferry-compat-%d", time.Now().UnixNano())
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -158,51 +155,17 @@ func read(t *testing.T, client *kgo.Client) *kgo.Record {
 
 func topicRecordCount(t *testing.T, a *kadm.Client, topic string, partitions int) int64 {
 	t.Helper()
-	var count int64
-	for _, n := range topicRecordCounts(t, a, topic, partitions) {
-		count += n
-	}
-	return count
-}
-func topicRecordCounts(t *testing.T, a *kadm.Client, topic string, partitions int) map[int32]int64 {
-	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	ends, err := a.ListEndOffsets(ctx, topic)
 	require.NoError(t, err)
 	require.NoError(t, ends.Error())
 	require.Len(t, ends[topic], partitions)
-	metadata, err := a.BrokerMetadata(ctx)
-	require.NoError(t, err)
-	seeds := make([]string, 0, len(metadata.Brokers))
-	for _, broker := range metadata.Brokers {
-		seeds = append(seeds, fmt.Sprintf("%s:%d", broker.Host, broker.Port))
+	var count int64
+	for _, p := range ends[topic] {
+		count += p.Offset
 	}
-	counts := make(map[int32]int64)
-	for id, limit := range ends[topic] {
-		if limit.Offset == 0 {
-			continue
-		}
-		reader, err := kgo.NewClient(kgo.SeedBrokers(seeds...), kgo.FetchIsolationLevel(kgo.ReadCommitted()), kgo.KeepControlRecords(), kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{topic: {id: kgo.NewOffset().AtStart()}}))
-		require.NoError(t, err)
-		position := int64(0)
-		for position < limit.Offset {
-			fetch := reader.PollRecords(ctx, 1000)
-			if err := fetch.Err(); err != nil {
-				reader.Close()
-				require.NoError(t, err)
-			}
-			for _, record := range fetch.Records() {
-				position = max(position, record.Offset+1)
-				if record.Offset < limit.Offset && !record.Attrs.IsControl() {
-					counts[id]++
-				}
-			}
-			require.NoError(t, ctx.Err())
-		}
-		reader.Close()
-	}
-	return counts
+	return count
 }
 
 func deliveryReporter(ctx context.Context, results chan<- kgo.ProduceResult) func(*kgo.Record, error) {
@@ -216,20 +179,25 @@ func deliveryReporter(ctx context.Context, results chan<- kgo.ProduceResult) fun
 
 func waitTopicCount(t *testing.T, a *kadm.Client, topic string, partitions int, count int64) {
 	t.Helper()
-	require.Eventually(t, func() bool { return topicRecordCount(t, a, topic, partitions) >= count }, 20*time.Second, 20*time.Millisecond, "destination did not reach its committed record count")
-}
-
-func ensureProgressTopic(t *testing.T, a *kadm.Client) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	result, err := a.CreateTopics(ctx, 1, 1, map[string]*string{"cleanup.policy": kadm.StringPtr("compact")}, "kaferry-progress")
-	require.NoError(t, err)
-	if err = result.Error(); !errors.Is(err, kerr.TopicAlreadyExists) {
-		require.NoError(t, err)
+
+	for {
+		result, err := a.ListEndOffsets(ctx, topic)
+		total := int64(0)
+		if err == nil && len(result[topic]) == partitions {
+			for _, info := range result[topic] {
+				require.NoError(t, info.Err)
+				total += int64(info.Offset)
+			}
+			if total >= count {
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("destination did not catch up", total, count, err)
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
-	require.Eventually(t, func() bool {
-		metadata, err := a.Metadata(ctx, "kaferry-progress")
-		return err == nil && metadata.Topics["kaferry-progress"].Err == nil && len(metadata.Topics["kaferry-progress"].Partitions) >= 1
-	}, 5*time.Second, 10*time.Millisecond)
 }

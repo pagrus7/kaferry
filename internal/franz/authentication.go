@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/twmb/franz-go/pkg/sasl"
 )
@@ -61,21 +60,9 @@ func (s settings) validateAuthentication(keys []string) error {
 type safeMechanism struct {
 	sasl.Mechanism
 	cleanup func()
-	mu      sync.Mutex
-	closed  bool
 }
 
-func (m *safeMechanism) Authenticate(ctx context.Context, host string) (sasl.Session, []byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, nil, err
-	}
-	// A Kafka client can close while authentication is still running.
-	// Close takes this lock before destroying credentials used by that call.
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return nil, nil, authenticationError(m.Name(), context.Canceled)
-	}
+func (m safeMechanism) Authenticate(ctx context.Context, host string) (sasl.Session, []byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -86,13 +73,7 @@ func (m *safeMechanism) Authenticate(ctx context.Context, host string) (sasl.Ses
 	return safeSession{session, m.Name()}, first, nil
 }
 
-func (m *safeMechanism) Close() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return
-	}
-	m.closed = true
+func (m safeMechanism) Close() {
 	if closer, ok := m.Mechanism.(sasl.ClosingMechanism); ok {
 		closer.Close()
 	}

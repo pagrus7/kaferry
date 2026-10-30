@@ -148,8 +148,14 @@ func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 		}
 
 	}
-	counts := topicRecordCounts(t, a, dst, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, err := a.ListEndOffsets(ctx, dst)
+	require.NoError(t, err)
 	for partition, want := range map[int32]int64{0: 20, 1: 1} {
-		require.Equal(t, want, counts[partition], "clean restart retains original partition without recopying")
+		info, ok := result.Lookup(dst, partition)
+		require.True(t, ok, "destination partition %d", partition)
+		require.NoError(t, info.Err)
+		require.Equal(t, want, info.Offset, "clean restart retains original partition without recopying")
 	}
 }

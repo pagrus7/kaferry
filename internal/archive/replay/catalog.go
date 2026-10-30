@@ -71,13 +71,9 @@ func (c *Catalog) Select(filter *plan.PartitionFilter) (Selection, error) {
 	return c.selectFiles(true, filter)
 }
 
-// Preview supplies a snapshot that checks headers and sizes without hashing contents.
-func (c *Catalog) Preview() Snapshot { return preview{c} }
-
-type preview struct{ catalog *Catalog }
-
-func (p preview) Select(filter *plan.PartitionFilter) (Selection, error) {
-	return p.catalog.selectFiles(false, filter)
+// Inspect describes headers without hashing file contents or validating data blocks.
+func (c *Catalog) Inspect(filter *plan.PartitionFilter) (Selection, error) {
+	return c.selectFiles(false, filter)
 }
 
 func (c *Catalog) selectFiles(hashContents bool, filter *plan.PartitionFilter) (selection Selection, result error) {
@@ -254,9 +250,11 @@ func compareSource(a, b avro.Source) int {
 	return cmp.Compare(a.Partition, b.Partition)
 }
 
-func (p preview) Validate(files []File) error {
+// ValidateHeaders checks identities and lengths for a read-only preview, without
+// rereading payload bytes. Execution still validates full contents before replay.
+func (c *Catalog) ValidateHeaders(files []File) error {
 	for _, file := range files {
-		h, err := p.catalog.Open(file)
+		h, err := c.Open(file)
 		if err != nil {
 			return fmt.Errorf("inspect archive file %s: %w", file.name(), err)
 		}

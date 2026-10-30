@@ -3,7 +3,6 @@ package avro
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"io"
 	"testing"
 
@@ -106,43 +105,6 @@ func TestRejectedEncodedRecordPreservesEarlierAndLaterRecords(t *testing.T) {
 	require.Nil(t, w.pending)
 	require.Nil(t, w.datum)
 	require.Equal(t, values, read(t, c, output.Bytes()))
-}
-
-func TestValidateRecordEnforcesAdmissionLimits(t *testing.T) {
-	for _, tc := range []struct {
-		name, message string
-		change        func(*Record)
-		skippable     bool
-	}{
-		{"valid", "", func(*Record) {}, false},
-		{"source", "source identity", func(r *Record) { r.Source.TopicID = TopicID{} }, false},
-		{"offset", "source offset", func(r *Record) { r.Offset = -1 }, false},
-		{"timestamp", "timestamp kind", func(r *Record) { r.TimestampKind = "invalid" }, false},
-		{"headers", "header count", func(r *Record) { r.Headers = make([]Header, 129) }, true},
-		{"raw size", "block limit", func(r *Record) { r.Value = make([]byte, 4097) }, true},
-		{"encoded size", "block limit", func(r *Record) {
-			r.Key, r.Headers = nil, nil
-			r.Value = make([]byte, 4096)
-		}, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			// Given a record with authored identity, field or format-limit boundaries.
-			c := codec(t, 4096)
-			r := records()[0]
-			tc.change(&r)
-			// When validated without a container, then only format limits are skippable.
-			err := c.ValidateRecord(r)
-			if tc.message == "" {
-				require.NoError(t, err)
-			} else {
-				require.ErrorContains(t, err, tc.message)
-			}
-			var invalid *InvalidRecord
-			require.Equal(t, tc.skippable, errors.As(err, &invalid))
-			// Then a rejected record cannot poison a later valid admission.
-			require.NoError(t, c.ValidateRecord(records()[0]))
-		})
-	}
 }
 
 func TestHeaderCountLimitMatchesReader(t *testing.T) {

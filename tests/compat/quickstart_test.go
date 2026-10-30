@@ -96,7 +96,7 @@ func TestKafkaQuickStart(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, ends.Error())
 	require.EqualValues(t, 3, ends["orders"][0].Offset)
-	require.EqualValues(t, 3, topicRecordCount(t, admin, "orders-copy", 1), "the rerun must not append duplicate records")
+	require.EqualValues(t, 3, ends["orders-copy"][0].Offset, "the rerun must not append duplicate records")
 	assign(t, client, "orders-copy", 1)
 	for _, expected := range []string{"order-1", "order-2", "order-3"} {
 		require.Equal(t, expected, string(read(t, client).Value))

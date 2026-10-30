@@ -34,16 +34,15 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Kafka positioning | [kafkaport](../internal/kafkaport) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetLookupFactory, OffsetLookup; raw offset/time ports and client conversions in franz |
 | Kafka input | [franz](../internal/franz) | Hand off callbacks/fetches to the core loop; position, pause and prove gaps | ConsumerClient, sourceMetadata, gapReader, rebalanceBridge, PartitionValidator |
 | Kafka output | [franz](../internal/franz) | Validate records, bound admission and report asynchronous deliveries | ProducerClient, destinationMetadata, Clock |
-| Kafka commits | [franz](../internal/franz) | Verify source membership; commit destination output with authoritative cursors after fencing | offsetCommitter, delivery.Session, copy.ProgressStore |
-| Delivery authority | [delivery](../internal/delivery) | Bind identity and confirmed cursors to independently owned partition commits | Backend, Partition, Log, Transaction; Kafka and filesystem clients stay in adapters |
+| Kafka commits | [franz](../internal/franz) | Save positions and eligible stops; reject commits without a group member ID and generation | offsetCommitter, copy.ProgressStore |
 | Observability | [observability](../internal/observability) | Export immutable copy snapshots and actual save results through OTLP/HTTP; bound cleanup and redact diagnostics | `copy.Observer`, per-query Session/Factory, environment/file ports; SDK stays in adapter |
 | Shutdown budget | [app/shutdown.go](../internal/app/shutdown.go) | Enforce whole-process stop deadline; identify the blocked operation | StopObserver, Shutdown; CLI alone owns termination |
 | Archive adapters | [archiveio](../internal/archiveio) | Convert full provenance, batch confirmations, save replay stops and publish final files | Input, Output, Capture, Replay; format libraries stay outside copy |
 | Avro codec | [archive/avro](../internal/archive/avro) | Preserve raw records and source identity in bounded compressed blocks | Standard I/O ports; fixed schema and independent Avro interoperability tests |
 | Archive capture | [archive/capture](../internal/archive/capture) | Route records and rotate by size, age, rewind and file budget | Segments, Clock; no Kafka or copy-loop state |
 | Archive storage | [archive/capture](../internal/archive/capture) | Lock writer namespaces, save durable boundaries, publish and recover files | Filesystem/DataFile, StateStore; Journal uses AtomicWriter for synced replacement |
-| Archive replay | [archive/replay](../internal/archive/replay) | Pin completed inputs, merge source offsets and save confirmed physical cursors | Snapshot, Blocks, Checkpoints; Query shares saved-selection and window checks with inspection; Catalog.Preview checks headers and sizes |
-| Checkpoint encoding | [checkpoint](../internal/checkpoint) | Read bounded regular files, derive safe group filenames, encode canonical JSON with checksums and replace files durably | File, AtomicWriter, private filesystem port; callers open files and validate their state |
+| Archive replay | [archive/replay](../internal/archive/replay) | Pin completed inputs, merge source offsets and save confirmed physical cursors | Snapshot, Blocks, Checkpoints; bounded Pool and read-only Catalog |
+| Checkpoint encoding | [checkpoint](../internal/checkpoint) | Derive safe group filenames, encode bounded canonical JSON with checksums and replace files durably | AtomicWriter, private filesystem port; owners validate their state |
 | CLI | [cmd](../cmd/kaferry), [app](../internal/app) | Parse flags, compose components and handle signals | Command/Engine; Fx at composition only |
 
 ## Ownership
@@ -54,7 +53,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 - Runner mutates progress in one event loop. Late outcomes from an old assignment cannot advance current progress.
 - Sources provide owned record buffers; sinks retain them until the corresponding write outcome.
 - Source cursors are distinct from record provenance. Preserved Kafka routing uses provenance; archive replay cursors use one virtual partition. The engine checks layouts before progress saves; Kafka assignments recheck through `PartitionValidator`. Replay validates its fixed selection before its initial checkpoint. Progress persists confirmed next positions and identity metadata.
-- Output preparation precedes confirmation of progress. Kafka output commits records and the authoritative cursor in one destination transaction; capture commits synced file boundaries with the cursor. No component saves past unresolved work. [Delivery contract](delivery.md).
+- Output confirmation precedes progress persistence: Kafka delivery or file fsync. No component saves past unresolved work.
 
 ## Conventions
 
@@ -76,7 +75,6 @@ Run from the repository root. [Makefile](../Makefile) defines these targets; Kaf
 | --- | --- | --- |
 | `make check` | Vet and race-enabled unit/mock/component tests, kfake and shutdown subprocesses; no broker | Every PR/main; all release platforms |
 | `make fast` | Local fast checks: formatting, check, script/docs checks, build/licenses and file-copy smoke | Optional before push; CI runs these entrypoints |
-| `make transactions` | Real three-broker coordinator failover, commit/abort marker delays, takeover and disk recovery; Docker required | Every PR/main |
 | `make broker` | Start disposable source/destination Kafka clusters | Fixture setup |
 | `make integration` | Broker/CLI paths, fidelity, resume and rebalances; start brokers first | Every PR/main; release |
 | `make fault` | Outages and ownership loss; start brokers first | Code PRs, nightly, weekly, release |

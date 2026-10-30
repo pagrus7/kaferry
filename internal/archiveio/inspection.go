@@ -21,13 +21,7 @@ type Inspector struct {
 func NewInspector(clock core.Clock) *Inspector {
 	return &Inspector{clock: clock}
 }
-func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (SourceInspection, error) {
-	return i.source(p, fp, w, nil, false)
-}
-func (i *Inspector) SavedSource(p plan.Plan, fp string, w config.Worker, saved *replay.State) (SourceInspection, error) {
-	return i.source(p, fp, w, saved, true)
-}
-func (i *Inspector) source(p plan.Plan, fp string, w config.Worker, saved *replay.State, authority bool) (result SourceInspection, err error) {
+func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result SourceInspection, err error) {
 	directory, err := checkpointDirectory(w)
 	if err != nil {
 		return result, err
@@ -36,14 +30,10 @@ func (i *Inspector) source(p plan.Plan, fp string, w config.Worker, saved *repla
 		return result, err
 	}
 	result.Exists = true
+	var saved *replay.State
 	if !p.OneOff {
 		result.CheckpointPath = checkpoint.Path(directory, p.Group)
-		if !authority {
-			saved, err = replay.ReadCheckpoint(directory, p.Group, replay.NativeGroupFiles{})
-			if err == nil && saved != nil {
-				err = errors.New("replay checkpoint lacks delivery authority")
-			}
-		}
+		saved, err = replay.ReadCheckpoint(directory, p.Group, replay.NativeGroupFiles{})
 		if err != nil {
 			return result, &Conflict{Err: err}
 		}
@@ -52,11 +42,13 @@ func (i *Inspector) source(p plan.Plan, fp string, w config.Worker, saved *repla
 	if err != nil {
 		return result, err
 	}
-	inputs := replay.NewCatalog(p.Source.Name, codec, replay.NativeFiles{}).Preview()
-	query := replayQuery(p, fp, 0)
+	catalog := replay.NewCatalog(p.Source.Name, codec, replay.NativeFiles{})
 	var files []replay.File
 	if saved != nil {
-		if err = query.CheckSaved(*saved, inputs); err != nil {
+		if saved.Fingerprint != fp {
+			return result, &Conflict{Err: errors.New("replay checkpoint query identity mismatch")}
+		}
+		if err = p.ValidateWindow(saved.Window); err != nil {
 			return result, &Conflict{Err: err}
 		}
 		result.Saved = true
@@ -64,10 +56,18 @@ func (i *Inspector) source(p plan.Plan, fp string, w config.Worker, saved *repla
 		result.Window = saved.Window
 		result.Stop = saved.Stop
 		for _, f := range saved.Files {
+			if !p.Partitions.Matches(f.File.Identity.Source.Partition) {
+				return result, &Conflict{Err: errors.New("replay selection contains an excluded original partition")}
+			}
 			files = append(files, f.File)
 		}
+		if !saved.Complete {
+			if err = catalog.ValidateHeaders(files); err != nil {
+				return result, &Conflict{Err: err}
+			}
+		}
 	} else {
-		selection, err := inputs.Select(p.Partitions)
+		selection, err := catalog.Inspect(p.Partitions)
 		if err != nil {
 			if errors.Is(err, plan.ErrMissingPartition) {
 				return result, &core.Exit{Code: 2, Err: err}
@@ -78,10 +78,13 @@ func (i *Inspector) source(p plan.Plan, fp string, w config.Worker, saved *repla
 		if selection.PrivateFiles > 0 {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("Snapshot excludes %d unfinished files.", selection.PrivateFiles))
 		}
-		result.Window, err = query.NewWindow(i.clock.Now())
+		result.Window, err = p.Window.Resolve(i.clock.Now())
 		if err != nil {
 			return result, &Conflict{Err: err}
 		}
+	}
+	if err = p.ValidateWindow(result.Window); err != nil {
+		return result, &Conflict{Err: err}
 	}
 	result.FileCount = len(files)
 	seen := map[int32]bool{}

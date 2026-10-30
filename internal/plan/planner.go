@@ -58,7 +58,6 @@ type Policies struct {
 }
 
 type Plan struct {
-	RecoverLocal           bool `json:"-"`
 	Source                 Endpoint
 	Destination            Endpoint
 	Group                  string

@@ -2,10 +2,12 @@ package franz
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kfake"
@@ -33,7 +35,16 @@ func TestProducerBoundaryRefusesOversizeBeforeAsyncSubmission(t *testing.T) {
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"))
 	defer cluster.Close()
 	p := testPlan(t, map[string]string{"bootstrap.servers": strings.Join(cluster.ListenAddrs(), ","), "message.max.bytes": "1000"})
-	_, sink, _ := componentOutput(t, cluster, p)
+	factory := componentFactory()
+	connection, err := factory.Open(t.Context(), p.Destination)
+	require.NoError(t, err)
+	defer connection.Close(context.Background())
+	if _, err = connection.ClusterID(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	sink, err := connection.Sink(t.Context(), config.Defaults("").Worker)
+	require.NoError(t, err)
+	defer sink.Close()
 	for _, tc := range []struct {
 		length   int
 		rejected bool
@@ -48,7 +59,6 @@ func TestProducerBoundaryRefusesOversizeBeforeAsyncSubmission(t *testing.T) {
 			require.Equal(t, "validation", rejected.Class)
 		} else {
 			require.NoError(t, err)
-			require.NoError(t, sink.Flush())
 			select {
 			case result := <-sink.Deliveries():
 				require.NoError(t, result.Err, "preflight allowed an async size failure")

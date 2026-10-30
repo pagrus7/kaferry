@@ -39,7 +39,7 @@ func TestContainerShutdownAndResume(t *testing.T) {
 		})
 		waitMembers(t, a, group, 1, 1, nil)
 		publish(t, producer, &kgo.Record{Topic: src, Value: []byte(fmt.Sprintf("round-%d", round)), Timestamp: time.Now()})
-		waitTopicCount(t, a, dst, 1, int64(round+1))
+		waitEnd(t, a, dst, int64(round+1))
 		// When Docker sends SIGTERM and waits for the process to stop.
 		stop := exec.Command("docker", "stop", "--time", "35", name)
 		data, err := stop.CombinedOutput()

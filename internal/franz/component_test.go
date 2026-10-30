@@ -12,7 +12,6 @@ import (
 	"github.com/pagrus7/kaferry/internal/commitmeta"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/delivery"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/stretchr/testify/require"
@@ -24,10 +23,7 @@ import (
 )
 
 func componentFactory() *Factory {
-	f := NewFactory(commitmeta.NewCodec(), NewClients(), kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory()), core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory())
-	f.session = delivery.New(plan.Plan{Source: plan.Endpoint{Kind: "TOPIC"}}, config.Defaults("").Worker)
-	f.session.Backend = &memoryAuthority{}
-	return f
+	return NewFactory(commitmeta.NewCodec(), NewClients(), kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory()), core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory())
 }
 func componentPlan(t *testing.T, cluster *kfake.Cluster) plan.Plan {
 	return testPlan(t, map[string]string{"bootstrap.servers": strings.Join(cluster.ListenAddrs(), ",")})
@@ -89,7 +85,7 @@ func TestConsumerConstructionDoesNotJoinBeforeStartAndCanClose(t *testing.T) {
 		t.Fatal("unsafe consumer defaults")
 	}
 	balancers := client.OptValue(kgo.Balancers).([]kgo.GroupBalancer)
-	if len(balancers) != 1 || balancers[0].ProtocolName() != factory.session.Protocol("cooperative-sticky") {
+	if len(balancers) != 1 || balancers[0].ProtocolName() != "cooperative-sticky" {
 		t.Fatal("unexpected group balancer", balancers)
 	}
 	// When output setup fails and cleanup runs before Start, then no group join or pump is needed.
@@ -171,8 +167,6 @@ func TestProductionAdaptersPreserveRawRecordsAndZeroNegativeTimestamps(t *testin
 		t.Fatal(err)
 	}
 	limits := config.Defaults("").Worker
-	require.NoError(t, configureComponentOutput(t.Context(), factory, p, sourceConnection, destination))
-	defer factory.session.Close()
 	source, store, err := sourceConnection.Source(t.Context(), p, "fp", limits, nil)
 	require.NoError(t, err)
 	defer source.Close()
@@ -210,21 +204,23 @@ func TestKafkaSinkPreservesPartitionsUsingTheRealProducer(t *testing.T) {
 	defer cluster.Close()
 	p := componentPlan(t, cluster)
 	p.Destination.Partitioning = plan.Preserve
-	connection, output, session := componentOutput(t, cluster, p)
+	connection, err := componentFactory().Open(t.Context(), p.Destination)
+	require.NoError(t, err)
+	defer connection.Close(context.Background())
 	require.NoError(t, connection.ValidatePartitions(t.Context(), []int32{0, 2}))
 	require.ErrorContains(t, connection.ValidatePartitions(t.Context(), []int32{3}), "original partition 3")
-	actual := output.(*Sink).client.(*kafkaOutput).partitions[0].tx.client.OptValue(kgo.RecordPartitioner).(kgo.Partitioner).ForTopic("output")
+	output, err := connection.Sink(t.Context(), config.Defaults("").Worker)
+	require.NoError(t, err)
+	defer output.Close()
+	actual := output.(*Sink).client.(*kgo.Client).OptValue(kgo.RecordPartitioner).(kgo.Partitioner).ForTopic("output")
 	require.True(t, actual.RequiresConsistency(&kgo.Record{}), "leaderless partitions must not renumber the layout")
 	// When submitting null, empty and binary keys, then all retain the original partition 2.
 	for _, key := range [][]byte{nil, {}, {0, 255}} {
 		require.NoError(t, output.Submit(core.Record{Source: &core.Provenance{Partition: 2}, Key: key}, core.Token{Partition: 0}))
-		require.NoError(t, output.Flush())
 		require.NoError(t, receiveDelivery(t, output).Err)
 	}
-	require.NoError(t, session.Commit(t.Context(), core.Cursor{Partition: 0}, "fixture"))
 	// When the layout changes after preflight, then the manual partitioner fails rather than remapping.
 	require.NoError(t, output.Submit(core.Record{Source: &core.Provenance{Partition: 8}}, core.Token{}))
-	require.Error(t, output.Flush())
 	require.Error(t, receiveDelivery(t, output).Err)
 	consumer := componentClient(t, cluster, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"output": {2: kgo.NewOffset().AtStart()}}))
 	for _, key := range [][]byte{nil, {}, {0, 255}} {
@@ -243,18 +239,21 @@ func TestExplicitKeyRoutingMatchesKafkaHashVectors(t *testing.T) {
 	defer cluster.Close()
 	p := componentPlan(t, cluster)
 	p.Destination.Partitioning = plan.Key
-	_, output, session := componentOutput(t, cluster, p)
+	connection, err := componentFactory().Open(t.Context(), p.Destination)
+	require.NoError(t, err)
+	defer connection.Close(context.Background())
+	output, err := connection.Sink(t.Context(), config.Defaults("").Worker)
+	require.NoError(t, err)
+	defer output.Close()
 	// Expected values use Kafka UtilsTest.testMurmur2 hashes, masked positive then modulo 5.
 	expected := map[string]int32{"21": 0, "foobar": 1, "abc": 2}
 	for range 2 {
 		for _, key := range []string{"21", "foobar", "abc"} {
 			// When source partition 4 differs from every expected destination, then KEY ignores that source placement.
 			require.NoError(t, output.Submit(core.Record{Source: &core.Provenance{Partition: 4}, Key: []byte(key)}, core.Token{}))
-			require.NoError(t, output.Flush())
 			require.NoError(t, receiveDelivery(t, output).Err)
 		}
 	}
-	require.NoError(t, session.Commit(t.Context(), core.Cursor{Partition: 0}, "fixture"))
 	reader := componentClient(t, cluster, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"output": {0: kgo.NewOffset().AtStart(), 1: kgo.NewOffset().AtStart(), 2: kgo.NewOffset().AtStart()}}))
 	ctx := componentContext(t)
 	seen := map[string]int{}

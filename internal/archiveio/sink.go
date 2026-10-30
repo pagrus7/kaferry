@@ -8,7 +8,7 @@ import (
 )
 
 type Capture interface {
-	Append(avro.Record, core.Cursor) error
+	Append(avro.Record) error
 	Flush() error
 	Finish() error
 	Close() error
@@ -33,7 +33,7 @@ func (s *Sink) Submit(record core.Record, token core.Token) error {
 	if err != nil {
 		return err
 	}
-	if err = s.capture.Append(r, core.Cursor{Partition: token.Partition, Position: token.Next}); err != nil {
+	if err = s.capture.Append(r); err != nil {
 		var invalid *avro.InvalidRecord
 		if errors.As(err, &invalid) {
 			return &core.RecordError{Class: "validation", Err: err}

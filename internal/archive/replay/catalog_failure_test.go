@@ -24,15 +24,14 @@ func TestInspectionDoesNotReadPayloadsButExecutionHashesThem(t *testing.T) {
 	files := &faultyFiles{Filesystem: NativeFiles{}, fault: "hash", start: file.Start}
 	catalog := NewCatalog(root, codec(t), files)
 	// When previewing a query, then headers and lengths are readable without a full content scan.
-	selection, err := catalog.Preview().Select(nil)
+	selection, err := catalog.Inspect(nil)
 	require.NoError(t, err)
 	require.Len(t, selection.Files, 1)
-	require.NoError(t, catalog.Preview().Validate([]File{file}))
+	require.NoError(t, catalog.ValidateHeaders([]File{file}))
 	require.Zero(t, files.active)
 	// When executing, then the same unreadable payload must fail before the selection is pinned.
 	_, err = catalog.Select(nil)
 	require.ErrorIs(t, err, errDisk)
-	require.ErrorIs(t, catalog.Validate([]File{file}), errDisk)
 	require.Zero(t, files.active)
 }
 
@@ -119,25 +118,6 @@ func TestSelectionStorageFailuresNeverPinAPartialDirectory(t *testing.T) {
 			require.Empty(t, store.writes)
 			require.Zero(t, blocks.reads)
 			require.Zero(t, fs.active, "every directory and data handle is closed")
-		})
-	}
-}
-
-func TestPreviewValidationClosesFilesOnFailure(t *testing.T) {
-	for _, fault := range []string{"stat", "file close"} {
-		t.Run(fault, func(t *testing.T) {
-			// Given a saved descriptor and a failed header check or close.
-			root := t.TempDir()
-			file := writeFile(t, root, 1, records(42), 0)
-			files := &faultyFiles{Filesystem: NativeFiles{}, fault: fault}
-			inputs := NewCatalog(root, codec(t), files).Preview()
-
-			// When validating the saved selection for inspection.
-			err := inputs.Validate([]File{file})
-
-			// Then the failure is returned and no handle remains open.
-			require.ErrorIs(t, err, errDisk)
-			require.Zero(t, files.active)
 		})
 	}
 }

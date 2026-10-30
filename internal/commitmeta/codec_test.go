@@ -17,9 +17,9 @@ func TestCodecContract(t *testing.T) {
 		progress Progress
 		golden   string
 	}{
-		{"minimal", Progress{Fingerprint: "fp", TopicID: "/////////////////////w"}, `kaferry:4;{"fp":"fp","tid":"/////////////////////w"}`},
-		{"worker stop", Progress{Fingerprint: "fp", TopicID: "id", Stop: &core.Stop{Reason: "worker_record_cap", At: 42}}, `kaferry:4;{"fp":"fp","tid":"id","stop":{"reason":"worker_record_cap","at":42}}`},
-		{"full", Progress{Fingerprint: "fp", TopicID: "id", Window: &plan.Window{Lower: &zero, Upper: &upper}, Stop: &core.Stop{Reason: "tip", At: 0}}, `kaferry:4;{"fp":"fp","tid":"id","win":{"lower":0,"upper":9223372036854775807},"stop":{"reason":"tip","at":0}}`},
+		{"minimal", Progress{Fingerprint: "fp", TopicID: "/////////////////////w"}, `kaferry:2;{"fp":"fp","tid":"/////////////////////w"}`},
+		{"worker stop", Progress{Fingerprint: "fp", TopicID: "id", Stop: &core.Stop{Reason: "worker_record_cap", At: 42}}, `kaferry:2;{"fp":"fp","tid":"id","stop":{"reason":"worker_record_cap","at":42}}`},
+		{"full", Progress{Fingerprint: "fp", TopicID: "id", Window: &plan.Window{Lower: &zero, Upper: &upper}, Stop: &core.Stop{Reason: "tip", At: 0}}, `kaferry:2;{"fp":"fp","tid":"id","win":{"lower":0,"upper":9223372036854775807},"stop":{"reason":"tip","at":0}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given logical progress independent of serialized field names.
@@ -38,7 +38,7 @@ func TestCodecContract(t *testing.T) {
 
 func TestCodecAcceptsJSONWhitespaceAndFieldOrder(t *testing.T) {
 	// Given valid JSON with reordered fields and a negative millisecond bound.
-	text := `kaferry:4; {"tid":"id", "win":{"upper":null,"lower":-9223372036854775808}, "fp":"fp"} `
+	text := `kaferry:2; {"tid":"id", "win":{"upper":null,"lower":-9223372036854775808}, "fp":"fp"} `
 	// When decoding without requiring canonical JSON bytes.
 	p, err := NewCodec().Decode(text)
 	// Then integer milliseconds remain exact and absence stays absent.
@@ -53,32 +53,32 @@ func TestCodecAcceptsJSONWhitespaceAndFieldOrder(t *testing.T) {
 func TestCodecRejectsMalformedOrUnsupportedData(t *testing.T) {
 	for _, tc := range []struct{ name, text, kind string }{
 		{"foreign", "other;{}", "foreign"},
-		{"version", "kaferry:99;opaque", "unsupported version of"},
+		{"version", "kaferry:4;opaque", "unsupported version of"},
 		{"previous version", `kaferry:1;{"fp":"fp","tid":"id"}`, "unsupported version of"},
 		{"missing version", "kaferry:;{}", "unsupported version of"},
 		{"oversize", strings.Repeat("x", MaxBytes+1), "oversized"},
-		{"missing identity", `kaferry:4;{}`, "invalid"},
-		{"null root", `kaferry:4;null`, "invalid"},
-		{"array root", `kaferry:4;[]`, "invalid"},
-		{"broken JSON", `kaferry:4;{"fp":`, "invalid"},
-		{"trailing value", `kaferry:4;{"fp":"fp","tid":"id"} {}`, "invalid"},
-		{"duplicate field", `kaferry:4;{"fp":"fp","fp":"other","tid":"id"}`, "invalid"},
-		{"Unicode stop name", `kaferry:4;{"fp":"fp","tid":"id","ſtop":{"reason":"tip","at":0,"at":9}}`, "invalid"},
-		{"Unicode reason name", `kaferry:4;{"fp":"fp","tid":"id","stop":{"reaſon":"tip","at":0}}`, "invalid"},
-		{"duplicate window", `kaferry:4;{"fp":"fp","tid":"id","win":{"lower":null,"upper":1},"win":{"lower":0,"upper":1}}`, "invalid"},
-		{"case variant", `kaferry:4;{"FP":"fp","tid":"id"}`, "invalid"},
-		{"removed file fields", `kaferry:4;{"fp":"fp","tid":"id","fid":"file","extent":128}`, "invalid"},
-		{"unknown field", `kaferry:4;{"fp":"fp","tid":"id","future":1}`, "invalid"},
-		{"unknown nested field", `kaferry:4;{"fp":"fp","tid":"id","win":{"lower":0,"extra":1}}`, "invalid"},
-		{"duplicate nested field", `kaferry:4;{"fp":"fp","tid":"id","stop":{"reason":"tip","at":0,"at":1}}`, "invalid"},
-		{"null window", `kaferry:4;{"fp":"fp","tid":"id","win":null}`, "invalid"},
-		{"reversed window", `kaferry:4;{"fp":"fp","tid":"id","win":{"lower":1,"upper":0}}`, "invalid"},
-		{"fractional bound", `kaferry:4;{"fp":"fp","tid":"id","win":{"lower":1.5}}`, "invalid"},
-		{"overflow", `kaferry:4;{"fp":"fp","tid":"id","win":{"upper":9223372036854775808}}`, "invalid"},
-		{"unknown reason", `kaferry:4;{"fp":"fp","tid":"id","stop":{"reason":"eof","at":0}}`, "invalid"},
-		{"missing stop position", `kaferry:4;{"fp":"fp","tid":"id","stop":{"reason":"tip"}}`, "invalid"},
-		{"negative stop position", `kaferry:4;{"fp":"fp","tid":"id","stop":{"reason":"tip","at":-1}}`, "invalid"},
-		{"invalid UTF8", "kaferry:4;{\"fp\":\"\xff\",\"tid\":\"id\"}", "invalid"},
+		{"missing identity", `kaferry:2;{}`, "invalid"},
+		{"null root", `kaferry:2;null`, "invalid"},
+		{"array root", `kaferry:2;[]`, "invalid"},
+		{"broken JSON", `kaferry:2;{"fp":`, "invalid"},
+		{"trailing value", `kaferry:2;{"fp":"fp","tid":"id"} {}`, "invalid"},
+		{"duplicate field", `kaferry:2;{"fp":"fp","fp":"other","tid":"id"}`, "invalid"},
+		{"Unicode stop name", `kaferry:2;{"fp":"fp","tid":"id","ſtop":{"reason":"tip","at":0,"at":9}}`, "invalid"},
+		{"Unicode reason name", `kaferry:2;{"fp":"fp","tid":"id","stop":{"reaſon":"tip","at":0}}`, "invalid"},
+		{"duplicate window", `kaferry:2;{"fp":"fp","tid":"id","win":{"lower":null,"upper":1},"win":{"lower":0,"upper":1}}`, "invalid"},
+		{"case variant", `kaferry:2;{"FP":"fp","tid":"id"}`, "invalid"},
+		{"removed file fields", `kaferry:2;{"fp":"fp","tid":"id","fid":"file","extent":128}`, "invalid"},
+		{"unknown field", `kaferry:2;{"fp":"fp","tid":"id","future":1}`, "invalid"},
+		{"unknown nested field", `kaferry:2;{"fp":"fp","tid":"id","win":{"lower":0,"extra":1}}`, "invalid"},
+		{"duplicate nested field", `kaferry:2;{"fp":"fp","tid":"id","stop":{"reason":"tip","at":0,"at":1}}`, "invalid"},
+		{"null window", `kaferry:2;{"fp":"fp","tid":"id","win":null}`, "invalid"},
+		{"reversed window", `kaferry:2;{"fp":"fp","tid":"id","win":{"lower":1,"upper":0}}`, "invalid"},
+		{"fractional bound", `kaferry:2;{"fp":"fp","tid":"id","win":{"lower":1.5}}`, "invalid"},
+		{"overflow", `kaferry:2;{"fp":"fp","tid":"id","win":{"upper":9223372036854775808}}`, "invalid"},
+		{"unknown reason", `kaferry:2;{"fp":"fp","tid":"id","stop":{"reason":"eof","at":0}}`, "invalid"},
+		{"missing stop position", `kaferry:2;{"fp":"fp","tid":"id","stop":{"reason":"tip"}}`, "invalid"},
+		{"negative stop position", `kaferry:2;{"fp":"fp","tid":"id","stop":{"reason":"tip","at":-1}}`, "invalid"},
+		{"invalid UTF8", "kaferry:2;{\"fp\":\"\xff\",\"tid\":\"id\"}", "invalid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given untrusted broker metadata.
@@ -119,21 +119,21 @@ func TestCodecValidatesWritesAndSizeLimit(t *testing.T) {
 func TestCapturedEndWireContract(t *testing.T) {
 	// Given a captured empty end, distinct from no captured end.
 	p := Progress{Fingerprint: "fp", TopicID: "id", End: new(int64(0))}
-	// When saving and restoring it, then the current version preserves the boundary exactly.
+	// When saving and restoring it, then version 3 preserves the boundary exactly.
 	text, err := NewCodec().Encode(p)
 	require.NoError(t, err)
-	require.Equal(t, `kaferry:4;{"fp":"fp","tid":"id","end":0}`, text)
+	require.Equal(t, `kaferry:3;{"fp":"fp","tid":"id","end":0}`, text)
 	got, err := NewCodec().Decode(text)
 	require.NoError(t, err)
 	require.Equal(t, p, got)
 	for _, text := range []string{
-		`kaferry:2;{"fp":"fp","tid":"id"}`,
-		`kaferry:3;{"fp":"fp","tid":"id","end":0}`,
-		`kaferry:4;{"fp":"fp","tid":"id","end":null}`,
-		`kaferry:4;{"fp":"fp","tid":"id","end":-1}`,
-		`kaferry:4;{"fp":"fp","tid":"id","end":1,"end":2}`,
-		`kaferry:4;{"fp":"fp","tid":"id","end":1,"stop":{"reason":"tip","at":2}}`,
-		`kaferry:4;{"fp":"fp","tid":"id","end":1,"stop":{"reason":"tip","at":0}}`,
+		`kaferry:2;{"fp":"fp","tid":"id","end":0}`,
+		`kaferry:3;{"fp":"fp","tid":"id"}`,
+		`kaferry:3;{"fp":"fp","tid":"id","end":null}`,
+		`kaferry:3;{"fp":"fp","tid":"id","end":-1}`,
+		`kaferry:3;{"fp":"fp","tid":"id","end":1,"end":2}`,
+		`kaferry:3;{"fp":"fp","tid":"id","end":1,"stop":{"reason":"tip","at":2}}`,
+		`kaferry:3;{"fp":"fp","tid":"id","end":1,"stop":{"reason":"tip","at":0}}`,
 	} {
 		// Given malformed boundaries, when decoding, then reject without accepting a different range.
 		_, err := NewCodec().Decode(text)

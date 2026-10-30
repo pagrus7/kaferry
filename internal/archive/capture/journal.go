@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
@@ -54,9 +55,20 @@ func (j *Journal) Load(path string) (state State, result error) {
 	if err != nil {
 		return State{}, err
 	}
-	data, err := checkpoint.Read(f, maxStateBytes)
+	defer func() { result = errors.Join(result, f.Close()) }()
+	info, err := f.Stat()
 	if err != nil {
 		return State{}, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxStateBytes {
+		return State{}, errors.New("archive writer state is not a regular file within the size limit")
+	}
+	data, err := io.ReadAll(io.NewSectionReader(f, 0, info.Size()))
+	if err != nil {
+		return State{}, err
+	}
+	if int64(len(data)) != info.Size() {
+		return State{}, io.ErrUnexpectedEOF
 	}
 	return decodeState(data)
 }
