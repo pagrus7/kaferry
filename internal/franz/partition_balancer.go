@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/pagrus7/kaferry/internal/delivery"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -94,13 +93,4 @@ func (b *partitionBalancer) Balance(consumer *kgo.ConsumerBalancer, topics map[s
 		}
 	}
 	return result
-}
-
-type deliveryBalancer struct {
-	kgo.GroupBalancer
-	session *delivery.Session
-}
-
-func (b deliveryBalancer) ProtocolName() string {
-	return b.session.Protocol(b.GroupBalancer.ProtocolName())
 }

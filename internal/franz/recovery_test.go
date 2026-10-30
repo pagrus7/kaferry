@@ -38,10 +38,6 @@ func runComponentCopy(ctx context.Context, p plan.Plan, limits config.Worker) (e
 	if _, err = destination.ClusterID(ctx); err != nil {
 		return err
 	}
-	if err = configureComponentOutput(ctx, factory, p, sourceConnection, destination); err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, factory.session.Close()) }()
 	source, store, err := sourceConnection.Source(ctx, p, "component-fingerprint", limits, nil)
 	if err != nil {
 		return err
@@ -51,7 +47,7 @@ func runComponentCopy(ctx context.Context, p plan.Plan, limits config.Worker) (e
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, factory.session.Close()); sink.Close() }()
+	defer sink.Close()
 	return core.NewRunner(source, sink, store, core.RealClock{}, quietLogger(), p, limits, core.NewTracker(), core.NoopStopObserver{}, nil).Run(ctx)
 }
 func boundedComponentPlan(t *testing.T, cluster *kfake.Cluster) plan.Plan {
@@ -93,6 +89,63 @@ func await(t *testing.T, done <-chan struct{}, label string) {
 		t.Fatal(label + " did not finish within 2 seconds")
 	}
 }
+func TestAmbiguousDeliveryReplaysWithoutLosingProgress(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	// Given three source records and a broker whose second produce reply is lost.
+	gate := &replyGate{}
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"), kfake.MaxVersions(kversion.V3_9_0()), kfake.ListenFn(gate.listen))
+	defer cluster.Close()
+	producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...))
+	require.NoError(t, err)
+	defer producer.Close()
+	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	for _, value := range []string{"confirmed", "uncertain", "later"} {
+		require.NoError(t, producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Key: []byte("key"), Value: []byte(value), Timestamp: stamp}).FirstErr())
+	}
+	p := boundedComponentPlan(t, cluster)
+	limits := config.Defaults(t.TempDir()).Worker
+	limits.DeliveryTimeout = "200ms"
+	limits.RecordCap = 1
+	gate.after.Store(2)
+
+	// When the copy times out after the destination has accepted its record.
+	started := time.Now()
+	err = runComponentCopy(componentContext(t), p, limits)
+	require.ErrorIs(t, err, context.DeadlineExceeded, "wanted delivery deadline, got %v", err)
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("failed delivery delayed shutdown: %s", elapsed)
+	}
+	admin := kadm.NewClient(producer)
+	saved, err := admin.FetchOffsets(componentContext(t), p.Group)
+	if err != nil || saved["input"][0].At != 1 {
+		t.Fatalf("ambiguous write advanced source progress: %v %v", saved, err)
+	}
+	if end := cluster.PartitionInfo("output", 0).HighWatermark; end != 2 || gate.dropped.Load() == 0 {
+		t.Fatalf("fixture did not store the unacknowledged second record: end=%d dropped=%d", end, gate.dropped.Load())
+	}
+	// When the destination recovers and the same query restarts.
+	gate.after.Store(0)
+	limits.DeliveryTimeout = "5s"
+	require.NoError(t, runComponentCopy(componentContext(t), p, limits))
+	// Then the record replays, producing the permitted duplicate and saving its next offset.
+	saved, err = admin.FetchOffsets(componentContext(t), p.Group)
+	if err != nil || saved["input"][0].At != 3 {
+		t.Fatalf("replay did not save confirmed progress: %v %v", saved, err)
+	}
+	if end := cluster.PartitionInfo("output", 0).HighWatermark; end != 4 {
+		t.Fatalf("wanted three source records plus one replay, got %d", end)
+	}
+	reader, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"output": {0: kgo.NewOffset().AtStart()}}))
+	require.NoError(t, err)
+	defer reader.Close()
+	for i, record := range readN(t, reader, 4) {
+		want := []string{"confirmed", "uncertain", "uncertain", "later"}[i]
+		if string(record.Key) != "key" || string(record.Value) != want || record.Timestamp.UnixMilli() != stamp.UnixMilli() {
+			t.Fatalf("replay changed record: %+v", record)
+		}
+	}
+}
+
 func TestCompactedOffsetsReachTheBoundedEnd(t *testing.T) {
 	for _, scenario := range []struct {
 		retained []int32
@@ -150,9 +203,6 @@ func TestCompactedOffsetsReachTheBoundedEnd(t *testing.T) {
 				t.Fatalf("wrong consumed end: %v %v", saved, err)
 			}
 			want := int64(len(retained))
-			if want > 0 {
-				want++
-			} // committed output includes its transaction marker
 			if got := cluster.PartitionInfo("output", 0).HighWatermark; got != want {
 				t.Fatalf("copied %d records, wanted %d", got, want)
 			}

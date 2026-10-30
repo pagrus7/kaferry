@@ -6,7 +6,6 @@ import (
 
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/delivery"
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
@@ -46,15 +45,4 @@ type Connection interface {
 	Source(context.Context, plan.Plan, string, config.Worker, PartitionValidator) (core.Source, core.ProgressStore, error)
 	Sink(context.Context, config.Worker) (core.Sink, error)
 	Close(context.Context) error
-}
-
-// Factory creates one query's Kafka adapters with a shared output authority.
-type Factory interface {
-	Open(context.Context, plan.Endpoint) (Connection, error)
-	ForQuery(*delivery.Session) Factory
-}
-type DeliveryConnection interface {
-	Connection
-	TopicID(context.Context) ([16]byte, error)
-	ProgressLog(context.Context, *delivery.Session, string) (delivery.Log, error)
 }

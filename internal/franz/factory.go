@@ -2,8 +2,6 @@ package franz
 
 import (
 	"context"
-	"errors"
-	"github.com/pagrus7/kaferry/internal/delivery"
 	"log/slog"
 	"slices"
 	"time"
@@ -17,8 +15,6 @@ import (
 )
 
 type Factory struct {
-	session     *delivery.Session
-	progress    *ProgressLog
 	codec       commitmeta.Codec
 	clients     Clients
 	lookups     kafkaport.OffsetLookupFactory
@@ -29,19 +25,6 @@ type Factory struct {
 
 func NewFactory(codec commitmeta.Codec, clients Clients, positioning kafkaport.PositionerFactory, clock core.Clock, log *slog.Logger, lookups kafkaport.OffsetLookupFactory) *Factory {
 	return &Factory{lookups: lookups, codec: codec, clients: clients, positioning: positioning, clock: clock, log: log}
-}
-
-func (f *Factory) ForQuery(s *delivery.Session) kafkaport.Factory {
-	copy := *f
-	copy.session = s
-	copy.progress = nil
-	return &copy
-}
-func (c *connection) TopicID(ctx context.Context) ([16]byte, error) {
-	if err := c.inspector.Refresh(ctx); err != nil {
-		return [16]byte{}, err
-	}
-	return c.inspector.topicID, nil
 }
 
 // Validate checks both endpoints before the engine opens Kafka or file handles.
@@ -165,9 +148,6 @@ func (c *connection) ReadProgress(ctx context.Context, group, fp string, window 
 func (c *connection) Close(context.Context) error { c.cancel(); c.inspector.client.Close(); return nil }
 
 func (c *connection) Source(query context.Context, p plan.Plan, fp string, limits config.Worker, routing kafkaport.PartitionValidator) (core.Source, core.ProgressStore, error) {
-	if c.factory.session == nil {
-		return nil, nil, errors.New("output authority required for Kafka input")
-	}
 	if err := query.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -183,7 +163,7 @@ func (c *connection) Source(query context.Context, p plan.Plan, fp string, limit
 	if err != nil {
 		return nil, nil, err
 	}
-	options, err := c.borrowedOptions()
+	options, err := settings.commonOptions()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -196,15 +176,15 @@ func (c *connection) Source(query context.Context, p plan.Plan, fp string, limit
 	if settings.clientID != "" {
 		clientID += "-" + settings.clientID
 	}
-	options = append(options, kgo.WithContext(clientCtx), kgo.ClientID(clientID), kgo.ConsumerGroup(p.Group), kgo.DisableAutoCommit(), kgo.ConsumeResetOffset(kgo.NoResetOffset()), kgo.FetchIsolationLevel(kgo.ReadCommitted()), kgo.FetchMaxWait(500*time.Millisecond), kgo.KeepControlRecords(), kgo.BlockRebalanceOnPoll(), kgo.Balancers(deliveryBalancer{GroupBalancer: sourceBalancer(p, fp), session: c.factory.session}))
+	options = append(options, kgo.WithContext(clientCtx), kgo.ClientID(clientID), kgo.ConsumerGroup(p.Group), kgo.DisableAutoCommit(), kgo.ConsumeResetOffset(kgo.NoResetOffset()), kgo.FetchIsolationLevel(kgo.ReadCommitted()), kgo.FetchMaxWait(500*time.Millisecond), kgo.KeepControlRecords(), kgo.BlockRebalanceOnPoll(), kgo.Balancers(sourceBalancer(p, fp)))
 	client, err := c.factory.clients.Consumer(options...)
 	if err != nil {
 		cancel()
 		clientCancel()
 		return nil, nil, conflict("invalid Kafka consumer configuration")
 	}
-	store := &Committer{delivery: c.factory.session, codec: c.factory.codec, client: client, topic: p.Source.Name, group: p.Group, topicID: c.inspector.topicID, metadata: make(map[int32]kafkaport.Progress)}
-	source := &Source{delivery: c.factory.session, routing: routing, client: client, lookup: c.factory.lookups.New(c.inspector, c.inspector), inspector: c.inspector, positioning: c.factory.positioning, store: store, bridge: bridge, plan: p, fingerprint: fp, topicID: topicID(c.inspector.topicID), clusterID: c.inspector.clusterID, originalTopicID: c.inspector.topicID, query: query, ctx: ctx, cancel: cancel, clientCancel: clientCancel, positions: make(map[int32]int64), paused: make(map[int32]bool), held: make(map[int32]*kgo.Record), retention: make(map[int32]kafkaport.RetentionCheck), log: c.factory.log}
+	store := &Committer{codec: c.factory.codec, client: client, topic: p.Source.Name, group: p.Group, topicID: c.inspector.topicID, metadata: make(map[int32]kafkaport.Progress)}
+	source := &Source{routing: routing, client: client, lookup: c.factory.lookups.New(c.inspector, c.inspector), inspector: c.inspector, positioning: c.factory.positioning, store: store, bridge: bridge, plan: p, fingerprint: fp, topicID: topicID(c.inspector.topicID), clusterID: c.inspector.clusterID, originalTopicID: c.inspector.topicID, query: query, ctx: ctx, cancel: cancel, clientCancel: clientCancel, positions: make(map[int32]int64), paused: make(map[int32]bool), held: make(map[int32]*kgo.Record), retention: make(map[int32]kafkaport.RetentionCheck), log: c.factory.log}
 	source.gaps = &fetchGap{client: c.inspector.client, topic: p.Source.Name, topicID: source.topicID}
 	return source, store, nil
 }
@@ -220,16 +200,19 @@ func (c *connection) Sink(query context.Context, limits config.Worker) (core.Sin
 	if err != nil {
 		return nil, err
 	}
-	if c.factory.session == nil || c.factory.progress == nil {
-		return nil, errors.New("kafka output authority is not configured")
-	}
-	options, err := c.borrowedOptions()
+	options, err := settings.commonOptions()
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	options = append(options, kgo.WithContext(ctx))
-	client := &kafkaOutput{session: c.factory.session, log: c.factory.progress, options: options, settings: settings, partitions: make(map[int32]*kafkaPartition)}
-	c.factory.session.Backend = client
+	options = append(options, settings.producerOptions()...)
+	if c.endpoint.PreservesPartitions() {
+		options = append(options, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	}
+	client, err := c.factory.clients.Producer(append(options, kgo.WithContext(ctx))...)
+	if err != nil {
+		cancel()
+		return nil, conflict("invalid Kafka producer configuration")
+	}
 	return &Sink{preserve: c.endpoint.PreservesPartitions(), client: client, topic: c.endpoint.Name, settings: settings, configuration: configuration, inspector: c.inspector, clock: c.factory.clock, log: c.factory.log, reports: make(chan core.Delivery, limits.RecordCap+int(settings.queueRecords)+1), ctx: ctx, cancel: cancel, partitionCount: len(c.inspector.parts), lastMetadata: c.factory.clock.Now()}, nil
 }

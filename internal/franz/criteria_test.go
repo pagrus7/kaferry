@@ -44,7 +44,7 @@ func TestLatestFreezesReadableEndAndKeepsItAfterResume(t *testing.T) {
 	require.NoError(t, runComponentCopy(componentContext(t), p, config.Defaults("").Worker))
 	end, err := kadm.NewClient(producer).ListEndOffsets(componentContext(t), "output")
 	require.NoError(t, err)
-	require.EqualValues(t, 6, end["output"][0].Offset, "five records and one transaction marker")
+	require.EqualValues(t, 5, end["output"][0].Offset)
 	reader := componentClient(t, cluster, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"output": {0: kgo.NewOffset().AtStart()}}))
 	got := readN(t, reader, 5)
 	for n, r := range got {

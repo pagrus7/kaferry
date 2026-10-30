@@ -13,7 +13,6 @@ import (
 	"github.com/pagrus7/kaferry/internal/archiveio"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
-	"github.com/pagrus7/kaferry/internal/delivery"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
 	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/stretchr/testify/require"
@@ -60,12 +59,12 @@ func (f *engineFixture) Open(_ context.Context, endpoint plan.Endpoint) (kafkapo
 	}
 	return &engineConnection{fixture: f, name: endpoint.Name}, nil
 }
-func (f *engineFixture) OpenSource(_ context.Context, s *delivery.Session, _ config.Worker, count int) (archiveio.Input, error) {
+func (f *engineFixture) OpenSource(p plan.Plan, _ string, _ config.Worker, count int) (archiveio.Input, error) {
 	f.partitionCount = count
-	f.groups = append(f.groups, s.Plan.Group)
+	f.groups = append(f.groups, p.Group)
 	return f.input, f.stage("file-input")
 }
-func (f *engineFixture) OpenOutput(*delivery.Session, config.Worker, delivery.Log) (archiveio.Output, error) {
+func (f *engineFixture) OpenOutput(plan.Endpoint, config.Worker) (archiveio.Output, error) {
 	return finalizedOutput{f.output}, f.stage("file-output")
 }
 func (f *engineFixture) New(source core.Source, sink core.Sink, store core.ProgressStore, p plan.Plan, _ config.Worker, _ core.StopObserver, _ core.Observer) Execution {
@@ -229,7 +228,7 @@ func TestRuntimeCompositionAcceptsReplacementFactories(t *testing.T) {
 				inputIndex, outputIndex := slices.Index(f.trace, "topic-input"), slices.Index(f.trace, output)
 				require.NotEqual(t, -1, inputIndex)
 				require.NotEqual(t, -1, outputIndex)
-				require.Less(t, outputIndex, inputIndex)
+				require.Less(t, inputIndex, outputIndex)
 			}
 			closed := 0
 			for _, stage := range f.trace {
@@ -252,16 +251,18 @@ func TestEngineClosesOnlyAcquiredResourcesOnFailure(t *testing.T) {
 		{"TOPIC", "TOPIC", "cluster-source", []string{"close-source"}},
 		{"TOPIC", "TOPIC", "open-destination", []string{"close-source"}},
 		{"TOPIC", "TOPIC", "cluster-destination", []string{"close-destination", "close-source"}},
-		{"TOPIC", "TOPIC", "members", []string{"close-output", "close-destination", "close-source"}},
-		{"TOPIC", "ARCHIVE", "members", []string{"close-output", "close-source"}},
-		{"TOPIC", "ARCHIVE", "topic-input", []string{"close-output", "close-source"}},
-		{"TOPIC", "ARCHIVE", "file-output", []string{"close-source"}},
-		{"TOPIC", "TOPIC", "topic-output", []string{"close-destination", "close-source"}},
-		{"TOPIC", "TOPIC", "topic-input", []string{"close-output", "close-destination", "close-source"}},
-		{"TOPIC", "TOPIC", "run", []string{"close-topic-input", "close-output", "close-destination", "close-source"}},
-		{"ARCHIVE", "TOPIC", "file-input", []string{"close-output", "close-destination"}},
-		{"ARCHIVE", "ARCHIVE", "file-output", []string(nil)},
-		{"ARCHIVE", "ARCHIVE", "run", []string{"close-file-input", "close-output"}},
+		{"TOPIC", "TOPIC", "members", []string{"close-destination", "close-source"}},
+		{"TOPIC", "TOPIC", "progress", []string{"close-destination", "close-source"}},
+		{"TOPIC", "ARCHIVE", "members", []string{"close-source"}},
+		{"TOPIC", "ARCHIVE", "progress", []string{"close-source"}},
+		{"TOPIC", "ARCHIVE", "topic-input", []string{"close-source"}},
+		{"TOPIC", "ARCHIVE", "file-output", []string{"close-topic-input", "close-source"}},
+		{"TOPIC", "TOPIC", "topic-output", []string{"close-topic-input", "close-destination", "close-source"}},
+		{"TOPIC", "TOPIC", "topic-input", []string{"close-destination", "close-source"}},
+		{"TOPIC", "TOPIC", "run", []string{"close-output", "close-topic-input", "close-destination", "close-source"}},
+		{"ARCHIVE", "TOPIC", "file-input", []string{"close-destination"}},
+		{"ARCHIVE", "ARCHIVE", "file-output", []string{"close-file-input"}},
+		{"ARCHIVE", "ARCHIVE", "run", []string{"close-output", "close-file-input"}},
 	}
 	for _, test := range cases {
 		t.Run(test.source+"-"+test.destination+"-"+test.fail, func(t *testing.T) {
@@ -321,7 +322,7 @@ func TestEngineSkipsAcquisitionWhenStartupIsCancelled(t *testing.T) {
 	require.Len(t, f.trace, 0)
 }
 
-func TestStartupCancellationClosesAcquiredResources(t *testing.T) {
+func TestStartupCancellationClosesInputWithoutCreatingOutput(t *testing.T) {
 	for _, kind := range []string{"TOPIC", "ARCHIVE"} {
 		t.Run(kind, func(t *testing.T) {
 			// Given cancellation while the source adapter is being created.
@@ -329,9 +330,9 @@ func TestStartupCancellationClosesAcquiredResources(t *testing.T) {
 			f.store = f.input
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			stage, closed := "topic-input", []string{"close-topic-input", "close-output", "close-source"}
+			stage, closed := "topic-input", []string{"close-topic-input", "close-source"}
 			if kind == "ARCHIVE" {
-				stage, closed = "file-input", []string{"close-file-input", "close-output"}
+				stage, closed = "file-input", []string{"close-file-input"}
 			}
 			f.onStage = func(name string) {
 				if name == stage {
@@ -342,7 +343,7 @@ func TestStartupCancellationClosesAcquiredResources(t *testing.T) {
 			// When starting a copy into a file.
 			err := newEngine(f, f, f, engineLogger(), nil).Run(ctx, enginePlan(kind, "ARCHIVE"), config.Config{}, noopShutdown{})
 
-			// Then cancellation preserves its cause, closes acquired input, and closes the prepared output.
+			// Then cancellation preserves its cause, closes acquired input, and creates no output.
 			index := slices.Index(f.trace, stage)
 			require.NotEqual(t, -1, index, "source acquisition stage missing")
 			afterCancellation := f.trace[index+1:]
@@ -498,19 +499,3 @@ func TestEngineMetadataFailurePrecedesProgressAndOutput(t *testing.T) {
 		})
 	}
 }
-
-func (f *engineFixture) ForQuery(*delivery.Session) kafkaport.Factory { return f }
-func (f *engineFixture) Recover(context.Context, *delivery.Session, delivery.Log, core.StopObserver) error {
-	return f.stage("recover")
-}
-func (c *engineConnection) TopicID(context.Context) ([16]byte, error) { return [16]byte{1}, nil }
-func (c *engineConnection) ProgressLog(context.Context, *delivery.Session, string) (delivery.Log, error) {
-	return engineLog{}, nil
-}
-
-type engineLog struct{}
-
-func (engineLog) Ensure(context.Context, []int32) error                          { return nil }
-func (engineLog) Open(context.Context, int32) (delivery.Transaction, error)      { panic("not used") }
-func (engineLog) ReadValue(context.Context, int32, string, bool) ([]byte, error) { return nil, nil }
-func (engineLog) Publish(context.Context, int32, string, string, []byte) error   { return nil }

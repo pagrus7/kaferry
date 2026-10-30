@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/pagrus7/kaferry/internal/config"
-	"github.com/pagrus7/kaferry/internal/delivery"
-	"github.com/pagrus7/kaferry/internal/plan"
 	"net"
 	"os"
 	"syscall"
@@ -151,10 +148,7 @@ func TestCommitterPreservesEachPartitionResultAlongsideRequestFailure(t *testing
 				metadata[id] = kafkaport.Progress{Fingerprint: "fp", TopicID: "id"}
 				cursors = append(cursors, core.Cursor{Partition: id, Position: 42})
 			}
-			authority := delivery.New(plan.Plan{Source: plan.Endpoint{Kind: "TOPIC"}}, config.Defaults("").Worker)
-			authority.Backend = &memoryAuthority{}
-			require.NoError(t, authority.Acquire(t.Context(), []int32{0}))
-			committer := &Committer{delivery: authority, codec: commitmeta.NewCodec(), client: client, topic: "input", metadata: metadata}
+			committer := &Committer{codec: commitmeta.NewCodec(), client: client, topic: "input", metadata: metadata}
 			// When saving the positions, then request classification does not replace individual outcomes.
 			results, err := committer.Save(t.Context(), cursors)
 			require.ErrorIs(t, err, requestError)

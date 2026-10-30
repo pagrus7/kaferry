@@ -25,7 +25,6 @@ func TestCrossClusterOpaqueSchemaBytes(t *testing.T) {
 	a := admin(t)
 	name := topic(t, a, 2)
 	destination := kadm.NewClient(fixtureClient(t, dr))
-	ensureProgressTopic(t, destination)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	sourceMetadata, err := a.BrokerMetadata(ctx)

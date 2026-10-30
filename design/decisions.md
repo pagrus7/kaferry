@@ -7,14 +7,14 @@ Completion, delivery and restart contracts. See the [usage guide](../docs/usage.
 - Copies topic→topic, topic→file, file→topic and file→file with one SQL-like statement; no transformations or Schema Registry access.
 - Preserves raw key/value bytes, null versus empty, and ordered headers including duplicates and NUL/non-UTF-8 names, subject to [client limits](client-compatibility.md). Files retain timestamp values and types; Kafka output follows the destination's timestamp rules.
 - Payloads are opaque. Users must ensure byte formats and Schema Registry IDs are compatible with the destination.
-- Delivery is exactly once per selected input occurrence when the same job resumes. Duplicate values and overlapping physical archive records remain separate occurrences. Filters, SKIP, completion rules and retention determine selection. [Commit and recovery contract](delivery.md).
+- Delivery is at least once for records selected before completion: output acknowledgment precedes source progress. Crashes and rebalances can duplicate output. Filters, SKIP, completion rules and retention can omit records.
 
 ## Time window
 
 - `WHERE` filters Kafka record timestamps, not payload event time. Bounds normalize to a logged half-open millisecond range `[lo, hi)`; `BETWEEN` includes both endpoints by adding 1 ms to its upper bound.
 - `NOW()` resolves once and is stored with progress: per partition for Kafka, per checkpoint for files. Restart and reassignment reuse the saved window, even when its offset falls outside retention.
 - A partition without progress adopts the lowest-numbered partition's valid saved window. If none exists, its worker resolves `NOW()`. Concurrent workers may resolve different windows; use literal bounds for a consistent group-wide range.
-- Changed filters require a new `GROUP`. Destination-owned authority determines resume positions; source-group offsets are advisory. Missing authority for an initialized job is an error.
+- Changed filters require a new `GROUP`. If all group offsets expire or a checkpoint is lost, the job starts fresh and resolves `NOW()` again. Kafka startup logs how many partitions have saved progress.
 
 ## Source partitions
 
@@ -85,8 +85,8 @@ Stop logs identify reason, partition and position. Timestamp stops identify the 
 
 ### Group names
 
-- `GROUP` identifies a Kafka consumer group or a file-source checkpoint. Omitting it means `GROUP = ONE_OFF`: generate and log `kaferry-<hex>` for a single worker. Repeated or concurrent unnamed runs independently copy the source. Resume an unfinished one-off run with its logged group name; use a shared named group for cooperating Kafka workers. Successful file-source ONE_OFF runs without `WORKER_STOP_AFTER_RECORDS` delete the checkpoint but retain its lock. Runs with a worker threshold keep the checkpoint, even at EOF. Retain authoritative progress for the job lifetime; source-group offset expiry does not delete it.
-- Topic→topic workers share a named group and progress independently using cooperative sticky assignment with a job-specific protocol. Kafka transactions coordinate progress; there is no group-wide done marker.
+- `GROUP` identifies a Kafka consumer group or a file-source checkpoint. Omitting it means `GROUP = ONE_OFF`: generate and log `kaferry-<hex>` for a single worker. Repeated or concurrent unnamed runs independently copy the source. Resume an unfinished one-off run with its logged group name; use a shared named group for cooperating Kafka workers. Successful file-source ONE_OFF runs without `WORKER_STOP_AFTER_RECORDS` delete the checkpoint but retain its lock. Runs with a worker threshold keep the checkpoint, even at EOF. Kafka progress expires under broker offset retention.
+- Topic→topic workers share a named group and progress independently using classic `cooperative-sticky` assignment. There is no group-wide done marker or external coordinator.
 
 ### When a worker exits
 
@@ -119,7 +119,7 @@ Before subscribing, group inspection also rejects active members whose client ID
 
 ### Commit metadata
 
-Kafka stores `kaferry:4;` followed by a UTF-8 JSON object with each committed offset. The complete string is at most 4,096 bytes; a broker may enforce a smaller limit.
+Kafka stores `kaferry:2;` or `kaferry:3;` followed by a UTF-8 JSON object with each committed offset. The complete string is at most 4,096 bytes; a broker may enforce a smaller limit.
 
 | Field | Meaning |
 | --- | --- |
@@ -127,17 +127,17 @@ Kafka stores `kaferry:4;` followed by a UTF-8 JSON object with each committed of
 | `win` | Optional `{"lower": integer-or-null, "upper": integer-or-null}`; signed 64-bit Unix milliseconds, lower inclusive/upper exclusive. Required for saved `NOW()` bounds |
 | `stop` | Optional `{"reason": "timestamp", "tip" or "worker_record_cap", "at": integer}`; nonnegative source offset where the stopping rule was reached, at or below the committed offset. `at` is not a timestamp |
 
-Absent `stop` means no saved stop. Zero is a valid offset or time bound. Unknown/duplicate fields, null fields other than window bounds, invalid values, foreign prefixes and unsupported versions are rejected. JSON whitespace and field order do not matter. The prefix identifies the exactly-once advisory metadata format. Optional `end` is a nonnegative exclusive captured end offset. A committed position or stop cannot exceed its captured end.
+Absent `stop` means no saved stop. Zero is a valid offset or time bound. Unknown/duplicate fields, null fields other than window bounds, invalid values, foreign prefixes and unsupported versions are rejected. JSON whitespace and field order do not matter. The prefix selects the decoder. Version `2` uses the fields above. Version `3` additionally requires `end`, a nonnegative exclusive captured end offset. Version `2` rejects `end`; version `3` rejects missing or null `end`. Progress without a captured end uses version `2`; progress with one uses version `3`. A committed position or stop cannot exceed its captured end.
 
-The initial assignment commit preserves saved timestamp and end stops and clears worker record stops. The source-group commit verifies membership and may precede output durability. The adapter then commits output with authoritative progress, including stops at unchanged offsets; only that authority determines resume positions. Uncommitted preparation can replay; committed output and its cursor remain paired.
+The initial assignment commit preserves saved timestamp and end stops and clears worker record stops. A later commit includes it only after every earlier required write succeeds (Kafka acknowledgment or file fsync), including stops at unchanged offsets. Lost assignments never commit. A crash before saving can replay writes.
 
 ## Kafka output
 
-- One transactional producer per owned source partition, with client batching. Producer initialization retries connection and coordinator failures for up to ten seconds, or a shorter caller deadline. Archive replay uses one virtual source partition.
+- One asynchronous idempotent producer per worker, with delivery reports and client batching.
 - Default `PARTITIONING = PRESERVE`: write original partition N to destination partition N, keeping original key bytes, including nulls. Check all selected input partition IDs before output; Kafka assignments recheck the destination. Archive replay uses the fixed selection's original IDs, never its replay cursor. This includes selected partitions whose records the timestamp filter excludes. Destination counts may be larger; missing IDs fail under every policy. Topics must exist.
 - `WITH (PARTITIONING = KEY)` on the destination selects Java-compatible Murmur2 key routing; null keys use sticky routing. Equal non-null keys stay together with a stable partitioner/count. Preserved placement can differ from other destination producers' key routing. Destination partition-count changes are logged. Source offsets are never copied; destination offsets are new.
 - Layout checks are not atomic with publishing. Topic recreation or partition changes during a copy can fail after partial output; missing partitions never fall back to key routing.
-- Submission order is preserved for records from one source partition routed to one destination partition during an uninterrupted producer session with stable routing. With `KEY`, null keys can spread. Transactions and fencing preserve committed occurrence counts across restart and rebalance; there is no cross-partition order guarantee.
+- Submission order is preserved for records from one source partition routed to one destination partition during an uninterrupted producer session with stable routing. With `KEY`, null keys can spread. Replay and rebalances can duplicate and reorder output; there is no cross-partition order guarantee.
 - Client delivery retries default to `worker.delivery_timeout` (60 s). Connection `message.timeout.ms` / `delivery.timeout.ms` overrides it; values must be positive and conflicting aliases fail. Deadlines start at submission, independently of record timestamps. Exhausted delivery fails the run.
 - Queue-full refusal pauses reading and retries the same record first, up to `worker.delivery_timeout`. Accepted records are not submitted again within that assignment.
 - Optional destination configuration supports size/timestamp preflight; denial logs a warning. [Checks and fallbacks](client-compatibility.md#optional-destination-configuration). Preflight cannot guarantee broker acceptance: clocks, settings, framing and compression may differ.
@@ -147,11 +147,11 @@ The initial assignment commit preserves saved timestamp and end stops and clears
 
 ## Delivery and progress
 
-- Kafka sources and output readers use `read_committed`. Delivery reports confirm preparation; the authoritative cursor and output commit together. [Delivery authority](delivery.md).
-- Batches are bounded; each source partition commits independently. Save a partition's next position only after all earlier consumed records are delivered, filtered or explicitly skipped. Consumed positions account for Kafka offset gaps.
-- A later failure leaves earlier output intact. Restart reloads the committed cursor after fencing the prior producer and revisits uncommitted input. It does not repeat committed output.
+- Kafka sources read committed records. A Kafka delivery report or file fsync acknowledges output before source progress is saved.
+- Batches are bounded and non-atomic. Save a partition's next position only after all earlier consumed records are delivered, filtered or explicitly skipped. Consumed positions account for Kafka offset gaps.
+- A later failure leaves earlier output intact. Restart can duplicate output acknowledged after the last saved position, and revisits the failing record unless conditions or policy change.
 - Default uncommitted caps: 5,000 records / 16 MiB per partition; 20,000 records / 128 MiB per worker. Pause reading at a cap until commit succeeds; a single oversized record may proceed alone. These bound tracked work, not total process memory, which also includes client buffers and overhead.
-- Save confirmed progress for owned partitions: every second, when a worker or partition cap is reached or the next input cannot fit, while paused at a cap with confirmed progress, and on shutdown/revocation. Check results per partition.
+- Commit all worker partitions in one request, with at most one request in flight: every second, when a worker or partition cap is reached or the next input cannot fit, while paused at a cap with confirmed progress, and on shutdown/revocation. Check results per partition.
 - Shutdown stops reading, allows ten seconds for outstanding writes, then commits confirmed progress. Synchronous file flush/fsync can block that save until the whole-process deadline. The CLI enforces `worker.shutdown_timeout` (default 30 s) across draining, saving and cleanup, starting when a signal arrives or stopping begins. Expiry exits 1 immediately; unsaved work may replay. A short budget can end before the final save.
 
 ## Errors
@@ -173,7 +173,7 @@ Default FAIL. Choose `ON_ERROR` or the specific timestamp policies; they are mut
 
 `ARCHIVE 'directory'` captures independently recoverable compressed files. Multiple workers can capture to local or shared storage. Replay uses one process per group/checkpoint directory, saves a fixed completed-file selection, and preserves original Kafka identity. Storage needs durable sync, atomic rename and exclusive locks across its users. [Archive contract](archive.md).
 
-The engine configures output authority before source assignment. Archive capture syncs bytes before saving their boundaries and source cursor together. The runner saves progress before closing adapters; closing a Kafka source does not commit offsets. [Capture and recovery](archive.md#capture-and-recovery).
+Kafka consumers are created and validated before opening archive output. Kaferry saves source progress only after the archive has synced its data and recovery state. The runner saves progress before closing adapters; closing a Kafka source does not commit offsets. [Capture and recovery](archive.md#capture-and-recovery).
 
 ## Settings and results
 

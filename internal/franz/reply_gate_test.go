@@ -1,4 +1,4 @@
-package app
+package franz
 
 import (
 	"encoding/binary"
@@ -8,46 +8,45 @@ import (
 	"sync/atomic"
 )
 
-// commitReplyGate drops selected replies after the broker has processed requests.
+// replyGate drops produce replies after the broker has processed the requests.
 // Requests and all other replies still use the broker's real network path.
-type commitReplyGate struct {
-	apiKey  uint16
+type replyGate struct {
 	after   atomic.Int64
 	seen    atomic.Int64
 	dropped atomic.Int64
 }
 
-func (g *commitReplyGate) listen(network, address string) (net.Listener, error) {
+func (g *replyGate) listen(network, address string) (net.Listener, error) {
 	listener, err := net.Listen(network, address)
 	if err != nil {
 		return nil, err
 	}
-	return &commitGatedListener{Listener: listener, gate: g}, nil
+	return &gatedListener{Listener: listener, gate: g}, nil
 }
 
-type commitGatedListener struct {
+type gatedListener struct {
 	net.Listener
-	gate *commitReplyGate
+	gate *replyGate
 }
 
-func (l *commitGatedListener) Accept() (net.Conn, error) {
+func (l *gatedListener) Accept() (net.Conn, error) {
 	conn, err := l.Listener.Accept()
 	if err != nil {
 		return nil, err
 	}
-	return &commitGatedConn{Conn: conn, gate: l.gate, produce: make(map[uint32]bool)}, nil
+	return &gatedConn{Conn: conn, gate: l.gate, produce: make(map[uint32]bool)}, nil
 }
 
-type commitGatedConn struct {
+type gatedConn struct {
 	net.Conn
-	gate    *commitReplyGate
+	gate    *replyGate
 	mu      sync.Mutex
 	produce map[uint32]bool
 	input   []byte
 	output  []byte
 }
 
-func (c *commitGatedConn) Read(p []byte) (int, error) {
+func (c *gatedConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	c.input = append(c.input, p[:n]...)
 	for len(c.input) >= 4 {
@@ -55,7 +54,7 @@ func (c *commitGatedConn) Read(p []byte) (int, error) {
 		if len(c.input) < size {
 			break
 		}
-		if size >= 12 && binary.BigEndian.Uint16(c.input[4:6]) == c.gate.apiKey {
+		if size >= 12 && binary.BigEndian.Uint16(c.input[4:6]) == 0 {
 			c.mu.Lock()
 			c.produce[binary.BigEndian.Uint32(c.input[8:12])] = true
 			c.mu.Unlock()
@@ -65,7 +64,7 @@ func (c *commitGatedConn) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (c *commitGatedConn) Write(p []byte) (int, error) {
+func (c *gatedConn) Write(p []byte) (int, error) {
 	c.output = append(c.output, p...)
 	for len(c.output) >= 4 {
 		size := int(binary.BigEndian.Uint32(c.output[:4])) + 4
@@ -79,7 +78,7 @@ func (c *commitGatedConn) Write(p []byte) (int, error) {
 		produce := c.produce[correlation]
 		delete(c.produce, correlation)
 		c.mu.Unlock()
-		if after := c.gate.after.Load(); produce && after > 0 && c.gate.seen.Add(1) >= after {
+		if after := c.gate.after.Load(); produce && after > 0 && c.gate.seen.Add(1) == after {
 			c.gate.dropped.Add(1)
 			continue
 		}
