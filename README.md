@@ -11,6 +11,8 @@
 
 Copy Kafka records between topics and disk archives with one SQL-like statement.
 
+> **Warning:** Kaferry is pre-1.0. Releases may introduce breaking changes.
+
 A Kaferry archive is a directory of Avro files containing Kafka records with their original topic, partition and offset. Copies preserve raw bytes, nulls and ordered headers. Resuming the same job produces one committed output per selected input occurrence. Kafka readers use `read_committed`; see the [delivery contract](design/delivery.md).
 
 ## Choosing a tool
