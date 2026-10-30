@@ -52,13 +52,11 @@ func (i *Inspector) source(p plan.Plan, fp string, w config.Worker, saved *repla
 	if err != nil {
 		return result, err
 	}
-	catalog := replay.NewCatalog(p.Source.Name, codec, replay.NativeFiles{})
+	inputs := replay.NewCatalog(p.Source.Name, codec, replay.NativeFiles{}).Preview()
+	query := replayQuery(p, fp, 0)
 	var files []replay.File
 	if saved != nil {
-		if saved.Fingerprint != fp {
-			return result, &Conflict{Err: errors.New("replay checkpoint query identity mismatch")}
-		}
-		if err = p.ValidateWindow(saved.Window); err != nil {
+		if err = query.CheckSaved(*saved, inputs); err != nil {
 			return result, &Conflict{Err: err}
 		}
 		result.Saved = true
@@ -66,18 +64,10 @@ func (i *Inspector) source(p plan.Plan, fp string, w config.Worker, saved *repla
 		result.Window = saved.Window
 		result.Stop = saved.Stop
 		for _, f := range saved.Files {
-			if !p.Partitions.Matches(f.File.Identity.Source.Partition) {
-				return result, &Conflict{Err: errors.New("replay selection contains an excluded original partition")}
-			}
 			files = append(files, f.File)
 		}
-		if !saved.Complete {
-			if err = catalog.ValidateHeaders(files); err != nil {
-				return result, &Conflict{Err: err}
-			}
-		}
 	} else {
-		selection, err := catalog.Inspect(p.Partitions)
+		selection, err := inputs.Select(p.Partitions)
 		if err != nil {
 			if errors.Is(err, plan.ErrMissingPartition) {
 				return result, &core.Exit{Code: 2, Err: err}
@@ -88,13 +78,10 @@ func (i *Inspector) source(p plan.Plan, fp string, w config.Worker, saved *repla
 		if selection.PrivateFiles > 0 {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("Snapshot excludes %d unfinished files.", selection.PrivateFiles))
 		}
-		result.Window, err = p.Window.Resolve(i.clock.Now())
+		result.Window, err = query.NewWindow(i.clock.Now())
 		if err != nil {
 			return result, &Conflict{Err: err}
 		}
-	}
-	if err = p.ValidateWindow(result.Window); err != nil {
-		return result, &Conflict{Err: err}
 	}
 	result.FileCount = len(files)
 	seen := map[int32]bool{}

@@ -12,17 +12,6 @@ import (
 )
 
 type Clock interface{ Now() time.Time }
-type Query struct {
-	Group, Fingerprint string
-	Window             plan.WindowSpec
-	Partitions         *plan.PartitionFilter
-	Offsets            *plan.OffsetRange
-	PartitionOffsets   []plan.PartitionOffsetRange
-	MaxOutOfOrderMS    *int64
-	// PartitionCount bounds original IDs when replay requires an existing layout.
-	// Zero leaves IDs unrestricted; the constraint is not persisted.
-	PartitionCount int
-}
 type Item struct {
 	Position, Next int64
 	Record         avro.Record
@@ -64,11 +53,8 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 		return nil, err
 	}
 	if saved == nil {
-		window, err := query.Window.Resolve(clock.Now())
+		window, err := query.NewWindow(clock.Now())
 		if err != nil {
-			return nil, err
-		}
-		if err = query.Window.ValidateStored(window, query.disorderAllowance()); err != nil {
 			return nil, err
 		}
 		selection, err := inputs.Select(query.Partitions)
@@ -94,23 +80,8 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 		if err = s.saved.validate(); err != nil {
 			return nil, err
 		}
-		if s.saved.Group != query.Group || s.saved.Fingerprint != query.Fingerprint {
-			return nil, errors.New("replay checkpoint query identity mismatch")
-		}
-		if err = query.Window.ValidateStored(s.saved.Window, query.disorderAllowance()); err != nil {
+		if err = query.CheckSaved(s.saved, inputs); err != nil {
 			return nil, err
-		}
-		if err = query.validatePartitions(s.saved.Files); err != nil {
-			return nil, err
-		}
-		if !s.saved.Complete {
-			files := make([]File, len(s.saved.Files))
-			for i, p := range s.saved.Files {
-				files[i] = p.File
-			}
-			if err = inputs.Validate(files); err != nil {
-				return nil, err
-			}
 		}
 	}
 	if query.MaxOutOfOrderMS != nil && *query.MaxOutOfOrderMS >= 0 && !s.criteria.HasOffsetEnd() && s.saved.Window.Upper != nil {
@@ -124,24 +95,6 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 		}
 	}
 	return s, nil
-}
-
-func (q Query) validatePartitions(files []Progress) error {
-	if q.Partitions == nil && q.PartitionCount == 0 {
-		return nil
-	}
-	for _, file := range files {
-		id := file.File.Identity.Source.Partition
-		if !q.Partitions.Matches(id) {
-			return errors.New("replay selection contains an excluded original partition")
-		}
-		if q.PartitionCount != 0 {
-			if err := plan.CheckPartition(id, q.PartitionCount); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 func (s *Session) Next() (item Item, err error) {
@@ -238,10 +191,3 @@ func (s *Session) Close() error {
 }
 
 func equalStop(a, b *core.Stop) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
-
-func (q Query) disorderAllowance() int64 {
-	if q.MaxOutOfOrderMS != nil {
-		return max(0, *q.MaxOutOfOrderMS)
-	}
-	return 0
-}

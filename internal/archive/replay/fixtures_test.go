@@ -66,6 +66,7 @@ func (m *memoryBlocks) Close() error { m.closes++; return nil }
 
 type memorySnapshots struct {
 	files                  []File
+	validated              []File
 	private                int
 	selects, validates     int
 	selectErr, validateErr error
@@ -75,7 +76,11 @@ func (m *memorySnapshots) Select(*plan.PartitionFilter) (Selection, error) {
 	m.selects++
 	return Selection{Files: append([]File{}, m.files...), PrivateFiles: m.private}, m.selectErr
 }
-func (m *memorySnapshots) Validate(files []File) error { m.validates++; return m.validateErr }
+func (m *memorySnapshots) Validate(files []File) error {
+	m.validates++
+	m.validated = append([]File{}, files...)
+	return m.validateErr
+}
 
 type memoryCheckpoints struct {
 	saved            *State

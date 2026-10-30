@@ -42,8 +42,8 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Avro codec | [archive/avro](../internal/archive/avro) | Preserve raw records and source identity in bounded compressed blocks | Standard I/O ports; fixed schema and independent Avro interoperability tests |
 | Archive capture | [archive/capture](../internal/archive/capture) | Route records and rotate by size, age, rewind and file budget | Segments, Clock; no Kafka or copy-loop state |
 | Archive storage | [archive/capture](../internal/archive/capture) | Lock writer namespaces, save durable boundaries, publish and recover files | Filesystem/DataFile, StateStore; Journal uses AtomicWriter for synced replacement |
-| Archive replay | [archive/replay](../internal/archive/replay) | Pin completed inputs, merge source offsets and save confirmed physical cursors | Snapshot, Blocks, Checkpoints; bounded Pool and read-only Catalog |
-| Checkpoint encoding | [checkpoint](../internal/checkpoint) | Derive safe group filenames, encode bounded canonical JSON with checksums and replace files durably | AtomicWriter, private filesystem port; owners validate their state |
+| Archive replay | [archive/replay](../internal/archive/replay) | Pin completed inputs, merge source offsets and save confirmed physical cursors | Snapshot, Blocks, Checkpoints; Query shares saved-selection and window checks with inspection; Catalog.Preview checks headers and sizes |
+| Checkpoint encoding | [checkpoint](../internal/checkpoint) | Read bounded regular files, derive safe group filenames, encode canonical JSON with checksums and replace files durably | File, AtomicWriter, private filesystem port; callers open files and validate their state |
 | CLI | [cmd](../cmd/kaferry), [app](../internal/app) | Parse flags, compose components and handle signals | Command/Engine; Fx at composition only |
 
 ## Ownership

@@ -27,7 +27,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 		{"previous to candidate", previous, candidate}, {"candidate to previous", candidate, previous},
 	} {
 		t.Run(direction.name, func(t *testing.T) {
-			// Given two source records and binaries with incompatible progress formats but a shared Avro schema.
+			// Given two source records and binaries sharing the Avro schema.
 			admin := admin(t)
 			source := topic(t, admin, 1)
 			producer := producer(t)
@@ -52,12 +52,25 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			require.Equal(t, int64(1), progress.At)
 			require.True(t, strings.HasPrefix(progress.Metadata, "kaferry:2;") || strings.HasPrefix(progress.Metadata, "kaferry:4;"))
 
-			// When the other binary encounters incompatible delivery authority, then it refuses before changing output.
-			runMigrationExpect(t, direction.second, limited(sql), config, 2, "unsupported version of commit metadata")
-			require.Equal(t, first, archiveRecords(t, archive))
+			// Given the second binary's progress format, observed on an independent group.
+			probeGroup := group + "-format"
+			probeSQL := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s') ", filepath.Join(t.TempDir(), "probe"), source, probeGroup)
+			runMigrationBinary(t, direction.second, limited(probeSQL), config)
+			probe := committedPartitions(t, admin, probeGroup, source, 1)[0]
+			firstFormat, _, _ := strings.Cut(progress.Metadata, ";")
+			secondFormat, _, _ := strings.Cut(probe.Metadata, ";")
+			require.Contains(t, []string{"kaferry:2", "kaferry:4"}, secondFormat)
+			compatible := firstFormat == secondFormat
 
-			// Given the original binary finishes capture, leaving two records for a partial replay.
-			runMigrationBinary(t, direction.first, limited(sql), config)
+			// When the other binary resumes, then matching formats continue from the
+			// saved cursor; incompatible authority is rejected without changing output.
+			if compatible {
+				runMigrationBinary(t, direction.second, limited(sql), config)
+			} else {
+				runMigrationExpect(t, direction.second, limited(sql), config, 2, "unsupported version of commit metadata")
+				require.Equal(t, first, archiveRecords(t, archive))
+				runMigrationBinary(t, direction.first, limited(sql), config)
+			}
 			complete := archiveRecords(t, archive)
 			require.Len(t, complete, 2)
 			require.Equal(t, first, complete[:1])
@@ -72,9 +85,18 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			require.Equal(t, int64(1), state.Position)
 			require.False(t, state.Complete)
 
-			// When another implementation resumes this checkpoint, then its incompatible output state is rejected.
-			runMigrationReject(t, direction.second, cloneSQL, config)
-			require.Equal(t, complete[:1], archiveRecords(t, clone))
+			// When the other binary resumes replay, then compatible authority preserves
+			// the fixed selection and cursor; incompatible output state is rejected.
+			if compatible {
+				runMigrationBinary(t, direction.second, cloneSQL, config)
+				require.Equal(t, complete, archiveRecords(t, clone))
+				resumed := migrationCheckpoint(t, config, "file-migration")
+				require.EqualValues(t, 2, resumed.Position)
+				require.True(t, resumed.Complete)
+			} else {
+				runMigrationReject(t, direction.second, cloneSQL, config)
+				require.Equal(t, complete[:1], archiveRecords(t, clone))
+			}
 
 			// When a fresh group reads the archive, then it sees the same full records.
 			fresh := filepath.Join(t.TempDir(), "read")
