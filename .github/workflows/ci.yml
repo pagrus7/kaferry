@@ -106,6 +106,14 @@ jobs:
         run: |
           mkdir -p .cache/previous-version
           git archive "$BASE_SHA" | tar -x -C .cache/previous-version
+          progress_format_status=0
+          grep -Fq 'const prefix = "kaferry:4;"' .cache/previous-version/internal/commitmeta/codec.go || progress_format_status=$?
+          if [ "$progress_format_status" -eq 0 ]; then
+            echo 'Skipping cross-version resume: kaferry:4 progress is unsupported.'
+            exit 0
+          elif [ "$progress_format_status" -ne 1 ]; then
+            exit "$progress_format_status"
+          fi
           previous_binary="$PWD/build-results/kaferry-previous"
           (cd .cache/previous-version && CGO_ENABLED=0 go build -trimpath -o "$previous_binary" ./cmd/kaferry)
           CGO_ENABLED=0 make build
