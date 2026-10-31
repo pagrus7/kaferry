@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from pr_description import MAX_CHARACTERS, SECTIONS, validate
+from pr_description import FORMATTING_ONLY, MAX_CHARACTERS, SECTIONS, validate
 
 
 VALID = """## Changes
@@ -69,6 +69,60 @@ class PRDescriptionTest(unittest.TestCase):
                 # When marked ready, then unfinished reviews block the description check.
                 self.assertEqual(validate(body, draft=True), [])
                 self.assertEqual(not validate(body), result == "Passed")
+
+    def test_formatting_exemptions_require_docs_review_and_eligible_scope(self):
+        # Given both exemptions, then only independently reviewed Markdown scope is ready.
+        body = VALID.replace("## Tests review\n\nPassed", "## Tests review\n\n" + FORMATTING_ONLY)
+        body = body.replace("## Simplicity review\n\nPassed", "## Simplicity review\n\n" + FORMATTING_ONLY)
+        for paths in (["README.md"], ["docs/usage.md", "releases/v1.md"]):
+            with self.subTest(paths=paths):
+                self.assertEqual(validate(body, paths=paths), [])
+                self.assertEqual(validate(body.replace("Passed", "Pending"), draft=True, paths=paths), [])
+                self.assertTrue(validate(body.replace("Passed", "Pending"), paths=paths))
+        # When file scope is missing, mixed or policy-bearing, then the exemption fails closed.
+        for paths in (None, [], ["AGENTS.md"], ["review/README.md"], ["design/grammar.md"],
+                      ["docs/AGENTS.md"], ["docs/SKILL.md"], ["README.md", "internal/app/cli.go"]):
+            with self.subTest(paths=paths):
+                self.assertTrue(validate(body, paths=paths))
+        for section in ("Docs review", "Tests review", "Simplicity review"):
+            # When exempting just one aspect, then standard review cannot be bypassed.
+            self.assertTrue(validate(VALID.replace(f"## {section}\n\nPassed",
+                                                 f"## {section}\n\n{FORMATTING_ONLY}"), paths=["README.md"]))
+
+    def test_formatting_event_checks_the_actual_git_diff(self):
+        # Given an eligible body and real base/head commits.
+        script = Path(__file__).with_name("pr_description.py").resolve()
+        body = VALID.replace("## Tests review\n\nPassed", "## Tests review\n\n" + FORMATTING_ONLY)
+        body = body.replace("## Simplicity review\n\nPassed", "## Simplicity review\n\n" + FORMATTING_ONLY)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*args):
+                return subprocess.check_output(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", *args],
+                                               cwd=root, text=True, stderr=subprocess.PIPE).strip()
+
+            git("init")
+            (root / "README.md").write_text("Example\n")
+            git("add", "README.md")
+            git("commit", "-m", "base")
+            base = git("rev-parse", "HEAD")
+            event = root / "event.json"
+            for name, code in (("README.md", 0), ("runtime.go", 1)):
+                (root / name).write_text("Changed\n")
+                git("add", name)
+                git("commit", "-m", name)
+                head = git("rev-parse", "HEAD")
+                event.write_text(json.dumps({"pull_request": {"body": body, "base": {"sha": base}, "head": {"sha": head}}}))
+                # When the entrypoint reads repository changes, then mixed code scope is rejected.
+                result = subprocess.run([sys.executable, str(script)], cwd=root,
+                                        env=dict(os.environ, GITHUB_EVENT_PATH=str(event)), capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, code, result.stderr)
+            # Missing or invalid revision evidence must also reject the exemption.
+            for refs in ({}, {"base": {"sha": "--invalid"}, "head": {"sha": head}}):
+                event.write_text(json.dumps({"pull_request": {"body": body, **refs}}))
+                result = subprocess.run([sys.executable, str(script)], cwd=root,
+                                        env=dict(os.environ, GITHUB_EVENT_PATH=str(event)), capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 1, result.stderr)
 
     def test_length_limit_counts_the_entire_unicode_body(self):
         # Given a description exactly at the limit, including a hidden comment.
@@ -132,7 +186,7 @@ class PRDescriptionTest(unittest.TestCase):
             event = root / "event.json"
             env = dict(os.environ, GITHUB_EVENT_PATH=str(event))
             for valid in (True, False):
-                body = VALID.replace("- Add local reviews.", "$(touch unexpected); `touch unexpected`")
+                body = VALID.replace("- Add local reviews.", "$(touch unexpected); `touch unexpected`\n\n```text\n" + FORMATTING_ONLY + "\n```")
                 if not valid:
                     body = body.replace("Passed", "Incomplete")
                 event.write_text(json.dumps({"pull_request": {"body": body}}), encoding="utf-8")

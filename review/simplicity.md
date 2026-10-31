@@ -1,15 +1,12 @@
 # Simplicity review
 
-Review the supplied changes for opportunities to delete, simplify or consolidate implementation, tests and documentation.
+Review the supplied scope for opportunities to delete, simplify or consolidate code, tests and documentation. Follow the [shared workflow](README.md) for follow-ups and coverage evidence.
 
-- Default to the smallest solution that satisfies current requirements. Challenge speculative features, unused options, unnecessary state, wrappers, framework code, duplicate representations and abstractions justified only by possible future use. Require a current requirement, demonstrated failure or compatibility contract to keep them.
-- Prefer direct control flow and fewer independent states. Flag avoidable branching, nesting, oversized components and repeated logic. Lines of code and cyclomatic complexity are clues, not targets; do not trade clarity or correctness for a smaller score.
-- For final coverage follow-ups, read the full patch, gap record and raw coverage evidence. Independently check each retained gap against callers, invariants and required behavior. Propose removal or useful tests where warranted; report agreement or disagreement and evidence for every retained gap.
-- Keep focused components and useful interfaces for actual responsibilities, dependency injection or independent testing. Do not flatten good boundaries, remove meaningful failure handling or invent another abstraction to make something look cleaner.
-- Separate necessary behavior from the small support operations used to implement or test it. Repeating scenario steps is different from repeating generic scaffolding; inspect the operations separately even when their arguments are domain-specific.
-- Evaluate reuse at individual sites and as a consistent practice across the reviewed scope. Look for shared work hidden behind different names or arguments; do not stop at the most frequent operation. Check directly related components and existing dependencies. State where broader reuse helps and where direct code remains clearer.
-- Compare direct code, standard utilities, existing dependencies, focused helpers and maintained libraries. For useful candidates, give representative locations, a rough occurrence count and a small replacement. Weigh total writing, reading, debugging, dependency and migration costs. Recommend a consistent default and justified exceptions when benefits apply broadly. Reformatting or relocating repetition alone does not establish simplification.
-- In tests, remove redundant scenarios, assertion-free coverage chasing, excessive setup, broad mocks and helper layers that hide the behavior. Inspect whole changed test functions and their fixtures; preserve useful regression detection, cleanup, concurrency safety and the testing pyramid.
-- In docs, remove repetition, stale detail, backstory and files that answer no current user or contributor question. Preserve necessary instructions, limits and compatibility guarantees.
+- Keep the smallest solution satisfying current requirements. Challenge speculative features, unused options, unnecessary state, wrappers and duplicate representations. Retained complexity needs a current requirement, demonstrated failure or compatibility contract.
+- Prefer direct control flow and fewer independent states. Complexity scores are clues; preserve correctness, useful component boundaries, dependency injection and meaningful failure handling.
+- Inspect repeated support operations separately from domain-specific scenario steps. Compare direct code, standard tools, existing dependencies and small helpers within the affected scope. Recommend reuse only when total writing, reading, debugging and maintenance cost improves; show representative sites and a concrete replacement. Moving repetition alone is not simplification.
+- In tests, remove redundant scenarios, assertion-free coverage chasing, excessive setup, broad mocks and helpers that hide behavior. Preserve regression detection, cleanup and concurrency safety.
+- In docs, remove repetition, stale detail, backstory and files serving no current user or contributor question. Preserve necessary instructions, limits and compatibility guarantees.
+- For applicable coverage follow-ups, inspect the reviewed scope, gap record and raw evidence. Independently assess every retained gap against callers, invariants and required behavior; report agreement or disagreement and useful removal or test options.
 
-Report concrete simplifications or evidence for keeping the reviewed complexity, including when there are no findings.
+Report concrete simplifications or evidence for keeping the reviewed complexity. No findings is valid.
