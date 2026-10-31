@@ -35,7 +35,7 @@ func TestTimeBoundariesOutOfOrderAndTriggerReplay(t *testing.T) {
 	}{{"halfopen", fmt.Sprintf("RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s'", lo.Format(time.RFC3339Nano), hi.Format(time.RFC3339Nano)), []string{"1", "2", "3"}}, {"between", fmt.Sprintf("RECORD_TIMESTAMP BETWEEN TIMESTAMP '%s' AND TIMESTAMP '%s'", lo.Format(time.RFC3339Nano), hi.Format(time.RFC3339Nano)), []string{"1", "2", "3", "4"}}} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "out.avro")
-			statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s-%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE %s ", path, src, src, test.name, test.filter)
+			statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s-%s', MAX_STALENESS=INTERVAL '0' SECOND, MAX_OUT_OF_ORDER=INTERVAL '0' SECOND) WHERE %s ", path, src, src, test.name, test.filter)
 
 			// When
 			execute(t, statement, cfg)
