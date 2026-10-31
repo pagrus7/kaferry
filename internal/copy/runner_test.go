@@ -188,7 +188,7 @@ func TestRunnerCapsIncludeConfirmedWorkAndOversizedAlone(t *testing.T) {
 	require.NoError(t, r.input(incoming(0, 1, 200)))
 
 	// Then the oversized record waits for the outstanding work.
-	if len(d.writes) != 1 || r.deferred == nil {
+	if len(d.writes) != 1 || r.flow.deferred == nil {
 		t.Fatal("oversized record submitted alongside uncommitted work")
 	}
 

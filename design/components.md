@@ -18,15 +18,15 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | --- | --- | --- | --- |
 | SQL parser | [sql](../internal/sql) | Tokenize/parse; report input positions | `sql.Parser` |
 | Configuration | [config](../internal/config) | Read TOML and defaults | `config.Reader`, `FileReader` |
-| Planner | [plan](../internal/plan) | Validate, merge connections, compile time bounds and resolve environment values | `plan.Builder`, `Environment` |
+| Planner | [plan](../internal/plan) | Validate, merge connections, compile time bounds and resolve environment values | [Builder, Environment and Plan](../internal/plan/types.go) |
 | Command | [app](../internal/app) | Order planning stages; classify failures | Parser, Reader, Builder, Engine |
 | Engine | [app](../internal/app) | Validate endpoints/progress; acquire and close query resources | KafkaFactory, FileFactory, RunnerFactory |
 | Copy inspection | [inspect](../internal/inspect) | Preview endpoints, progress and starting positions without writes | KafkaFactory, Files, PositionerFactory |
 | Archive inspection | [archiveio/inspection.go](../internal/archiveio/inspection.go) | Read archive headers, sizes and replay checkpoints without locks or recovery | inspect.Files |
-| Runner | [copy](../internal/copy) | Consume, filter, submit, process outcomes/lifecycle events | Source, Sink, ProgressStore, ProgressTracker, Clock |
+| Runner | [copy](../internal/copy) | Consume, filter, submit, process outcomes/lifecycle events | [Source, Sink, ProgressStore and Clock](../internal/copy/ports.go); [ProgressTracker](../internal/copy/progress.go) |
 | Partition completion | [copy/partition.go](../internal/copy/partition.go) | Decide timestamp stops, tip sampling and waits for a fixed sampled end | Pure assignment state; runner performs I/O and logs outcomes |
-| Flow control | [copy/flow.go](../internal/copy/flow.go) | Hold unsent input; decide admission, worker-wide pause and commit cadence | Narrow work-count port; runner pauses full partitions and checkpoints at a record/byte cap, after one second or when the next input cannot fit |
-| Progress tracker | [copy](../internal/copy) | Track consumed/resolved prefixes, ownership and caps | ProgressTracker, fresh instance through ProgressFactory |
+| Flow control | [copy/flow.go](../internal/copy/flow.go) | Hold input and its EOF before tracking; decide admission, capacity pauses and commit cadence | Narrow work-count port; runner pauses full partitions and checkpoints at a record/byte cap, after one second or when the next input cannot fit |
+| Progress tracker | [copy/progress.go](../internal/copy/progress.go) | Track consumed/resolved prefixes, ownership and caps | ProgressTracker, fresh instance through ProgressFactory |
 | Kafka metadata | [franz](../internal/franz) | Inspect identities, offsets and optional destination config | sourceMetadata, destinationMetadata, MetadataClient |
 | Kafka contracts | [kafkaport](../internal/kafkaport) | Endpoint interfaces and saved-progress identity checks | Connection, copy.ProgressStore; client libraries stay in adapters |
 | Commit metadata codec | [commitmeta](../internal/commitmeta) | Encode/decode the versioned commit format, without Kafka I/O | `commitmeta.Codec`; private wire types, independent golden/invalid-input tests |
@@ -34,7 +34,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Kafka positioning | [kafkaport](../internal/kafkaport) | Resolve saved/start positions and windows; batch lookups | PositionerFactory, AssignmentPositioner, OffsetLookupFactory, OffsetLookup; raw offset/time ports and client conversions in franz |
 | Kafka input | [franz](../internal/franz) | Hand off callbacks/fetches to the core loop; position, pause and prove gaps | ConsumerClient, sourceMetadata, gapReader, rebalanceBridge, PartitionValidator |
 | Kafka output | [franz](../internal/franz) | Validate records, bound admission and report asynchronous deliveries | ProducerClient, destinationMetadata, Clock |
-| Kafka commits | [franz](../internal/franz) | Save positions and eligible stops; reject commits without a group member ID and generation | offsetCommitter, copy.ProgressStore |
+| Kafka commits | [franz](../internal/franz) | Save positions and eligible stops; reject commits without a group member ID and generation | offsetCommitter, copy.ProgressStore; committer owns assignment metadata |
 | Observability | [observability](../internal/observability) | Export immutable copy snapshots and actual save results through OTLP/HTTP; bound cleanup and redact diagnostics | `copy.Observer`, per-query Session/Factory, environment/file ports; SDK stays in adapter |
 | Shutdown budget | [app/shutdown.go](../internal/app/shutdown.go) | Enforce whole-process stop deadline; identify the blocked operation | StopObserver, Shutdown; CLI alone owns termination |
 | Archive adapters | [archiveio](../internal/archiveio) | Convert full provenance, batch confirmations, save replay stops and publish final files | Input, Output, Capture, Replay; format libraries stay outside copy |
@@ -44,6 +44,19 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Archive replay | [archive/replay](../internal/archive/replay) | Pin completed inputs, merge source offsets and save confirmed physical cursors | Snapshot, Blocks, Checkpoints; bounded Pool and read-only Catalog |
 | Checkpoint encoding | [checkpoint](../internal/checkpoint) | Derive safe group filenames, encode bounded canonical JSON with checksums and replace files durably | AtomicWriter, private filesystem port; owners validate their state |
 | CLI | [cmd](../cmd/kaferry), [app](../internal/app) | Parse flags, compose components and handle signals | Command/Engine; Fx at composition only |
+
+## Starting a component change
+
+Start with the affected contract and its focused tests below. Follow callers and adapters when changing ownership, ordering, errors or persisted identity. Review the full patch; these entry points guide investigation, not review exclusions.
+
+| Change | Contract and implementation | Focused evidence |
+| --- | --- | --- |
+| Source/sink behavior | [Core ports](../internal/copy/ports.go), [record and event types](../internal/copy/record.go) | [Rejection and asynchronous errors](../internal/copy/policy_test.go), [draining and save failures](../internal/copy/runner_boundary_test.go) |
+| Admission and held input | [Flow](../internal/copy/flow.go); runner owns submission retries after tracking | [Capacity](../internal/copy/flow_test.go), [revocation and queue deadlines](../internal/copy/runner_regression_test.go), [input/EOF ordering](../internal/copy/policy_test.go) |
+| Confirmed and saved positions | [Tracker contract](../internal/copy/progress.go), [implementation](../internal/copy/tracker.go) | [Gaps and stale deliveries](../internal/copy/progress_test.go), [stop persistence](../internal/copy/stop_test.go) |
+| Kafka commit ownership | [Committer](../internal/franz/commit.go), [assignment sequence](../internal/franz/source_lifecycle.go) | [Commit snapshots and errors](../internal/franz/commit_test.go), [assignment and revocation](../internal/franz/source_test.go) |
+| Plan inputs and identity | [Plan types](../internal/plan/types.go), [identity contract](decisions.md#identity) | [Locations and redaction](../internal/plan/diagnostic_test.go), [fingerprint compatibility](../internal/plan/fingerprint_test.go) |
+| Replay resource limits | [Pool](../internal/archive/replay/pool.go), [reader](../internal/archive/replay/reader.go) | [Bounded resources and restart](../internal/archive/replay/files_test.go), [ordering and cleanup](../internal/archive/replay/order_test.go) |
 
 ## Ownership
 

@@ -16,12 +16,25 @@ import (
 type offsetCommitter interface {
 	CommitOffsetsSync(context.Context, map[string]map[int32]kgo.EpochOffset, func(*kgo.Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error))
 }
+
+// Committer owns the metadata for assigned partitions. Assignment, revocation and
+// Save run serially on the source event loop; request hooks use encoded snapshots.
 type Committer struct {
 	codec        commitmeta.Codec
 	client       offsetCommitter
 	topic, group string
 	topicID      [16]byte
 	metadata     map[int32]kafkaport.Progress
+}
+
+// assign installs the validated identity and window before saving initial progress.
+func (c *Committer) assign(id int32, progress kafkaport.Progress) {
+	c.metadata[id] = progress
+}
+
+// revoke prevents subsequent saves after the runner releases this partition.
+func (c *Committer) revoke(id int32) {
+	delete(c.metadata, id)
 }
 
 func (c *Committer) Save(ctx context.Context, cursors []core.Cursor) (map[int32]error, error) {

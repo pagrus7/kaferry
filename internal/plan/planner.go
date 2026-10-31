@@ -11,67 +11,9 @@ import (
 	"github.com/pagrus7/kaferry/internal/sql"
 )
 
-type Environment interface{ LookupEnv(string) (string, bool) }
-type Builder interface {
-	Build(sql.Statement, Profiles) (Plan, error)
-}
-
 type Planner struct{ environment Environment }
 
 func NewPlanner(environment Environment) *Planner { return &Planner{environment: environment} }
-
-type Profiles map[string]map[string]string
-
-type Properties struct{ values map[string]string }
-
-func (p Properties) Get(name string) string { return p.values[name] }
-func (p Properties) Values() map[string]string {
-	values := make(map[string]string, len(p.values))
-	maps.Copy(values, p.values)
-	return values
-}
-
-// Do not expose credentials through fmt, JSON, or error reporting.
-func (p Properties) String() string   { return "[connection properties redacted]" }
-func (p Properties) GoString() string { return p.String() }
-
-const (
-	Preserve = "PRESERVE"
-	Key      = "KEY"
-)
-
-type Endpoint struct {
-	Kind             string
-	Name             string
-	Format           string
-	Partitioning     string
-	RotateAfterSize  int64
-	RotateAfterAgeMS int64
-	Alias            string
-	Properties       Properties
-}
-
-type Policies struct {
-	MissingTimestamp  string
-	RejectedTimestamp string
-	OtherRecord       string
-}
-
-type Plan struct {
-	Source                 Endpoint
-	Destination            Endpoint
-	Group                  string
-	OneOff                 bool
-	Start                  string
-	Window                 WindowSpec
-	Partitions             *PartitionFilter
-	MaxOutOfOrderMS        *int64
-	Offsets                *OffsetRange
-	PartitionOffsets       []PartitionOffsetRange
-	MaxStalenessMS         int64
-	WorkerStopAfterRecords uint64
-	Policies               Policies
-}
 
 func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error) {
 	connections, err := p.connections(statement.Connections, profiles)

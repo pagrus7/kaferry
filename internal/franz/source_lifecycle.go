@@ -16,7 +16,7 @@ func (s *Source) lifecycle(event lifecycleEvent) error {
 			delete(s.paused, id)
 			delete(s.held, id)
 			delete(s.retention, id)
-			delete(s.store.metadata, id)
+			s.store.revoke(id)
 			s.client.ResumeFetchPartitions(map[string][]int32{s.plan.Source.Name: {id}})
 		}
 		event.answer <- lifecycleAnswer{err: err}
@@ -52,7 +52,7 @@ func (s *Source) lifecycle(event lifecycleEvent) error {
 	for n, a := range positioned.Assignments {
 		id := a.Cursor.Partition
 		s.positions[id] = a.Cursor.Position
-		s.store.metadata[id] = positioned.Progress[id]
+		s.store.assign(id, positioned.Progress[id])
 		s.retention[id] = positioned.Retention[id]
 		if _, ok := positioned.Retention[id]; !ok {
 			delete(s.retention, id)

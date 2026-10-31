@@ -115,7 +115,7 @@ func TestSnapshotDistinguishesTrackingFromRecordCounts(t *testing.T) {
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0}}}))
 	require.NoError(t, r.tracker.Advance(Cursor{Partition: 0, Position: 2}))
 	in := incoming(0, 2, 10)
-	r.deferred = &in
+	r.flow.deferred = &deferredInput{input: in}
 	r.partitions[0].stop = &Stop{Reason: "eof", At: 2}
 	// When inspecting the loop-owned state.
 	s := r.snapshot()

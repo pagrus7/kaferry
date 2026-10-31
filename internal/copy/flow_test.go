@@ -68,7 +68,7 @@ func TestFlowCommitCadenceAndPauseReasons(t *testing.T) {
 		name                string
 		total, partition    workCount
 		elapsed             time.Duration
-		deferred, pending   bool
+		deferred            bool
 		wantDue, wantPaused bool
 	}{
 		{name: "none", total: workCount{1, 100}, partition: workCount{1, 100}},
@@ -82,17 +82,13 @@ func TestFlowCommitCadenceAndPauseReasons(t *testing.T) {
 		{name: "below partition bytes", total: workCount{1, 799}, partition: workCount{1, 799}},
 		{name: "partition bytes", total: workCount{1, 800}, partition: workCount{1, 800}, wantDue: true},
 		{name: "deferred", total: workCount{1, 100}, partition: workCount{1, 100}, deferred: true, wantDue: true, wantPaused: true},
-		{name: "pending", total: workCount{1, 100}, partition: workCount{1, 100}, pending: true, wantPaused: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given independent work counts, held input and elapsed time.
 			now := time.Unix(10, 0)
 			f := flow{lastCommit: now}
 			if tc.deferred {
-				f.deferred = &Input{}
-			}
-			if tc.pending {
-				f.pending = &submission{}
+				f.deferred = &deferredInput{}
 			}
 			limits := config.Worker{RecordCap: 10, ByteCap: 1000, PartitionRecordCap: 8, PartitionByteCap: 800}
 			work := mockWorkCounts{total: tc.total, partitions: map[int32]workCount{3: tc.partition}}
@@ -101,7 +97,7 @@ func TestFlowCommitCadenceAndPauseReasons(t *testing.T) {
 			due := f.commitDue(now.Add(tc.elapsed), work, map[int32]*partition{3: {}}, limits)
 			paused := f.full(work, limits)
 
-			// Then full budgets save; held input pauses; pending alone does not force saves.
+			// Then full budgets save and deferred input pauses intake.
 			require.Equal(t, tc.wantDue, due, "commit due")
 			require.Equal(t, tc.wantPaused, paused, "worker paused")
 		})

@@ -11,8 +11,15 @@ import (
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
+type submission struct {
+	input     Input
+	token     Token
+	busySince time.Time
+}
+
 type Runner struct {
-	flow
+	flow           flow
+	pending        *submission
 	source         Source
 	sink           Sink
 	store          ProgressStore
@@ -64,6 +71,9 @@ func (r *Runner) Revoke(partitions []int32, lost bool) error {
 	}
 	for _, id := range partitions {
 		r.flow.revoke(id)
+		if r.pending != nil && r.pending.token.Partition == id {
+			r.pending = nil
+		}
 		r.tracker.Revoke(id)
 		delete(r.partitions, id)
 		r.log.Info("partition revoked", "partition", id)
@@ -79,7 +89,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		r.stop.Begin()
 		r.report(true)
 		r.stop.Stage("printing copy summary")
-		r.log.Info("copy summary", "submitted", r.submitted, "confirmed", r.confirmed, "filtered", r.filtered, "skipped", r.skipped, "timestamp_stops", r.timestampStops, "tip_stops", r.tipStops, "peak_uncommitted_records", r.peakRecords, "peak_uncommitted_bytes", r.peakBytes)
+		r.log.Info("copy summary", "submitted", r.submitted, "confirmed", r.confirmed, "filtered", r.filtered, "skipped", r.skipped, "timestamp_stops", r.timestampStops, "tip_stops", r.tipStops, "peak_uncommitted_records", r.flow.peakRecords, "peak_uncommitted_bytes", r.flow.peakBytes)
 	}()
 	if err := r.run(ctx); err != nil {
 		return r.exit(err)
@@ -197,7 +207,7 @@ func (r *Runner) input(input Input) error {
 	if p == nil || p.stop != nil {
 		return nil
 	}
-	if r.pending != nil || r.deferred != nil {
+	if r.pending != nil || r.flow.deferred != nil {
 		return fmt.Errorf("source delivered a record while intake was paused")
 	}
 	p.atTip = false
@@ -211,7 +221,7 @@ func (r *Runner) input(input Input) error {
 		input.Next = min(input.Next, *p.high)
 	}
 	if !r.admits(input) {
-		r.deferred = &input
+		r.flow.deferred = &deferredInput{input: input}
 		return nil
 	}
 	if stopped, err := r.stopAtTimestamp(p, input); stopped || err != nil {
@@ -352,8 +362,7 @@ func (r *Runner) eof(cursor Cursor) error {
 	if p == nil || p.stop != nil {
 		return nil
 	}
-	if r.deferred != nil && r.deferred.Cursor.Partition == cursor.Partition {
-		r.deferredEOF = &cursor
+	if r.flow.deferEOF(cursor) {
 		return nil
 	}
 	if p.high != nil {

@@ -43,10 +43,14 @@ func TestRunnerIgnoresLateInputAndEOFAfterStopOrRevocation(t *testing.T) {
 
 func TestRunnerRejectsNewInputWhileSubmissionIsPending(t *testing.T) {
 	// Given a full destination queue holding an unsubmitted record.
-	r, _, sink, store, _ := fixture(t)
+	r, source, sink, store, clock := fixture(t)
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 	sink.submit = func(Record, Token) error { return &Busy{} }
 	require.NoError(t, r.input(incoming(0, 0, 10)))
+	r.flow.lastCommit = clock.Now()
+	require.NoError(t, r.pause())
+	require.True(t, source.paused[0], "pending submission pauses intake below capacity")
+	require.False(t, r.shouldCommit(), "pending submission alone does not force a save")
 	pending := r.pending
 	beforeRecords, beforeBytes := r.tracker.Total()
 
@@ -190,7 +194,7 @@ func TestRunnerStopsBeforeNextInputWhenPeriodicCheckpointFails(t *testing.T) {
 			first, next := incoming(0, 0, 1), incoming(0, 1, 1)
 			source.events = []Event{{Input: &first}, {Input: &next}}
 			failure := errors.New("periodic " + stage + " failed")
-			r.lastCommit = clock.Now()
+			r.flow.lastCommit = clock.Now()
 			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 			deadline := clock.Now().Add(5 * time.Second)

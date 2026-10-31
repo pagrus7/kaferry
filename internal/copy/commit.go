@@ -22,7 +22,7 @@ func (r *Runner) commit(ids []int32) error { return r.save(ids, false) }
 // save commits confirmed progress. When releasing revoked partitions, a
 // recoverable failure only replays work, so the partition is released anyway.
 func (r *Runner) save(ids []int32, releasing bool) error {
-	r.lastCommit = r.clock.Now()
+	r.flow.lastCommit = r.clock.Now()
 	cursors := r.confirmedCursors(ids)
 	if len(cursors) == 0 {
 		return nil

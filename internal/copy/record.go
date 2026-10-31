@@ -2,9 +2,6 @@
 package copy
 
 import (
-	"context"
-	"time"
-
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
@@ -45,32 +42,29 @@ type Stop struct {
 	At     int64  `json:"at"`
 }
 
+// Cursor is a source's next position, independent of original record provenance.
+// Kafka uses one cursor per partition; archive replay uses virtual partition zero.
 type Cursor struct {
 	Partition int32
 	Position  int64
 	Stop      *Stop
 	End       *int64
 }
+
+// Input spans Cursor.Position through Next (exclusive), including source gaps.
 type Input struct {
 	Cursor Cursor
 	Next   int64
 	Record Record
 }
 
-// StopObserver starts the shutdown budget and reports the operation in progress.
-type StopObserver interface {
-	Begin()
-	Stage(string)
-}
-type NoopStopObserver struct{}
-
-func (NoopStopObserver) Begin()       {}
-func (NoopStopObserver) Stage(string) {}
-
 type Assignment struct {
 	Cursor Cursor
 	Window plan.Window
 }
+
+// Event may carry input, an observed end position, both, or neither. EOF is a
+// Kafka tip observation, not necessarily permanent completion; archives end there.
 type Event struct {
 	Input *Input
 	EOF   *Cursor
@@ -85,34 +79,6 @@ type Delivery struct {
 	Err   error
 	Fatal bool
 }
-type Lifecycle interface {
-	Assign([]Assignment) error
-	Revoke(partitions []int32, lost bool) error
-}
-type Source interface {
-	Start(Lifecycle, Observer) error
-	Poll(time.Duration) (Event, error)
-	Pause(int32, bool) error
-	HighWatermark(int32) (int64, error)
-	Close() error
-}
-type Sink interface {
-	Submit(Record, Token) error
-	Flush() error
-	Deliveries() <-chan Delivery
-	Close()
-}
-type ProgressStore interface {
-	Save(context.Context, []Cursor) (map[int32]error, error)
-}
-type Clock interface {
-	Now() time.Time
-	Sleep(time.Duration)
-}
-type RealClock struct{}
-
-func (RealClock) Now() time.Time               { return time.Now() }
-func (RealClock) Sleep(duration time.Duration) { time.Sleep(duration) }
 
 // RecordError is safe to skip: the failed input is identified and was not sent.
 type RecordError struct {
