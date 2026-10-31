@@ -63,8 +63,9 @@ type Assignment struct {
 	Window plan.Window
 }
 
-// Event may carry input, an observed end position, both, or neither. EOF is a
-// Kafka tip observation, not necessarily permanent completion; archives end there.
+// Event may carry input, a source position without a payload, both, or neither.
+// Kafka EOF can report control-record progress or a tip; archive EOF marks the
+// end of selected input.
 type Event struct {
 	Input *Input
 	EOF   *Cursor
