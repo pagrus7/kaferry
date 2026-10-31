@@ -56,7 +56,7 @@ def read_rollout(path):
                         warnings.append(f'usage unavailable at record {number}')
                         continue
                     total = info['total_token_usage']
-                    # Cache writes were absent from some older rollouts.
+                    # Cache-write counters are optional in rollout records.
                     total = {key: total.get(key, 0) if key == 'cache_write_input_tokens'
                              else total[key] for key in FIELDS}
                     if any(type(value) is not int or value < 0 for value in total.values()):
