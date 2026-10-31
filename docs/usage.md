@@ -294,10 +294,9 @@ SQL
 
 Multiple workers can capture into one archive. Stop capture with Ctrl+C and wait for a successful exit before replaying its remaining records; [recover a failed capture](#capture-crashed) first.
 
-**Replay completed files to Kafka.** A checkpoint is a file recording replay progress, stored outside the input archive. Create its directory before running one replay process for this group:
+**Replay completed files to Kafka.** A checkpoint is a file recording replay progress, stored outside the input archive. Kaferry creates the default directory, `~/.kaferry/checkpoints`, when replay starts. Run one replay process for this group:
 
 ```sh
-mkdir -p ~/.kaferry/checkpoints
 kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM ARCHIVE 'archive/orders' WITH (GROUP = 'orders-restore');"
 ```
