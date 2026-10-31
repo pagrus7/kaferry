@@ -90,11 +90,12 @@ class UsageTest(unittest.TestCase):
         self.assertEqual([r['round'] for r in report['rows']], [1, 2])
 
     def test_child_identity_models_and_cross_work_registration(self):
-        # Given a child with the parent's session_id but its own thread id.
+        # Given a fork with its own header followed by copied parent metadata.
         self.mark('--from-start')
         child = self.root / 'child.jsonl'
         self.write(child, [event('session_meta', {'id': 'child', 'session_id': 'root',
                                                 'source': {'subagent': {'thread_spawn': {'parent_thread_id': 'root'}}}}),
+                           event('session_meta', {'id': 'root', 'session_id': 'root'}),
                            event('turn_context', {'model': 'model-a', 'service_tier': 'priority'}),
                            counter(50, 10, 5), event('turn_context', {'model': 'unknown-model'}),
                            counter(100, 20, 10, second=3)])

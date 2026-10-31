@@ -20,7 +20,7 @@ python3 scripts/pr_usage.py attach sql-diagnostics --pr 123
 python3 scripts/pr_usage.py report sql-diagnostics
 ```
 
-Phases are `investigation`, `implementation`, `review`, `rework`, `delivery` and `unattributed`. Purpose is a short description such as `code`, `tests`, `docs`, `simplicity`, `coverage` or `fix-ci`. The coordinator registers every reviewer thread immediately after launching it, using its returned thread ID. Use `--from-start` to include the reviewer's startup requests. Reviewers do not write the ledger. Set `--round 2` for follow-up reviews and associated fixes; later rounds use increasing numbers. Registration is explicit: the script cannot measure unregistered agents, other clients or external services. Use a separate thread for each work name; duplicate registration across work names is rejected.
+Phases are `investigation`, `implementation`, `review`, `rework`, `delivery` and `unattributed`. Purpose is a short description such as `code`, `tests`, `docs`, `simplicity`, `coverage` or `fix-ci`. The coordinator registers every reviewer thread immediately after launching it, using its thread ID or rollout path. Use `--from-start` to include the reviewer's startup requests. Reviewers do not write the ledger. Set `--round 2` for follow-up reviews and associated fixes; later rounds use increasing numbers. Registration is explicit: the script cannot measure unregistered agents, other clients or external services. Use a separate thread for each work name; duplicate registration across work names is rejected.
 
 ```sh
 python3 scripts/pr_usage.py mark sql-diagnostics --session REVIEWER_THREAD_ID \
@@ -30,7 +30,7 @@ python3 scripts/pr_usage.py mark sql-diagnostics --session REVIEWER_THREAD_ID \
   --phase review --purpose docs --round 2
 ```
 
-Stop attribution when leaving the task, and resume with another `mark`. Keep the same work name across commits and resumed threads. Register each new thread. Reports refresh registered sources and retain imported counters if a source disappears or changes. Missing records and counter resets leave warnings; unflushed requests appear only after Codex writes them. Markers use recording time, so a delayed usage event can fall into the next phase. Compressed rollouts must be decompressed locally before registration; retain the registered file for refreshes.
+Stop attribution when leaving the task, and resume with another `mark`. Keep the same work name across commits and resumed threads. Register each new thread. Reports refresh registered sources and retain imported counters if a source disappears or changes. Unavailable usage fields, unreadable sources and detected counter resets leave warnings; unflushed requests appear only after Codex writes them. Markers use recording time, so a delayed usage event can fall into the next phase. Compressed rollouts must be decompressed locally before registration; retain the registered file for refreshes.
 
 ```sh
 python3 scripts/pr_usage.py stop sql-diagnostics

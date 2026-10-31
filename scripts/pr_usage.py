@@ -42,11 +42,9 @@ def read_rollout(path):
             try:
                 event = json.loads(line)
                 payload = event.get('payload') or {}
-                if event.get('type') == 'session_meta':
-                    source = payload.get('source')
-                    spawn = (source.get('subagent', {}).get('thread_spawn', {})
-                             if isinstance(source, dict) else {})
-                    meta = {'id': payload['id'], 'parent': spawn.get('parent_thread_id')}
+                if event.get('type') == 'session_meta' and not meta:
+                    # Forks may copy parent metadata after their own header.
+                    meta = {'id': payload['id']}
                 elif event.get('type') == 'turn_context':
                     model = payload.get('model') or 'unknown'
                     tier = payload.get('service_tier') or 'unknown'
@@ -112,9 +110,9 @@ def resolve_session(value, sessions):
     return matches[0].resolve()
 
 
-def refresh(session):
+def refresh(session, snapshot=None):
     try:
-        meta, rows, warnings = read_rollout(Path(session['path']))
+        meta, rows, warnings = snapshot if snapshot is not None else read_rollout(Path(session['path']))
         if meta['id'] != session['id']:
             raise ValueError('source thread identity changed')
         old = session.get('rows', [])
@@ -272,7 +270,7 @@ def main(argv=None):
                 else:
                     session = work['sessions'][thread]
                     marker = {'at': now(), 'phase': 'stopped', 'purpose': 'stopped', 'round': 1}
-                refresh(session)
+                refresh(session, (meta, rows, warnings))
                 session['markers'].append(marker)
             elif args.command == 'attach':
                 if args.pr < 1:
