@@ -271,6 +271,20 @@ class UsageTest(unittest.TestCase):
         self.assertEqual(result['totals']['total_tokens'], 0)
         self.assertTrue(result['warnings'])  # Reading does not invent token usage.
 
+    def test_file_read_text_distinguishes_threads_with_identical_labels(self):
+        # Given two threads reading the same range for the same phase and purpose.
+        self.mark('--from-start', '--phase', 'investigation', '--purpose', 'parser')
+        child = self.root / 'child.jsonl'
+        self.write(child, [event('session_meta', {'id': 'child'})])
+        self.mark('--from-start', '--phase', 'investigation', '--purpose', 'parser', source=child)
+        (self.root / 'example.go').write_text('package example\n')
+        for thread in ('root', 'child'):
+            self.run_cli('read', 'feature', 'example.go', '--session', thread, '--start', '1', '--end', '1')
+        # When displayed, then both rows identify their thread and measured volume.
+        text = usage.render(self.report())
+        for thread in ('root', 'child'):
+            self.assertIn(f'example.go | investigation / parser / 1 | {thread} | 1 | 1 | 16', text)
+
     def test_unregistered_stopped_and_invalid_reads_do_not_create_observations(self):
         # Given a registered but stopped session and a repository file.
         self.mark('--from-start')
@@ -303,7 +317,7 @@ class UsageTest(unittest.TestCase):
         with patch.object(usage, 'now', return_value='2026-10-31T00:01:00+00:00'):
             report = self.run_cli('report', 'example', '--rates', str(self.rates))
         return ('SYNTHETIC EXAMPLE: invented usage, prices, thread IDs and file contents.\n'
-                'This is not actual project usage.\n\n$ python3 scripts/pr_usage.py report example\n' + report
+                'This is not actual project usage.\n\n$ python3 scripts/pr_usage.py report example --rates /path/to/example-rates.json\n' + report
                 + '\n$ python3 scripts/pr_usage.py history example\n' + self.run_cli('history', 'example'))
 
     def test_committed_output_example_matches_cli(self):

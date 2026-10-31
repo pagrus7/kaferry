@@ -247,10 +247,10 @@ def render(report):
             lines.append(' / '.join(key) + f' | {group["input_tokens"]:,} | {group["cached_input_tokens"]:,}'
                          f' | {group["output_tokens"]:,} | ${group["estimated_usd"]:.4f} | {group["unpriced_tokens"]:,}')
         lines.append('')
-    lines.append('Tracked file reads | phase / purpose / round | reads | emitted lines | UTF-8 bytes')
+    lines.append('Tracked file reads | phase / purpose / round | thread | reads | emitted lines | UTF-8 bytes')
     for row in report.get('file_reads', []):
         lines.append(f'{row["path"]} | {row["phase"]} / {row["purpose"]} / {row["round"]}'
-                     f' | {row["reads"]:,} | {row["lines"]:,} | {row["bytes"]:,}')
+                     f' | {row["session"]} | {row["reads"]:,} | {row["lines"]:,} | {row["bytes"]:,}')
     lines.append('Only tracked read commands are measured; repeats count again. Tool output may be truncated.')
     lines.append('File read volume is not token cost; request usage also includes history, instructions and caching.')
     lines.extend(f'Warning: {warning}' for warning in report['warnings'])
@@ -276,7 +276,7 @@ def save(path, value, replace=True):
 def archive_report(directory, report):
     history = directory / 'history'
     history.mkdir(exist_ok=True)
-    # Preserve the last report on the first upgrade, with its original timestamp.
+    # Preserve an existing report when initializing snapshot history.
     prior = directory / 'report.json'
     if not any(history.glob('*.json')) and prior.exists():
         save(history / '000001.json', json.loads(prior.read_text()), replace=False)

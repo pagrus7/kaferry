@@ -1,7 +1,7 @@
 SYNTHETIC EXAMPLE: invented usage, prices, thread IDs and file contents.
 This is not actual project usage.
 
-$ python3 scripts/pr_usage.py report example
+$ python3 scripts/pr_usage.py report example --rates /path/to/example-rates.json
 Local usage: example | PR: 123
 Registered threads: 1; unregistered work is not measured.
 Recorded tokens: 230; unattributed: 0; outside work boundaries: 0
@@ -19,9 +19,9 @@ model-a / unknown | 200 | 80 | 30 | $0.0028 | 0
 session | input | cached (within input) | output (includes reasoning) | est. USD | unpriced tokens
 root | 200 | 80 | 30 | $0.0028 | 0
 
-Tracked file reads | phase / purpose / round | reads | emitted lines | UTF-8 bytes
-internal/sql/parser.go | implementation / code / 1 | 1 | 2 | 17
-internal/sql/parser.go | investigation / parser / 1 | 1 | 2 | 13
+Tracked file reads | phase / purpose / round | thread | reads | emitted lines | UTF-8 bytes
+internal/sql/parser.go | implementation / code / 1 | root | 1 | 2 | 17
+internal/sql/parser.go | investigation / parser / 1 | root | 1 | 2 | 13
 Only tracked read commands are measured; repeats count again. Tool output may be truncated.
 File read volume is not token cost; request usage also includes history, instructions and caching.
 
