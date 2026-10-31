@@ -242,3 +242,45 @@ func TestCLIRejectsReadFailureAfterValidSQL(t *testing.T) {
 	require.Equal(t, failure.Error()+"\n", stderr.String())
 	require.Equal(t, before, fileTree(t, fixture.directory))
 }
+
+func TestFileCLICreatesDefaultCheckpointDirectoryOnlyWhenRunning(t *testing.T) {
+	// Given retained archive records and a home with no checkpoint directory.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	source, destination := filepath.Join(home, "input"), filepath.Join(home, "output")
+	writeArchiveRecords(t, source, []core.Record{{Value: []byte("order-1"), TimestampType: "unknown"}})
+	query := "INSERT INTO ARCHIVE '" + destination + "' SELECT * FROM ARCHIVE '" + source + "' WITH (GROUP='restore')"
+	before := fileTree(t, home)
+	for _, command := range []string{"explain", "status"} {
+		var stdout, stderr bytes.Buffer
+		// When inspecting a replay before its first run.
+		code := Execute(t.Context(), []string{command, "-e", query}, nil, &stdout, &stderr)
+		// Then report fresh progress without creating directories or changing the archive.
+		want := 0
+		if command == "status" {
+			want = 5
+		}
+		require.Equal(t, want, code, stderr.String())
+		require.Equal(t, before, fileTree(t, home))
+	}
+
+	var diagnostics bytes.Buffer
+	// When copying, then create private default storage and save the confirmed progress.
+	require.Zero(t, Execute(t.Context(), []string{"run", "-e", query}, nil, io.Discard, &diagnostics), diagnostics.String())
+	directory := filepath.Join(home, ".kaferry", "checkpoints")
+	info, err := os.Stat(directory)
+	require.NoError(t, err)
+	require.True(t, info.IsDir())
+	require.Equal(t, os.FileMode(0700), info.Mode().Perm())
+	checkpoints, err := filepath.Glob(filepath.Join(directory, "*.json"))
+	require.NoError(t, err)
+	require.Len(t, checkpoints, 1)
+	copied := archiveRecords(t, destination)
+	require.Len(t, copied, 1)
+	require.Equal(t, []byte("order-1"), copied[0].Value)
+
+	// When rerunning, then reuse the directory and saved progress without copying records again.
+	diagnostics.Reset()
+	require.Zero(t, Execute(t.Context(), []string{"run", "-e", query}, nil, io.Discard, &diagnostics), diagnostics.String())
+	require.Len(t, archiveRecords(t, destination), 1)
+}

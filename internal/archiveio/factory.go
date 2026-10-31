@@ -35,6 +35,11 @@ func (f *Factory) OpenSource(p plan.Plan, fp string, w config.Worker, partitionC
 	if err = separatePaths(p, directory); err != nil {
 		return nil, err
 	}
+	if w.CheckpointDir == nil {
+		if err = os.MkdirAll(directory, 0700); err != nil {
+			return nil, &Conflict{Err: fmt.Errorf("create default checkpoint directory: %w", err)}
+		}
+	}
 	codec, err := avro.New(w.ArchiveBlockMaxBytes)
 	if err != nil {
 		return nil, err
@@ -87,10 +92,10 @@ func checkpointDirectory(w config.Worker) (string, error) {
 		directory = filepath.Join(home, ".kaferry", "checkpoints")
 	}
 	info, err := os.Stat(directory)
-	if err != nil {
+	if err != nil && !(w.CheckpointDir == nil && errors.Is(err, os.ErrNotExist)) {
 		return "", &Conflict{Err: fmt.Errorf("checkpoint directory must exist; create it for a new job or configure the existing directory to resume: %w", err)}
 	}
-	if !info.IsDir() {
+	if err == nil && !info.IsDir() {
 		return "", &Conflict{Err: errors.New("checkpoint path must be a directory")}
 	}
 	return resolvedPath(directory)
@@ -102,7 +107,11 @@ func resolvedPath(path string) (string, error) {
 	}
 	resolved, err := filepath.EvalSymlinks(absolute)
 	if errors.Is(err, os.ErrNotExist) {
-		return absolute, nil
+		parent, err := resolvedPath(filepath.Dir(absolute))
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(parent, filepath.Base(absolute)), nil
 	}
 	return resolved, err
 }

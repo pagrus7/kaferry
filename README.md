@@ -27,7 +27,7 @@ SELECT * FROM TOPIC 'orders@prod'
 WHERE RECORD_OFFSET < LATEST;
 ```
 
-**Topic to file** — save current records as an Avro archive directory and stop.
+**Topic to file** — save current records to disk and stop.
 
 ```sql
 INSERT INTO ARCHIVE 'orders-archive'
@@ -35,11 +35,17 @@ SELECT * FROM TOPIC 'orders@prod'
 WHERE RECORD_OFFSET < LATEST;
 ```
 
-**File to topic** — replay the archive into Kafka and stop. First create the directory for saved progress:
+**Time range** — copy records from 09:00 to 10:00 UTC within the current backlog and stop.
 
-```sh
-mkdir -p ~/.kaferry/checkpoints
+```sql
+INSERT INTO TOPIC 'orders-copy@backup'
+SELECT * FROM TOPIC 'orders@prod'
+WHERE RECORD_OFFSET < LATEST
+  AND RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
+  AND RECORD_TIMESTAMP < TIMESTAMP '2026-10-01T10:00:00Z';
 ```
+
+**File to topic** — replay the archive into Kafka and stop.
 
 ```sql
 INSERT INTO TOPIC 'orders-restored@backup'
