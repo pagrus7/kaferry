@@ -14,6 +14,7 @@ func TestStopSavedOnlyAfterEarlierWritesResolve(t *testing.T) {
 			// Given one unacknowledged write followed by a timestamp stopping record.
 			r, _, sink, store, _ := fixture(t)
 			r.plan.Source.Kind = "TOPIC"
+			r.plan.MaxOutOfOrderMS = new(int64(0))
 			upper := int64(100)
 			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}))
 			first := incoming(0, 0, 1)

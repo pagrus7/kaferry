@@ -31,7 +31,7 @@ func TestSavedStopsDescribeEveryCurrentKafkaPartition(t *testing.T) {
 	}
 	group := source + "-status"
 	config := configuration(t)
-	query := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", destination, source, group, end.Format(time.RFC3339Nano))
+	query := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND, MAX_OUT_OF_ORDER=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", destination, source, group, end.Format(time.RFC3339Nano))
 	// When a worker finishes both partitions and saves progress.
 	execute(t, query, config)
 	waitMembers(t, a, group, 0, 0, nil)

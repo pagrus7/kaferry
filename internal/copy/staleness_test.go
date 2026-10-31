@@ -42,11 +42,12 @@ func TestStalenessCapturesWhileBehindAndWaitsOnlyAtReadableTip(t *testing.T) {
 	require.ErrorContains(t, r.tips(), "tip wait exceeded")
 }
 
-func TestStalenessReadsBeforeDeadlineAndKeepsTimestampShortcutAfterCapture(t *testing.T) {
+func TestStalenessReadsBeforeDeadlineAndKeepsExplicitTimestampShortcutAfterCapture(t *testing.T) {
 	// Given a future deadline and an in-range record.
 	r, source, sink, store, clock := fixture(t)
 	r.plan.Source.Kind = "TOPIC"
 	r.plan.MaxStalenessMS = 1000
+	r.plan.MaxOutOfOrderMS = new(int64(1000))
 	upper := clock.Now().Add(time.Minute).UnixMilli()
 	source.high = 10
 	query := &watermarkSource{testSource: source}
@@ -180,4 +181,44 @@ func TestStalenessProgressResetsAnExistingTipWait(t *testing.T) {
 			require.Zero(t, query.calls)
 		})
 	}
+}
+
+func TestDefaultDisorderDrainsCapturedEndPastFutureTimestamp(t *testing.T) {
+	// Given a captured end and the default disabled timestamp stop.
+	r, source, sink, store, clock := fixture(t)
+	r.plan.Source.Kind = "TOPIC"
+	r.plan.MaxStalenessMS = 300000
+	upper := clock.Now().Add(time.Minute).UnixMilli()
+	source.high = 10
+	r.source = &watermarkSource{testSource: source}
+	require.NoError(t, r.Assign([]Assignment{{Window: plan.Window{Upper: &upper}}}))
+	require.NoError(t, r.tips())
+	require.Empty(t, store.saves, "the wall-clock deadline has not passed")
+	// When a future-dated record precedes matching records already below the end.
+	for offset := int64(0); offset < 10; offset++ {
+		if offset == 2 {
+			clock.Sleep(7 * time.Minute)
+			require.NoError(t, r.tips())
+		}
+		input := incoming(0, offset, 1)
+		stamp := upper - 1
+		if offset == 1 {
+			stamp = upper + 300001
+		}
+		input.Record.TimestampMS = &stamp
+		require.NoError(t, r.input(input))
+		if offset != 1 {
+			sink.reports <- Delivery{Token: sink.writes[len(sink.writes)-1]}
+			require.NoError(t, r.deliveries())
+		}
+	}
+	require.NoError(t, r.eof(Cursor{Position: 10}))
+	require.NoError(t, r.tips())
+	require.NoError(t, r.commit(r.ids()))
+	// Then all nine matching records are written and the saved stop is the end.
+	require.Len(t, sink.writes, 9)
+	require.Equal(t, &Stop{Reason: "tip", At: 10}, r.partitions[0].stop)
+	last := store.saves[len(store.saves)-1][0]
+	require.EqualValues(t, 10, last.Position)
+	require.EqualValues(t, 10, *last.End)
 }

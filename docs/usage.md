@@ -164,7 +164,7 @@ WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
 ```
 
-Use this when records for the range are still arriving, or to finish an old range without reading to today's end. Both settings show their five-minute defaults; copying starts immediately:
+Use this when records for the range are still arriving, or to finish an old range without reading to today's end. The arrival-delay allowance defaults to five minutes. This example also opts into a five-minute disorder allowance; copying starts immediately:
 
 - `MAX_STALENESS`: once Kaferry's clock passes 10:05, it captures each partition's current end, including unfinished transactions, saves it and reads up to it. Records appended beyond that saved end are excluded; if the deadline is already past, capture happens at startup.
 - `MAX_OUT_OF_ORDER`: reading a record stamped strictly after 10:05 stops reading that partition, even before reaching its saved end. A later record stamped 09:59 can be missed, even if already present.

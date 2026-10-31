@@ -329,6 +329,7 @@ func TestTimestampTriggerReplaysTriggerOffset(t *testing.T) {
 	hi := int64(1000)
 	stamp := int64(2001)
 	r.plan.Source.Kind = "TOPIC"
+	r.plan.MaxOutOfOrderMS = new(int64(0))
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: hi}
 	r.plan.MaxStalenessMS = 1000
 	s.high = 1

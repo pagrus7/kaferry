@@ -49,7 +49,7 @@ Copies consume immediately. [Endpoint settings](../docs/reference.md#endpoint-wi
 
 For a timestamp upper bound `hi`, each Kafka partition can stop on either enabled rule:
 
-1. A consumed record timestamp strictly exceeds `hi + MAX_OUT_OF_ORDER`.
+1. With an explicit `MAX_OUT_OF_ORDER`, a consumed record timestamp strictly exceeds `hi + MAX_OUT_OF_ORDER`.
 2. Its consumed position reaches a saved exclusive end **H**. After wall time strictly passes `hi + MAX_STALENESS`, capture the current replicated end H, including open transactions, without waiting to catch up. Save H separately from confirmed progress before processing more input. Timestamp stopping remains active during the drain.
 
 Timestamp stopping assumes later offsets never fall farther behind an earlier timestamp than the configured disorder allowance. A future-dated record can stop before matching records already present. Wall-clock capture assumes arrival delay and the consumer clock's lead fit its allowance. Configuring either value verifies neither assumption. Raising one value does not correct an invalid bound used by the other. No finite allowance covers arbitrary replay or clock errors; retained data cannot recover records removed by retention or compaction.

@@ -40,17 +40,11 @@ func (p Plan) HasOffsetEnd() bool {
 	// Every partition branch is validated to have an upper offset bound.
 	return p.Offsets != nil && p.Offsets.HasEnd() || len(p.PartitionOffsets) > 0
 }
-func (p Plan) defaultDisorderMS() int64 {
-	if p.Source.Kind != "TOPIC" || p.HasOffsetEnd() {
-		return -1
-	}
-	return p.MaxStalenessMS
-}
 func (p Plan) DisorderMS() int64 {
 	if p.MaxOutOfOrderMS != nil {
 		return *p.MaxOutOfOrderMS
 	}
-	return p.defaultDisorderMS()
+	return -1
 }
 func (p Plan) Finite() bool {
 	return p.Source.Kind == "ARCHIVE" || p.WorkerStopAfterRecords > 0 || p.HasOffsetEnd() || p.Window.Upper != nil && (p.MaxStalenessMS >= 0 || p.DisorderMS() >= 0)
