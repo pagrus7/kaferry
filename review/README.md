@@ -42,7 +42,32 @@ Reports show phase/purpose/round, model/tier and thread breakdowns, recorded tok
 
 The dated [rate card](../scripts/pr_usage_rates.json) calculates a standard, short-context API-equivalent dollar comparison. It does not apply the observed service tier or long-context uplifts, or include tools, tax or subscription allocation. Actual billed spend stays unknown. Unknown models and requests with cache writes are unpriced. Use `report WORK --rates /path/to/rates.json` with the same schema to supply a different dated comparison; rates are per million tokens. The JSON report includes the rate card used.
 
-Ledgers and reports stay in ignored `.cache/usage/WORK/`: `ledger.json`, `report.json` and `report.txt`. The ledger retains counters, thread identifiers, source paths and labels, without transcript text. Refresh the report after each work phase and after reviewers finish. Never put usage totals, estimates or reports into PR descriptions, PR comments, CI summaries or uploaded artifacts. The script reads local files and writes local files only.
+### File reads
+
+For focused repository inspection, the coordinator uses `read` in place of a plain `cat` or `sed`. It emits the selected UTF-8 text and records the relative file path, actual inclusive line range, emitted line/byte counts, time, thread, phase, purpose and round. Mark an active phase first. `--session` for this command accepts a registered thread ID; otherwise it uses `CODEX_THREAD_ID`.
+
+```sh
+python3 scripts/pr_usage.py mark sql-diagnostics --phase investigation --purpose parser
+python3 scripts/pr_usage.py read sql-diagnostics internal/sql/parser.go --start 1 --end 80
+python3 scripts/pr_usage.py report sql-diagnostics
+```
+
+Ranges are 1-based and inclusive; without `--end`, reading continues to the end of the file. Repeated reads count again, and a range beyond the end emits zero lines. Reports group reads by file, phase, purpose, round and thread; JSON includes the ranges. File contents are never saved in the ledger. Ordinary shell reads, searches, editor access and reviewer reads are unmeasured. Reviewers retain their read-only contract and do not execute the PR's collector. Tool output may be truncated after emission, so these counts do not prove what reached the model. Read volume helps explain context size alongside phase token totals; it cannot establish per-file token cost because requests also contain prior context, instructions and cached input.
+
+### Saved history
+
+Each `report` refreshes `report.json` and `report.txt` and saves a numbered snapshot in `.cache/usage/WORK/history/`. Each snapshot includes its timestamp, breakdowns, file-read measurements, warnings and the complete comparison rate card. The script never replaces or prunes snapshots. If an existing report has no history, the next report preserves it as the first snapshot with its original timestamp. Earlier intermediate reports cannot be recovered.
+
+```sh
+python3 scripts/pr_usage.py report sql-diagnostics
+python3 scripts/pr_usage.py history sql-diagnostics
+python3 scripts/pr_usage.py history
+python3 scripts/pr_usage.py history sql-diagnostics --json
+```
+
+`history WORK` shows that task's saved snapshots; `history` without a work name compares the latest snapshot from each task. Values are cumulative, never summed across snapshots. Compare dollar estimates only where the rate-card identifiers match. Registering an earlier session can increase a later snapshot's total without representing new consumption in that interval. History reads saved snapshots without needing the original rollouts. No background collection runs: refresh after each phase and after reviewers finish. Deleting `.cache/usage/` deletes the local history; there is no remote backup.
+
+Ledgers, reports, history and file-read observations stay in ignored `.cache/usage/WORK/`. They contain counters, identifiers, paths and labels, without transcript text. Never put real usage totals, estimates or reports into PR descriptions, comments, CI summaries or uploaded artifacts. The [synthetic output example](usage-example.txt) contains invented data and is checked against the CLI by a fixture test. The script reads local files and writes local files only.
 
 ## Run a review
 

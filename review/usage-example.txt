@@ -1,0 +1,33 @@
+SYNTHETIC EXAMPLE: invented usage, prices, thread IDs and file contents.
+This is not actual project usage.
+
+$ python3 scripts/pr_usage.py report example
+Local usage: example | PR: 123
+Registered threads: 1; unregistered work is not measured.
+Recorded tokens: 230; unattributed: 0; outside work boundaries: 0
+Priced subtotal: $0.0028; unpriced tokens: 0
+Actual billed spend: unknown. No subscription allocation or billing reconciliation.
+Rate card (2026-10-31): Test reference rates
+
+phase / purpose / round | input | cached (within input) | output (includes reasoning) | est. USD | unpriced tokens
+implementation / code / 1 | 100 | 40 | 20 | $0.0016 | 0
+investigation / parser / 1 | 100 | 40 | 10 | $0.0011 | 0
+
+model / tier | input | cached (within input) | output (includes reasoning) | est. USD | unpriced tokens
+model-a / unknown | 200 | 80 | 30 | $0.0028 | 0
+
+session | input | cached (within input) | output (includes reasoning) | est. USD | unpriced tokens
+root | 200 | 80 | 30 | $0.0028 | 0
+
+Tracked file reads | phase / purpose / round | reads | emitted lines | UTF-8 bytes
+internal/sql/parser.go | implementation / code / 1 | 1 | 2 | 17
+internal/sql/parser.go | investigation / parser / 1 | 1 | 2 | 13
+Only tracked read commands are measured; repeats count again. Tool output may be truncated.
+File read volume is not token cost; request usage also includes history, instructions and caching.
+
+$ python3 scripts/pr_usage.py history example
+Saved cumulative snapshots; values are not added together.
+Compare dollar estimates only with the same rate card; imports can add earlier usage.
+snapshot | recorded at | work / PR | tokens | unattributed | unpriced | est. USD | rate card | tracked lines | warnings
+000001 | 2026-10-31T00:00:02+00:00 | example / 123 | 110 | 0 | 0 | $0.0011 | f01589e506aa | 2 | 0
+000002 | 2026-10-31T00:01:00+00:00 | example / 123 | 230 | 0 | 0 | $0.0028 | f01589e506aa | 4 | 0

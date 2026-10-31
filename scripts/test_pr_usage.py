@@ -160,8 +160,9 @@ class UsageTest(unittest.TestCase):
         self.mark('--from-start')
         # When reported, then only counters and attribution are retained locally.
         self.report()
-        for path in (self.root / '.cache/usage/feature').iterdir():
-            self.assertNotIn('SECRET-', path.read_text())
+        for path in (self.root / '.cache/usage/feature').rglob('*'):
+            if path.is_file():
+                self.assertNotIn('SECRET-', path.read_text())
         default = usage.load_rates(Path(usage.__file__).with_name('pr_usage_rates.json'))
         self.assertIn('gpt-6-astra', default['models'])
 
@@ -186,6 +187,131 @@ class UsageTest(unittest.TestCase):
         self.write(sessions / 'rollout-other-root.jsonl', [])
         with self.assertRaisesRegex(ValueError, 'exactly one'):
             usage.resolve_session('root', sessions)
+
+    def test_history_preserves_snapshots_and_compares_latest_work_without_summing(self):
+        # Given two reports at the same instant followed by a different comparison rate.
+        self.mark('--from-start')
+        self.report()
+        history = self.root / '.cache/usage/feature/history'
+        first = (history / '000001.json').read_bytes()
+        self.write(self.source, [counter(200, 80, 30, 3, second=3)], 'a')
+        self.report()
+        changed = json.loads(json.dumps(RATES))
+        changed['models']['model-a']['input'] = 20
+        self.rates.write_text(json.dumps(changed))
+        self.report()
+        # When the source disappears, then saved history still exposes original totals/rates.
+        self.source.unlink()
+        rows = json.loads(self.run_cli('history', 'feature', '--json'))
+        self.assertEqual([r['tokens'] for r in rows], [110, 230, 230])
+        self.assertEqual(rows[0]['rate_card'], rows[1]['rate_card'])
+        self.assertNotEqual(rows[1]['rate_card'], rows[2]['rate_card'])
+        self.assertEqual((history / '000001.json').read_bytes(), first)
+        latest = json.loads(self.run_cli('history', '--json'))
+        self.assertEqual(len(latest), 1)
+        self.assertEqual(latest[0]['tokens'], 230)
+        self.assertEqual(latest[0]['snapshot'], '000003')
+        # Given another work, then its latest snapshot is shown separately.
+        child = self.root / 'child.jsonl'
+        self.write(child, [event('session_meta', {'id': 'child'}), counter(50, 10, 5)])
+        self.mark('--from-start', work='other', source=child)
+        self.report('other')
+        self.assertEqual([(r['work'], r['tokens']) for r in json.loads(self.run_cli('history', '--json'))],
+                         [('feature', 230), ('other', 55)])
+
+    def test_history_migrates_prior_report_and_failed_snapshot_does_not_damage_it(self):
+        # Given an existing latest report without archived snapshots or read measurements.
+        self.mark('--from-start')
+        report = self.report()
+        report.pop('file_reads')
+        directory = self.root / '.cache/usage/feature'
+        for path in (directory / 'history').iterdir():
+            path.unlink()
+        usage.save(directory / 'report.json', report)
+        original = (directory / 'report.json').read_bytes()
+        # When the new snapshot cannot be published, then the old one survives unchanged.
+        with patch.object(usage.os, 'link', side_effect=OSError('disk full')):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.report()
+        self.assertEqual((directory / 'report.json').read_bytes(), original)
+        self.assertEqual(list((directory / 'history').iterdir()), [])
+        self.report()
+        archived = json.loads((directory / 'history/000001.json').read_text())
+        self.assertEqual(archived, report)
+        rows = json.loads(self.run_cli('history', 'feature', '--json'))
+        self.assertIsNone(rows[0]['read_lines'])
+        self.assertEqual(len(rows), 2)
+        # When an existing snapshot name is reused, then replacement is refused.
+        with self.assertRaises(FileExistsError):
+            usage.save(directory / 'history/000001.json', {}, replace=False)
+        self.assertEqual(json.loads((directory / 'history/000001.json').read_text()), report)
+
+    def test_tracked_reads_record_actual_ranges_repeat_volume_and_phase_without_content(self):
+        # Given UTF-8 content with CRLF and a final line without a newline.
+        self.mark('--phase', 'investigation', '--purpose', 'parser')
+        source = self.root / 'source file.go'
+        source.write_bytes('SECRET-one\r\ncafé\r\nlast'.encode())
+        def read(start, end):
+            return self.run_cli('read', 'feature', 'source file.go', '--session', 'root',
+                                '--start', str(start), '--end', str(end))
+        # When ranges overlap and extend beyond EOF, then only emitted content is counted.
+        self.assertEqual(read(1, 2), 'SECRET-one\r\ncafé\r\n')
+        self.assertEqual(read(2, 90), 'café\r\nlast')
+        self.mark('--phase', 'implementation', '--purpose', 'code')
+        self.assertEqual(read(3, 3), 'last')
+        self.assertEqual(read(99, 100), '')
+        result = self.report()
+        groups = {r['phase']: r for r in result['file_reads']}
+        self.assertEqual((groups['investigation']['reads'], groups['investigation']['lines']), (2, 4))
+        self.assertEqual(groups['investigation']['ranges'], [[1, 2], [2, 3]])
+        self.assertEqual(groups['investigation']['bytes'], len('SECRET-one\r\ncafé\r\ncafé\r\nlast'.encode()))
+        self.assertEqual(groups['implementation']['ranges'], [[3, 3], [None, None]])
+        for path in (self.root / '.cache/usage/feature').rglob('*.json'):
+            self.assertNotIn('SECRET-one', path.read_text())
+        self.assertEqual(result['totals']['total_tokens'], 0)
+        self.assertTrue(result['warnings'])  # Reading does not invent token usage.
+
+    def test_unregistered_stopped_and_invalid_reads_do_not_create_observations(self):
+        # Given a registered but stopped session and a repository file.
+        self.mark('--from-start')
+        self.run_cli('stop', 'feature', '--session', str(self.source))
+        source = self.root / 'example.go'
+        source.write_text('text')
+        # When attribution or range is invalid, then content is not emitted or recorded.
+        cases = [('--session', 'root'), ('--session', 'missing'),
+                 ('--session', 'root', '--start', '0'), ('--session', 'root', '--start', '3', '--end', '2')]
+        for args in cases:
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.run_cli('read', 'feature', 'example.go', *args)
+        self.mark('--phase', 'investigation', '--purpose', 'inspect')
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.run_cli('read', 'feature', '../outside.go', '--session', 'root')
+        ledger = json.loads((self.root / '.cache/usage/feature/ledger.json').read_text())
+        self.assertEqual(ledger.get('reads', []), [])
+
+    def synthetic_example(self):
+        self.mark('--from-start', '--phase', 'investigation', '--purpose', 'parser', work='example')
+        self.run_cli('attach', 'example', '--pr', '123')
+        folder = self.root / 'internal/sql'
+        folder.mkdir(parents=True)
+        (folder / 'parser.go').write_text('package sql\n\nfunc Parse() {}\n')
+        self.run_cli('read', 'example', 'internal/sql/parser.go', '--session', 'root', '--start', '1', '--end', '2')
+        self.report('example')
+        self.mark('--phase', 'implementation', '--purpose', 'code', work='example')
+        self.run_cli('read', 'example', 'internal/sql/parser.go', '--session', 'root', '--start', '2', '--end', '3')
+        self.write(self.source, [counter(200, 80, 30, 8, second=3)], 'a')
+        with patch.object(usage, 'now', return_value='2026-10-31T00:01:00+00:00'):
+            report = self.run_cli('report', 'example', '--rates', str(self.rates))
+        return ('SYNTHETIC EXAMPLE: invented usage, prices, thread IDs and file contents.\n'
+                'This is not actual project usage.\n\n$ python3 scripts/pr_usage.py report example\n' + report
+                + '\n$ python3 scripts/pr_usage.py history example\n' + self.run_cli('history', 'example'))
+
+    def test_committed_output_example_matches_cli(self):
+        # Given a synthetic two-phase session with file reads and two saved reports.
+        example = self.synthetic_example()
+        # When rendered by the CLI, then the committed example matches the actual output.
+        expected = Path(usage.__file__).parents[1] / 'review/usage-example.txt'
+        self.assertEqual(example, expected.read_text())
 
     def test_invalid_input_does_not_silently_become_zero_usage(self):
         # Given malformed complete JSON and invalid rate values.

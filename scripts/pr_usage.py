@@ -4,11 +4,13 @@ import argparse
 from collections import defaultdict
 from datetime import datetime, timezone
 import fcntl
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import re
+import sys
 import tempfile
 
 
@@ -177,7 +179,51 @@ def summarize(work, rates):
     return {'work': work['work'], 'pr': work.get('pr'), 'generated_at': now(),
             'registered_sessions': len(work['sessions']), 'totals': total,
             'unattributed_tokens': unattributed, 'outside_work_tokens': outside,
-            'warnings': warnings, 'rate_card': rates, 'actual_billed_usd': None, 'rows': rows}
+            'warnings': warnings, 'rate_card': rates, 'actual_billed_usd': None, 'rows': rows,
+            'file_reads': summarize_reads(work.get('reads', []))}
+
+
+def summarize_reads(reads):
+    groups = {}
+    for read in reads:
+        key = tuple(read[k] for k in ('path', 'phase', 'purpose', 'round', 'session'))
+        if key not in groups:
+            groups[key] = dict(zip(('path', 'phase', 'purpose', 'round', 'session'), key),
+                               reads=0, lines=0, bytes=0, ranges=[])
+        group = groups[key]
+        group['reads'] += 1
+        group['lines'] += read['lines']
+        group['bytes'] += read['bytes']
+        group['ranges'].append([read['start'], read['end']])
+    return [groups[key] for key in sorted(groups)]
+
+
+def tracked_read(work, filename, start, end, session):
+    if start < 1 or (end is not None and end < start):
+        raise ValueError('line range must start at 1 or later and end at or after start')
+    thread = session or os.environ.get('CODEX_THREAD_ID')
+    if thread not in work['sessions']:
+        raise ValueError('read needs a registered thread ID in --session or CODEX_THREAD_ID')
+    at = now()
+    label = label_at(work['sessions'][thread], at)
+    if not label or label['phase'] == 'stopped':
+        raise ValueError('mark an active phase before reading')
+    path = (ROOT / filename).resolve()
+    relative = path.relative_to(ROOT.resolve()).as_posix()
+    # Preserve newline bytes so the measurement matches the selected text.
+    with path.open(encoding='utf-8', newline='') as stream:
+        lines = []
+        for number, line in enumerate(stream, 1):
+            if end is not None and number > end:
+                break
+            if number >= start:
+                lines.append(line)
+    text = ''.join(lines)
+    observation = {'at': at, 'session': thread, 'path': relative,
+                   'phase': label['phase'], 'purpose': label['purpose'], 'round': label['round'],
+                   'start': start if lines else None, 'end': start + len(lines) - 1 if lines else None,
+                   'lines': len(lines), 'bytes': len(text.encode('utf-8'))}
+    return text, observation
 
 
 def render(report):
@@ -201,11 +247,17 @@ def render(report):
             lines.append(' / '.join(key) + f' | {group["input_tokens"]:,} | {group["cached_input_tokens"]:,}'
                          f' | {group["output_tokens"]:,} | ${group["estimated_usd"]:.4f} | {group["unpriced_tokens"]:,}')
         lines.append('')
+    lines.append('Tracked file reads | phase / purpose / round | reads | emitted lines | UTF-8 bytes')
+    for row in report.get('file_reads', []):
+        lines.append(f'{row["path"]} | {row["phase"]} / {row["purpose"]} / {row["round"]}'
+                     f' | {row["reads"]:,} | {row["lines"]:,} | {row["bytes"]:,}')
+    lines.append('Only tracked read commands are measured; repeats count again. Tool output may be truncated.')
+    lines.append('File read volume is not token cost; request usage also includes history, instructions and caching.')
     lines.extend(f'Warning: {warning}' for warning in report['warnings'])
     return '\n'.join(lines) + '\n'
 
 
-def save(path, value):
+def save(path, value, replace=True):
     with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as stream:
         temporary = Path(stream.name)
         try:
@@ -213,17 +265,70 @@ def save(path, value):
             stream.write('\n')
             stream.flush()
             os.fsync(stream.fileno())
-            os.replace(temporary, path)
+            if replace:
+                os.replace(temporary, path)
+            else:
+                os.link(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
+
+
+def archive_report(directory, report):
+    history = directory / 'history'
+    history.mkdir(exist_ok=True)
+    # Preserve the last report on the first upgrade, with its original timestamp.
+    prior = directory / 'report.json'
+    if not any(history.glob('*.json')) and prior.exists():
+        save(history / '000001.json', json.loads(prior.read_text()), replace=False)
+    sequence = max((int(p.stem) for p in history.glob('*.json')), default=0) + 1
+    save(history / f'{sequence:06d}.json', report, replace=False)
+
+
+def history_rows(directory, work=None):
+    paths = sorted((directory / work / 'history').glob('*.json')) if work else sorted(directory.glob('*/history/*.json'))
+    if not paths:
+        raise ValueError('no saved snapshots; run report for the work first')
+    if not work:
+        # Across tasks, compare only the newest snapshot; never sum cumulative reports.
+        latest = {}
+        for path in paths:
+            latest[path.parent.parent.name] = path
+        paths = list(latest.values())
+    result = []
+    for path in paths:
+        report = json.loads(path.read_text())
+        rates = json.dumps(report['rate_card'], sort_keys=True).encode()
+        result.append({'snapshot': path.stem, 'at': report['generated_at'], 'work': report['work'],
+                       'pr': report['pr'], 'tokens': report['totals']['total_tokens'],
+                       'unattributed': report['unattributed_tokens'],
+                       'unpriced': report['totals']['unpriced_tokens'],
+                       'estimated_usd': report['totals']['estimated_usd'],
+                       'rate_card': hashlib.sha256(rates).hexdigest()[:12],
+                       'read_lines': (sum(r['lines'] for r in report['file_reads'])
+                                      if 'file_reads' in report else None),
+                       'warnings': len(report['warnings'])})
+    return result
+
+
+def render_history(rows):
+    lines = ['Saved cumulative snapshots; values are not added together.',
+             'Compare dollar estimates only with the same rate card; imports can add earlier usage.',
+             'snapshot | recorded at | work / PR | tokens | unattributed | unpriced | est. USD | rate card | tracked lines | warnings']
+    for row in rows:
+        read_lines = f'{row["read_lines"]:,}' if row['read_lines'] is not None else 'unknown'
+        lines.append(f'{row["snapshot"]} | {row["at"]} | {row["work"]} / {row["pr"] or "unassigned"}'
+                     f' | {row["tokens"]:,} | {row["unattributed"]:,} | {row["unpriced"]:,}'
+                     f' | ${row["estimated_usd"]:.4f} | {row["rate_card"]} | {read_lines} | {row["warnings"]}')
+    return '\n'.join(lines) + '\n'
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
-    for command in ('mark', 'stop', 'attach', 'report'):
+    for command in ('mark', 'stop', 'attach', 'report', 'read', 'history'):
         sub = commands.add_parser(command)
-        sub.add_argument('work', help='stable local name, for example sql-diagnostics')
+        sub.add_argument('work', nargs='?' if command == 'history' else None,
+                         help='stable local name; history without a name compares latest task snapshots')
         if command in ('mark', 'stop'):
             sub.add_argument('--session', help='thread ID or .jsonl path; default CODEX_THREAD_ID')
         if command == 'mark':
@@ -233,20 +338,30 @@ def main(argv=None):
             sub.add_argument('--from-start', action='store_true', help='include existing usage on first registration')
         if command == 'attach':
             sub.add_argument('--pr', type=int, required=True)
+        if command == 'read':
+            sub.add_argument('file', help='UTF-8 repository file, relative to the repository root')
+            sub.add_argument('--start', type=int, default=1, help='first line, inclusive')
+            sub.add_argument('--end', type=int, help='last line, inclusive; default end of file')
+            sub.add_argument('--session', help='registered thread ID; default CODEX_THREAD_ID')
         if command == 'report':
             sub.add_argument('--rates', type=Path, default=Path(__file__).with_name('pr_usage_rates.json'))
+        if command in ('report', 'history'):
             sub.add_argument('--json', action='store_true', help='print JSON instead of text')
     args = parser.parse_args(argv)
-    if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}', args.work):
+    if args.work is not None and not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}', args.work):
         parser.error('work must be 1-80 letters, digits, dots, underscores or hyphens, starting with a letter or digit')
     directory = ROOT / '.cache' / 'usage'
     directory.mkdir(parents=True, exist_ok=True)
-    work_directory = directory / args.work
-    path = work_directory / 'ledger.json'
     try:
         # All work files share a lock, including checks for duplicate registration.
         with (directory / '.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
+            if args.command == 'history':
+                rows = history_rows(directory, args.work)
+                print(json.dumps(rows, indent=2) if args.json else render_history(rows), end='\n' if args.json else '')
+                return
+            work_directory = directory / args.work
+            path = work_directory / 'ledger.json'
             work = json.loads(path.read_text()) if path.exists() else {'work': args.work, 'sessions': {}}
             if args.command != 'mark' and not path.exists():
                 raise ValueError('unknown work; register a session with mark first')
@@ -272,6 +387,13 @@ def main(argv=None):
                     marker = {'at': now(), 'phase': 'stopped', 'purpose': 'stopped', 'round': 1}
                 refresh(session, (meta, rows, warnings))
                 session['markers'].append(marker)
+            elif args.command == 'read':
+                text, observation = tracked_read(work, args.file, args.start, args.end, args.session)
+                sys.stdout.write(text)
+                sys.stdout.flush()
+                work.setdefault('reads', []).append(observation)
+                save(path, work)
+                return
             elif args.command == 'attach':
                 if args.pr < 1:
                     raise ValueError('PR number must be positive')
@@ -282,6 +404,7 @@ def main(argv=None):
                     refresh(session)
                 report = summarize(work, rates)
                 save(path, work)
+                archive_report(work_directory, report)
                 save(work_directory / 'report.json', report)
                 text = render(report)
                 (work_directory / 'report.txt').write_text(text)
