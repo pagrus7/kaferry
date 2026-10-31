@@ -103,17 +103,21 @@ class PRDescriptionTest(unittest.TestCase):
 
             git("init")
             (root / "README.md").write_text("Example\n")
-            git("add", "README.md")
+            (root / "runtime.go").write_text("Original\n")
+            git("add", "README.md", "runtime.go")
             git("commit", "-m", "base")
             base = git("rev-parse", "HEAD")
             event = root / "event.json"
-            for name, code in (("README.md", 0), ("runtime.go", 1)):
-                (root / name).write_text("Changed\n")
+            for name, code in (("README.md", 0), ("runtime.go", 1), ("docs/runtime.md", 1)):
+                if "/" in name:
+                    (root / "docs").mkdir()
+                    git("mv", "runtime.go", name)
+                (root / name).write_text("Original\n" if "/" in name else "Changed\n")
                 git("add", name)
                 git("commit", "-m", name)
                 head = git("rev-parse", "HEAD")
                 event.write_text(json.dumps({"pull_request": {"body": body, "base": {"sha": base}, "head": {"sha": head}}}))
-                # When the entrypoint reads repository changes, then mixed code scope is rejected.
+                # When the entrypoint reads repository changes, then code edits and code renamed into Markdown are rejected.
                 result = subprocess.run([sys.executable, str(script)], cwd=root,
                                         env=dict(os.environ, GITHUB_EVENT_PATH=str(event)), capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, code, result.stderr)
