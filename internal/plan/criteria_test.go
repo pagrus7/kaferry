@@ -13,8 +13,8 @@ func TestCriteriaDefaultsAndIndependentAllowances(t *testing.T) {
 		kind, options string
 		s, d          int64
 	}{
-		{"TOPIC 'a'", "", 300000, 300000},
-		{"TOPIC 'a'", "MAX_STALENESS=INTERVAL '10' MINUTE", 600000, 600000},
+		{"TOPIC 'a'", "", 300000, -1},
+		{"TOPIC 'a'", "MAX_STALENESS=INTERVAL '10' MINUTE", 600000, -1},
 		{"TOPIC 'a'", "MAX_OUT_OF_ORDER=INTERVAL '10' SECOND,MAX_STALENESS=INTERVAL '10' MINUTE", 600000, 10000},
 		{"TOPIC 'a'", "MAX_STALENESS=OFF", -1, -1},
 		{"TOPIC 'a'", "MAX_STALENESS=OFF,MAX_OUT_OF_ORDER=INTERVAL '0' SECOND", -1, 0},
@@ -29,7 +29,7 @@ func TestCriteriaDefaultsAndIndependentAllowances(t *testing.T) {
 			if tc.options != "" {
 				q += " WITH(" + tc.options + ")"
 			}
-			// When planning, then resolve the inherited allowance without changing the filter.
+			// When planning, then resolve the independent allowances without changing the filter.
 			p := build(t, q+" WHERE RECORD_TIMESTAMP < TIMESTAMP '2026-10-22T10:00:00Z'")
 			require.Equal(t, tc.s, p.MaxStalenessMS)
 			require.Equal(t, tc.d, p.DisorderMS())
@@ -121,8 +121,8 @@ func TestCriteriaIdentityIncludesBehaviorAndExcludesPositions(t *testing.T) {
 	b := build(t, base+"WITH(MAX_OUT_OF_ORDER=INTERVAL '5' MINUTE) WHERE RECORD_TIMESTAMP<NOW()")
 	x, _ := a.Fingerprint("s", "d")
 	y, _ := b.Fingerprint("s", "d")
-	require.Equal(t, x, y)
+	require.NotEqual(t, x, y)
 	b = build(t, base+"WITH(MAX_OUT_OF_ORDER=OFF) WHERE RECORD_TIMESTAMP<NOW()")
 	y, _ = b.Fingerprint("s", "d")
-	require.NotEqual(t, x, y)
+	require.Equal(t, x, y)
 }

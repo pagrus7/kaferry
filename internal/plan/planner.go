@@ -194,8 +194,15 @@ func (p Plan) Fingerprint(sourceClusterID, destinationClusterID string) (string,
 		canonical.Version = 2
 	}
 	canonical.Offsets, canonical.PartitionOffsets = p.Offsets, p.PartitionOffsets
-	if p.MaxOutOfOrderMS != nil && *p.MaxOutOfOrderMS != p.defaultDisorderMS() {
-		canonical.Disorder = p.MaxOutOfOrderMS
+	// The wire encoding omits disorder when it equals the topic staleness
+	// allowance (or OFF for archives and offset ends). Keep that encoding for
+	// explicit settings so existing progress retains its identity.
+	wireDisorder := int64(-1)
+	if p.Source.Kind == "TOPIC" && !p.HasOffsetEnd() {
+		wireDisorder = p.MaxStalenessMS
+	}
+	if disorder := p.DisorderMS(); p.Window.Upper != nil && disorder != wireDisorder {
+		canonical.Disorder = &disorder
 	}
 	if canonical.Disorder != nil || p.MaxStalenessMS < 0 || p.Offsets != nil || len(p.PartitionOffsets) > 0 {
 		canonical.Version = 3

@@ -17,6 +17,7 @@ func TestRunnerIgnoresLateInputAndEOFAfterStopOrRevocation(t *testing.T) {
 	r, _, sink, store, _ := fixture(t)
 	upper, stamp := int64(100), int64(101)
 	r.plan.Source.Kind = "TOPIC"
+	r.plan.MaxOutOfOrderMS = new(int64(0))
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}, {Cursor: Cursor{Partition: 1, Position: 0}}}))
 	trigger := incoming(0, 5, 1)

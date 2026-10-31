@@ -74,6 +74,7 @@ func TestAssignmentBeforeIdleDeadlineCompletesNormally(t *testing.T) {
 	upper, stamp := int64(1000), int64(1001)
 	source.high = 1
 	r.plan.Source.Kind = "TOPIC"
+	r.plan.MaxOutOfOrderMS = new(int64(0))
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
 	r.limits.IdleExit = "1s"
 	source.assignments = nil
@@ -110,6 +111,7 @@ func TestDelayedHandoffDistinguishesPartitionCompletionFromIdleExit(t *testing.T
 	upper, stamp := int64(1000), int64(1001)
 	for _, runner := range []*Runner{a, b} {
 		runner.plan.Source.Kind = "TOPIC"
+		runner.plan.MaxOutOfOrderMS = new(int64(0))
 		runner.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
 		runner.limits.IdleExit = "1s"
 	}

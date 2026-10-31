@@ -43,7 +43,18 @@ func TestBoundedFingerprintPinsCompletionSemantics(t *testing.T) {
 	// When fingerprinting, then the canonical identity is independently fixed.
 	fp, err := p.Fingerprint("source-cluster", "destination-cluster")
 	require.NoError(t, err)
-	require.Equal(t, "12877001310d72398ba96d680622f197e65a401bee704fb24e598a688704b8ff", fp)
+	require.Equal(t, "4ae7f338c666fcfa584dc9ea432cc1befdb093527d9b1be49397c4d9751e9b32", fp)
+	// Then explicit OFF retains its existing identity, while pinning the former
+	// allowance permits resuming progress written with the former default.
+	p.MaxOutOfOrderMS = new(int64(-1))
+	explicitOff, err := p.Fingerprint("source-cluster", "destination-cluster")
+	require.NoError(t, err)
+	require.Equal(t, fp, explicitOff)
+	p.MaxOutOfOrderMS = new(int64(300000))
+	explicitOld, err := p.Fingerprint("source-cluster", "destination-cluster")
+	require.NoError(t, err)
+	require.Equal(t, "12877001310d72398ba96d680622f197e65a401bee704fb24e598a688704b8ff", explicitOld)
+	require.NotEqual(t, fp, explicitOld)
 	// Given an explicit one-minute allowance, bounded-query identity rejects incompatible completion semantics.
 	p.MaxStalenessMS = 60000
 	fp, err = p.Fingerprint("source-cluster", "destination-cluster")
