@@ -1,4 +1,4 @@
-<!-- Maximum 2,000 characters, including comments. -->
+<!-- Maximum 2,000 characters. Review statuses: see review/README.md. -->
 
 ## Changes
 
@@ -10,12 +10,12 @@
 
 ## Docs review
 
-<!-- Pending while draft; Passed when ready; Failed: reason for a failed review. -->
+Pending
 
 ## Tests review
 
-<!-- Pending while draft; Passed when ready; Failed: reason for a failed review. -->
+Pending
 
 ## Simplicity review
 
-<!-- Pending while draft; Passed when ready; Failed: reason for a failed review. -->
+Pending
