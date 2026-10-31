@@ -99,7 +99,7 @@ Optional keys in TOML's `[worker]` table; byte values are integers:
 | `idle_exit` | `'30s'` | Wait after an empty assignment before exit 3 |
 | `tip_wait` | `'15m'` | Continuous wait at the readable tip below the saved captured end; ordinary backlog processing resets it |
 | `progress_interval` | '30s' | Progress logs; '0' disables |
-| `checkpoint_dir` | `~/.kaferry/checkpoints` | File-source checkpoint directory |
+| `checkpoint_dir` | `~/.kaferry/checkpoints` | File-source checkpoint directory; `run` creates the default directory. A configured directory must already exist |
 
 Caps must be positive; `max_frame_bytes` is at most 4,294,967,295. Durations are positive Go duration strings, except `progress_interval` permits zero; `delivery_timeout` is 1 ms–2,147,483,647 ms. `checkpoint_dir` must not be empty. Unknown keys fail.
 

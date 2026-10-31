@@ -67,17 +67,29 @@ func TestFactoryOwnsReplayCheckpointAndRejectsUnsafePaths(t *testing.T) {
 }
 
 func TestInvalidCheckpointDirectoryFailsBeforeCreatingReplayState(t *testing.T) {
-	for _, shape := range []string{"missing", "regular file"} {
-		t.Run(shape, func(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		defaultDirectory bool
+		regularFile      bool
+	}{
+		{name: "configured missing"},
+		{name: "configured regular file", regularFile: true},
+		{name: "default regular file", defaultDirectory: true, regularFile: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			// Given an unusable checkpoint directory and otherwise valid archive paths.
 			root := t.TempDir()
-			directory := filepath.Join(root, "checkpoints")
+			t.Setenv("HOME", root)
+			directory := filepath.Join(root, ".kaferry", "checkpoints")
 			original := []byte("keep this file")
-			if shape == "regular file" {
+			if tc.regularFile {
+				require.NoError(t, os.MkdirAll(filepath.Dir(directory), 0700))
 				require.NoError(t, os.WriteFile(directory, original, 0600))
 			}
 			limits := config.Defaults("").Worker
-			limits.CheckpointDir = &directory
+			if !tc.defaultDirectory {
+				limits.CheckpointDir = &directory
+			}
 			p := plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: filepath.Join(root, "output")}, Group: "g"}
 			factory := NewFactory(core.RealClock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			// When starting replay, then fail as a configuration conflict without creating output or state.
@@ -87,7 +99,7 @@ func TestInvalidCheckpointDirectoryFailsBeforeCreatingReplayState(t *testing.T) 
 			require.Equal(t, 2, conflict.ExitCode())
 			_, err = os.Stat(p.Destination.Name)
 			require.ErrorIs(t, err, os.ErrNotExist)
-			if shape == "regular file" {
+			if tc.regularFile {
 				data, err := os.ReadFile(directory)
 				require.NoError(t, err)
 				require.Equal(t, original, data)
@@ -95,6 +107,55 @@ func TestInvalidCheckpointDirectoryFailsBeforeCreatingReplayState(t *testing.T) 
 				_, err = os.Stat(directory)
 				require.ErrorIs(t, err, os.ErrNotExist)
 			}
+		})
+	}
+}
+
+func TestDefaultCheckpointDirectoryCreationFailureLeavesReplayUntouched(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can create directories without write permission")
+	}
+	// Given a default checkpoint parent that cannot accept new directories.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	parent := filepath.Join(home, ".kaferry")
+	require.NoError(t, os.Mkdir(parent, 0500))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(parent, 0700)) })
+	limits := config.Defaults("").Worker
+	p := plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: filepath.Join(t.TempDir(), "output")}, Group: "restore"}
+	factory := NewFactory(core.RealClock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// When replay cannot create its default checkpoint directory.
+	_, err := factory.OpenSource(p, "fingerprint", limits, 0)
+	// Then report the permission failure as a configuration conflict before output or state creation.
+	var conflict *Conflict
+	require.ErrorAs(t, err, &conflict)
+	require.Equal(t, 2, conflict.ExitCode())
+	require.ErrorIs(t, err, os.ErrPermission)
+	for _, path := range []string{p.Destination.Name, filepath.Join(parent, "checkpoints")} {
+		_, err = os.Stat(path)
+		require.ErrorIs(t, err, os.ErrNotExist)
+	}
+}
+
+func TestDefaultCheckpointDirectoryCannotBeCreatedInsideSource(t *testing.T) {
+	for _, alias := range []bool{false, true} {
+		t.Run(map[bool]string{false: "home archive", true: "symlinked parent"}[alias], func(t *testing.T) {
+			// Given a source archive containing the default checkpoint path, directly or through a symlink.
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			source := home
+			if alias {
+				source = t.TempDir()
+				require.NoError(t, os.Symlink(source, filepath.Join(home, ".kaferry")))
+			}
+			limits := config.Defaults("").Worker
+			p := plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: source}, Destination: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: filepath.Join(t.TempDir(), "output")}, Group: "restore"}
+			factory := NewFactory(core.RealClock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			// When preparing replay, then reject the location before creating checkpoint storage inside the source.
+			_, err := factory.OpenSource(p, "fingerprint", limits, 0)
+			require.ErrorContains(t, err, "outside the source archive")
+			_, err = os.Stat(filepath.Join(home, ".kaferry", "checkpoints"))
+			require.ErrorIs(t, err, os.ErrNotExist)
 		})
 	}
 }
