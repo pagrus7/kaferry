@@ -106,7 +106,7 @@ func TestRevokeDiscardsHeldWorkBeforeReassignment(t *testing.T) {
 				} else {
 					old = sink.writes[0]
 					require.NoError(t, r.accept(Event{Input: ptrInput(incoming(0, 1, 1)), EOF: &Cursor{Partition: 0, Position: 2}}))
-					if r.deferred == nil || r.deferredEOF == nil {
+					if r.flow.deferred == nil || r.flow.deferred.eof == nil {
 						t.Fatal("fixture did not hold input and EOF")
 					}
 				}
@@ -119,7 +119,7 @@ func TestRevokeDiscardsHeldWorkBeforeReassignment(t *testing.T) {
 				require.NoError(t, r.advance())
 
 				// Then held work and EOF cannot leak into the new assignment.
-				if r.pending != nil || r.deferred != nil || r.deferredEOF != nil || len(sink.writes) != before || r.partitions[0].stop != nil {
+				if r.pending != nil || r.flow.deferred != nil || len(sink.writes) != before || r.partitions[0].stop != nil {
 					t.Fatal("revoked work survived reassignment")
 				}
 				require.NoError(t, r.input(incoming(0, 0, 1)))
@@ -157,7 +157,7 @@ func TestFullCapFlushesAndCommitsBeforePeriodicDeadline(t *testing.T) {
 			// Given a four-record budget and no periodic commit due.
 			r, _, sink, store, clock := fixture(t)
 			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
-			r.lastCommit = clock.Now()
+			r.flow.lastCommit = clock.Now()
 			switch cap {
 			case "total records":
 				r.limits.RecordCap = 4

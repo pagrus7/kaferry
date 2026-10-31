@@ -46,7 +46,7 @@ func (r *Runner) bounded() bool {
 }
 
 func (r *Runner) readyToExit() bool {
-	if r.deferred != nil || r.pending != nil {
+	if r.flow.deferred != nil || r.pending != nil {
 		return false
 	}
 	if len(r.partitions) == 0 {
@@ -73,7 +73,7 @@ func (r *Runner) finishWrites() error {
 	r.stop.Begin()
 	r.stop.Stage("finishing writes")
 	r.pending = nil // Unsubmitted input replays from the confirmed cursor.
-	r.deferred, r.deferredEOF = nil, nil
+	r.flow.deferred = nil
 	deadline := r.clock.Now().Add(10 * time.Second)
 	var failed error
 	for id := range r.partitions {

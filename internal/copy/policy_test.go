@@ -145,7 +145,7 @@ func TestDeferredRecordRetainsFollowingEOFUntilBudgetIsReleased(t *testing.T) {
 	err := r.eof(Cursor{Partition: 0, Position: 2})
 
 	// Then the partition stays open and keeps the EOF without observing it ahead of input.
-	if err != nil || r.deferredEOF == nil || r.partitions[0].stop != nil || r.partitions[0].position != 1 {
+	if err != nil || r.flow.deferred == nil || r.flow.deferred.eof == nil || r.partitions[0].stop != nil || r.partitions[0].position != 1 {
 		t.Fatal("EOF overtook deferred input", err, r.partitions[0])
 	}
 
@@ -156,7 +156,7 @@ func TestDeferredRecordRetainsFollowingEOFUntilBudgetIsReleased(t *testing.T) {
 	err = r.admitDeferred()
 
 	// Then both input and EOF are consumed in order, with the second delivery still pending.
-	if err != nil || len(sink.writes) != 2 || r.deferred != nil || r.deferredEOF != nil || r.partitions[0].stop == nil || r.readyToExit() {
+	if err != nil || len(sink.writes) != 2 || r.flow.deferred != nil || r.partitions[0].stop == nil || r.readyToExit() {
 		t.Fatal("held EOF was lost or completed unresolved work", err)
 	}
 
@@ -183,7 +183,7 @@ func TestDeferredRecordIsValidatedAfterBudgetIsReleased(t *testing.T) {
 	source.events = []Event{{Input: &first}, {Input: &second}, {EOF: &eof}}
 	acknowledged := false
 	sink.flush = func() error {
-		if r.deferred != nil && !acknowledged {
+		if r.flow.deferred != nil && !acknowledged {
 			acknowledged = true
 			sink.reports <- Delivery{Token: sink.writes[0]}
 		}

@@ -159,7 +159,7 @@ func TestWorkerStopDiscardsDeferredEOFAfterAdmissionReachesCap(t *testing.T) {
 	r.plan.WorkerStopAfterRecords = 1
 	require.NoError(t, source.Start(r, nil))
 	input := incoming(0, 0, 1)
-	r.deferred, r.deferredEOF = &input, &Cursor{Partition: 0, Position: 9}
+	r.flow.deferred = &deferredInput{input: input, eof: &Cursor{Partition: 0, Position: 9}}
 	acknowledgeWritesOnFlush(sink)
 	// When admitting the deferred record reaches the cap during advance.
 	done, err := r.step(t.Context())

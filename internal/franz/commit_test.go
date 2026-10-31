@@ -30,7 +30,8 @@ func TestCommitMetadataUsesTheCapturedProgress(t *testing.T) {
 	// When state changes before the asynchronous hook runs.
 	stop.At = 43
 	end = 43
-	c.metadata[0] = kafkaport.Progress{Fingerprint: "other"}
+	c.revoke(0)
+	c.assign(0, kafkaport.Progress{Fingerprint: "other"})
 	req := &kmsg.OffsetCommitRequest{Group: "group", MemberID: "member", Generation: 3, Topics: []kmsg.OffsetCommitRequestTopic{{TopicID: id, Partitions: []kmsg.OffsetCommitRequestTopicPartition{{Partition: 0, Offset: 42}}}}}
 	require.NoError(t, hook(req))
 	// Then the ID-only request carries the originally confirmed position and metadata.

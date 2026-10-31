@@ -6,23 +6,21 @@ import (
 	"github.com/pagrus7/kaferry/internal/config"
 )
 
-type submission struct {
-	input     Input
-	token     Token
-	busySince time.Time
-}
-
 // workCounts is the progress information needed to enforce flow limits.
 type workCounts interface {
 	Total() (int, int64)
 	Work(int32) (int, int64)
 }
 
-// flow holds unsent input and decides when work limits require a pause or save.
+type deferredInput struct {
+	input Input
+	eof   *Cursor
+}
+
+// flow owns input waiting for admission, including its following EOF. Such input
+// has no tracker token yet. Runner owns submissions already admitted to tracking.
 type flow struct {
-	pending     *submission
-	deferred    *Input
-	deferredEOF *Cursor
+	deferred    *deferredInput
 	peakRecords int
 	peakBytes   int64
 	lastCommit  time.Time
@@ -35,11 +33,8 @@ func (f *flow) observe(work workCounts) {
 }
 
 func (f *flow) revoke(id int32) {
-	if f.deferred != nil && f.deferred.Cursor.Partition == id {
-		f.deferred, f.deferredEOF = nil, nil
-	}
-	if f.pending != nil && f.pending.token.Partition == id {
-		f.pending = nil
+	if f.deferred != nil && f.deferred.input.Cursor.Partition == id {
+		f.deferred = nil
 	}
 }
 
@@ -55,7 +50,7 @@ func (f *flow) admits(input Input, work workCounts, limits config.Worker) bool {
 
 func (f *flow) full(work workCounts, limits config.Worker) bool {
 	n, b := work.Total()
-	return n >= limits.RecordCap || b >= limits.ByteCap || f.pending != nil || f.deferred != nil
+	return n >= limits.RecordCap || b >= limits.ByteCap || f.deferred != nil
 }
 
 func (f *flow) commitDue(now time.Time, work workCounts, partitions map[int32]*partition, limits config.Worker) bool {
@@ -80,7 +75,7 @@ func (r *Runner) shouldCommit() bool {
 }
 
 func (r *Runner) pause() error {
-	full := r.flow.full(r.tracker, r.limits)
+	full := r.pending != nil || r.flow.full(r.tracker, r.limits)
 	for id, p := range r.partitions {
 		n, b := r.tracker.Work(id)
 		paused := full || p.stop != nil || n >= r.limits.PartitionRecordCap || b >= r.limits.PartitionByteCap
@@ -98,17 +93,35 @@ func (r *Runner) admits(input Input) bool {
 	return r.flow.admits(input, r.tracker, r.limits)
 }
 
-func (r *Runner) admitDeferred() error {
-	if r.deferred == nil || !r.admits(*r.deferred) {
+// deferEOF keeps a tip behind the input whose capacity is not yet available.
+func (f *flow) deferEOF(cursor Cursor) bool {
+	if f.deferred == nil || f.deferred.input.Cursor.Partition != cursor.Partition {
+		return false
+	}
+	f.deferred.eof = &cursor
+	return true
+}
+
+// takeDeferred releases input and its EOF together, only when the input fits.
+func (f *flow) takeDeferred(work workCounts, limits config.Worker) *deferredInput {
+	if f.deferred == nil || !f.admits(f.deferred.input, work, limits) {
 		return nil
 	}
-	input, eof := *r.deferred, r.deferredEOF
-	r.deferred, r.deferredEOF = nil, nil
-	if err := r.input(input); err != nil {
+	event := f.deferred
+	f.deferred = nil
+	return event
+}
+
+func (r *Runner) admitDeferred() error {
+	event := r.flow.takeDeferred(r.tracker, r.limits)
+	if event == nil {
+		return nil
+	}
+	if err := r.input(event.input); err != nil {
 		return err
 	}
-	if eof != nil {
-		return r.eof(*eof)
+	if event.eof != nil {
+		return r.eof(*event.eof)
 	}
 	return nil
 }

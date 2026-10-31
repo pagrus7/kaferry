@@ -169,7 +169,8 @@ func TestSourceHoldsPausedRecordWhileOtherPartitionsContinue(t *testing.T) {
 }
 func TestSourceRevokesOnlyNamedPartitionsAndTreatsLostSeparately(t *testing.T) {
 	// Given paused records in two owned partitions.
-	s, _ := sourceFixture(t)
+	s, client := sourceFixture(t)
+	s.store.assign(2, kafkaport.Progress{Fingerprint: "fp", TopicID: "id"})
 	s.positions[2] = 8
 	s.paused[0] = true
 	s.paused[2] = true
@@ -182,7 +183,17 @@ func TestSourceRevokesOnlyNamedPartitionsAndTreatsLostSeparately(t *testing.T) {
 	if !life.lost || !reflect.DeepEqual(life.revoked, []int32{0}) || len(s.positions) != 1 || s.positions[2] != 8 || s.held[0] != nil || s.held[2] == nil || !s.paused[2] {
 		t.Fatal("revocation crossed partition boundaries", s.positions, s.held, life)
 	}
+	// When saving after revocation, the released partition is rejected before I/O.
+	_, err := s.store.Save(t.Context(), []core.Cursor{{Partition: 0, Position: 8}})
+	require.ErrorContains(t, err, "unowned partition 0")
+	require.Empty(t, client.committed)
+	// Then the remaining partition can still save its confirmed position.
+	results, err := s.store.Save(t.Context(), []core.Cursor{{Partition: 2, Position: 8}})
+	require.NoError(t, err)
+	require.Equal(t, map[int32]error{2: nil}, results)
+	require.Equal(t, map[int32]int64{2: 8}, client.committed)
 }
+
 func TestSourceCommitsResolvedStartBeforeExposingAssignment(t *testing.T) {
 	failure := errors.New("initial commit failed")
 	for _, tc := range []struct {
