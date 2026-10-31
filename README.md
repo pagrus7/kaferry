@@ -19,13 +19,11 @@ Prepare your [Kafka connections and destination topics](docs/usage.md#copy-betwe
 kaferry run -c connections.toml -f copy.sql
 ```
 
-Rerunning the same statement resumes from saved progress; changing or omitting `GROUP` starts an independent copy and can duplicate existing output. See [resuming](docs/usage.md#resume-or-start-over).
-
 **Topic to topic** — copy current records and stop.
 
 ```sql
 INSERT INTO TOPIC 'orders-copy@backup'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-copy')
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-copy-oct31')
 WHERE RECORD_OFFSET < LATEST;
 ```
 
@@ -33,7 +31,7 @@ WHERE RECORD_OFFSET < LATEST;
 
 ```sql
 INSERT INTO ARCHIVE 'orders-archive'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive')
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive-oct31')
 WHERE RECORD_OFFSET < LATEST;
 ```
 
@@ -41,7 +39,7 @@ WHERE RECORD_OFFSET < LATEST;
 
 ```sql
 INSERT INTO TOPIC 'orders-copy@backup'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-hour')
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-hour-oct01')
 WHERE RECORD_OFFSET < LATEST
   AND RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z'
                            AND TIMESTAMP '2026-10-01T10:00:00Z';
@@ -51,7 +49,7 @@ WHERE RECORD_OFFSET < LATEST
 
 ```sql
 INSERT INTO TOPIC 'orders-restored@backup'
-SELECT * FROM ARCHIVE 'orders-archive' WITH (GROUP = 'orders-restore');
+SELECT * FROM ARCHIVE 'orders-archive' WITH (GROUP = 'orders-restore-oct31');
 ```
 
 More examples: [Current records](docs/usage.md#copy-between-kafka-topics) · [Offset range](docs/usage.md#copy-an-offset-range) · [Selected partitions](docs/usage.md#copy-selected-partitions) · [Time range](docs/usage.md#copy-records-in-a-time-range) · [Tail new records](docs/usage.md#keep-copying-new-records) · [Archive and replay](docs/usage.md#archive-your-own-topic).
