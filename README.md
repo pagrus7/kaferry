@@ -19,7 +19,9 @@ Prepare your [Kafka connections and destination topics](docs/usage.md#copy-betwe
 kaferry run -c connections.toml -f copy.sql
 ```
 
-**Topic to topic** — copy current records and stop.
+**Topic to topic**
+
+Copy current records and stop.
 
 ```sql
 INSERT INTO TOPIC 'orders-copy@backup'
@@ -27,7 +29,9 @@ SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-copy-oct31')
 WHERE RECORD_OFFSET < LATEST;
 ```
 
-**Topic to file** — save current records to disk and stop.
+**Topic to file**
+
+Save current records to disk and stop.
 
 ```sql
 INSERT INTO ARCHIVE 'orders-archive'
@@ -35,7 +39,9 @@ SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive-oct31')
 WHERE RECORD_OFFSET < LATEST;
 ```
 
-**Time range** — copy records from 09:00 to 10:00 UTC, inclusive, within the current backlog and stop.
+**Time range**
+
+Copy records from 09:00 to 10:00 UTC, inclusive, within the current backlog and stop.
 
 ```sql
 INSERT INTO TOPIC 'orders-copy@backup'
@@ -45,7 +51,9 @@ WHERE RECORD_OFFSET < LATEST
                            AND TIMESTAMP '2026-10-01T10:00:00Z';
 ```
 
-**File to topic** — replay the archive into Kafka and stop.
+**File to topic**
+
+Replay the archive into Kafka and stop.
 
 ```sql
 INSERT INTO TOPIC 'orders-restored@backup'
