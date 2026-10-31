@@ -6,6 +6,44 @@ Give initial reviewers scope and evidence without suspected issues or preferred 
 
 Compare instruction versions on frozen examples with the same review settings. Keep examples used to tune instructions separate from unseen validation examples; include cases where keeping the code is the right answer. Record useful findings, misses, false positives, unsafe recommendations, elapsed review time and available token usage. Longer reports, reviewer agreement or one successful example do not establish improvement.
 
+## Local usage accounting
+
+The coordinator records Codex usage with [scripts/pr_usage.py](../scripts/pr_usage.py). Python 3.10+ on macOS or Linux and readable, uncompressed Codex `.jsonl` rollouts are required. Run commands from the repository root. The script uses `CODEX_THREAD_ID` for the current thread; from another terminal, add `--session THREAD_ID` or `--session /absolute/path/to/rollout.jsonl`. Thread lookup searches `$CODEX_HOME/sessions`, defaulting to `~/.codex/sessions`.
+
+Choose one stable work name before opening a PR. Mark the phase and purpose before starting that work; each marker applies to usage events recorded afterward. The first marker excludes earlier usage. Add `--from-start` only on first registration to include an existing thread's history; omit phase and purpose when its historical attribution is unknown.
+
+```sh
+python3 scripts/pr_usage.py mark sql-diagnostics --phase investigation --purpose requirements
+python3 scripts/pr_usage.py mark sql-diagnostics --phase implementation --purpose code
+python3 scripts/pr_usage.py mark sql-diagnostics --phase implementation --purpose tests
+python3 scripts/pr_usage.py attach sql-diagnostics --pr 123
+python3 scripts/pr_usage.py report sql-diagnostics
+```
+
+Phases are `investigation`, `implementation`, `review`, `rework`, `delivery` and `unattributed`. Purpose is a short description such as `code`, `tests`, `docs`, `simplicity`, `coverage` or `fix-ci`. The coordinator registers every reviewer thread immediately after launching it, using its returned thread ID. Use `--from-start` to include the reviewer's startup requests. Reviewers do not write the ledger. Set `--round 2` for follow-up reviews and associated fixes; later rounds use increasing numbers. Registration is explicit: the script cannot measure unregistered agents, other clients or external services. Use a separate thread for each work name; duplicate registration across work names is rejected.
+
+```sh
+python3 scripts/pr_usage.py mark sql-diagnostics --session REVIEWER_THREAD_ID \
+  --from-start --phase review --purpose docs
+python3 scripts/pr_usage.py mark sql-diagnostics --phase rework --purpose fix-review --round 2
+python3 scripts/pr_usage.py mark sql-diagnostics --session REVIEWER_THREAD_ID \
+  --phase review --purpose docs --round 2
+```
+
+Stop attribution when leaving the task, and resume with another `mark`. Keep the same work name across commits and resumed threads. Register each new thread. Reports refresh registered sources and retain imported counters if a source disappears or changes. Missing records and counter resets leave warnings; unflushed requests appear only after Codex writes them. Markers use recording time, so a delayed usage event can fall into the next phase. Compressed rollouts must be decompressed locally before registration; retain the registered file for refreshes.
+
+```sh
+python3 scripts/pr_usage.py stop sql-diagnostics
+python3 scripts/pr_usage.py mark sql-diagnostics --phase delivery --purpose final-checks
+python3 scripts/pr_usage.py report sql-diagnostics --json
+```
+
+Reports show phase/purpose/round, model/tier and thread breakdowns, recorded tokens, unattributed tokens and unpriced tokens. Input includes cached input; output includes reasoning. Counter snapshots are converted to increments, and repeated snapshots count once. The first counter's earlier accumulated usage is excluded when it differs from the reported last request, with a warning. A report covers registered threads only; no recorded usage means unknown, not a verified zero-cost task.
+
+The dated [rate card](../scripts/pr_usage_rates.json) calculates a standard, short-context API-equivalent dollar comparison. It does not apply the observed service tier or long-context uplifts, or include tools, tax or subscription allocation. Actual billed spend stays unknown. Unknown models and requests with cache writes are unpriced. Use `report WORK --rates /path/to/rates.json` with the same schema to supply a different dated comparison; rates are per million tokens. The JSON report includes the rate card used.
+
+Ledgers and reports stay in ignored `.cache/usage/WORK/`: `ledger.json`, `report.json` and `report.txt`. The ledger retains counters, thread identifiers, source paths and labels, without transcript text. Refresh the report after each work phase and after reviewers finish. Never put usage totals, estimates or reports into PR descriptions, PR comments, CI summaries or uploaded artifacts. The script reads local files and writes local files only.
+
 ## Run a review
 
 The agent doing the work coordinates these steps. Individual reviewers follow the Reviewer contract below.

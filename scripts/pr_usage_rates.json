@@ -1,0 +1,11 @@
+{
+  "as_of": "2026-10-31",
+  "basis": "Standard short-context API-equivalent USD per million tokens; excludes tier/context uplifts, tools and tax. This is a comparison, not a bill.",
+  "source": "https://developers.openai.com/api/docs/pricing",
+  "models": {
+    "gpt-6-astra": {"input": 10, "cached_input": 1, "output": 50},
+    "gpt-6.1-sol": {"input": 2, "cached_input": 0.1, "output": 10},
+    "gpt-6.1-terra": {"input": 1, "cached_input": 0.05, "output": 5},
+    "gpt-6-luna": {"input": 0.1, "cached_input": 0.01, "output": 0.5}
+  }
+}
