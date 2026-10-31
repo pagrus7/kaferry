@@ -40,9 +40,6 @@ func (t *Tracker) Advance(cursor Cursor) error {
 }
 func (t *Tracker) observe(cursor Cursor, next, bytes int64, resolved bool) (Token, error) {
 	p := t.partitions[cursor.Partition]
-	if p == nil {
-		return Token{}, fmt.Errorf("record for an unassigned partition")
-	}
 	previous := p.committed
 	if n := len(p.entries); n > 0 {
 		previous = p.entries[n-1].next
@@ -79,12 +76,7 @@ func (t *Tracker) InFlight() bool {
 	return false
 }
 func (t *Tracker) PositionOf(token Token) int64 {
-	if p := t.partitions[token.Partition]; p != nil {
-		if e := p.pending[token.Sequence]; e != nil {
-			return e.position
-		}
-	}
-	return -1
+	return t.partitions[token.Partition].pending[token.Sequence].position
 }
 func (t *Tracker) Settle(token Token, success bool) bool {
 	p := t.partitions[token.Partition]
@@ -110,10 +102,7 @@ func (t *Tracker) Confirmed(partition int32) Cursor {
 	return Cursor{Partition: partition, Position: position}
 }
 func (t *Tracker) Saved(partition int32) int64 {
-	if p := t.partitions[partition]; p != nil {
-		return p.committed
-	}
-	return -1
+	return t.partitions[partition].committed
 }
 func (t *Tracker) HasProgress(partition int32) bool {
 	p := t.partitions[partition]
@@ -121,9 +110,6 @@ func (t *Tracker) HasProgress(partition int32) bool {
 }
 func (t *Tracker) Committed(cursor Cursor) {
 	p := t.partitions[cursor.Partition]
-	if p == nil {
-		return
-	}
 	n := 0
 	for _, e := range p.entries {
 		if !e.resolved || e.next > cursor.Position {
@@ -139,9 +125,6 @@ func (t *Tracker) Committed(cursor Cursor) {
 }
 func (t *Tracker) Work(partition int32) (int, int64) {
 	p := t.partitions[partition]
-	if p == nil {
-		return 0, 0
-	}
 	return len(p.entries), p.bytes
 }
 func (t *Tracker) Total() (int, int64) {
@@ -155,9 +138,6 @@ func (t *Tracker) Total() (int, int64) {
 }
 func (t *Tracker) Resolved(partition int32) bool {
 	p := t.partitions[partition]
-	if p == nil {
-		return true
-	}
 	for _, e := range p.entries {
 		if !e.resolved {
 			return false
