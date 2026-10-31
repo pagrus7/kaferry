@@ -35,7 +35,11 @@ SELECT * FROM TOPIC 'orders@prod'
 WHERE RECORD_OFFSET < LATEST;
 ```
 
-**File to topic** — replay the archive into Kafka and stop.
+**File to topic** — replay the archive into Kafka and stop. First create the directory for saved progress:
+
+```sh
+mkdir -p ~/.kaferry/checkpoints
+```
 
 ```sql
 INSERT INTO TOPIC 'orders-restored@backup'
