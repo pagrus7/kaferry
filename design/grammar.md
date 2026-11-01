@@ -57,11 +57,11 @@ copy_option = "WORKER_STOP_AFTER_RECORDS" "=" integer
 Planning or startup enforces:
 
 - Both endpoint `WITH` clauses and final `OPTIONS` are optional; if present, each must contain a setting. Omitted `GROUP` means `ONE_OFF`: generate and log a fresh group for each run. Explicit group names must be nonblank. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name. Settings, inline connection aliases and a connection's properties cannot repeat.
-- Archive rotation uses positive bytes (case-insensitive binary k/m/g suffixes) and positive intervals; defaults are 1g and one hour. `ARCHIVE 'directory'` names a filesystem directory containing a Kaferry archive.
-- Source `WITH` precedes `WHERE`. Without timestamp bounds, topic sources default to `START = EARLIEST`; `LATEST` reads new records. Timestamp bounds supply the starting rule and cannot be combined with explicit `START`. Saved progress takes precedence. Archive sources take no `START`. `MAX_STALENESS` and `MAX_OUT_OF_ORDER` belong to source `WITH`; record-error policies and worker stops belong to final `OPTIONS`.
+- Archive rotation uses positive bytes (case-insensitive binary k/m/g suffixes) and positive intervals; see [settings and defaults](../docs/reference.md#archive-sink). `ARCHIVE 'directory'` names a filesystem directory containing a Kaferry archive.
+- Source `WITH` precedes `WHERE`. Timestamp bounds supply the starting rule and cannot be combined with explicit `START`; see [Kafka start positions](decisions.md#kafka-start-positions). Archive sources take no `START`. `MAX_STALENESS` and `MAX_OUT_OF_ORDER` belong to source `WITH`; record-error policies and worker stops belong to final `OPTIONS`.
 - `ON_ERROR` cannot be combined with any specific error policy.
 - `WORKER_STOP_AFTER_RECORDS` is from 1 to 9,007,199,254,740,992; it caps accepted writes per worker per invocation, not records read or a shared group total.
-- `PARTITIONING` requires a topic destination and defaults to `PRESERVE`: original partition N goes to destination N. With `PRESERVE`, every selected input partition ID must exist at the destination, including IDs whose records the timestamp filter excludes. Counts need not match. `KEY` uses original key bytes and the destination key partitioner, allowing fewer destination partitions. Missing preserved partitions fail under every error policy.
+- `PARTITIONING` requires a topic destination. See [Kafka output](decisions.md#kafka-output) for routing and destination layout requirements, and [settings](../docs/reference.md#kafka-sink) for its default.
 - Intervals use nonnegative integers; `DAY` is 86,400 seconds. Both timestamp completion settings require an upper timestamp bound and reject an explicit offset end. `MAX_STALENESS` requires Kafka input. `OFF` disables the corresponding rule; zero is allowed. [Endpoint settings and defaults](../docs/reference.md#endpoint-with-properties).
 - Offset literals are nonnegative signed 64-bit integers. `BETWEEN lo AND hi` includes both ends and is equivalent to `>= lo AND <= hi`. Comparisons normalize to an inclusive lower and exclusive upper bound; empty ranges and overflowing adjustments fail. Each grouped branch requires `PARTITION IN` or `PARTITION BETWEEN` and an upper offset bound; selectors must be disjoint. Unlisted partitions are excluded. Shared timestamp predicates follow the branches. Ungrouped timestamp `OR` is unsupported.
 - Kafka explicit numeric starts/ends must be within retained positions at initialization. `LATEST` freezes the readable committed end on first assignment; resume reuses it. A timestamp-derived start beyond that end becomes an empty snapshot. File offsets refer to original source offsets, not replay cursors; `LATEST` means the pinned selection's EOF.
@@ -164,13 +164,7 @@ SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-sample', START = EARLIES
 OPTIONS (WORKER_STOP_AFTER_RECORDS = 100);
 ```
 
-Copy the current readable Kafka prefix without timestamp lateness assumptions:
-
-```sql
-INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-snapshot')
-WHERE RECORD_OFFSET < LATEST;
-```
+For `RECORD_OFFSET < LATEST`, see [copy the current backlog and stop](../docs/usage.md#copy-the-current-backlog-and-stop).
 
 Use a shorter known disorder bound while allowing ten minutes for arrivals:
 
