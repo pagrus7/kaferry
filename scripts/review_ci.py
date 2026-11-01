@@ -34,6 +34,15 @@ def ci_state(observation, head):
         raise Incomplete('CI response does not match the frozen head')
     if any(r['event'] != 'pull_request' for r in runs):
         raise Incomplete('workflow response contains a different event')
+    pr = observation['pr']
+
+    def same_pr(candidate):
+        return (candidate['number'] == pr['number'] and candidate['head']['sha'] == head and
+                candidate['head']['repo']['id'] == pr['head']['repo']['id'] and
+                all(candidate['base'][key] == pr['base'][key] for key in ('ref', 'sha')) and
+                candidate['base']['repo']['id'] == pr['base']['repo']['id'])
+
+    runs = [run for run in runs if any(same_pr(candidate) for candidate in run['pull_requests'])]
     # Description edits and reruns may leave several results for the same name.
     latest_runs, latest_checks = {}, {}
     for run in sorted(runs, key=lambda r: r['id']):
@@ -91,7 +100,7 @@ def watch(repository, number, head, output, timeout=1800, max_requests=160):
         current_base = (pr['base']['repo']['full_name'], pr['base']['ref'], pr['base']['sha'])
         if base is None:
             base = current_base
-        return (pr['state'] == 'open' and pr['head']['sha'] == head and
+        return (pr['number'] == number and pr['state'] == 'open' and pr['head']['sha'] == head and
                 current_base == base and local_head() == head)
 
     try:

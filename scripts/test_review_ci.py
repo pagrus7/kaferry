@@ -1,5 +1,6 @@
 """CI watching must bound work and reject missing, failed and stale observations."""
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -18,13 +19,14 @@ HEAD, BASE = 'a' * 40, 'b' * 40
 
 
 def observation():
+    pr = {'number': 12, 'state': 'open', 'head': {'sha': HEAD, 'repo': {'id': 1}},
+          'base': {'sha': BASE, 'ref': 'main', 'repo': {'id': 1, 'full_name': 'owner/repo'}}}
     runs = [{'id': i, 'path': path, 'head_sha': HEAD, 'event': 'pull_request',
-             'status': 'completed', 'conclusion': 'success'}
+             'status': 'completed', 'conclusion': 'success', 'pull_requests': [copy.deepcopy(pr)]}
             for i, path in enumerate(sorted(ci.WORKFLOWS), 1)]
     checks = [{'id': 1, 'name': 'fast', 'head_sha': HEAD, 'app': {'id': 1},
                'status': 'completed', 'conclusion': 'success'}]
-    return {'pr': {'state': 'open', 'head': {'sha': HEAD},
-                   'base': {'sha': BASE, 'ref': 'main', 'repo': {'full_name': 'owner/repo'}}},
+    return {'pr': pr,
             'runs': {'total_count': len(runs), 'workflow_runs': runs},
             'checks': {'total_count': len(checks), 'check_runs': checks},
             'statuses': {'total_count': 0, 'sha': HEAD, 'statuses': []}}
@@ -123,6 +125,34 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(self.watch()['state'], 'ci-complete')
         self.data['checks']['check_runs'][0]['app'] = {'id': 2}
         self.assertEqual(self.watch()['state'], 'failed')
+
+    def test_other_pr_or_base_cannot_supply_success_for_the_same_head(self):
+        # Given the requested PR is pending and newer successful runs exist for another scope.
+        for fault in ('number', 'base_sha', 'base_ref', 'base_repo', 'head_repo', 'missing'):
+            with self.subTest(fault=fault):
+                self.data = observation()
+                other = copy.deepcopy(self.data['runs']['workflow_runs'])
+                for run in other:
+                    run['id'] += 100
+                    candidate = run['pull_requests'][0]
+                    if fault == 'number':
+                        candidate['number'] = 13
+                    elif fault == 'base_sha':
+                        candidate['base']['sha'] = 'c' * 40
+                    elif fault == 'base_ref':
+                        candidate['base']['ref'] = 'release'
+                    elif fault == 'missing':
+                        run['pull_requests'] = []
+                    else:
+                        candidate['base' if fault == 'base_repo' else 'head']['repo']['id'] = 2
+                self.data['runs']['workflow_runs'][0]['status'] = 'in_progress'
+                self.data['runs']['workflow_runs'] += other
+                self.data['runs']['total_count'] += len(other)
+                # When collected, then other-scope successes never supersede this PR's pending run.
+                self.assertEqual(self.watch(max_requests=4)['state'], 'incomplete')
+                self.data['runs']['workflow_runs'] = other
+                self.data['runs']['total_count'] = len(other)
+                self.assertEqual(self.watch(max_requests=4)['state'], 'incomplete')
 
     def test_malformed_paginated_or_wrong_revision_evidence_is_incomplete(self):
         for fault in ('runs', 'checks', 'statuses', 'shape', 'event', 'sha'):
