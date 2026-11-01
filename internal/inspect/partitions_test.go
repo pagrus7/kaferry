@@ -26,7 +26,7 @@ func TestInspectionUsesSelectedPartitionsForPositioningRoutingAndStatus(t *testi
 	require.Equal(t, p.Partitions, r.Source.PartitionFilter)
 	status, err := s.Status(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
 	require.NoError(t, err)
-	require.Equal(t, "stopped", status.Verdict)
+	require.Equal(t, "complete_within_staleness", status.Verdict)
 	require.Len(t, status.Partitions, 1)
 	// When a new partition appears, then NOT IN makes its missing progress visible.
 	source.info.Partitions = append(source.info.Partitions, 2)

@@ -202,7 +202,7 @@ docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io
 ```
 
 ```text
-Status: stopped
+Status: complete
 Group: "archive-demo"
 Reason: file selection completed
   Source: ARCHIVE "input"
@@ -212,7 +212,18 @@ Saved progress
   Replay: input records 3; file selection completed at 3
   Snapshot: 1 completed files, 1498 encoded bytes.
 
-Stopped means this group saved a stop reason for its fixed selection of archive files. A new group selects current completed files.
+Status                    | Meaning
+--------------------------|--------
+unknown                   | No saved progress, or incompatible progress or group membership.
+running                   | Kafka group activity or a membership change was observed.
+incomplete                | At least one selected partition has no saved stop.
+limit_reached             | All selected partitions stopped; at least one reached a worker record cap.
+complete_within_staleness | Source processing finished under the configured timestamp assumptions.
+complete                  | Source processing finished for the selected finite scope.
+
+Timestamp completion depends on enabled MAX_STALENESS (arrival delay and clock lead) and MAX_OUT_OF_ORDER (timestamp disorder) assumptions.
+Completion permits filtered or skipped records, does not guarantee exactly-once writes and does not establish that destination data still exists.
+Archive completion applies to this group’s fixed file selection. A new group selects current completed files.
 Activity: not checked for files.
 ```
 
@@ -268,7 +279,7 @@ The first `copy summary` reports `submitted: 3` and `confirmed: 3`. The status i
 
 ```json
 {
-  "verdict": "stopped",
+  "verdict": "complete",
   "reason": "file selection completed",
   "partitions": [{"id": 0, "position": 3, "stop": {"reason": "eof", "at": 3}}]
 }
@@ -389,7 +400,7 @@ SIGINT/SIGTERM stop reading, allow 10 s for writes, then save progress. File flu
 kaferry status -c connections.toml -f copy.sql --json
 ```
 
-`stopped` means every currently selected partition has a saved stop reason; it does not verify destination contents. Record limits can leave input unread, and [timestamp stops](#allow-late-arrivals) depend on their assumptions. Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](reference.md#saved-status).
+`complete` reports finished source processing for the selected scope; it does not verify destination contents. `limit_reached` means a worker record cap stopped processing; rerun the same job for another allowance. `complete_within_staleness` depends on the configured [timestamp assumptions](#allow-late-arrivals). Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](reference.md#saved-status).
 
 ## Resume or start over
 
@@ -448,7 +459,7 @@ Keep the SQL, named group, configuration, `explain` output, stderr logs and `sta
 | Copy fails on a record | Read the error and `copy summary`. Only identified synchronous validation failures support SKIP; delivery and storage failures stop the copy. | Fix the cause and resume the same group. Use SKIP only when deliberately dropping that rejected record; async broker failures cannot be skipped. [Policies](../design/decisions.md#errors). |
 | Rerun copies records again | Compare the logged group and saved progress. An unnamed run, missing checkpoint, expired offsets, or writes after the last save can repeat data. | Restore the intended progress and destination together, or resume the same named group. Previously repeated output remains and may need downstream handling. |
 | Replay omits recent capture output | Compare its fixed selection with completed files; private or later-published files are outside that selection. | Follow [capture completion](#capture-is-still-running). A new group can replay older files again. |
-| Status is `stopped`, but input remains | Read each partition’s saved `stop.reason`; a worker record threshold can stop before source end. | For a threshold stop, rerun the same job for another allowance. Interpret other reasons using the [completion contract](../design/decisions.md#completion). |
+| Status is `limit_reached` | A worker record cap stopped source processing. | Rerun the same job for another allowance. |
 
 ## Errors
 

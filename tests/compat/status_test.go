@@ -40,7 +40,7 @@ func TestSavedStopsDescribeEveryCurrentKafkaPartition(t *testing.T) {
 	code := app.Execute(t.Context(), []string{"status", "-e", query, "-c", config, "--json"}, nil, &out, &errout)
 	// Then status reports both durable reasons and leaves offsets/metadata unchanged.
 	var report inspect.StatusReport
-	if err := json.Unmarshal(out.Bytes(), &report); err != nil || code != 0 || report.Verdict != "stopped" || len(report.Partitions) != 2 {
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil || code != 0 || report.Verdict != "complete_within_staleness" || len(report.Partitions) != 2 {
 		t.Fatal(code, out.String(), errout.String(), err)
 	}
 	if report.Partitions[0].Stop == nil || report.Partitions[0].Stop.Reason != "timestamp" || report.Partitions[1].Stop == nil || report.Partitions[1].Stop.Reason != "tip" {

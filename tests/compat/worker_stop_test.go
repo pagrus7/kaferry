@@ -26,10 +26,10 @@ func assertSavedWorkerStop(t *testing.T, statement, config string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	code := app.Execute(t.Context(), []string{"status", "-e", statement, "-c", config, "--json"}, nil, &stdout, &stderr)
-	require.Zero(t, code, "status: %s %s", stdout.String(), stderr.String())
+	require.Equal(t, 7, code, "status: %s %s", stdout.String(), stderr.String())
 	var report inspect.StatusReport
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
-	require.Equal(t, "stopped", report.Verdict)
+	require.Equal(t, "limit_reached", report.Verdict)
 	require.Equal(t, "worker record threshold reached", report.Reason)
 	for _, partition := range report.Partitions {
 		require.NotNil(t, partition.Stop, "partition %d stop", partition.ID)
