@@ -182,7 +182,7 @@ func TestPreviousBinaryRejectsUnsupportedReplayState(t *testing.T) {
 	// When the candidate opens the old writer state, then recovery fails without changing records.
 	runMigrationExpect(t, testBinary(t), query, config, 1, "recover archive writer.*state JSON is not canonical")
 	require.Equal(t, before, archiveRecords(t, output))
-	// Given a fresh capture directory, when the candidate reaches the old replay checkpoint,
+	// With the old writer state moved aside, when the candidate reaches the old replay checkpoint,
 	// then it rejects that checkpoint before consuming another record.
 	require.NoError(t, os.Rename(filepath.Join(output, ".kaferry"), filepath.Join(t.TempDir(), "writer-state")))
 	runMigrationExpect(t, testBinary(t), query, config, 2, "replay checkpoint.*state JSON is not canonical")
