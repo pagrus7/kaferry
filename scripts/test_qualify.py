@@ -20,7 +20,7 @@ from broker_probe import logical, reconcile, records
 
 class MatrixTest(unittest.TestCase):
     def test_profiles_cover_directed_pairs_without_duplicates(self):
-        for tier, count in [('pr', 5), ('nightly', 6), ('full', 30)]:
+        for tier, count in [('pr', 6), ('nightly', 7), ('full', 31)]:
             cases = plan(tier)
             self.assertEqual(count, len(cases))
             self.assertEqual(count, len({c['id'] for c in cases}))

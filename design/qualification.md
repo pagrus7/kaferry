@@ -34,7 +34,7 @@ python3 scripts/qualify.py matrix --tier pr
 python3 scripts/qualify.py matrix --tier full --output build-results/full-matrix
 ```
 
-A matrix runs sequentially locally; CI runs up to six cases in parallel on separate hosted runners. Existing output directories are refused so failed evidence cannot be overwritten. Use a new output path for a follow-up run.
+Every tier also runs a two-minute archive-capture endurance smoke. A matrix runs sequentially locally; CI runs up to six cases in parallel on separate hosted runners. Existing output directories are refused so failed evidence cannot be overwritten. Use a new output path for a follow-up run.
 
 Run an individual case:
 

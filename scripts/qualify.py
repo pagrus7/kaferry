@@ -38,6 +38,8 @@ def plan(tier):
     cases = [{'id': f'broker-{a}-{b}', 'suite': 'broker', 'source': a, 'destination': b} for a, b in pairs]
     cases += [{'id': f'auth-{v}-{v}', 'suite': 'auth', 'source': v, 'destination': v}
               for v in (VERSIONS if tier == 'full' else [VERSIONS[-1]])]
+    cases.append({'id': f'capture-{VERSIONS[0]}-{VERSIONS[0]}', 'suite': 'capture',
+                  'source': VERSIONS[0], 'destination': VERSIONS[0]})
     return cases
 
 
