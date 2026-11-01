@@ -21,6 +21,20 @@ The coordinator follows these steps; reviewers follow the contract below.
 5. If no non-test Go files under `cmd/` or `internal/` changed, record patch coverage N/A with compared SHAs and the full changed-file list; download no profiles and request no separate simplicity follow-up. Otherwise complete the coverage review below and have the simplicity reviewer assess every retained gap against the patch and raw evidence. Resolve disagreements; missing evidence leaves review pending.
 6. Recheck HEAD, diff and status against the reviewed scope. Mark ready only after required reviews, coverage decisions and final-head CI pass. Keep scope, reports and evidence locally; distinguish source inspection from checks actually run.
 
+## Watching CI
+
+From the frozen worktree, one coordinator can use authenticated `gh` with Python 3:
+
+```sh
+python3 scripts/review_ci.py OWNER/REPO PR_NUMBER FULL_HEAD_SHA
+```
+
+The watcher polls PR state, head-specific workflow runs, check runs and commit statuses. It waits 15, 30, then 60 seconds between polls, with a 20-second request timeout, a 30-minute total timeout and a 160-request cap. Use `--timeout SECONDS` or `--max-requests COUNT` to lower or raise the total bounds. Ctrl-C or SIGTERM stops the watch and terminates its active request. Output is one JSON result; raw responses and the result stay in a new `.cache/reviews/<head>/ci-*/` directory.
+
+Exit 0 (`ci-complete`) requires successful latest PR runs for checks, quality, integrity and PR description, completed observed checks without failures, and successful observed commit statuses. Optional skipped workflows and skipped/neutral checks are accepted; this does not establish branch-protection requirements or review readiness. Exit 1 means failed CI; exit 2 means incomplete or stale evidence; exit 130 means interrupted. Missing workflows, truncated lists and unavailable responses cannot produce success. Lists over 100 entries need manual paginated collection. A changed local HEAD, remote head, base or closed PR invalidates the result.
+
+The tests reviewer still verifies final-head CI once against raw evidence and live state; the watcher does not grant approval or decide coverage exceptions. Treat every result as a dated observation: new commits, base changes, reruns or description edits require fresh CI verification. Continue the scope/status checks in Run a review before marking ready. For a follow-up, supply the complete saved report and relevant delta; avoid resending unchanged context or polling CI through reviewers.
+
 ## Follow-ups
 
 Reuse affected reviewers. Supply the prior reviewed SHA and reports, the complete delta to the new frozen HEAD, findings and relevant surrounding content. Keep the full PR patch accessible; reread unchanged content only when the delta affects its assumptions or dependencies.
