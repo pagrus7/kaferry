@@ -44,7 +44,7 @@ class WatchTest(unittest.TestCase):
         patch.object(ci, 'local_head', return_value=HEAD).start()
         patch.object(ci.time, 'monotonic', side_effect=lambda: self.clock).start()
         patch.object(ci.time, 'sleep', side_effect=self.sleep).start()
-        patch.object(ci.subprocess, 'run', side_effect=self.api).start()
+        patch.object(ci, 'command_output', side_effect=self.api).start()
 
     def sleep(self, seconds):
         self.sleeps.append(seconds)
@@ -56,7 +56,7 @@ class WatchTest(unittest.TestCase):
         endpoint = command[-1]
         key = ('pr' if '/pulls/' in endpoint else 'runs' if '/actions/' in endpoint
                else 'checks' if '/check-runs?' in endpoint else 'statuses')
-        return subprocess.CompletedProcess(command, 0, json.dumps(self.data[key]))
+        return json.dumps(self.data[key])
 
     def watch(self, **kwargs):
         return ci.watch('owner/repo', 12, HEAD, self.output, **kwargs)
@@ -78,7 +78,7 @@ class WatchTest(unittest.TestCase):
             self.data['runs']['workflow_runs'][0]['status'] = 'in_progress' if self.clock < 105 else 'completed'
             return original(command, **kwargs)
 
-        with patch.object(ci.subprocess, 'run', side_effect=delayed):
+        with patch.object(ci, 'command_output', side_effect=delayed):
             result = self.watch()
         # When watched, then polls at 0/15/45/105 use 17 calls versus 33 at fixed 15s.
         self.assertEqual(result['state'], 'ci-complete')
@@ -184,7 +184,7 @@ class WatchTest(unittest.TestCase):
                         self.data['pr'][fault]['sha'] = 'c' * 40
                 return original(command, **kwargs)
 
-            with self.subTest(fault=fault), patch.object(ci.subprocess, 'run', side_effect=changed):
+            with self.subTest(fault=fault), patch.object(ci, 'command_output', side_effect=changed):
                 self.assertEqual(self.watch()['state'], 'stale')
         with patch.object(ci, 'local_head', side_effect=[HEAD, HEAD, BASE]):
             self.data = observation()
@@ -203,11 +203,11 @@ class WatchTest(unittest.TestCase):
                     raise error
                 return original(command, **kwargs)
 
-            with self.subTest(error=type(error).__name__), patch.object(ci.subprocess, 'run', side_effect=unavailable):
+            with self.subTest(error=type(error).__name__), patch.object(ci, 'command_output', side_effect=unavailable):
                 self.assertEqual(self.watch(max_requests=5)['state'], 'incomplete')
                 calls = 0
                 self.assertEqual(self.watch()['state'], 'ci-complete')
-        with patch.object(ci.subprocess, 'run', side_effect=subprocess.TimeoutExpired('gh', 20)):
+        with patch.object(ci, 'command_output', side_effect=subprocess.TimeoutExpired('gh', 20)):
             result = self.watch(timeout=50)
         self.assertEqual((result['state'], result['elapsed_seconds']), ('incomplete', 50))
 

@@ -73,8 +73,23 @@ def ci_state(observation, head):
             sorted(set(failed or pending)))
 
 
+def command_output(command, timeout):
+    process = subprocess.Popen(command, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except BaseException:
+        # Reap explicitly: Popen's KeyboardInterrupt cleanup can return before wait.
+        process.kill()
+        process.communicate()
+        raise
+    if process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, process.args, stdout, stderr)
+    return stdout
+
+
 def local_head():
-    return subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True, timeout=5).strip()
+    return command_output(['git', 'rev-parse', 'HEAD'], timeout=5).strip()
 
 
 def watch(repository, number, head, output, timeout=1800, max_requests=160):
@@ -90,10 +105,8 @@ def watch(repository, number, head, output, timeout=1800, max_requests=160):
         if remaining <= 0 or requests >= max_requests:
             raise TimeoutError('time or request budget exhausted')
         requests += 1
-        response = subprocess.run(['gh', 'api', f'repos/{repository}/{endpoint}'],
-                                  capture_output=True, text=True, check=True,
-                                  timeout=min(20, remaining))
-        return json.loads(response.stdout)
+        return json.loads(command_output(['gh', 'api', f'repos/{repository}/{endpoint}'],
+                                         timeout=min(20, remaining)))
 
     def matching_pr(pr):
         nonlocal base
