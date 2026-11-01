@@ -142,7 +142,7 @@ def suite_command(args, env):
             raise ValueError('migration requires --previous-binary naming a supported release executable')
         env['KAFERRY_PREVIOUS_BINARY'] = str(args.previous_binary.resolve())
         env['KAFERRY_PREVIOUS_STATE'] = args.state_contract
-        name = 'TestPreviousBinaryRejectsUnsupportedReplayState' if args.state_contract == 'reject' else 'TestPreviousBinaryProgressAndArchiveCompatibility'
+        name = 'TestPreviousBinaryRejectsUnsupportedCaptureState' if args.state_contract == 'reject' else 'TestPreviousBinaryProgressAndArchiveCompatibility'
         return prefix + ['-timeout=10m', '-tags=integration,migration', '-run', '^' + name + '$', './tests/compat'], [name]
     if args.suite == 'integration':
         return prefix + ['-race', '-timeout=20m', '-tags=integration', './tests/compat'], ['TestAllFileDirectionsAndResume', 'TestTopicToTopicSlice']

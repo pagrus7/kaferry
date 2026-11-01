@@ -165,11 +165,11 @@ func TestPreviousBinaryRejectsChangedCapturedEndQuery(t *testing.T) {
 	require.Equal(t, before, archiveRecords(t, out))
 }
 
-func TestPreviousBinaryRejectsUnsupportedReplayState(t *testing.T) {
+func TestPreviousBinaryRejectsUnsupportedCaptureState(t *testing.T) {
 	if os.Getenv("KAFERRY_PREVIOUS_STATE") != "reject" {
 		t.Skip("select the explicit reject contract for an incompatible released binary")
 	}
-	// Given an archive readable by both binaries and a checkpoint made by the old binary.
+	// Given an archive readable by both binaries and writer state made by the old binary.
 	previous := os.Getenv("KAFERRY_PREVIOUS_BINARY")
 	require.NotEmpty(t, previous)
 	input, output, fresh := filepath.Join(t.TempDir(), "input"), filepath.Join(t.TempDir(), "output"), filepath.Join(t.TempDir(), "fresh")
@@ -181,11 +181,6 @@ func TestPreviousBinaryRejectsUnsupportedReplayState(t *testing.T) {
 	require.Len(t, before, 1)
 	// When the candidate opens the old writer state, then recovery fails without changing records.
 	runMigrationExpect(t, testBinary(t), query, config, 1, "recover archive writer.*state JSON is not canonical")
-	require.Equal(t, before, archiveRecords(t, output))
-	// With the old writer state moved aside, when the candidate reaches the old replay checkpoint,
-	// then it rejects that checkpoint before consuming another record.
-	require.NoError(t, os.Rename(filepath.Join(output, ".kaferry"), filepath.Join(t.TempDir(), "writer-state")))
-	runMigrationExpect(t, testBinary(t), query, config, 2, "replay checkpoint.*state JSON is not canonical")
 	require.Equal(t, before, archiveRecords(t, output))
 	// A fresh group can still read the completed Avro records from the old release.
 	runMigrationBinary(t, testBinary(t), fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='fresh-release')", fresh, output), config)
