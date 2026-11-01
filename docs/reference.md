@@ -31,9 +31,18 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 
 `kaferry status` accepts the same query and configuration as `run`; a named `GROUP` is required. It reads saved progress without joining, consuming, producing, committing, creating files or taking locks. It needs no permissions beyond existing source/group DESCRIBE and endpoint metadata access. `ONE_OFF` requires the actual logged group name; a deleted file checkpoint has no saved status.
 
-Verdicts: invalid/incompatible progress → `unknown`; incompatible active members → `unknown`; active members, unsettled group state or changed membership → `running`; no saved progress → `unknown`; any current partition without a saved stop → `incomplete`; otherwise → `stopped`. Added eligible partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. New archive files do not expand a saved replay selection. Status reports `unknown` (5) when a checkpoint or saved selection cannot be validated; other operational read failures exit 1 without a verdict.
+| Status | Meaning |
+| --- | --- |
+| `unknown` | Saved progress is absent, invalid or incompatible, or the group has an incompatible active member. |
+| `running` | Kafka group activity, unsettled state or a membership change was observed. |
+| `incomplete` | At least one currently selected partition has no saved stop. |
+| `limit_reached` | All selected partitions have saved stops and at least one stopped at a worker record cap. |
+| `complete_within_staleness` | Source processing finished under the enabled `MAX_STALENESS` (arrival delay and consumer clock lead) or `MAX_OUT_OF_ORDER` (timestamp disorder) assumptions. |
+| `complete` | Source processing finished for the selected finite scope: explicit offset bounds or the saved archive selection. |
 
-`stopped` means every currently selected partition has a saved stop reason. More source records may remain; timestamp completion depends on the configured arrival-delay and disorder assumptions. Workers remain independent: they never wait for other workers' stops.
+Identity conflicts and incompatible active members take precedence over activity. Activity takes precedence over saved progress; missing stops take precedence over caps, and caps over completion. Added eligible partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. New archive files do not expand a saved replay selection. A checkpoint or saved selection that cannot be validated yields `unknown`; other operational read failures exit 1 without a verdict.
+
+Archive replay with disorder stopping enabled is conservatively conditional even when its saved stop is `eof`, because saved progress does not identify whether that shortcut fired. Completion permits filtered/skipped records, does not guarantee exactly-once writes and does not establish that destination data still exists. Workers remain independent: they never wait for other workers' stops.
 
 Kafka text lists up to eight partitions; file text reports replay progress. `--json` includes all. JSON version `1` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `stop`, `window`, `captured_end`). Kafka positions are offsets; file positions count confirmed examined input records. File `size_bytes` and `file_count` describe the saved selection, or current completed files before the first run. Inspection checks selected headers and sizes for incomplete groups, not payload checksums. Status does not scan records or verify destination writes.
 
@@ -149,13 +158,14 @@ Queue/fetch overrides must be positive. Byte queue settings use KiB. Large or co
 
 | Normal exit | Meaning |
 | --- | --- |
-| 0 | Status is `stopped`, or the preview printed, or this worker finished its file input or remaining Kafka partitions, or reached its worker record threshold. A signal cleanly stopped a Kafka copy without an enabled completion rule or worker record threshold. SKIP counts do not change the code |
+| 0 | Status is `complete` or `complete_within_staleness`, or the preview printed, or this worker finished its file input or remaining Kafka partitions, or reached its worker record threshold. A signal cleanly stopped a Kafka copy without an enabled completion rule or worker record threshold. SKIP counts do not change the code |
 | 1 | Copy, inspection, output, cleanup or the shutdown deadline failed, or a signal arrived before completion of startup, a file copy, or a Kafka copy with an enabled completion rule or worker record threshold. Conflicts after the first consumed record also exit 1 |
 | 2 | Usage/parse/plan/configuration error, or a validation conflict before the first consumed record (Kafka topic validation, query/source identity, replay checkpoint/lock or self-copy) |
 | 3 | For a Kafka copy with an enabled completion rule or worker record threshold, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |
 | 4 | Status is `incomplete`: a partition lacks a saved stop |
 | 5 | Status is `unknown`: progress is absent, invalid or incompatible, or the group has an incompatible active member |
 | 6 | Status is `running`: group activity or a change was observed |
+| 7 | Status is `limit_reached`: saved worker record caps leave source completion unestablished; rerun the same job for another allowance |
 
 A busy replay-group lock exits 2. Errors while writing, publishing or recovering archive data exit 1. Startup Kafka topic-validation conflicts (for example, topic authorization denied) exit 2. The first failure determines the code; cleanup cannot replace it. A second signal or external forced termination can use system signal status.
 

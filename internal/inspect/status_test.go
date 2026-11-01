@@ -7,16 +7,63 @@ import (
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
+	"github.com/pagrus7/kaferry/internal/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestStatusCompletionScopeAndPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		reasons   []string
+		offsetEnd bool
+		disorder  *int64
+		want      string
+		code      int
+	}{
+		{"offset end", []string{"tip"}, true, nil, "complete", 0},
+		{"captured end", []string{"tip"}, false, nil, "complete_within_staleness", 0},
+		{"timestamp stop", []string{"timestamp"}, false, new(int64(0)), "complete_within_staleness", 0},
+		{"mixed timestamp and end", []string{"timestamp", "tip"}, false, new(int64(0)), "complete_within_staleness", 0},
+		{"archive eof", []string{"eof"}, false, nil, "complete", 0},
+		{"archive disorder off", []string{"eof"}, false, new(int64(-1)), "complete", 0},
+		{"archive disorder enabled", []string{"eof"}, false, new(int64(0)), "complete_within_staleness", 0},
+		{"archive offset end", []string{"eof"}, true, nil, "complete", 0},
+		{"worker cap", []string{"worker_record_cap"}, false, nil, "limit_reached", 7},
+		{"cap before conditional completion", []string{"tip", "worker_record_cap"}, false, nil, "limit_reached", 7},
+		{"cap before strict completion", []string{"tip", "worker_record_cap"}, true, nil, "limit_reached", 7},
+		{"unfinished before cap", []string{"worker_record_cap", ""}, false, nil, "incomplete", 4},
+		{"no partitions", nil, false, nil, "unknown", 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given validated saved stops and the query that defines their source scope.
+			p := plan.Plan{MaxOutOfOrderMS: tc.disorder}
+			if tc.offsetEnd {
+				p.Offsets = &plan.OffsetRange{Upper: new(int64(10))}
+			}
+			r := StatusReport{}
+			for id, reason := range tc.reasons {
+				row := SavedPartition{ID: int32(id), Position: new(int64(10))}
+				if reason != "" {
+					row.Stop = &core.Stop{Reason: reason, At: 10}
+				}
+				r.Partitions = append(r.Partitions, row)
+			}
+			// When aggregating the saved status.
+			r.classify(p)
+			// Then the least complete outcome determines the verdict and shell result.
+			require.Equal(t, tc.want, r.Verdict)
+			require.Equal(t, tc.code, r.ExitCode())
+		})
+	}
+}
 
 func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 	for _, tc := range []struct {
 		name, verdict string
 		code          int
 	}{
-		{"no progress", "unknown", 5}, {"partial progress", "incomplete", 4}, {"no stop", "incomplete", 4}, {"stopped", "stopped", 0},
-		{"worker threshold", "stopped", 0}, {"mixed stops", "stopped", 0}, {"partial worker stops", "incomplete", 4}, {"active after worker stop", "running", 6},
+		{"no progress", "unknown", 5}, {"partial progress", "incomplete", 4}, {"no stop", "incomplete", 4}, {"stopped", "complete_within_staleness", 0},
+		{"worker threshold", "limit_reached", 7}, {"mixed stops", "limit_reached", 7}, {"partial worker stops", "incomplete", 4}, {"active after worker stop", "running", 6},
 		{"active", "running", 6}, {"changed empty group state", "running", 6}, {"rebalance without members", "running", 6},
 		{"foreign member", "unknown", 5}, {"identity conflict while active", "unknown", 5},
 	} {
@@ -64,7 +111,7 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 			}
 			// When observing without joining, consuming, positioning or committing.
 			r, err := s.Status(t.Context(), p, config.Defaults("home").Worker, core.NoopStopObserver{})
-			// Then identity conflicts win, activity prevents stopped, and only every durable stop yields 0.
+			// Then identity conflicts win, activity prevents completion, and worker caps remain distinct.
 			require.NoError(t, err)
 			require.Equal(t, tc.verdict, r.Verdict)
 			require.Equal(t, tc.code, r.ExitCode())

@@ -68,11 +68,15 @@ func TestFileWorkerStopResumeAndSavedStatus(t *testing.T) {
 				var stdout bytes.Buffer
 				diagnostics.Reset()
 				code = Execute(t.Context(), []string{"status", "-e", query, "-c", fixture.config, "--json"}, nil, &stdout, &diagnostics)
-				require.Equal(t, 0, code, diagnostics.String())
+				wantVerdict, wantCode := "complete", 0
+				if step.reason == "worker_record_cap" {
+					wantVerdict, wantCode = "limit_reached", 7
+				}
+				require.Equal(t, wantCode, code, diagnostics.String())
 				var report inspect.StatusReport
 				require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
 				require.Len(t, report.Partitions, 1)
-				require.Equal(t, "stopped", report.Verdict)
+				require.Equal(t, wantVerdict, report.Verdict)
 				require.NotNil(t, report.Partitions[0].Stop)
 				require.Equal(t, step.reason, report.Partitions[0].Stop.Reason)
 				require.Equal(t, inspect.StopDescription(step.reason), report.Reason)

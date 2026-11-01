@@ -14,7 +14,17 @@ import (
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
-const StatusMeaning = "Stopped means every currently selected partition has a saved stop reason. More source records may remain; timestamp completion depends on the configured arrival-delay and disorder assumptions."
+const StatusMeaning = `Status                    | Meaning
+--------------------------|--------
+unknown                   | No saved progress, or incompatible progress or group membership.
+running                   | Kafka group activity or a membership change was observed.
+incomplete                | At least one selected partition has no saved stop.
+limit_reached             | All selected partitions stopped; at least one reached a worker record cap.
+complete_within_staleness | Source processing finished under the configured timestamp assumptions.
+complete                  | Source processing finished for the selected finite scope.
+
+Timestamp completion depends on enabled MAX_STALENESS (arrival delay and clock lead) and MAX_OUT_OF_ORDER (timestamp disorder) assumptions.
+Completion permits filtered or skipped records, does not guarantee exactly-once writes and does not establish that destination data still exists.`
 
 var stopDescriptions = map[string]string{
 	"timestamp":         "timestamp disorder threshold reached",
@@ -52,8 +62,10 @@ type SavedPartition struct {
 
 func (r StatusReport) ExitCode() int {
 	switch r.Verdict {
-	case "stopped":
+	case "complete", "complete_within_staleness":
 		return 0
+	case "limit_reached":
+		return 7
 	case "incomplete":
 		return 4
 	case "running":
@@ -153,18 +165,18 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 		r.Partitions = append(r.Partitions, row)
 	}
 	r.Activity = "group checked twice; observations are not atomic"
-	r.observed(before, after)
+	r.observed(before, after, p)
 	return nil
 }
 
-func (r *StatusReport) observed(before, after kafkaport.Membership) {
+func (r *StatusReport) observed(before, after kafkaport.Membership, p plan.Plan) {
 	switch {
 	case before.Foreign || after.Foreign:
 		r.Verdict, r.Reason = "unknown", "group has an incompatible active member"
 	case !before.Idle || !after.Idle || before.State != after.State:
 		r.Verdict = "running"
 	default:
-		r.classify()
+		r.classify(p)
 	}
 }
 
@@ -175,17 +187,17 @@ func (s *Service) fileStatus(p plan.Plan, limits config.Worker, r *StatusReport)
 	}
 	r.Source.File = fileSummary(info.ArchiveInspection)
 	r.Source.File.PositionRecords = &info.Position
-	r.Meaning = "Stopped means this group saved a stop reason for its fixed selection of archive files. A new group selects current completed files."
+	r.Meaning = StatusMeaning + "\nArchive completion applies to this group’s fixed file selection. A new group selects current completed files."
 	row := SavedPartition{ID: 0}
 	if info.Saved {
 		row.Position, row.Stop, row.Window = &info.Position, info.Stop, &info.Window
 	}
 	r.Partitions = append(r.Partitions, row)
-	r.classify()
+	r.classify(p)
 	return nil
 }
 
-func (r *StatusReport) classify() {
+func (r *StatusReport) classify(p plan.Plan) {
 	anySaved, allStopped := false, len(r.Partitions) > 0
 	reasons := make(map[string]bool)
 	for _, p := range r.Partitions {
@@ -201,7 +213,13 @@ func (r *StatusReport) classify() {
 	case !allStopped:
 		r.Verdict, r.Reason = "incomplete", "partitions have no saved stop"
 	default:
-		r.Verdict = "stopped"
+		r.Verdict = "complete"
+		switch {
+		case reasons["worker_record_cap"]:
+			r.Verdict = "limit_reached"
+		case reasons["timestamp"] || !p.HasOffsetEnd() && (reasons["tip"] || reasons["eof"] && p.DisorderMS() >= 0):
+			r.Verdict = "complete_within_staleness"
+		}
 		var descriptions []string
 		for reason := range reasons {
 			descriptions = append(descriptions, StopDescription(reason))

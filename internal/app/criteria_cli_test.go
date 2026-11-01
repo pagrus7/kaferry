@@ -2,12 +2,14 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/pagrus7/kaferry/internal/archive/avro"
+	"github.com/pagrus7/kaferry/internal/inspect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,6 +44,20 @@ func TestArchiveCriteriaCLIUsesOriginalStreamsAndResumesCompletion(t *testing.T)
 				code := Execute(t.Context(), []string{"run", "-e", query, "-c", cfg}, nil, &logs, &logs)
 				require.Zero(t, code, logs.String())
 			}
+			// When inspecting the completed selection, then preserve the query completion assumptions.
+			var stdout, stderr bytes.Buffer
+			code := Execute(t.Context(), []string{"status", "-e", query, "-c", cfg, "--json"}, nil, &stdout, &stderr)
+			require.Zero(t, code, stderr.String())
+			var status inspect.StatusReport
+			require.NoError(t, json.Unmarshal(stdout.Bytes(), &status))
+			wantVerdict := "complete"
+			if mode == "disorder" {
+				wantVerdict = "complete_within_staleness"
+			}
+			require.Equal(t, wantVerdict, status.Verdict)
+			require.Len(t, status.Partitions, 1)
+			require.NotNil(t, status.Partitions[0].Stop)
+			require.Equal(t, "eof", status.Partitions[0].Stop.Reason)
 			got := archiveRecords(t, output)
 			var offsets []int64
 			for _, record := range got {
