@@ -11,8 +11,10 @@ cleanup() {
     mkdir -p "$KAFERRY_REPORT_DIR"
     compose logs --no-color > "$KAFERRY_REPORT_DIR/security-brokers.log" || true
   fi
-  compose down -v
+  cleanup_status=0
+  compose down -v || cleanup_status=$?
   rm -rf "$cert_dir"
+  return "$cleanup_status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT

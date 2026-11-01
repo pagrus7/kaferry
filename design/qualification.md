@@ -4,7 +4,7 @@ Run the same scripts from a terminal, GitHub Actions or a local scheduler. No ag
 
 ## Prepare
 
-Use Python 3.9+, the Go version required by `go.mod`, Docker with Compose, OpenSSL and Make. Linux and macOS AMD64/ARM64 are supported. Release comparisons also need an authenticated `gh` CLI with repository/attestation read access. Linux race tests need a C compiler. On Linux, install the Python venv package if the distribution packages it separately.
+Use Python 3.11+, the Go version required by `go.mod`, Docker with Compose, OpenSSL and Make. Linux and macOS AMD64/ARM64 are supported. Release comparisons also need an authenticated `gh` CLI with repository/attestation read access. Linux race tests need a C compiler. On Linux, install the Python venv package if the distribution packages it separately.
 
 From the repository root:
 
@@ -13,9 +13,9 @@ make qualification-setup
 python3 scripts/qualify.py plan --tier pr
 ```
 
-Setup builds Kaferry and installs the independent librdkafka checker into a checkout-local Python virtual environment. Run setup and qualification with the same Python major/minor version. Pass `--binary /absolute/path/to/kaferry` to test a downloaded executable; qualification does not rebuild that executable.
+If `python3` is an older system interpreter, use `make qualification-setup PYTHON=python3.14` and `python3.14` for the CLI commands. Setup builds Kaferry and installs the independent librdkafka checker into a checkout-local Python virtual environment. Run setup and qualification with the same Python major/minor version. Pass `--binary /absolute/path/to/kaferry` to test a downloaded executable; qualification does not rebuild that executable.
 
-Reserve ports 39092/40092 for plain brokers, 41092–43094 for the security listeners and 44088 for Kerberos. Run one lab per checkout and do not run `make broker` or `make qualification` alongside it. The runner locks the checkout's lab; legacy Make entrypoints do not take that lock. Broker containers use only the `kaferry-compat` and `kaferry-qualification` Compose projects. Other Docker workloads are outside the lab.
+Reserve ports 39092/40092 for plain brokers, 41092–43094 for the security listeners and 44088 for Kerberos. Run one lab per host, across all checkouts and do not run `make broker` or `make qualification` alongside it. The runner takes a host-wide lock for its fixed ports and Compose names; legacy Make entrypoints do not take that lock. Broker containers use only the `kaferry-compat` and `kaferry-qualification` Compose projects. Other Docker workloads are outside the lab.
 
 Start with one workload, 8 available CPUs, 16–20 GiB available RAM and 100 GiB free test storage; measure actual usage before increasing load. These are starting allocations, not capacity guarantees. Fixtures cap broker JVM heaps at 512 MiB and use four internal offset/transaction partitions.
 
@@ -43,7 +43,7 @@ python3 scripts/qualify.py run broker --source 3.9.2 --destination 4.4.0
 python3 scripts/qualify.py run auth --source 4.4.0
 ```
 
-The independent Python checker uses librdkafka; Kaferry uses franz-go. It seeds 96 records through all five compression codecs and checks both Kafka partitioning modes plus capture→clone→replay. Each route performs a partial run, resume and a completed rerun. Reconciliation checks unique IDs, bytes, null versus empty, ordered duplicate headers, timestamps and preserved partition IDs. Counts come from consumed records, not Kafka offset differences or Kaferry's counters.
+The independent Python checker uses librdkafka; Kaferry uses franz-go. It seeds 96 records through all five compression codecs and checks both Kafka partitioning modes plus capture→clone→replay. Each route independently verifies seven records after its partial run, all 96 after resume, and unchanged output after its completed rerun. Python fastavro reads archive records independently of Kaferry. Reconciliation checks unique IDs, bytes, null versus empty, ordered duplicate headers, timestamps and preserved partition IDs. Counts come from consumed records, not Kafka offset differences or Kaferry's counters.
 
 Security fixtures exercise PLAIN, SCRAM-SHA-256/512, signed OAuth client credentials, OAuth token files, Kerberos, server TLS, mTLS, denied access and replicated destination-leader failure. OAuth brokers validate RSA signatures, issuer, audience and expiry against an HTTP JWKS fixture; a live-copy test renews short-lived tokens while the issuer rotates keys. Token-file replacement is tested across invocations. The local KDC covers keytab login; prolonged ticket renewal and deployment-specific identity-provider behavior need separate evidence. Internal broker/controller listeners use plaintext.
 
@@ -51,7 +51,7 @@ These commands define test targets. A configuration is qualified only by a compl
 
 ## Other suites
 
-Every command owns fixture cleanup and returns nonzero on failure or interruption:
+Every command attempts fixture cleanup and returns nonzero on failure or interruption:
 
 ```sh
 python3 scripts/qualify.py run integration
@@ -73,6 +73,15 @@ sh scripts/performance_run.sh origin/main HEAD --pairs 6 --archives
 ```
 
 The wrapper tears down its disposable brokers after success, failure or interruption. Compare measurements on the same quiet machine; shared-runner throughput has no regression gate. [Performance interpretation](components.md#paired-performance).
+
+If Docker itself is unavailable, cleanup can fail. The receipt preserves both suite and cleanup errors. After restoring Docker, remove only these lab projects:
+
+```sh
+docker compose -p kaferry-compat --profile cross-cluster down -v --remove-orphans
+KAFERRY_QUAL_CERT_DIR=/tmp docker compose -p kaferry-qualification -f tests/qualification/compose.yaml down -v --remove-orphans
+```
+
+The temporary certificate path satisfies Compose interpolation during teardown; it does not create new brokers. Restarting Docker can interrupt other workloads and is outside the lab's automatic cleanup.
 
 ## Endurance on a persistent host
 

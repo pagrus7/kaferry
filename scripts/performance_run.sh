@@ -6,4 +6,4 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 make broker
-python3 scripts/performance.py run "$@"
+"${PYTHON:-python3}" scripts/performance.py run "$@"

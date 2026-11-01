@@ -1,4 +1,5 @@
 GO ?= go
+PYTHON ?= python3
 export CGO_ENABLED := 0
 KAFERRY_VERSION ?= dev
 KAFERRY_REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || printf unknown)$(if $(shell git status --porcelain --untracked-files=no 2>/dev/null),-dirty)
@@ -26,16 +27,16 @@ check:
 	CGO_ENABLED=1 $(GO) test -race ./...
 fast: check
 	test -z "$$(gofmt -l cmd internal tests)"
-	python3 -m unittest discover -s scripts -p 'test_*.py'
-	python3 scripts/docs.py
+	$(PYTHON) -m unittest discover -s scripts -p 'test_*.py'
+	$(PYTHON) scripts/docs.py
 	$(GO) test -run '^$$' -tags=integration,load,fault,qualification,migration ./tests/compat
 	$(MAKE) build
-	python3 scripts/notices.py bin/kaferry bin/THIRD_PARTY_NOTICES.txt
-	python3 scripts/install_smoke.py
+	$(PYTHON) scripts/notices.py bin/kaferry bin/THIRD_PARTY_NOTICES.txt
+	$(PYTHON) scripts/install_smoke.py
 	$(MAKE) smoke KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry
 smoke: $(TEST_BINARY_PREREQUISITE)
-	python3 scripts/ci.py smoke $(GO) test -count=1 -json -tags=integration,load -run '^(TestArchiveTutorial(Cancellation)?|TestLoadObservability)$$/^round-0$$/^disabled$$' ./tests/compat
-	python3 scripts/ci.py verify-tests smoke 'TestLoadObservability/round-0/disabled' 'TestArchiveTutorial' 'TestArchiveTutorialCancellation'
+	$(PYTHON) scripts/ci.py smoke $(GO) test -count=1 -json -tags=integration,load -run '^(TestArchiveTutorial(Cancellation)?|TestLoadObservability)$$/^round-0$$/^disabled$$' ./tests/compat
+	$(PYTHON) scripts/ci.py verify-tests smoke 'TestLoadObservability/round-0/disabled' 'TestArchiveTutorial' 'TestArchiveTutorialCancellation'
 broker:
 	docker compose -p kaferry-compat --profile cross-cluster up -d --wait --wait-timeout 60
 	# Listening sockets precede cold group-coordinator readiness.
@@ -66,13 +67,13 @@ metrics:
 	@rg --files cmd internal -g '*.go' -g '!**/*_test.go' | xargs wc -l
 	$(GO) run github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0 -top 10 $$(rg --files cmd internal -g '*.go' -g '!**/*_test.go')
 
-# Standalone qualification: Python 3.9+, Go, Docker and Compose; no agent required.
+# Standalone qualification: Python 3.11+, Go, Docker and Compose; no agent required.
 .PHONY: qualification-setup qualification-pr qualification-full model
 qualification-setup: build
-	python3 scripts/qualify.py setup
+	$(PYTHON) scripts/qualify.py setup
 qualification-pr:
-	python3 scripts/qualify.py matrix --tier pr
+	$(PYTHON) scripts/qualify.py matrix --tier pr
 qualification-full:
-	python3 scripts/qualify.py matrix --tier full
+	$(PYTHON) scripts/qualify.py matrix --tier full
 model:
 	CGO_ENABLED=1 $(GO) test -race -count=1 -run '^TestProgressLifecycleModel$$' ./internal/copy

@@ -34,7 +34,7 @@ func TestCrashResumeReconcilesRetainedRecords(t *testing.T) {
 	publishRange(0, 16)
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST)", dst, src, group)
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000','heartbeat.interval.ms'='1000') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST)", broker(t), dst, src, group)
 	config := configuration(t)
 	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
 	waitEnd(t, a, dst, 1)
@@ -42,7 +42,9 @@ func TestCrashResumeReconcilesRetainedRecords(t *testing.T) {
 	require.NoError(t, process.command.Process.Kill())
 	require.Error(t, process.wait())
 	publishRange(16, 64)
+	waitMembers(t, a, group, 0, 0, nil)
 	resumed := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+	waitMembers(t, a, group, 1, 1, nil)
 	seen, duplicates := make(map[uint64]bool), 0
 	for len(seen) < 64 {
 		record := read(t, reader)

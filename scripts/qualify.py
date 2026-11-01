@@ -27,6 +27,8 @@ VERSIONS = list(IMAGES)
 RELEASES = json.loads((ROOT / 'tests/qualification/releases.json').read_text())
 SUITES = ('broker', 'auth', 'fault', 'load', 'soak', 'capture', 'migration',
           'model', 'resources', 'integration', 'fuzz', 'benchmark', 'smoke', 'cloud')
+STOP_GRACE = 5
+LAB_LOCK = Path('/tmp/kaferry-qualification.lock')
 VENV = ROOT / ('.cache/qualification/venv-' + str(sys.version_info.major) + '.' + str(sys.version_info.minor))
 
 
@@ -61,17 +63,18 @@ def logged(command, directory, label, env, timeout=1800):
         process = subprocess.Popen(list(map(str, command)), cwd=ROOT, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    text=True, errors='replace', start_new_session=True)
-        expired = threading.Event()
+        expired, finished = threading.Event(), threading.Event()
+        def signal_group(signum):
+            try:
+                os.killpg(process.pid, signum)
+            except ProcessLookupError:
+                pass
         def terminate():
-            if process.poll() is None:
-                expired.set()
-                try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                    process.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+            # An exited parent can leave a descendant holding the output pipe.
+            expired.set()
+            signal_group(signal.SIGTERM)
+            if not finished.wait(STOP_GRACE):
+                signal_group(signal.SIGKILL)
         timer = threading.Timer(timeout, terminate)
         timer.daemon = True
         timer.start()
@@ -83,13 +86,14 @@ def logged(command, directory, label, env, timeout=1800):
             code = process.wait()
         finally:
             timer.cancel()
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGTERM)
-                try:
-                    process.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.wait()
+            signal_group(signal.SIGTERM)
+            try:
+                process.wait(timeout=STOP_GRACE)
+            except subprocess.TimeoutExpired:
+                signal_group(signal.SIGKILL)
+                process.wait()
+            signal_group(signal.SIGKILL)
+            finished.set()
             process.stdout.close()
     if expired.is_set():
         raise RuntimeError(f'{label} exceeded {timeout}s; inspect {directory / (label + ".log")}')
@@ -99,13 +103,11 @@ def logged(command, directory, label, env, timeout=1800):
 
 @contextmanager
 def lab_lock():
-    directory = ROOT / '.cache/qualification'
-    directory.mkdir(parents=True, exist_ok=True)
-    with (directory / 'lab.lock').open('w') as lock:
+    with LAB_LOCK.open('a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise ValueError('another qualification suite owns this checkout’s disposable broker ports')
+            raise ValueError('another qualification suite owns this host’s disposable broker ports')
         yield
 
 
@@ -168,7 +170,7 @@ def run_suite(args):
                'source_version': args.source, 'destination_version': args.destination,
                'source_commit': capture(['git', 'rev-parse', 'HEAD']),
                'working_tree_dirty': bool(capture(['git', 'status', '--porcelain', '--untracked-files=no'])),
-               'platform': platform.platform(), 'machine': platform.machine(),
+               'platform': platform.platform(), 'machine': platform.machine(), 'python': platform.python_version(),
                'started_at': datetime.now(timezone.utc).isoformat(), 'status': 'running',
                'go': capture([os.environ.get('GO', 'go'), 'version']),
                'execution': 'checkout component tests' if args.suite in ('model', 'resources', 'fuzz', 'benchmark') else 'CLI scenarios with checkout fixture tests',
@@ -218,19 +220,34 @@ def run_suite(args):
                 if args.suite in ('broker', 'cloud'):
                     probe = json.loads((args.output / 'reconciliation.json').read_text())
                     if (probe['status'] != 'passed' or probe['binary_sha256'] != receipt['binary_sha256'] or
-                            {c['name'] for c in probe['cases']} != {'topic-preserve', 'topic-key', 'capture-clone-replay'} or
+                            {c['name'] for c in probe['cases']} != {route + '/' + phase for route in ('topic-preserve', 'topic-key', 'capture', 'clone', 'replay') for phase in ('partial', 'resume', 'completed')} or
                             any(c['verified'] <= 0 or c['verified'] != c['expected'] or
                                 c['missing'] or c['duplicates'] or c['corrupted'] for c in probe['cases'])):
                         raise ValueError('independent reconciliation did not pass for the tested binary')
                     receipt['reconciliation'] = probe
                 if args.suite == 'auth':
                     receipt['broker_images'] = (args.output / 'qualification.broker-images.json').read_text()
+            except (Exception, KeyboardInterrupt) as error:
+                receipt['suite_error'] = str(error) or 'interrupted'
+                raise
             finally:
                 if fixtures:
-                    with (args.output / 'brokers.log').open('w') as log:
-                        subprocess.run(compose + ['logs', '--no-color'], cwd=ROOT, env=env,
-                                       stdout=log, stderr=subprocess.STDOUT, timeout=30, check=False)
-                    logged(compose + ['down', '-v', '--remove-orphans'], args.output, 'brokers-down', env, timeout=60)
+                    errors = []
+                    try:
+                        with (args.output / 'brokers.log').open('w') as log:
+                            subprocess.run(compose + ['logs', '--no-color'], cwd=ROOT, env=env,
+                                           stdout=log, stderr=subprocess.STDOUT, timeout=30, check=False)
+                    except (OSError, subprocess.SubprocessError) as error:
+                        errors.append({'phase': 'logs', 'error': str(error)})
+                    finally:
+                        try:
+                            logged(compose + ['down', '-v', '--remove-orphans'], args.output, 'brokers-down', env, timeout=60)
+                        except (OSError, RuntimeError) as error:
+                            errors.append({'phase': 'teardown', 'error': str(error)})
+                    if errors:
+                        receipt['cleanup_errors'] = errors
+                        if 'suite_error' not in receipt:
+                            raise RuntimeError('fixture diagnostics or teardown failed; inspect manifest.json')
         receipt['status'] = 'passed'
     except (Exception, KeyboardInterrupt) as error:
         receipt.update(status='interrupted' if isinstance(error, KeyboardInterrupt) else 'failed', error=str(error) or 'interrupted')
@@ -349,6 +366,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     os.chdir(ROOT)
     if args.action == 'setup':
+        if sys.version_info < (3, 11):
+            raise ValueError('qualification setup requires Python 3.11+; select that interpreter for setup and runs')
         venv.EnvBuilder(with_pip=True).create(VENV)
         requirements = 'requirements-cloud.txt' if args.cloud else 'requirements.txt'
         subprocess.run([str(VENV / 'bin/python'), '-m', 'pip', 'install', '--no-cache-dir', '-r',

@@ -61,6 +61,8 @@ x-environment: &environment
   KAFKA_SSL_KEYSTORE_TYPE: PKCS12
   KAFKA_SSL_KEYSTORE_PASSWORD: fixture-keystore-secret
   KAFKA_SSL_KEY_PASSWORD: fixture-keystore-secret
+  KAFKA_SSL_TRUSTSTORE_TYPE: PEM
+  KAFKA_SSL_TRUSTSTORE_LOCATION: /mnt/certs/ca.pem
   KAFKA_SSL_CLIENT_AUTH: none
 
 services:

@@ -34,7 +34,7 @@ def logical(key, value, headers, timestamp):
             'headers': [(name, encoded(data)) for name, data in headers], 'timestamp_ms': timestamp}
 
 
-def reconcile(messages, expected, preserve):
+def reconcile(messages, expected, preserve, expected_count=None):
     wanted = {r['id']: r for r in expected}
     seen = set()
     for message in messages:
@@ -52,10 +52,15 @@ def reconcile(messages, expected, preserve):
         if preserve and message.partition() != record['partition']:
             raise ValueError(f'record ID {identity} changed its preserved partition')
         seen.add(identity)
-    missing = set(wanted) - seen
-    if missing:
-        raise ValueError(f'{len(missing)} selected records missing; first IDs: {sorted(missing)[:5]}')
-    return {'expected': len(wanted), 'verified': len(seen), 'missing': 0, 'duplicates': 0, 'corrupted': 0}
+    count = len(wanted) if expected_count is None else expected_count
+    if len(seen) != count:
+        raise ValueError(f'expected {count} output records, observed {len(seen)}')
+    if count < len(wanted):
+        for partition in range(4):
+            observed = sorted(i for i in seen if wanted[i]['partition'] == partition)
+            if observed and observed != list(range(partition, max(observed)+1, 4)):
+                raise ValueError('partial output skipped a source partition prefix')
+    return {'expected': count, 'verified': len(seen), 'missing': 0, 'duplicates': 0, 'corrupted': 0}
 
 
 def client_properties(properties, region):
@@ -97,6 +102,28 @@ def read_topic(consumer_type, topic_partition, properties, topic, partitions):
         consumer.close()
 
 
+class ArchiveMessage:
+    def __init__(self, row): self.row = row
+    def key(self): return self.row['key']
+    def value(self): return self.row['value']
+    def headers(self): return [(h['key'].decode('utf-8'), h['value']) for h in self.row['headers']]
+    def timestamp(self): return 1, self.row['timestamp_ms']
+    def partition(self): return self.row['source']['partition']
+
+
+def read_archive(path):
+    from fastavro import reader
+    files = sorted(path.rglob('*.avro'))
+    if not files:
+        raise ValueError('archive contains no completed Avro files')
+    for filename in files:
+        with filename.open('rb') as stream:
+            for row in reader(stream):
+                if row['timestamp_kind'] != 'create_time':
+                    raise ValueError('archive changed timestamp kind')
+                yield ArchiveMessage(row)
+
+
 def sql_string(value):
     return "'" + str(value).replace("'", "''") + "'"
 
@@ -104,6 +131,8 @@ def sql_string(value):
 def run_probe(args):
     try:
         import confluent_kafka as kafka
+        import fastavro
+        import cramjam
         from confluent_kafka.admin import AdminClient, NewTopic
     except ImportError:
         raise ValueError('run python3 scripts/qualify.py setup before broker/cloud qualification')
@@ -126,7 +155,7 @@ def run_probe(args):
         for name, properties in [('source', source), ('destination', destination)]) +
         '[worker]\ncheckpoint_dir=' + json.dumps(str(output / 'checkpoints')) + '\n')
     report = {'schema': 1, 'status': 'running', 'checker': 'confluent-kafka ' + kafka.__version__,
-              'librdkafka': kafka.libversion()[0], 'binary_sha256': hashlib.sha256(args.binary.read_bytes()).hexdigest(),
+              'librdkafka': kafka.libversion()[0], 'archive_checker': 'fastavro ' + fastavro.__version__, 'binary_sha256': hashlib.sha256(args.binary.read_bytes()).hexdigest(),
               'cases': []}
     created = [[], []]
 
@@ -155,15 +184,12 @@ def run_probe(args):
         if result.returncode:
             raise ValueError(f'{label}: CLI exited {result.returncode}; inspect {label}.cli.log')
 
-    def copy_resume(label, query):
-        copy(label + '-partial', query + ' OPTIONS(WORKER_STOP_AFTER_RECORDS=7)')
-        copy(label + '-resume', query)
-        copy(label + '-completed', query)
-
-    def check(label, name, partitions, preserve):
-        counts = reconcile(read_topic(kafka.Consumer, kafka.TopicPartition, fixture_destination, name, partitions), expected, preserve)
-        report['cases'].append(dict(counts, name=label))
-        print(label + ': ' + json.dumps(counts), flush=True)
+    def copy_resume(label, query, observe, preserve):
+        for phase, count in [('partial', 7), ('resume', len(expected)), ('completed', len(expected))]:
+            copy(label + '-' + phase, query + (' OPTIONS(WORKER_STOP_AFTER_RECORDS=7)' if phase == 'partial' else ''))
+            counts = reconcile(observe(), expected, preserve, count)
+            report['cases'].append(dict(counts, name=label + '/' + phase))
+            print(label + '/' + phase + ': ' + json.dumps(counts), flush=True)
 
     try:
         report['source_cluster'] = admins[0].list_topics(timeout=30).cluster_id
@@ -184,14 +210,14 @@ def run_probe(args):
         for mode, partitions in [('PRESERVE', 4), ('KEY', 5)]:
             dst = topic(1, mode.lower(), partitions)
             query = f"INSERT INTO TOPIC {sql_string(dst + '@destination')} WITH (PARTITIONING={mode}) SELECT * " + source_sql(mode)
-            copy_resume('topic-' + mode.lower(), query)
-            check('topic-' + mode.lower(), dst, partitions, mode == 'PRESERVE')
+            copy_resume('topic-' + mode.lower(), query,
+                lambda: read_topic(kafka.Consumer, kafka.TopicPartition, fixture_destination, dst, partitions), mode == 'PRESERVE')
         archive, clone = output / 'captured', output / 'cloned'
-        copy_resume('capture', f"INSERT INTO ARCHIVE {sql_string(archive)} SELECT * " + source_sql('capture'))
-        copy_resume('clone', f"INSERT INTO ARCHIVE {sql_string(clone)} SELECT * FROM ARCHIVE {sql_string(archive)} WITH (GROUP='clone')")
+        copy_resume('capture', f"INSERT INTO ARCHIVE {sql_string(archive)} SELECT * " + source_sql('capture'), lambda: read_archive(archive), True)
+        copy_resume('clone', f"INSERT INTO ARCHIVE {sql_string(clone)} SELECT * FROM ARCHIVE {sql_string(archive)} WITH (GROUP='clone')", lambda: read_archive(clone), True)
         dst = topic(1, 'restored', 4)
-        copy_resume('replay', f"INSERT INTO TOPIC {sql_string(dst + '@destination')} SELECT * FROM ARCHIVE {sql_string(clone)} WITH (GROUP='replay')")
-        check('capture-clone-replay', dst, 4, True)
+        copy_resume('replay', f"INSERT INTO TOPIC {sql_string(dst + '@destination')} SELECT * FROM ARCHIVE {sql_string(clone)} WITH (GROUP='replay')",
+            lambda: read_topic(kafka.Consumer, kafka.TopicPartition, fixture_destination, dst, 4), True)
         report['status'] = 'passed'
     finally:
         try:
