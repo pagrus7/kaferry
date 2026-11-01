@@ -32,7 +32,7 @@ def check_tutorial(image):
                 raise ValueError(f"tutorial expected {expected} confirmations: {result.stderr}")
             status = json.loads(subprocess.check_output(command + ["status", "-c", "tutorial.toml", "-f", "copy.sql", "--json"], text=True))
             # Then progress survives container removal and a rerun confirms no additional records.
-            if status["verdict"] != "stopped" or status["partitions"][0]["position"] != 3:
+            if status["verdict"] != "complete" or status["partitions"][0]["position"] != 3:
                 raise ValueError(f"tutorial did not save completion: {status}")
     finally:
         subprocess.run(["docker", "volume", "rm", volume], check=True, stdout=subprocess.DEVNULL)

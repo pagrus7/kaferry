@@ -111,7 +111,7 @@ func TestArchiveCLIResumeUsesFixedSelectionAndSavesStopReason(t *testing.T) {
 	require.False(t, state.Complete)
 	require.Equal(t, "worker_record_cap", state.Stop.Reason)
 	code, logs = execute("status", sql)
-	require.Zero(t, code, logs)
+	require.Equal(t, 7, code, logs)
 	require.Contains(t, logs, "worker record threshold reached")
 	require.Contains(t, logs, "input records 2")
 	extra := records[4]
@@ -119,7 +119,7 @@ func TestArchiveCLIResumeUsesFixedSelectionAndSavesStopReason(t *testing.T) {
 	archiveFixture(t, src, 2, []avro.Record{extra})
 	// When more files appear, then status still describes the saved selection.
 	code, logs = execute("status", sql)
-	require.Zero(t, code, logs)
+	require.Equal(t, 7, code, logs)
 	require.Contains(t, logs, fmt.Sprintf("Snapshot: 1 completed files, %d encoded bytes.", state.Files[0].File.Size))
 	// When the same group resumes, then it finishes only the originally selected file.
 	code, logs = execute("run", sql)
@@ -200,7 +200,7 @@ func TestArchivePartitionCLIInspectsCopiesAndResumesOnlyItsSelectedFiles(t *test
 			require.Zero(t, code, logs)
 			var status inspect.StatusReport
 			require.NoError(t, json.Unmarshal(data, &status))
-			require.Equal(t, "stopped", status.Verdict)
+			require.Equal(t, "complete", status.Verdict)
 			require.Equal(t, 1, status.Source.File.FileCount)
 			require.EqualValues(t, 0, status.Partitions[0].ID)
 			require.EqualValues(t, 2, *status.Partitions[0].Position)
