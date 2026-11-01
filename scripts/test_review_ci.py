@@ -96,8 +96,8 @@ class WatchTest(unittest.TestCase):
                     self.data['checks'] = {'total_count': 0, 'check_runs': []}
                 else:
                     self.data['statuses'].update(total_count=1, statuses=[{'context': 'external', 'state': 'pending'}])
-                result = self.watch(max_requests=4)
-                self.assertEqual((result['state'], result['requests']), ('incomplete', 4))
+                result = self.watch(max_requests=5)
+                self.assertEqual((result['state'], result['requests']), ('incomplete', 5))
 
     def test_each_failure_and_required_workflow_skip_blocks_success(self):
         for key, field, value in [('runs', 'conclusion', 'skipped'), ('runs', 'conclusion', 'failure'),
@@ -149,10 +149,10 @@ class WatchTest(unittest.TestCase):
                 self.data['runs']['workflow_runs'] += other
                 self.data['runs']['total_count'] += len(other)
                 # When collected, then other-scope successes never supersede this PR's pending run.
-                self.assertEqual(self.watch(max_requests=4)['state'], 'incomplete')
+                self.assertEqual(self.watch(max_requests=5)['state'], 'incomplete')
                 self.data['runs']['workflow_runs'] = other
                 self.data['runs']['total_count'] = len(other)
-                self.assertEqual(self.watch(max_requests=4)['state'], 'incomplete')
+                self.assertEqual(self.watch(max_requests=5)['state'], 'incomplete')
 
     def test_malformed_paginated_or_wrong_revision_evidence_is_incomplete(self):
         for fault in ('runs', 'checks', 'statuses', 'shape', 'event', 'sha'):
