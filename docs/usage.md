@@ -312,7 +312,7 @@ kaferry run -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM ARCHIVE 'archive/orders' WITH (GROUP = 'orders-restore');"
 ```
 
-Replay selects current completed files and exits after reading that selection; the same group keeps its selection and progress. Keep the checkpoint directory and existing output to resume; new archive files require a new group and can cause older records to be copied again. [Archive recovery and moving replay](#archive-procedures).
+Keep the checkpoint directory and existing output to resume. See [replay selection and progress](../design/archive.md#replay-and-progress) and [archive recovery and moving replay](#archive-procedures).
 
 Pass SQL with `-f file`, `-f -` (stdin), or `-e "SQL"`, as above. [Archive rotation, routing and more SQL examples](../design/grammar.md#valid-examples).
 
@@ -438,7 +438,7 @@ Use only one replay process for a group/checkpoint directory. A different checkp
 
 ### Capture is still running
 
-Replay selects completed files once. It does not read private files or add files published later to the same group. To include capture’s remaining records, stop every intended capture worker, wait for successful exits. If a capture failed, recover it before selecting replay input. Preview a fresh selection to check for private-file warnings:
+To include capture’s remaining records in a [fresh replay selection](../design/archive.md#replay-and-progress), stop every intended capture worker and wait for successful exits. If a capture failed, recover it before selecting replay input. Preview a fresh selection to check for private-file warnings:
 
 ```sh
 kaferry explain -c connections.toml -e "INSERT INTO TOPIC 'orders@backup'

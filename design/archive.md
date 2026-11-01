@@ -16,7 +16,7 @@ The [schema](../internal/archive/avro/schema.json) defines the wire fields. OCF 
 
 The codec owns block cuts, counts, checksums and exact block positions. The Avro library encodes/decodes individual records. Encoding finishes before a record changes the pending block. Only format-limit rejections permit skipping; source identity changes or decreasing offsets require rotation, and caller errors stop capture.
 
-The writer records its decoded-block byte limit (`worker.max_frame_bytes`, default 64 MiB). Readers use that limit or return `LimitError` when their configured cap is lower. The header-count limit is `max(16, block_limit/32)`; blocks contain at most one million records. Blocks normally stay within a 256 KiB target before compression; a single larger record may form a larger block within the limit. Truncated data is an error, never normal EOF. A write error stops the writer permanently. Flushing releases pending payload buffers.
+The writer records its decoded-block byte limit (`worker.max_frame_bytes`; [worker settings](../docs/reference.md#worker-settings)). Readers use that limit or return `LimitError` when their configured cap is lower. The header-count limit is `max(16, block_limit/32)`; blocks contain at most one million records. Blocks normally stay within a 256 KiB target before compression; a single larger record may form a larger block within the limit. Truncated data is an error, never normal EOF. A write error stops the writer permanently. Flushing releases pending payload buffers.
 
 ## Layout and ownership
 
@@ -54,11 +54,11 @@ INSERT INTO ARCHIVE '/archive/orders' WITH (ROTATE_AFTER_SIZE = 512m, ROTATE_AFT
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive', START = EARLIEST);
 ```
 
-Only the path is required. Defaults: 1g compressed container bytes or one elapsed hour. Size suffixes k/m/g are case-insensitive powers of 1024; plain integers are bytes. The complete crossing block may exceed the size target. Check age even when no records arrive.
+Only the path is required; [rotation settings](../docs/reference.md#archive-sink) define the size and age defaults. The complete crossing block may exceed the size target. Check age even when no records arrive.
 
 Also rotate when original source identity changes or offsets decrease; equal offsets are allowed. Worker completion publishes every nonempty remainder. Graceful shutdown attempts this within the shutdown deadline. Work caps and source commits flush durable blocks without forcing rotation. Create no empty data files.
 
-The capture component caps open files at 1024 by default. TOML `worker.archive_capture_open_files` changes this budget. At capacity, publish the least recently used file before opening another; more active partitions than this budget can produce files far below the size/age targets. Check age during input and quiet flushes. `Finish` publishes remaining files; `Close` only releases resources. Calls use one event loop.
+TOML `worker.archive_capture_open_files` sets the open-file budget ([worker settings](../docs/reference.md#worker-settings)). At capacity, publish the least recently used file before opening another; more active partitions than this budget can produce files far below the size/age targets. Check age during input and quiet flushes. `Finish` publishes remaining files; `Close` only releases resources. Calls use one event loop.
 
 ## Replay and progress
 
@@ -69,11 +69,11 @@ Replay selects matching completed file IDs once and saves that selection before 
 
 Store and exclusively lock the group-derived checkpoint outside the archive, which may be read-only. Save cursors only through destination-confirmed progress. Missing or changed selected inputs fail an incomplete replay.
 
-Merge overlaps by original source identity, partition and offset. Preserve duplicates with deterministic file-ID/physical-record ties. No ordering across partitions. Bound open handles and payload buffers; cursor/head metadata grows with selected files. Evicting a block may require decompressing it and decoding earlier records again. The replay component defaults to 32 open files and 8 cached blocks; TOML `worker.archive_replay_open_files` and `worker.archive_replay_blocks` change these budgets. More simultaneously overlapping files than cached blocks can sharply reduce throughput. The CLI applies partition caps to the whole replay: 5,000 unsaved records / 16 MiB by default.
+Merge overlaps by original source identity, partition and offset. Preserve duplicates with deterministic file-ID/physical-record ties. No ordering across partitions. Bound open handles and payload buffers; cursor/head metadata grows with selected files. Evicting a block may require decompressing it and decoding earlier records again. TOML `worker.archive_replay_open_files` and `worker.archive_replay_blocks` set these budgets ([worker settings](../docs/reference.md#worker-settings)). More simultaneously overlapping files than cached blocks can sharply reduce throughput. The CLI applies partition work caps to the whole replay.
 
 ### Checkpoints
 
-Checkpoints use group-derived filenames and stable `.lock` files in `~/.kaferry/checkpoints`, or `worker.checkpoint_dir`. Replay creates the default directory when needed; a configured directory must already exist. Explain and status do not create directories. A group and checkpoint directory identify one replay; another directory starts fresh and can duplicate output. The canonical JSON envelope contains `state` and its lowercase `sha256` digest. State version `1` stores `group`, query `fingerprint`, resolved `window`, confirmed `position`, `complete`, selected `files` and optional `stop` (`reason`, `at`). Stop reason `eof` means the fixed selection completed, including configured offset or timestamp stops; `worker_record_cap` means the requested worker threshold was reached. `at` equals the confirmed input-record count. Restart clears a previous threshold stop when new progress is saved.
+Checkpoints use group-derived filenames and stable `.lock` files in `worker.checkpoint_dir`; [worker settings](../docs/reference.md#worker-settings) define its default and creation rules. Explain and status do not create directories. A group and checkpoint directory identify one replay; another directory starts fresh and can duplicate output. The canonical JSON envelope contains `state` and its lowercase `sha256` digest. State version `1` stores `group`, query `fingerprint`, resolved `window`, confirmed `position`, `complete`, selected `files` and optional `stop` (`reason`, `at`). Stop reason `eof` means the fixed selection completed, including configured offset or timestamp stops; `worker_record_cap` means the requested worker threshold was reached. `at` equals the confirmed input-record count. Restart clears a previous threshold stop when new progress is saved.
 
 Each `files` entry contains:
 
