@@ -14,7 +14,17 @@ import (
 	"github.com/pagrus7/kaferry/internal/plan"
 )
 
-const StatusMeaning = "Complete means source processing finished for the selected scope. Complete within staleness depends on enabled MAX_STALENESS (arrival delay and clock lead) and MAX_OUT_OF_ORDER (timestamp disorder) assumptions. Limit reached means a worker record cap stopped processing. Completion does not verify destination contents, exclude filtered or skipped records, or guarantee exactly-once writes."
+const StatusMeaning = `Status                    | Meaning
+--------------------------|--------
+unknown                   | No saved progress, or incompatible progress or group membership.
+running                   | Kafka group activity or a membership change was observed.
+incomplete                | At least one selected partition has no saved stop.
+limit_reached             | All selected partitions stopped; at least one reached a worker record cap.
+complete_within_staleness | Source processing finished under the configured timestamp assumptions.
+complete                  | Source processing finished for the selected finite scope.
+
+Timestamp completion depends on enabled MAX_STALENESS (arrival delay and clock lead) and MAX_OUT_OF_ORDER (timestamp disorder) assumptions.
+Completion permits filtered or skipped records, does not guarantee exactly-once writes and does not establish that destination data still exists.`
 
 var stopDescriptions = map[string]string{
 	"timestamp":         "timestamp disorder threshold reached",
@@ -177,7 +187,7 @@ func (s *Service) fileStatus(p plan.Plan, limits config.Worker, r *StatusReport)
 	}
 	r.Source.File = fileSummary(info.ArchiveInspection)
 	r.Source.File.PositionRecords = &info.Position
-	r.Meaning = StatusMeaning + " Archive completion applies to this group’s fixed file selection. A new group selects current completed files."
+	r.Meaning = StatusMeaning + "\nArchive completion applies to this group’s fixed file selection. A new group selects current completed files."
 	row := SavedPartition{ID: 0}
 	if info.Saved {
 		row.Position, row.Stop, row.Window = &info.Position, info.Stop, &info.Window

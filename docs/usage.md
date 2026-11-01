@@ -212,7 +212,18 @@ Saved progress
   Replay: input records 3; file selection completed at 3
   Snapshot: 1 completed files, 1498 encoded bytes.
 
-Complete means source processing finished for the selected scope. Complete within staleness depends on enabled MAX_STALENESS (arrival delay and clock lead) and MAX_OUT_OF_ORDER (timestamp disorder) assumptions. Limit reached means a worker record cap stopped processing. Completion does not verify destination contents, exclude filtered or skipped records, or guarantee exactly-once writes. Archive completion applies to this group’s fixed file selection. A new group selects current completed files.
+Status                    | Meaning
+--------------------------|--------
+unknown                   | No saved progress, or incompatible progress or group membership.
+running                   | Kafka group activity or a membership change was observed.
+incomplete                | At least one selected partition has no saved stop.
+limit_reached             | All selected partitions stopped; at least one reached a worker record cap.
+complete_within_staleness | Source processing finished under the configured timestamp assumptions.
+complete                  | Source processing finished for the selected finite scope.
+
+Timestamp completion depends on enabled MAX_STALENESS (arrival delay and clock lead) and MAX_OUT_OF_ORDER (timestamp disorder) assumptions.
+Completion permits filtered or skipped records, does not guarantee exactly-once writes and does not establish that destination data still exists.
+Archive completion applies to this group’s fixed file selection. A new group selects current completed files.
 Activity: not checked for files.
 ```
 
