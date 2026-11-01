@@ -77,7 +77,7 @@ Both allowances require an upper timestamp bound and reject an explicit offset e
 
 | Property | Default | Meaning |
 | --- | --- | --- |
-| `ROTATE_AFTER_SIZE` | `1g` | Compressed container size target; binary k/m/g suffixes |
+| `ROTATE_AFTER_SIZE` | `1g` | Compressed container size target; case-insensitive binary k/m/g suffixes, or plain integer bytes |
 | `ROTATE_AFTER_AGE` | `INTERVAL '1' HOUR` | Elapsed file age before rotation |
 
 [Rotation and publication](../design/archive.md#rotation).
