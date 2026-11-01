@@ -79,7 +79,7 @@ Stop logs identify reason, partition and position. Timestamp stops identify the 
 - Accepted writes still count after revocation; their late outcomes are discarded and the next owner may replay them. Rebalances do not reset the count. Only currently owned partitions save progress.
 - Each invocation gets a fresh allowance across all its assigned partitions. Three workers with `WORKER_STOP_AFTER_RECORDS = 100` can accept 300 writes total, across any number of source partitions. Reruns add another allowance; unsaved writes can repeat.
 - A successful drain saves `worker_record_cap` at each owned partition's confirmed position, preserving existing source stops. Write/drain failures save confirmed progress without a new worker stop; save and shutdown failures fail the run. Stop reasons clear when processing resumes. They describe saved partition progress, not worker history.
-- With no active Kafka members and a saved stop on every current partition, `status` is `stopped`, even if more input remains. Mixed reasons are listed. `explain` shows the allowance in text and optional JSON `worker_stop_after_records`, without estimating records.
+- `status` distinguishes worker record limits from source completion using [saved-status verdicts](../docs/reference.md#saved-status). Mixed saved stop reasons are listed. `explain` shows the allowance in text and optional JSON `worker_stop_after_records`, without estimating records.
 
 ## Groups and workers
 
