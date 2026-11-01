@@ -179,8 +179,13 @@ func TestPreviousBinaryRejectsUnsupportedReplayState(t *testing.T) {
 	runMigrationBinary(t, previous, query+" OPTIONS(WORKER_STOP_AFTER_RECORDS=1)", config)
 	before := archiveRecords(t, output)
 	require.Len(t, before, 1)
-	// When the candidate attempts to resume unsupported state, then it refuses before changing output.
-	runMigrationExpect(t, testBinary(t), query, config, 2, "checkpoint")
+	// When the candidate opens the old writer state, then recovery fails without changing records.
+	runMigrationExpect(t, testBinary(t), query, config, 1, "recover archive writer.*state JSON is not canonical")
+	require.Equal(t, before, archiveRecords(t, output))
+	// Given a fresh capture directory, when the candidate reaches the old replay checkpoint,
+	// then it rejects that checkpoint before consuming another record.
+	require.NoError(t, os.Rename(filepath.Join(output, ".kaferry"), filepath.Join(t.TempDir(), "writer-state")))
+	runMigrationExpect(t, testBinary(t), query, config, 2, "replay checkpoint.*state JSON is not canonical")
 	require.Equal(t, before, archiveRecords(t, output))
 	// A fresh group can still read the completed Avro records from the old release.
 	runMigrationBinary(t, testBinary(t), fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='fresh-release')", fresh, output), config)
