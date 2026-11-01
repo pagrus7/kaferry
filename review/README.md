@@ -29,11 +29,11 @@ From the frozen worktree, one coordinator can use authenticated `gh` with Python
 python3 scripts/review_ci.py OWNER/REPO PR_NUMBER FULL_HEAD_SHA
 ```
 
-The watcher polls PR state, head-specific workflow runs, check runs and commit statuses. It waits 15, 30, then 60 seconds between polls, with a 20-second request timeout, a 30-minute total timeout and a 160-request cap. Use `--timeout SECONDS` or `--max-requests COUNT` to lower or raise the total bounds. Ctrl-C or SIGTERM stops the watch and terminates its active request. Output is one JSON result; raw responses and the result stay in a new `.cache/reviews/<head>/ci-*/` directory.
+Use `--help` for time and request limits. Ctrl-C or SIGTERM stops the watch and its active request. The JSON result and raw responses stay in a new `.cache/reviews/<head>/ci-*/` directory.
 
-Exit 0 (`ci-complete`) requires successful latest runs associated with the requested PR, head and base for checks, quality, integrity and PR description, completed observed checks without failures, and successful observed commit statuses. Optional skipped workflows and skipped/neutral checks are accepted; this does not establish branch-protection requirements or review readiness. Exit 1 means failed CI; exit 2 means incomplete or stale evidence; exit 130 means interrupted. Missing workflows, truncated lists and unavailable responses cannot produce success. Lists over 100 entries need manual paginated collection. A changed local HEAD, remote head, base or closed PR invalidates the result.
+Exit 0 (`ci-complete`) means observed CI succeeded; exit 1 means failed CI; exit 2 means incomplete or stale evidence; exit 130 means interrupted. CI completion does not establish branch-protection requirements or PR readiness. Lists over 100 entries need manual paginated collection.
 
-The tests reviewer still verifies final-head CI once against raw evidence and live state; the watcher does not grant approval or decide coverage exceptions. Treat every result as a dated observation: new commits, base changes, reruns or description edits require fresh CI verification. Continue the scope/status checks in Run a review before marking ready. For a follow-up, supply the complete saved report and relevant delta; avoid resending unchanged context or polling CI through reviewers.
+Results apply to the recorded PR, head, base and time. New commits, base changes, reruns or description edits require fresh CI verification. Follow [Run a review](#run-a-review) for independent verification and readiness, and [Follow-ups](#follow-ups) for review updates.
 
 ## Follow-ups
 
