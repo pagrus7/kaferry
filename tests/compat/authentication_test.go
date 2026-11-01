@@ -4,7 +4,6 @@ package compat
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -36,15 +35,18 @@ func TestSaslTlsExternalAuthentication(t *testing.T) {
 				cfg["sasl.kerberos.keytab"] = os.Getenv("KAFERRY_QUAL_KEYTAB")
 				cfg["sasl.kerberos.config"] = os.Getenv("KAFERRY_QUAL_KRB_CONFIG")
 			} else {
+				key := fixtureOAuthKey(t, 1)
 				issuer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					user, password, ok := r.BasicAuth()
 					if !ok || user != "copier-client" || password != "private-oauth-secret" {
 						w.WriteHeader(http.StatusUnauthorized)
 						return
 					}
-					// Kafka's disposable fixture validates the principal and expiration of this unsigned JWT.
-					claims, _ := json.Marshal(map[string]any{"sub": "copier", "iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix()})
-					token := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`)) + "." + base64.RawURLEncoding.EncodeToString(claims) + "."
+					token, err := signedFixtureToken(key, 1, "https://kaferry.test", "kaferry-qualification", time.Now().Add(time.Hour))
+					if err != nil {
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
 					w.Header().Set("Content-Type", "application/json")
 					_ = json.NewEncoder(w).Encode(map[string]any{"access_token": token, "token_type": "Bearer", "expires_in": 3600})
 				}))

@@ -3,7 +3,6 @@
 package compat
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -39,27 +38,27 @@ type streamRecords struct {
 	topic                  string
 	stamp                  time.Time
 	headers                []kgo.RecordHeader
-	seen                   []bool
+	seen                   map[int]bool
+	published, contiguous  int
 	order                  map[[2]int32]int
 	verified, acknowledged int
 }
 
 func newStreamRecords(topic string, stamp time.Time) *streamRecords {
-	return &streamRecords{topic: topic, stamp: stamp, headers: []kgo.RecordHeader{{Key: "trace", Value: []byte{0, 255}}, {Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, order: make(map[[2]int32]int)}
+	return &streamRecords{topic: topic, stamp: stamp, headers: []kgo.RecordHeader{{Key: "trace", Value: []byte{0, 255}}, {Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, seen: make(map[int]bool), order: make(map[[2]int32]int)}
 }
 func (s *streamRecords) publish(t *testing.T, ctx context.Context, producer *kgo.Client, reports chan kgo.ProduceResult, count int) {
 	t.Helper()
 	for range count {
-		id := len(s.seen)
-		payload := bytes.Repeat([]byte{byte(id % 251)}, 1024+id%4096)
-		binary.BigEndian.PutUint32(payload, uint32(id))
+		id := s.published
+		payload := archiveLoadRecord(id).Value
 		key := []byte(fmt.Sprintf("key-%d", id%257))
 		if id%7 == 0 {
 			key = nil
 		}
 		message := &kgo.Record{Topic: s.topic, Partition: int32(id % 4), Key: key, Value: payload, Timestamp: s.stamp, Headers: s.headers}
 		producer.Produce(ctx, message, deliveryReporter(ctx, reports))
-		s.seen = append(s.seen, false)
+		s.published++
 	}
 }
 func (s *streamRecords) verify(t *testing.T, record *kgo.Record) {
@@ -68,7 +67,7 @@ func (s *streamRecords) verify(t *testing.T, record *kgo.Record) {
 		t.Fatal("invalid output", record)
 	}
 	id := int(binary.BigEndian.Uint32(record.Value))
-	if id >= len(s.seen) || s.seen[id] {
+	if id >= s.published || id < s.contiguous || s.seen[id] {
 		t.Fatal("unexpected or duplicated output", id)
 	}
 	key := []byte(fmt.Sprintf("key-%d", id%257))
@@ -79,18 +78,17 @@ func (s *streamRecords) verify(t *testing.T, record *kgo.Record) {
 	require.Len(t, record.Value, 1024+id%4096, "record %d value length", id)
 	require.True(t, record.Timestamp.Equal(s.stamp), "record %d timestamp: got %v, want %v", id, record.Timestamp, s.stamp)
 	require.Equal(t, s.headers, record.Headers, "record %d headers", id)
-	wantByte := byte(id % 251)
-	for offset, b := range record.Value[4:] {
-		if b != wantByte {
-			t.Fatalf("record %d payload byte %d: got %d, want %d", id, offset+4, b, wantByte)
-		}
-	}
+	require.Equal(t, archiveLoadRecord(id).Value, record.Value, "record %d payload", id)
 	pair := [2]int32{int32(id % 4), record.Partition}
 	if prior, exists := s.order[pair]; exists && id <= prior {
 		t.Fatal("source/destination partition order changed", pair, prior, id)
 	}
 	s.order[pair] = id
 	s.seen[id] = true
+	for s.seen[s.contiguous] {
+		delete(s.seen, s.contiguous)
+		s.contiguous++
+	}
 	s.verified++
 }
 func (s *streamRecords) drainReports(t *testing.T, reports <-chan kgo.ProduceResult) {

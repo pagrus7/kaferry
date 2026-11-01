@@ -117,6 +117,8 @@ PR and release integration jobs enable this test and verify that it ran; ordinar
 
 ### Test results
 
+[Standalone qualification lab](qualification.md) covers broker/authentication matrices, published-version contracts, managed-service inputs and multi-day local runs.
+
 [scripts/ci.py](../scripts/ci.py) writes logs, environment/result JSON and measurements to ignored `build-results/`, setting `KAFERRY_REPORT_DIR`. Direct load/soak commands need that variable to save metrics.
 
 Soak defaults to two minutes locally. `KAFERRY_SOAK_DURATION` overrides it (minimum one minute).

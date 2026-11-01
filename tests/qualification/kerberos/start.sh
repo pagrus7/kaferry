@@ -18,4 +18,5 @@ kadmin.local -q 'addprinc -randkey kafka/127.0.0.1@KAFERRY.TEST'
 kadmin.local -q 'ktadd -k /mnt/certs/copier.keytab copier@KAFERRY.TEST'
 kadmin.local -q 'ktadd -k /mnt/certs/broker.keytab kafka/127.0.0.1@KAFERRY.TEST'
 chmod 644 /mnt/certs/broker-krb5.conf /mnt/certs/client-krb5.conf /mnt/certs/copier.keytab /mnt/certs/broker.keytab
+python3 -m http.server 8080 --directory /mnt/certs/jwks >/dev/null 2>&1 &
 exec krb5kdc -n

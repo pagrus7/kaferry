@@ -164,3 +164,25 @@ func TestPreviousBinaryRejectsChangedCapturedEndQuery(t *testing.T) {
 	runMigrationExpect(t, previous, oldSQL, config, 2, "unsupported version of commit metadata|query fingerprint mismatch")
 	require.Equal(t, before, archiveRecords(t, out))
 }
+
+func TestPreviousBinaryRejectsUnsupportedReplayState(t *testing.T) {
+	if os.Getenv("KAFERRY_PREVIOUS_STATE") != "reject" {
+		t.Skip("select the explicit reject contract for an incompatible released binary")
+	}
+	// Given an archive readable by both binaries and a checkpoint made by the old binary.
+	previous := os.Getenv("KAFERRY_PREVIOUS_BINARY")
+	require.NotEmpty(t, previous)
+	input, output, fresh := filepath.Join(t.TempDir(), "input"), filepath.Join(t.TempDir(), "output"), filepath.Join(t.TempDir(), "fresh")
+	seedArchive(t, input, 2)
+	config := configuration(t)
+	query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='unsupported-release')", output, input)
+	runMigrationBinary(t, previous, query+" OPTIONS(WORKER_STOP_AFTER_RECORDS=1)", config)
+	before := archiveRecords(t, output)
+	require.Len(t, before, 1)
+	// When the candidate attempts to resume unsupported state, then it refuses before changing output.
+	runMigrationExpect(t, testBinary(t), query, config, 2, "checkpoint")
+	require.Equal(t, before, archiveRecords(t, output))
+	// A fresh group can still read the completed Avro records from the old release.
+	runMigrationBinary(t, testBinary(t), fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='fresh-release')", fresh, output), config)
+	require.Equal(t, before, archiveRecords(t, fresh))
+}

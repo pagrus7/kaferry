@@ -1,0 +1,116 @@
+"""Qualification must preserve failures, missing coverage and binary identity."""
+
+import argparse
+from contextlib import contextmanager
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from qualify import duration, plan, report, run_suite, suite_command
+from broker_probe import logical, reconcile, records
+
+
+class MatrixTest(unittest.TestCase):
+    def test_profiles_cover_directed_pairs_without_duplicates(self):
+        for tier, count in [('pr', 5), ('nightly', 6), ('full', 30)]:
+            cases = plan(tier)
+            self.assertEqual(count, len(cases))
+            self.assertEqual(count, len({c['id'] for c in cases}))
+        self.assertIn(('4.4.0', '3.9.2'), {(c['source'], c['destination']) for c in plan('pr')})
+
+    def test_duration_limits_and_units(self):
+        self.assertEqual(259200, duration('72h'))
+        self.assertEqual(604800, duration('7d'))
+        for value in ('0h', '59s', '8d', '-1h', '1.5h', '1h30m', 'forever'):
+            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
+                duration(value)
+
+    def test_reports_reject_missing_failed_duplicate_and_mismatched_runs(self):
+        for problem in ('missing', 'failed', 'digest', 'commit', 'duplicate', None):
+            with self.subTest(problem=problem), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                cases = plan('pr')
+                for index, case in enumerate(cases):
+                    if problem == 'missing' and index == 0:
+                        continue
+                    row = dict(case, schema=1, status='failed' if problem == 'failed' and index == 0 else 'passed',
+                               binary_sha256='other' if problem == 'digest' and index == 0 else 'a' * 64,
+                               source_commit='other' if problem == 'commit' and index == 0 else 'b' * 40,
+                               elapsed_seconds=1)
+                    folder = directory / str(index)
+                    folder.mkdir()
+                    (folder / 'manifest.json').write_text(json.dumps(row))
+                if problem == 'duplicate':
+                    folder = directory / 'duplicate'; folder.mkdir()
+                    (folder / 'manifest.json').write_text(json.dumps(row))
+                    with self.assertRaisesRegex(ValueError, 'duplicate'):
+                        report(directory, 'pr')
+                else:
+                    self.assertEqual(0 if problem is None else 1, report(directory, 'pr'))
+                    self.assertEqual('passed' if problem is None else 'incomplete',
+                                     json.loads((directory / 'qualification.json').read_text())['status'])
+
+    def test_interruption_records_failure_and_cleans_up_brokers(self):
+        @contextmanager
+        def unlocked():
+            yield
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            binary = directory / 'kaferry'; binary.write_bytes(b'executable fixture')
+            args = argparse.Namespace(suite='broker', source='3.9.2', destination='4.4.0',
+                                      output=directory / 'evidence', binary=str(binary), config=None, duration=60)
+            calls = []
+            def command(command, output, label, env, **kwargs):
+                calls.append(label)
+                if label == 'suite':
+                    raise KeyboardInterrupt()
+            with patch('qualify.lab_lock', unlocked), patch('qualify.capture', return_value='fixture'), \
+                 patch('qualify.logged', side_effect=command), patch('qualify.subprocess.run'):
+                with self.assertRaises(KeyboardInterrupt):
+                    run_suite(args)
+            self.assertEqual(['brokers-up', 'suite', 'brokers-down'], calls)
+            receipt = json.loads((args.output / 'manifest.json').read_text())
+            self.assertEqual('interrupted', receipt['status'])
+            self.assertEqual(64, len(receipt['binary_sha256']))
+
+    def test_external_and_migration_require_explicit_inputs(self):
+        args = argparse.Namespace(suite='migration', previous_binary=None)
+        with self.assertRaisesRegex(ValueError, 'previous-binary'):
+            suite_command(args, {})
+
+
+class Message:
+    def __init__(self, record): self.record = record
+    def headers(self): return self.record['headers']
+    def key(self): return self.record['key']
+    def value(self): return self.record['value']
+    def timestamp(self): return 1, self.record['timestamp_ms']
+    def partition(self): return self.record['partition']
+
+
+class ReconciliationTest(unittest.TestCase):
+    def test_detects_loss_duplicate_corruption_routing_and_null_changes(self):
+        expected = records(24)
+        messages = [Message(r.copy()) for r in expected]
+        self.assertEqual(24, reconcile(messages, expected, True)['verified'])
+        for problem in ('missing', 'duplicate', 'value', 'null', 'headers', 'partition', 'timestamp_ms'):
+            with self.subTest(problem=problem):
+                actual = [Message(r.copy()) for r in expected]
+                if problem == 'missing': actual.pop()
+                elif problem == 'duplicate': actual.append(actual[0])
+                else:
+                    actual[0].record[{'null': 'key'}.get(problem, problem)] = {
+                        'value': b'changed', 'null': b'', 'headers': [], 'partition': 3, 'timestamp_ms': 0}[problem]
+                with self.assertRaises(ValueError):
+                    reconcile(actual, expected, True)
+
+    def test_binary_json_preserves_null_empty_and_ordered_duplicate_headers(self):
+        self.assertNotEqual(logical(None, None, [], 0), logical(b'', b'', [], 0))
+        self.assertNotEqual(logical(None, None, [('dup', None), ('dup', b'')], 0),
+                            logical(None, None, [('dup', b''), ('dup', None)], 0))
+
+
+if __name__ == '__main__':
+    unittest.main()

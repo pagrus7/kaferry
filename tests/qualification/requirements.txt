@@ -1,0 +1,2 @@
+# Independent producer/verifier; Kaferry itself uses franz-go.
+confluent-kafka==2.16.1

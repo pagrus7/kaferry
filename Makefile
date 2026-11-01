@@ -46,7 +46,7 @@ broker-down:
 integration:
 	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_TEST_DEST_BROKERS=$(KAFKA_TEST_DEST_BROKERS) CGO_ENABLED=1 $(GO) test -count=1 -race -tags=integration ./...
 fault:
-	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_FAULT_CONTAINER=kaferry-compat-kafka-1 $(GO) test -count=1 -tags=integration,fault -run 'TestBlockingCommit|TestRebalanceChurn' $(KAFERRY_TEST_OUTPUT) ./tests/compat
+	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_FAULT_CONTAINER=kaferry-compat-kafka-1 $(GO) test -count=1 -tags=integration,fault -run 'TestBlockingCommit|TestRebalanceChurn|TestCrashResume' $(KAFERRY_TEST_OUTPUT) ./tests/compat
 load: $(TEST_BINARY_PREREQUISITE)
 	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) $(GO) test -count=1 -tags=integration,load -run '^TestLoad' $(KAFERRY_TEST_OUTPUT) ./tests/compat
 soak: $(TEST_BINARY_PREREQUISITE)
@@ -54,6 +54,7 @@ soak: $(TEST_BINARY_PREREQUISITE)
 qualification: $(TEST_BINARY_PREREQUISITE)
 	GO=$(GO) sh tests/qualification/run.sh
 fuzz:
+	$(GO) test -run '^$$' -fuzz FuzzProgressLifecycle -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/copy
 	$(GO) test -run '^$$' -fuzz FuzzParse -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/sql
 	$(GO) test -run '^$$' -fuzz FuzzContainer -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/archive/avro
 	$(GO) test -run '^$$' -fuzz FuzzState -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./internal/archive/capture
@@ -64,3 +65,14 @@ benchmark:
 metrics:
 	@rg --files cmd internal -g '*.go' -g '!**/*_test.go' | xargs wc -l
 	$(GO) run github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0 -top 10 $$(rg --files cmd internal -g '*.go' -g '!**/*_test.go')
+
+# Standalone qualification: Python 3.9+, Go, Docker and Compose; no agent required.
+.PHONY: qualification-setup qualification-pr qualification-full model
+qualification-setup: build
+	python3 scripts/qualify.py setup
+qualification-pr:
+	python3 scripts/qualify.py matrix --tier pr
+qualification-full:
+	python3 scripts/qualify.py matrix --tier full
+model:
+	CGO_ENABLED=1 $(GO) test -race -count=1 -run '^TestProgressLifecycleModel$$' ./internal/copy
