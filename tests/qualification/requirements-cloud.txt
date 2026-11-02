@@ -1,0 +1,2 @@
+-r requirements.txt
+aws-msk-iam-sasl-signer-python==1.0.2

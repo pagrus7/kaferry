@@ -36,6 +36,8 @@ Each platform build generates `archive-demo.tar.gz` from the SQL, TOML and JSON 
 
 ## Qualification summary
 
+The full broker/authentication matrix also produces checksummed `compatibility.json` and `compatibility.md` assets. Publication requires their source and binary identities to match the Linux AMD64 archive. [Standalone qualification commands](../design/qualification.md).
+
 Publishing saves `qualification.md` as a checksummed release asset. It identifies the tagged source, tested Linux AMD64 binary, fixture environments, major scenarios, suite results and configured soak duration. The generator rejects missing, failed or mismatched source/binary evidence. Per-platform build information and attestations remain separate assets. The summary describes the exercised configurations; detailed workflow artifacts expire after 30 days.
 
 ## Build and validation

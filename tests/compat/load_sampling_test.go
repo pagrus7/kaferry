@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestLoadSamplesMemoryBeforeReleasingInput(t *testing.T) {
@@ -31,4 +32,28 @@ func TestLoadSamplesMemoryBeforeReleasingInput(t *testing.T) {
 	require.ErrorAs(t, process.wait(), &exit, "invalid SQL must fail")
 	require.Equal(t, 2, exit.ExitCode(), "invalid SQL exit code")
 	require.NoError(t, ctx.Err(), "CLI must exit before the timeout")
+}
+
+func TestLoadStreamingVerifierBoundsHistory(t *testing.T) {
+	// Given many epochs arriving out of order within a bounded verification window.
+	stamp := time.Now().Truncate(time.Millisecond)
+	stream := newStreamRecords("fixture", stamp)
+	stream.published = 4096
+	for first := 0; first < stream.published; first += 16 {
+		for partition := 3; partition >= 0; partition-- {
+			for id := first + partition; id < first+16; id += 4 {
+				input := archiveLoadRecord(id)
+				headers := make([]kgo.RecordHeader, len(input.Headers))
+				for i, h := range input.Headers {
+					headers[i] = kgo.RecordHeader{Key: h.Name, Value: h.Value}
+				}
+				// When consumed records are verified, then completed history is released.
+				stream.verify(t, &kgo.Record{Key: input.Key, Value: input.Value, Headers: headers, Timestamp: stamp, Partition: int32(id % 4)})
+				require.LessOrEqual(t, len(stream.seen), 16)
+			}
+		}
+	}
+	require.Equal(t, stream.published, stream.verified)
+	require.Equal(t, stream.published, stream.contiguous)
+	require.Empty(t, stream.seen)
 }

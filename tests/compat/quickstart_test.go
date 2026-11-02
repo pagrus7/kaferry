@@ -37,7 +37,9 @@ func TestKafkaQuickStart(t *testing.T) {
 	require.NoError(t, err)
 	image := regexp.MustCompile(`apache/kafka:[0-9.]+`).FindString(string(guide))
 	require.NotEmpty(t, image)
-	require.Contains(t, string(compose), "image: "+image+"@", "the playground and fixtures must use the same Kafka version")
+	for _, setting := range []string{"KAFERRY_SOURCE_IMAGE", "KAFERRY_DESTINATION_IMAGE"} {
+		require.Contains(t, string(compose), setting+":-"+image+"@", "the playground and default fixtures must use the same Kafka version")
+	}
 	binary, err := filepath.Abs(testBinary(t))
 	require.NoError(t, err)
 	commands := t.TempDir()

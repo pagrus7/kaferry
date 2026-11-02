@@ -117,6 +117,8 @@ PR and release integration jobs enable this test and verify that it ran; ordinar
 
 ### Test results
 
+[Standalone qualification lab](qualification.md) covers broker/authentication matrices, published-version contracts, managed-service inputs and multi-day local runs.
+
 [scripts/ci.py](../scripts/ci.py) writes logs, environment/result JSON and measurements to ignored `build-results/`, setting `KAFERRY_REPORT_DIR`. Direct load/soak commands need that variable to save metrics.
 
 Soak defaults to two minutes locally. `KAFERRY_SOAK_DURATION` overrides it (minimum one minute).
@@ -139,7 +141,7 @@ KAFERRY_SOAK_DURATION=30m \
 python3 scripts/ci.py soak make soak
 ```
 
-[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. Bounded load measurements appear in the summary and `checks-kafka` artifact: throughput, sampled RSS, work caps and logs. Summaries list the slowest tests. [Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) run nightly unless a successful scheduled run already tested the same main commit; the weekly full run always includes a 30-minute soak. Manual dispatch runs all suites with a configurable soak duration (keep it below the 40-minute test timeout). Release assets retain a concise [qualification summary](../releases/README.md#qualification-summary); detailed artifacts retain evidence for 30 days; each test invocation runs once and failures stay visible in Actions.
+[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. Bounded load measurements appear in the summary and `checks-kafka` artifact: throughput, sampled RSS, work caps and logs. Summaries list the slowest tests. [Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) select fault/security, fuzz and benchmarks nightly; the weekly selection adds load and a 30-minute soak. Unchanged suites reuse recent successful executions under the [scheduled qualification rules](qualification.md#compatibility-matrix); weekly fuzzing always runs. Manual dispatch runs all suites with a configurable soak duration (keep it below the 40-minute test timeout). Release assets retain a concise [qualification summary](../releases/README.md#qualification-summary); detailed artifacts retain evidence for 30 days; each test invocation runs once and failures stay visible in Actions.
 
 PRs also run quality/security checks and [additional integrity suites](../.github/workflows/risk.yml). Only the prose allowlist skips fault and security/failover tests; unknown paths run both. The ordinary PR suites always run. Strict branch protection applies to admins; CodeQL errors and High/Critical security findings block merging.
 

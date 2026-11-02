@@ -22,24 +22,14 @@ jobs:
       run: ${{ steps.plan.outputs.run }}
       suites: ${{ steps.plan.outputs.suites }}
     steps:
-      - name: Choose nightly checks or the weekly full run
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Choose suites or reuse recent executions
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
-          SCHEDULE: ${{ github.event.schedule }}
-        run: |
-          suites='["fault","qualification","fuzz","benchmark"]'
-          run=true
-          if [ "$EVENT" = workflow_dispatch ] || [ "$SCHEDULE" = "17 9 * * 1" ]; then
-            suites='["load","soak","fault","qualification","fuzz","benchmark"]'
-          else
-            previous=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow qualification.yml --branch main --event schedule --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
-            if [ "$previous" = "$GITHUB_SHA" ]; then run=false; fi
-          fi
-          echo "run=$run" >> "$GITHUB_OUTPUT"
-          echo "suites=$suites" >> "$GITHUB_OUTPUT"
-          echo "Extended tests: run=$run, suites=$suites. Nightly checks skip an unchanged main; weekly checks always run." >> "$GITHUB_STEP_SUMMARY"
+          WEEKLY: ${{ github.event.schedule == '17 9 * * 1' }}
+        run: python3 scripts/scheduled.py qualification
   qualification:
     needs: plan
     if: needs.plan.outputs.run == 'true'

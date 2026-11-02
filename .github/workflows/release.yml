@@ -33,7 +33,7 @@ jobs:
             platform: linux-amd64
           - runner: ubuntu-24.04-arm
             platform: linux-arm64
-          - runner: macos-14
+          - runner: macos-15
             platform: darwin-arm64
           - runner: macos-15-intel
             platform: darwin-amd64
@@ -152,9 +152,44 @@ jobs:
     with:
       suites: '["integration","load","fault","qualification","soak"]'
       artifact: release-linux-amd64
+  compatibility:
+    needs: build
+    uses: ./.github/workflows/compatibility.yml
+    with:
+      artifact: release-linux-amd64
+      tier: full
+  released-versions:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-linux-amd64
+          path: .cache/release-input
+      - name: Compare the exact candidate against cataloged published releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p bin
+          set -- .cache/release-input/kaferry-*-linux-amd64.tar.gz
+          test "$#" = 1
+          tar -xzf "$1" -C bin kaferry
+          python3 scripts/qualify.py releases --output build-results/released-versions
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: released-version-contracts
+          path: build-results/
+          retention-days: 30
   publish:
     if: github.event_name == 'push' || inputs.publish
-    needs: [build, linux-validation]
+    needs: [build, linux-validation, compatibility, released-versions]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -181,6 +216,17 @@ jobs:
         with:
           pattern: qualification-*
           path: .cache/release-evidence/
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: compatibility-matrix
+          path: .cache/compatibility-evidence/
+      - name: Verify and retain the complete compatibility matrix
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          python3 scripts/qualify.py verify-release .cache/compatibility-evidence/qualification.json "release/kaferry-$RELEASE_TAG-linux-amd64.tar.gz" "$SOURCE_SHA"
+          cp .cache/compatibility-evidence/qualification.json release/compatibility.json
+          cp .cache/compatibility-evidence/qualification.md release/compatibility.md
       - name: Retain release qualification results
         env:
           SOURCE_SHA: ${{ github.sha }}

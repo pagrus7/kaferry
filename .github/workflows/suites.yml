@@ -81,11 +81,11 @@ jobs:
               ;;
             qualification)
               python3 scripts/ci.py qualification make qualification KAFERRY_TEST_OUTPUT=-json
-              python3 scripts/ci.py verify-tests qualification 'TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight' 'TestSaslTlsScramMechanisms/SCRAM-SHA-256' 'TestSaslTlsScramMechanisms/SCRAM-SHA-512' 'TestSaslTlsExternalAuthentication/OAUTHBEARER' 'TestSaslTlsExternalAuthentication/GSSAPI' 'TestReplicatedClusterLeaderFailurePreservesCopy'
+              python3 scripts/ci.py verify-tests qualification 'TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight' 'TestSaslTlsScramMechanisms/SCRAM-SHA-256' 'TestSaslTlsScramMechanisms/SCRAM-SHA-512' 'TestSaslTlsExternalAuthentication/OAUTHBEARER' 'TestSaslTlsExternalAuthentication/GSSAPI' 'TestSaslTlsOAuthTokenFile' 'TestSaslTlsOAuthRenewalAndKeyRotation' 'TestMutualTlsCopy' 'TestServerTlsCopy' 'TestReplicatedClusterLeaderFailurePreservesCopy'
               ;;
             fault)
               python3 scripts/ci.py fault make fault KAFERRY_TEST_OUTPUT=-json
-              python3 scripts/ci.py verify-tests fault 'TestBlockingCommitAcrossBrokerOutage' 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits'
+              python3 scripts/ci.py verify-tests fault 'TestBlockingCommitAcrossBrokerOutage' 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits' 'TestCrashResumeReconcilesRetainedRecords'
               ;;
             fuzz|benchmark) python3 scripts/ci.py "$SUITE" make "$SUITE" ;;
             *) echo 'Unknown extended test suite' >&2; exit 1 ;;
