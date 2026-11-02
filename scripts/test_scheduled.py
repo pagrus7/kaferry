@@ -97,6 +97,18 @@ class ScheduledTests(unittest.TestCase):
         jobs[1]['conclusion'] = 'cancelled'
         self.assertTrue(self.choose('compatibility', ['full'], [run(2, jobs), run(1, matrix(days=2))])[0]['run'])
 
+    def test_newer_cases_without_an_aggregate_job_require_retry(self):
+        for result in ('failure', 'cancelled', 'success'):
+            with self.subTest(result=result):
+                history = [run(2, matrix(result=result, days=0)[1:]), run(1, matrix())]
+                decision = self.choose('compatibility', ['full'], history)[0]
+                self.assertTrue(decision['run'])
+                self.assertIn('retry required', decision['reason'])
+
+    def test_a_known_different_tier_does_not_erase_full_matrix_evidence(self):
+        history = [run(2, matrix('nightly', days=0)), run(1, matrix())]
+        self.assertFalse(self.choose('compatibility', ['full'], history)[0]['run'])
+
     def test_passing_aggregate_without_real_passing_cases_is_insufficient(self):
         for cases in ([], matrix(result='skipped')[1:]):
             history = [run(1, matrix()[:1] + cases)]
@@ -126,12 +138,31 @@ class ScheduledTests(unittest.TestCase):
         env = {'EVENT': 'schedule', 'GITHUB_REPOSITORY': 'example/repo', 'GITHUB_SHA': HEAD}
         jobs = matrix()
         old = job('cases (unrerun)', 'Run standalone suite', days=31)
-        with patch('scheduled.gh', side_effect=[{'workflow_runs': [run(1, [], days=0)]}, [{'jobs': jobs}, {'jobs': [old]}]]) as api:
+        with patch('scheduled.gh', side_effect=[[{'workflow_runs': [run(1, [], days=0)]}], [{'jobs': jobs}, {'jobs': [old]}]]) as api:
             decision = scheduled.plan('compatibility', 'full', env)[0]
             self.assertTrue(decision['run'])
             self.assertIn('expired', decision['reason'])
             self.assertIn('filter=all', api.call_args.args[0])
             self.assertTrue(api.call_args.kwargs['paginate'])
+
+    def test_older_history_page_can_contain_the_latest_failed_rerun(self):
+        env = {'EVENT': 'schedule', 'GITHUB_REPOSITORY': 'example/repo', 'GITHUB_SHA': HEAD}
+        pages = [{'workflow_runs': [run(2, [], days=1)]}, {'workflow_runs': [run(1, [], days=0)]}]
+        with patch('scheduled.gh', side_effect=[pages, [{'jobs': [suite('fault', days=1)]}], [{'jobs': [suite('fault', 'failure', 0)]}]]) as api:
+            decision = scheduled.plan('qualification', 'nightly', env)[0]
+            self.assertTrue(decision['run'])
+            self.assertIn('retry required', decision['reason'])
+            self.assertTrue(api.call_args_list[0].kwargs['paginate'])
+            self.assertIn('head_sha=' + HEAD, api.call_args_list[0].args[0])
+
+    def test_truncated_history_requires_execution_instead_of_reuse(self):
+        env = {'EVENT': 'schedule', 'GITHUB_REPOSITORY': 'example/repo', 'GITHUB_SHA': HEAD}
+        pages = [{'workflow_runs': [run(1, [])], 'total_count': 2}]
+        with patch('scheduled.gh', return_value=pages) as api:
+            decisions = scheduled.plan('qualification', 'nightly', env)
+            self.assertTrue(all(d['run'] for d in decisions))
+            self.assertTrue(all('history unavailable' in d['reason'] for d in decisions))
+            self.assertEqual(1, api.call_count)
 
     def test_report_rerun_does_not_refresh_old_matrix_cases(self):
         jobs = matrix(days=31)
@@ -174,7 +205,7 @@ class ScheduledTests(unittest.TestCase):
 
     def test_history_query_is_bounded_and_uses_completed_scheduled_main_runs(self):
         env = {'EVENT': 'schedule', 'GITHUB_REPOSITORY': 'example/repo', 'GITHUB_SHA': HEAD}
-        with patch('scheduled.gh', return_value={'workflow_runs': []}) as api:
+        with patch('scheduled.gh', return_value=[{'workflow_runs': []}]) as api:
             scheduled.plan('compatibility', 'full', env)
             self.assertIn('branch=main&event=schedule&status=completed&per_page=100', api.call_args.args[0])
         with patch('scheduled.time.monotonic', return_value=10), patch('scheduled.subprocess.check_output', return_value='{}') as command:

@@ -43,18 +43,18 @@ def execution(kind, key, jobs):
         stamp = completed_step(job, 'Run suite')
         return stamp is not None, stamp, timestamp(job.get('started_at') or job.get('completed_at'))
     report = next((j for j in jobs if j['name'] == f'report ({key})'), None)
-    if report is None:
-        return None
     cases = [j for j in jobs if (j['name'] == 'cases' or j['name'].startswith('cases ('))
              and j.get('conclusion') != 'skipped']
-    if report.get('conclusion') == 'skipped' and not cases:
+    if report is None and (not cases or any(j['name'].startswith('report (') for j in jobs)):
+        return None
+    if report is not None and report.get('conclusion') == 'skipped' and not cases:
         return None
     stamps = [completed_step(j, 'Run standalone suite') for j in cases]
-    passed = completed_step(report, 'Require complete matching evidence') is not None
+    passed = report is not None and completed_step(report, 'Require complete matching evidence') is not None
     passed = passed and bool(stamps) and all(stamps)
     # Rerunning only the aggregate report cannot make the case executions newer.
-    attempted = [j for j in cases if j.get('conclusion') != 'skipped']
-    if not passed:
+    attempted = list(cases)
+    if not passed and report is not None:
         attempted.append(report)
     latest = max(timestamp(j.get('started_at') or j.get('completed_at')) for j in attempted)
     return bool(passed), min(stamps) if passed else None, latest
@@ -108,6 +108,13 @@ def gh(path, deadline, paginate=False):
         stderr=subprocess.PIPE, timeout=min(15, remaining)))
 
 
+def collect(pages, key):
+    values = [value for page in pages for value in page[key]]
+    if any(page.get('total_count', len(values)) > len(values) for page in pages):
+        raise ValueError('history is truncated')
+    return values
+
+
 def plan(kind, tier, env):
     weekly = env.get('WEEKLY') == 'true'
     if kind == 'qualification' and env.get('EVENT') == 'workflow_dispatch':
@@ -120,10 +127,11 @@ def plan(kind, tier, env):
         raise ValueError('expected a repository and full source commit')
     deadline = time.monotonic() + 45
     try:
-        runs = gh(f'repos/{repository}/actions/workflows/{kind}.yml/runs?branch=main&event=schedule&status=completed&per_page=100', deadline)['workflow_runs']
+        pages = gh(f'repos/{repository}/actions/workflows/{kind}.yml/runs?branch=main&event=schedule&status=completed&per_page=100&head_sha={head}', deadline, paginate=True)
+        runs = collect(pages, 'workflow_runs')
         def load_jobs(run):
             pages = gh(f'repos/{repository}/actions/runs/{int(run)}/jobs?per_page=100&filter=all', deadline, paginate=True)
-            return [job for page in pages for job in page['jobs']]
+            return collect(pages, 'jobs')
         return select(kind, keys, head, runs, load_jobs, datetime.now(timezone.utc), weekly)
     except (KeyError, OSError, TypeError, ValueError, subprocess.SubprocessError) as error:
         # Missing history cannot justify skipping a test. Do not expose CLI stderr.
