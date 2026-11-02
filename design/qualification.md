@@ -36,6 +36,10 @@ python3 scripts/qualify.py matrix --tier full --output build-results/full-matrix
 
 Every tier also runs a two-minute archive-capture endurance smoke. A matrix runs sequentially locally; CI runs up to six cases in parallel on separate hosted runners. Existing output directories are refused so failed evidence cannot be overwritten. Use a new output path for a follow-up run.
 
+Scheduled main runs reuse a suite or matrix tier only when its latest completed attempt passed on the same commit and its test executions are less than 30 days old. Nightly results cannot substitute for the full matrix. Failed or cancelled attempts require retry; skipped runs and rerunning only the aggregate report do not renew evidence age. Missing or unavailable history runs the tests.
+
+The planner's GitHub Actions summary names each suite/tier, says whether it will run or reuse evidence, and links the original execution with its date. Weekly extended tests always include fresh fuzzing; scheduled vulnerability scans and performance A/A calibration also continue on unchanged code. PR, manual and release invocations run their selected suites without scheduled-evidence reuse. These rules reuse scheduled evidence; they do not certify a newly packaged release executable.
+
 Run an individual case:
 
 ```sh

@@ -22,6 +22,7 @@ on:
         default: full
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: compatibility-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -32,6 +33,7 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       tier: ${{ steps.matrix.outputs.tier }}
+      run: ${{ steps.schedule.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: matrix
@@ -40,8 +42,17 @@ jobs:
         run: |
           echo "matrix=$(python3 scripts/qualify.py plan --tier "$TIER")" >> "$GITHUB_OUTPUT"
           echo "tier=$TIER" >> "$GITHUB_OUTPUT"
+      - name: Choose matrix or reuse recent executions
+        id: schedule
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          FORCE_RUN: ${{ inputs.artifact != '' }}
+          TIER: ${{ steps.matrix.outputs.tier }}
+        run: python3 scripts/scheduled.py compatibility --tier "$TIER"
   cases:
     needs: plan
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
@@ -86,7 +97,8 @@ jobs:
           path: build-results/
           retention-days: 14
   report:
-    if: always() && needs.plan.result == 'success'
+    name: report (${{ needs.plan.outputs.tier }})
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.run == 'true'
     needs: [plan, cases]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
