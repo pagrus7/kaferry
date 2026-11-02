@@ -12,7 +12,7 @@ import time
 
 
 WORKFLOWS = {f'.github/workflows/{name}.yml' for name in
-             ('ci', 'quality', 'risk', 'pr-description')}
+             ('ci', 'quality', 'risk', 'pr-description', 'compatibility')}
 
 
 class Incomplete(ValueError):

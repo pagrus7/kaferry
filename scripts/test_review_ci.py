@@ -99,6 +99,23 @@ class WatchTest(unittest.TestCase):
                 result = self.watch(max_requests=5)
                 self.assertEqual((result['state'], result['requests']), ('incomplete', 5))
 
+    def test_compatibility_workflow_must_be_present_and_pass(self):
+        # Given the other checks pass, missing or skipped compatibility is insufficient.
+        path = '.github/workflows/compatibility.yml'
+        for missing in (True, False):
+            with self.subTest(missing=missing):
+                data = observation()
+                rows = data['runs']['workflow_runs']
+                if missing:
+                    data['runs']['workflow_runs'] = [run for run in rows if run['path'] != path]
+                    data['runs']['total_count'] -= 1
+                else:
+                    next(run for run in rows if run['path'] == path)['conclusion'] = 'skipped'
+                # When evaluating completion, then compatibility blocks a success result.
+                state, details = ci.ci_state(data, HEAD)
+                self.assertEqual('pending' if missing else 'failed', state)
+                self.assertIn(path, details)
+
     def test_each_failure_and_required_workflow_skip_blocks_success(self):
         for key, field, value in [('runs', 'conclusion', 'skipped'), ('runs', 'conclusion', 'failure'),
                                   ('checks', 'conclusion', 'cancelled'), ('checks', 'conclusion', 'timed_out')]:
