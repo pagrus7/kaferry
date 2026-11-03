@@ -113,7 +113,7 @@ func probeSourceProgress(t *testing.T, name, group string) (*adapter.Source, cor
 	connection, err := factory.Open(context.Background(), p.Source)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = connection.Close(context.Background()) })
-	if _, err = connection.ClusterID(context.Background()); err != nil {
+	if _, err = connection.Describe(context.Background(), false); err != nil {
 		t.Fatal(err)
 	}
 	input, store, err := connection.Source(context.Background(), p, "pause-probe", config.Defaults(t.TempDir()).Worker, nil)

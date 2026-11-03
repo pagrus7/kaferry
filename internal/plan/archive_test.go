@@ -23,9 +23,9 @@ func TestArchiveOptionsValidateAndKeepOperationalSettingsOutOfFingerprint(t *tes
 	require.EqualValues(t, 2<<30, p.Destination.RotateAfterSize)
 	require.EqualValues(t, 180000, p.Destination.RotateAfterAgeMS)
 	// When fingerprinting, then rotation tuning is excluded while Avro query identity stays stable.
-	fp, err := p.Fingerprint("", "")
+	fp, err := p.testFingerprint("", "")
 	require.NoError(t, err)
-	plain, err := build(t, "").Fingerprint("", "")
+	plain, err := build(t, "").testFingerprint("", "")
 	require.NoError(t, err)
 	require.Equal(t, plain, fp)
 }

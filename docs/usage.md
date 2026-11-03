@@ -408,6 +408,41 @@ Rerun the same query with the same named `GROUP`, endpoints and checkpoint direc
 
 Keep existing output and saved progress. Kafka stores progress in source consumer-group offsets; archive replay uses checkpoint files. Expired offsets or missing checkpoints can start a fresh copy; crashes and Kafka rebalances can repeat or reorder writes. Keep selected completed archive files unchanged and retain lock files until replay completes. [Archive recovery and moving replay](#archive-procedures).
 
+### Recover after destination topic recreation
+
+A replacement topic has a different UUID even when its name is unchanged. Saved progress binds the destination UUID observed at startup, so a restart against the replacement fails identity validation. Runtime producer behavior depends on the broker protocol; see [Kafka output](../design/decisions.md#kafka-output).
+
+Stop every worker for the old group and disable automatic restarts before inspecting progress. Some workers may already be using the replacement and need to be stopped explicitly. Preserve the old query and group while capturing:
+
+```sh
+kaferry status -c connections.toml -f copy.sql --json > progress.json
+```
+
+A fingerprint conflict exits 5 with verdict `unknown`, while retaining source-validated saved positions, windows, ends and fingerprints. Check `activity` for remaining Kafka workers. Source-identity or metadata errors can prevent positions from being shown. Archive replay positions count examined input records, not Kafka offsets.
+
+**Start fresh:** run the copy with a new named `GROUP` and the intended fresh-start criteria. This creates independent progress; it does not clear the replacement topic or old progress. `NOW()` bounds, offset ends and archive selections are resolved again. Existing replacement records may be duplicated, and expired source data cannot be recovered by a fresh group.
+
+**Continue a Kafka source manually:** use another new group and translate each saved `partitions[].position` into `RECORD_OFFSET >= position`. The position is already the next source offset; do not add one. For a bounded copy, preserve its numeric `captured_end` values rather than capturing a new `LATEST`. For example, positions 1001 and 801 with saved ends 2000 and 1500 become:
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-recovery')
+WHERE (PARTITION IN (0) AND RECORD_OFFSET >= 1001 AND RECORD_OFFSET < 2000)
+   OR (PARTITION IN (1) AND RECORD_OFFSET >= 801 AND RECORD_OFFSET < 1500);
+```
+
+Use your saved values and original filters. Omit partitions already stopped at `tip` or `timestamp`, and any range whose position equals its end. Keep the original resolved time bounds, replacing `NOW()` expressions with saved timestamps; use separate queries if partitions have different windows. Explicit numeric starts below the current retained log start fail. Partitions without saved positions need a deliberate fresh-start choice.
+
+Different offset branches require upper bounds. To follow indefinitely from a saved position, use one query per partition with a distinct new group:
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-follow-recovery-p0')
+WHERE PARTITION IN (0) AND RECORD_OFFSET >= 1001;
+```
+
+Repeat for the intended partitions and their saved positions. Explicit selections do not pick up source partitions added later. This procedure keeps the already-examined prefix out of the new copy; it does not restore records lost with the old destination. Writes confirmed after the last saved position can repeat.
+
 ## Archive procedures
 
 Keep archive data, capture recovery state, and replay progress separate:

@@ -39,7 +39,7 @@ func TestProducerBoundaryRefusesOversizeBeforeAsyncSubmission(t *testing.T) {
 	connection, err := factory.Open(t.Context(), p.Destination)
 	require.NoError(t, err)
 	defer connection.Close(context.Background())
-	if _, err = connection.ClusterID(t.Context()); err != nil {
+	if _, err = connection.Describe(t.Context(), false); err != nil {
 		t.Fatal(err)
 	}
 	sink, err := connection.Sink(t.Context(), config.Defaults("").Worker)

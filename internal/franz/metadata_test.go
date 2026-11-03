@@ -217,8 +217,55 @@ func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
 				if err != nil || positions[0] != 42 || len(metadata) != 1 {
 					t.Fatal(positions, metadata, err)
 				}
+			} else if scenario == "fingerprint" {
+				var mismatch *plan.FingerprintMismatch
+				require.ErrorAs(t, err, &mismatch)
+				require.Equal(t, int64(42), positions[0])
+				require.Equal(t, progress, metadata[0])
 			} else if err == nil || len(positions) > 0 || len(metadata) > 0 {
 				t.Fatal("invalid progress became usable", positions, metadata, err)
+			}
+		})
+	}
+}
+
+func TestFingerprintConflictCannotHideUnsafeSourceProgress(t *testing.T) {
+	for _, scenario := range []string{"mixed identities", "changed source", "corrupt metadata", "stop beyond position", "position beyond end", "matching query missing window"} {
+		t.Run(scenario, func(t *testing.T) {
+			// Given incompatible progress on one partition and another partition that must still be validated.
+			id := [16]byte{1}
+			first := encodeMetadata(kafkaport.Progress{Fingerprint: "old", TopicID: topicID(id)})
+			last := kafkaport.Progress{Fingerprint: "current", TopicID: topicID(id)}
+			spec := plan.WindowSpec{}
+			switch scenario {
+			case "changed source":
+				last.TopicID = "another-source"
+			case "stop beyond position":
+				last.Stop = &core.Stop{Reason: "worker_record_cap", At: 8}
+			case "position beyond end":
+				last.End = new(int64(6))
+			case "matching query missing window":
+				spec.Lower = &plan.Expression{Now: true}
+			}
+			encoded := encodeMetadata(last)
+			if scenario == "corrupt metadata" {
+				encoded = "foreign"
+			}
+			parts := map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 3, Metadata: &first}, 2: {Offset: 7, Metadata: &encoded}}
+			inspector := &Inspector{codec: commitmeta.NewCodec(), topicID: id, parts: []int32{0, 2}}
+			// When validating all source partitions, not merely the first incompatible one.
+			positions, progress, err := inspector.decodeSaved(parts, "current", spec, 0)
+			// Then only source-safe fingerprint conflicts expose diagnostic positions.
+			require.Error(t, err)
+			if scenario == "mixed identities" {
+				var mismatch *plan.FingerprintMismatch
+				require.ErrorAs(t, err, &mismatch)
+				require.Equal(t, map[int32]int64{0: 3, 2: 7}, positions)
+				require.Equal(t, "old", progress[0].Fingerprint)
+				require.Equal(t, "current", progress[2].Fingerprint)
+			} else {
+				require.Nil(t, positions)
+				require.Nil(t, progress)
 			}
 		})
 	}

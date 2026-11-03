@@ -144,9 +144,19 @@ func validAlias(alias string) bool {
 	return true
 }
 
-// Fingerprint receives verified cluster IDs at startup. File identities stay in
+type FingerprintMismatch struct{}
+
+func (*FingerprintMismatch) Error() string { return "query fingerprint mismatch" }
+
+// Fingerprint receives verified Kafka identities at startup. File identities stay in
 // progress metadata; moving a file must not change the query identity.
-func (p Plan) Fingerprint(sourceClusterID, destinationClusterID string) (string, error) {
+func (p Plan) Fingerprint(sourceClusterID, destinationClusterID, destinationTopicID string) (string, error) {
+	if p.Destination.Kind == "TOPIC" && destinationTopicID == "" {
+		return "", fmt.Errorf("kafka fingerprint requires a verified destination topic ID")
+	}
+	if p.Destination.Kind == "ARCHIVE" && destinationTopicID != "" {
+		return "", fmt.Errorf("archive destination cannot have a Kafka topic ID")
+	}
 	if p.Destination.Partitioning != "" && p.Destination.Partitioning != Preserve && p.Destination.Partitioning != Key {
 		return "", fmt.Errorf("PARTITIONING must be PRESERVE or KEY")
 	}
@@ -183,13 +193,14 @@ func (p Plan) Fingerprint(sourceClusterID, destinationClusterID string) (string,
 		Destination identity
 		Window      WindowSpec
 		// CutoffMS is the fixed identity field name for unbounded Kafka and archive queries.
-		Disorder         *int64                 `json:",omitempty"`
-		Offsets          *OffsetRange           `json:",omitempty"`
-		PartitionOffsets []PartitionOffsetRange `json:",omitempty"`
-		MaxStalenessMS   int64                  `json:"CutoffMS"`
-		Partitioning     string                 `json:",omitempty"`
-		Partitions       *PartitionFilter       `json:",omitempty"`
-	}{Version: 1, Source: source, Destination: destination, Window: p.Window, MaxStalenessMS: p.MaxStalenessMS}
+		Disorder           *int64                 `json:",omitempty"`
+		Offsets            *OffsetRange           `json:",omitempty"`
+		PartitionOffsets   []PartitionOffsetRange `json:",omitempty"`
+		MaxStalenessMS     int64                  `json:"CutoffMS"`
+		Partitioning       string                 `json:",omitempty"`
+		Partitions         *PartitionFilter       `json:",omitempty"`
+		DestinationTopicID string                 `json:",omitempty"`
+	}{Version: 1, Source: source, Destination: destination, Window: p.Window, MaxStalenessMS: p.MaxStalenessMS, DestinationTopicID: destinationTopicID}
 	if p.Source.Kind == "TOPIC" && p.Window.Upper != nil {
 		canonical.Version = 2
 	}

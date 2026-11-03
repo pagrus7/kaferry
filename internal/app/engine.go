@@ -77,7 +77,7 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 	defer func() {
 		result = copy.CleanupResult(result, "close destination connection", destinationEndpoint.close(stop))
 	}()
-	fp, err := p.Fingerprint(sourceEndpoint.clusterID, destinationEndpoint.clusterID)
+	fp, err := p.Fingerprint(sourceEndpoint.clusterID, destinationEndpoint.clusterID, destinationEndpoint.topicID)
 	if err != nil {
 		return &kafkaport.Conflict{Err: err}
 	}
@@ -169,6 +169,7 @@ func oneOffGroup() string {
 type inspectedEndpoint struct {
 	connection kafkaport.Connection
 	clusterID  string
+	topicID    string
 }
 
 func (e *runtimeEngine) inspect(ctx context.Context, endpoint plan.Endpoint, stop copy.StopObserver) (inspectedEndpoint, error) {
@@ -179,12 +180,12 @@ func (e *runtimeEngine) inspect(ctx context.Context, endpoint plan.Endpoint, sto
 	if err != nil {
 		return inspectedEndpoint{}, err
 	}
-	id, err := connection.ClusterID(ctx)
+	info, err := connection.Describe(ctx, false)
 	if err != nil {
 		opened := inspectedEndpoint{connection: connection}
 		return inspectedEndpoint{}, copy.CleanupResult(err, "close Kafka connection", opened.close(stop))
 	}
-	return inspectedEndpoint{connection: connection, clusterID: id}, nil
+	return inspectedEndpoint{connection: connection, clusterID: info.ClusterID, topicID: info.TopicID}, nil
 }
 
 func (e *inspectedEndpoint) close(stop copy.StopObserver) error {

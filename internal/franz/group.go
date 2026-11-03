@@ -161,11 +161,8 @@ func (i *Inspector) decodeSaved(parts map[int32]kmsg.OffsetFetchResponseTopicPar
 		if p.Offset < 0 {
 			continue
 		}
-		progress, err := kafkaport.DecodeProgress(i.codec, p.Metadata, fp, topicID(i.topicID), window.Relative())
+		progress, err := kafkaport.DecodeProgress(i.codec, p.Metadata, topicID(i.topicID))
 		if err != nil {
-			return nil, nil, err
-		}
-		if err = kafkaport.ValidateWindow(progress, window, staleness); err != nil {
 			return nil, nil, err
 		}
 		if progress.End != nil && p.Offset > *progress.End {
@@ -175,6 +172,24 @@ func (i *Inspector) decodeSaved(parts map[int32]kmsg.OffsetFetchResponseTopicPar
 			return nil, nil, conflict("stop exceeds committed offset")
 		}
 		positions[id], metadata[id] = p.Offset, progress
+	}
+	// Finish validating the source before exposing diagnostic positions. Every
+	// execution caller must stop on the fingerprint error; status can inspect it.
+	mismatch := false
+	for _, progress := range metadata {
+		if progress.Fingerprint != fp {
+			mismatch = true
+			continue
+		}
+		if window.Relative() && progress.Window == nil {
+			return nil, nil, conflict("NOW() commit is missing its window")
+		}
+		if err := kafkaport.ValidateWindow(progress, window, staleness); err != nil {
+			return nil, nil, err
+		}
+	}
+	if mismatch {
+		return positions, metadata, &kafkaport.Conflict{Err: &plan.FingerprintMismatch{}}
 	}
 	return positions, metadata, nil
 }

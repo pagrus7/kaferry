@@ -36,7 +36,7 @@ type PartitionValidator interface {
 
 // Connection owns endpoint metadata and creates one query's source or sink.
 type Connection interface {
-	ClusterID(context.Context) (string, error)
+	Describe(context.Context, bool) (TopicDescription, error)
 	Partitions(context.Context) ([]int32, error)
 	DestinationPartitions(context.Context) (int, error)
 	PartitionValidator

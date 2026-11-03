@@ -58,7 +58,7 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 	}
 	defer closeConnection(destination, stop, &result)
 	report.Destination = destinationInfo
-	report.Fingerprint, err = p.Fingerprint(sourceInfo.ClusterID, destinationInfo.ClusterID)
+	report.Fingerprint, err = p.Fingerprint(sourceInfo.ClusterID, destinationInfo.ClusterID, destinationInfo.TopicID)
 	if err != nil {
 		return report, &kafkaport.Conflict{Err: err}
 	}

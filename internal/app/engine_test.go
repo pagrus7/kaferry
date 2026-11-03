@@ -82,8 +82,8 @@ type engineConnection struct {
 	name    string
 }
 
-func (c *engineConnection) ClusterID(context.Context) (string, error) {
-	return c.name + "-cluster", c.fixture.stage("cluster-" + c.name)
+func (c *engineConnection) Describe(context.Context, bool) (kafkaport.TopicDescription, error) {
+	return kafkaport.TopicDescription{ClusterID: c.name + "-cluster", TopicID: c.name + "-id"}, c.fixture.stage("cluster-" + c.name)
 }
 func (c *engineConnection) Partitions(context.Context) ([]int32, error) {
 	c.fixture.partitionReads = append(c.fixture.partitionReads, c.name)

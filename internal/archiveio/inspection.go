@@ -45,18 +45,12 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result Sour
 	catalog := replay.NewCatalog(p.Source.Name, codec, replay.NativeFiles{})
 	var files []replay.File
 	if saved != nil {
-		if saved.Fingerprint != fp {
-			return result, &Conflict{Err: errors.New("replay checkpoint query identity mismatch")}
-		}
-		if err = p.ValidateWindow(saved.Window); err != nil {
-			return result, &Conflict{Err: err}
-		}
-		result.Saved = true
+		result.Fingerprint = saved.Fingerprint
 		result.Position = saved.Position
 		result.Window = saved.Window
 		result.Stop = saved.Stop
 		for _, f := range saved.Files {
-			if !p.Partitions.Matches(f.File.Identity.Source.Partition) {
+			if saved.Fingerprint == fp && !p.Partitions.Matches(f.File.Identity.Source.Partition) {
 				return result, &Conflict{Err: errors.New("replay selection contains an excluded original partition")}
 			}
 			files = append(files, f.File)
@@ -83,8 +77,10 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result Sour
 			return result, &Conflict{Err: err}
 		}
 	}
-	if err = p.ValidateWindow(result.Window); err != nil {
-		return result, &Conflict{Err: err}
+	if saved == nil || saved.Fingerprint == fp {
+		if err = p.ValidateWindow(result.Window); err != nil {
+			return result, &Conflict{Err: err}
+		}
 	}
 	result.FileCount = len(files)
 	seen := map[int32]bool{}
@@ -97,6 +93,10 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result Sour
 		}
 	}
 	slices.Sort(result.Partitions)
+	result.Saved = saved != nil
+	if saved != nil && saved.Fingerprint != fp {
+		return result, &Conflict{Err: &plan.FingerprintMismatch{}}
+	}
 	return result, nil
 }
 func (i *Inspector) Destination(path string) (ArchiveInspection, error) {

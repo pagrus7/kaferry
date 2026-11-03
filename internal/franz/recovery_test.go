@@ -27,7 +27,7 @@ func runComponentCopy(ctx context.Context, p plan.Plan, limits config.Worker) (e
 		return err
 	}
 	defer sourceConnection.Close(context.Background())
-	if _, err = sourceConnection.ClusterID(ctx); err != nil {
+	if _, err = sourceConnection.Describe(ctx, false); err != nil {
 		return err
 	}
 	destination, err := factory.Open(ctx, p.Destination)
@@ -35,7 +35,7 @@ func runComponentCopy(ctx context.Context, p plan.Plan, limits config.Worker) (e
 		return err
 	}
 	defer destination.Close(context.Background())
-	if _, err = destination.ClusterID(ctx); err != nil {
+	if _, err = destination.Describe(ctx, false); err != nil {
 		return err
 	}
 	source, store, err := sourceConnection.Source(ctx, p, "component-fingerprint", limits, nil)

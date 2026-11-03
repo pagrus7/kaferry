@@ -98,9 +98,9 @@ func TestSourcePositionsDoNotChangePlansOrSavedIdentity(t *testing.T) {
 	require.NoError(t, err)
 	b, err := NewPlanner(environment{}).Build(second, profiles)
 	require.NoError(t, err)
-	fa, err := a.Fingerprint("source", "destination")
+	fa, err := a.testFingerprint("source", "destination")
 	require.NoError(t, err)
-	fb, err := b.Fingerprint("source", "destination")
+	fb, err := b.testFingerprint("source", "destination")
 	// Then transient positions never change normalized plans or checkpoint identity.
 	require.NoError(t, err)
 	require.Equal(t, b, a)

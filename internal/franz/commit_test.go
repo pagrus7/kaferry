@@ -35,7 +35,7 @@ func TestCommitMetadataUsesTheCapturedProgress(t *testing.T) {
 	req := &kmsg.OffsetCommitRequest{Group: "group", MemberID: "member", Generation: 3, Topics: []kmsg.OffsetCommitRequestTopic{{TopicID: id, Partitions: []kmsg.OffsetCommitRequestTopicPartition{{Partition: 0, Offset: 42}}}}}
 	require.NoError(t, hook(req))
 	// Then the ID-only request carries the originally confirmed position and metadata.
-	got, err := kafkaport.DecodeProgress(commitmeta.NewCodec(), req.Topics[0].Partitions[0].Metadata, "fp", topicID(id), false)
+	got, err := kafkaport.DecodeProgress(commitmeta.NewCodec(), req.Topics[0].Partitions[0].Metadata, topicID(id))
 	require.NoError(t, err)
 	require.Equal(t, &core.Stop{Reason: "tip", At: 42}, got.Stop)
 	require.Equal(t, new(int64(42)), got.End)
