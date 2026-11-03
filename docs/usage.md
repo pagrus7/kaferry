@@ -410,19 +410,19 @@ Keep existing output and saved progress. Kafka stores progress in source consume
 
 ### Recover after destination topic recreation
 
-A replacement topic has a different UUID even when its name is unchanged. Saved progress binds the destination UUID observed at startup, so a restart against the replacement fails identity validation. Runtime producer behavior depends on the broker protocol; see [Kafka output](../design/decisions.md#kafka-output).
+A recreated topic has a new ID (UUID), even with the same name. Saved progress is tied to the destination UUID read at startup, so it cannot resume against the replacement. Running workers may fail after writing records to the replacement ([Kafka output](../design/decisions.md#kafka-output)).
 
-Stop every worker for the old group and disable automatic restarts before inspecting progress. Some workers may already be using the replacement and need to be stopped explicitly. Preserve the old query and group while capturing:
+Stop every worker for the old group and disable automatic restarts. Then save status for the unchanged query and group:
 
 ```sh
 kaferry status -c connections.toml -f copy.sql --json > progress.json
 ```
 
-A fingerprint conflict exits 5 with verdict `unknown`, while retaining source-validated saved positions, windows, ends and fingerprints. Check `activity` for remaining Kafka workers. Source-identity or metadata errors can prevent positions from being shown. Archive replay positions count examined input records, not Kafka offsets.
+A fingerprint conflict reports `unknown` (exit 5) but keeps validated saved progress in JSON ([status fields](reference.md#saved-status)). For a Kafka source, confirm `activity` reports an idle group before continuing.
 
-**Start fresh:** run the copy with a new named `GROUP` and the intended fresh-start criteria. This creates independent progress; it does not clear the replacement topic or old progress. `NOW()` bounds, offset ends and archive selections are resolved again. Existing replacement records may be duplicated, and expired source data cannot be recovered by a fresh group.
+**Start fresh:** rerun the copy with a new named `GROUP`. The new group recaptures `LATEST` ends, recomputes `NOW()` bounds and reselects completed archive files. It copies only records the source still retains; existing replacement records can be duplicated. Use this option for archive replay: its positions count examined records, not Kafka offsets.
 
-**Continue a Kafka source manually:** use another new group and translate each saved `partitions[].position` into `RECORD_OFFSET >= position`. The position is already the next source offset; do not add one. For a bounded copy, preserve its numeric `captured_end` values rather than capturing a new `LATEST`. For example, positions 1001 and 801 with saved ends 2000 and 1500 become:
+**Continue a Kafka source manually:** this skips records before the saved positions, including records lost with the old topic. Use a new group with `RECORD_OFFSET >= position`; `position` is already the next offset to read, so do not add one. For a bounded copy, use the saved `captured_end` rather than a new `LATEST`. Positions 1001 and 801 with ends 2000 and 1500 become:
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
@@ -431,9 +431,13 @@ WHERE (PARTITION IN (0) AND RECORD_OFFSET >= 1001 AND RECORD_OFFSET < 2000)
    OR (PARTITION IN (1) AND RECORD_OFFSET >= 801 AND RECORD_OFFSET < 1500);
 ```
 
-Use your saved offset values and preserve non-time filters. Omit partitions already stopped at `tip` or `timestamp`, and any range whose position equals its end. For saved time windows, use `window.lower` with `>=` and `window.upper` with `<`, converting Unix milliseconds to RFC 3339 timestamps and replacing each entire timestamp predicate, including its comparison operator. Omit absent bounds and use separate queries if partitions have different windows. Explicit numeric starts below the current retained log start fail. Partitions without saved positions need a deliberate fresh-start choice.
+Use only partitions selected by the original query:
 
-Different offset branches require upper bounds. To follow indefinitely from a saved position, use one query per partition with a distinct new group:
+- Omit partitions stopped at `tip` or `timestamp`, or whose `position` equals `captured_end`.
+- For saved time windows, replace entire timestamp predicates with `RECORD_TIMESTAMP >= window.lower` and `RECORD_TIMESTAMP < window.upper`, including their operators. Convert Unix milliseconds to RFC 3339, omit null bounds, and use separate queries and groups for different windows.
+- A position below the current retained start fails. Choose a start for selected partitions without saved positions.
+
+Different offset branches require upper bounds. To follow indefinitely, use one query per partition with its own new group:
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
@@ -441,7 +445,7 @@ SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-follow-recovery-p0')
 WHERE PARTITION IN (0) AND RECORD_OFFSET >= 1001;
 ```
 
-Repeat for the intended partitions and their saved positions. Explicit selections do not pick up source partitions added later. This procedure keeps the already-examined prefix out of the new copy; it does not restore records lost with the old destination. Writes confirmed after the last saved position can repeat.
+These queries do not pick up source partitions added later. Writes confirmed after the last progress save can repeat.
 
 ## Archive procedures
 
