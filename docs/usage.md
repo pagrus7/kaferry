@@ -431,7 +431,7 @@ WHERE (PARTITION IN (0) AND RECORD_OFFSET >= 1001 AND RECORD_OFFSET < 2000)
    OR (PARTITION IN (1) AND RECORD_OFFSET >= 801 AND RECORD_OFFSET < 1500);
 ```
 
-Use your saved values and original filters. Omit partitions already stopped at `tip` or `timestamp`, and any range whose position equals its end. Keep the original resolved time bounds, replacing `NOW()` expressions with saved timestamps; use separate queries if partitions have different windows. Explicit numeric starts below the current retained log start fail. Partitions without saved positions need a deliberate fresh-start choice.
+Use your saved offset values and preserve non-time filters. Omit partitions already stopped at `tip` or `timestamp`, and any range whose position equals its end. For saved time windows, use `window.lower` with `>=` and `window.upper` with `<`, converting Unix milliseconds to RFC 3339 timestamps and replacing each entire timestamp predicate, including its comparison operator. Omit absent bounds and use separate queries if partitions have different windows. Explicit numeric starts below the current retained log start fail. Partitions without saved positions need a deliberate fresh-start choice.
 
 Different offset branches require upper bounds. To follow indefinitely from a saved position, use one query per partition with a distinct new group:
 
