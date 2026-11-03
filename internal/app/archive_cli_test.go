@@ -356,7 +356,7 @@ func TestArchiveCLIInspectionRejectsChangedSavedInputs(t *testing.T) {
 			switch change {
 			case "query":
 				query = fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='saved') WHERE RECORD_TIMESTAMP < NOW() ", dst, src)
-				message = "query identity mismatch"
+				message = "query fingerprint mismatch"
 			case "missing":
 				require.NoError(t, os.Remove(files[0]))
 				message = "no such file"

@@ -49,7 +49,7 @@ Group descriptions retry unavailable, loading or changed coordinators within one
 
 | API | Purpose / timing |
 | --- | --- |
-| Metadata | Startup: require existing topics, cluster identity, nonzero topic IDs and partitions. Assignment: recheck source identity. Output: refresh partition count |
+| Metadata | Startup: require existing topics, cluster identity, nonzero topic IDs and partitions; add the destination UUID to the query fingerprint. Assignment: recheck source identity. Output: refresh partition count |
 | DescribeGroups | Source startup: reject incompatible active members and assigned topics |
 | OffsetFetch | Startup and assignment: read and validate saved progress; only absent commits use the start rule |
 | ListOffsets | Batch retained/log-end bounds, timestamp starts, and stable ends |

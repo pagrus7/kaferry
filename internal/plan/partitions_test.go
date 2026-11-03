@@ -13,9 +13,9 @@ func TestPartitionIdentityIsCanonicalAndKeepsPositioningDefaults(t *testing.T) {
 	a := build(t, base+"WHERE PARTITION IN (2,0,2)")
 	b := build(t, base+"WITH(START=LATEST)\nWHERE PARTITION IN (0,2)")
 	// When fingerprinting, then syntax locations and START do not change selection identity.
-	x, err := a.Fingerprint("source", "dest")
+	x, err := a.testFingerprint("source", "dest")
 	require.NoError(t, err)
-	y, err := b.Fingerprint("source", "dest")
+	y, err := b.testFingerprint("source", "dest")
 	require.NoError(t, err)
 	require.Equal(t, x, y)
 	require.Equal(t, "EARLIEST", a.Start)
@@ -23,7 +23,7 @@ func TestPartitionIdentityIsCanonicalAndKeepsPositioningDefaults(t *testing.T) {
 	require.True(t, a.OneOff)
 	for _, suffix := range []string{"", "WHERE PARTITION IN (0)", "WHERE PARTITION NOT IN (0,2)"} {
 		p := build(t, base+suffix)
-		fp, err := p.Fingerprint("source", "dest")
+		fp, err := p.testFingerprint("source", "dest")
 		require.NoError(t, err)
 		require.NotEqual(t, x, fp)
 	}
@@ -52,14 +52,14 @@ func TestFilePartitionPredicatesUseCanonicalQueryIdentity(t *testing.T) {
 	b := build(t, base+"\nWHERE PARTITION NOT IN (0,5)")
 	// When planning and fingerprinting, then preserve file start rules and canonical identity.
 	require.Empty(t, a.Start)
-	x, err := a.Fingerprint("", "")
+	x, err := a.testFingerprint("", "")
 	require.NoError(t, err)
-	y, err := b.Fingerprint("", "")
+	y, err := b.testFingerprint("", "")
 	require.NoError(t, err)
 	require.Equal(t, x, y)
 	for _, suffix := range []string{"", "WHERE PARTITION IN (0,5)", "WHERE PARTITION NOT IN (0)"} {
 		p := build(t, base+suffix)
-		fp, err := p.Fingerprint("", "")
+		fp, err := p.testFingerprint("", "")
 		require.NoError(t, err)
 		require.NotEqual(t, x, fp)
 	}

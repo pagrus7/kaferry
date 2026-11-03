@@ -34,7 +34,7 @@ func componentConnection(t *testing.T, p plan.Plan) (*Factory, kafkaport.Connect
 	connection, err := factory.Open(t.Context(), p.Source)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = connection.Close(context.Background()) })
-	if _, err := connection.ClusterID(t.Context()); err != nil {
+	if _, err := connection.Describe(t.Context(), false); err != nil {
 		t.Fatal(err)
 	}
 	return factory, connection
@@ -142,9 +142,11 @@ func TestCorePositioningPrecedesClientOffsetAdjustment(t *testing.T) {
 		t.Fatal("initial save was not observed", observer.saves)
 	}
 	text := saved["input"][0].Metadata
-	if _, err := kafkaport.DecodeProgress(commitmeta.NewCodec(), &text, "fp", input.(*Source).topicID, false); err != nil {
+	progress, err := kafkaport.DecodeProgress(commitmeta.NewCodec(), &text, input.(*Source).topicID)
+	if err != nil {
 		t.Fatal("wire metadata changed", err)
 	}
+	require.Equal(t, "fp", progress.Fingerprint)
 }
 
 func TestProductionAdaptersPreserveRawRecordsAndZeroNegativeTimestamps(t *testing.T) {
@@ -163,7 +165,7 @@ func TestProductionAdaptersPreserveRawRecordsAndZeroNegativeTimestamps(t *testin
 	destination, err := factory.Open(t.Context(), p.Destination)
 	require.NoError(t, err)
 	defer destination.Close(context.Background())
-	if _, err = destination.ClusterID(t.Context()); err != nil {
+	if _, err = destination.Describe(t.Context(), false); err != nil {
 		t.Fatal(err)
 	}
 	limits := config.Defaults("").Worker

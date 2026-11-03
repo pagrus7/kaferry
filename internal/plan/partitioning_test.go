@@ -40,21 +40,21 @@ func TestPartitioningIdentityAndDefault(t *testing.T) {
 	preservePlan := build(t, strings.Replace(query, "%s", "WITH(PARTITIONING=PRESERVE)", 1))
 	keyPlan := build(t, strings.Replace(query, "%s", "WITH(PARTITIONING=KEY)", 1))
 	// When calculating saved query identities, then defaults normalize and a routing change requires a new group.
-	defaultFP, err := defaultPlan.Fingerprint("source", "destination")
+	defaultFP, err := defaultPlan.testFingerprint("source", "destination")
 	require.NoError(t, err)
-	preserveFP, err := preservePlan.Fingerprint("source", "destination")
+	preserveFP, err := preservePlan.testFingerprint("source", "destination")
 	require.NoError(t, err)
-	keyFP, err := keyPlan.Fingerprint("source", "destination")
+	keyFP, err := keyPlan.testFingerprint("source", "destination")
 	require.NoError(t, err)
 	require.Equal(t, Preserve, defaultPlan.Destination.Partitioning)
 	require.Equal(t, defaultFP, preserveFP)
 	require.NotEqual(t, defaultFP, keyFP)
 	for _, p := range []Plan{defaultPlan, keyPlan} {
 		p.Destination.Name = p.Source.Name
-		_, err = p.Fingerprint("same", "same")
+		_, err = p.testFingerprint("same", "same")
 		require.ErrorContains(t, err, "same Kafka topic", "routing must not bypass the self-copy guard")
 	}
 	defaultPlan.Destination.Partitioning = "invalid"
-	_, err = defaultPlan.Fingerprint("source", "destination")
+	_, err = defaultPlan.testFingerprint("source", "destination")
 	require.ErrorContains(t, err, "PARTITIONING must be PRESERVE or KEY")
 }

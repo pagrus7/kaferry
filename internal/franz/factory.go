@@ -95,12 +95,6 @@ type connection struct {
 	cancel    context.CancelFunc
 }
 
-func (c *connection) ClusterID(ctx context.Context) (string, error) {
-	if err := c.inspector.Refresh(ctx); err != nil {
-		return "", err
-	}
-	return c.inspector.clusterID, nil
-}
 func (c *connection) Partitions(ctx context.Context) ([]int32, error) {
 	return c.partitions(ctx, true)
 }

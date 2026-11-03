@@ -10,7 +10,7 @@ import (
 func TestWorkerStopValidationAndFingerprint(t *testing.T) {
 	const base = "INSERT INTO TOPIC 'b' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a' WITH (GROUP='g', START=EARLIEST) "
 	original := build(t, base)
-	want, err := original.Fingerprint("source-cluster", "destination-cluster")
+	want, err := original.testFingerprint("source-cluster", "destination-cluster")
 	require.NoError(t, err)
 	for _, limit := range []struct {
 		text string
@@ -20,7 +20,7 @@ func TestWorkerStopValidationAndFingerprint(t *testing.T) {
 		query := base + " OPTIONS(WORKER_STOP_AFTER_RECORDS=" + limit.text + ")"
 		// When planning and identifying its saved progress.
 		p := build(t, query)
-		got, err := p.Fingerprint("source-cluster", "destination-cluster")
+		got, err := p.testFingerprint("source-cluster", "destination-cluster")
 		// Then changing or removing the cap preserves the resumable query identity.
 		require.NoError(t, err)
 		require.Equal(t, limit.want, p.WorkerStopAfterRecords)

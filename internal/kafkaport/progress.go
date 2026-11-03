@@ -16,7 +16,9 @@ func conflict(format string, args ...any) error { return &Conflict{Err: fmt.Erro
 
 type Progress = commitmeta.Progress
 
-func DecodeProgress(codec commitmeta.Codec, metadata *string, fp, topicID string, relative bool) (Progress, error) {
+// DecodeProgress validates persisted data against the current source,
+// independently of the query being inspected.
+func DecodeProgress(codec commitmeta.Codec, metadata *string, topicID string) (Progress, error) {
 	if metadata == nil {
 		return Progress{}, conflict("foreign commit metadata")
 	}
@@ -25,14 +27,8 @@ func DecodeProgress(codec commitmeta.Codec, metadata *string, fp, topicID string
 		return Progress{}, &Conflict{Err: err}
 	}
 
-	if progress.Fingerprint != fp {
-		return progress, conflict("query fingerprint mismatch")
-	}
 	if progress.TopicID == "" || progress.TopicID != topicID {
 		return progress, conflict("source topic identity mismatch: saved=%s current=%s", progress.TopicID, topicID)
-	}
-	if relative && progress.Window == nil {
-		return progress, conflict("NOW() commit is missing its window")
 	}
 	return progress, nil
 }

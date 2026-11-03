@@ -28,6 +28,7 @@ type SourceInspection struct {
 	Partitions     []int32
 	Warnings       []string
 	Position       int64
+	Fingerprint    string
 	Window         plan.Window
 	Saved          bool
 	CheckpointPath string

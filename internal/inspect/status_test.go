@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/pagrus7/kaferry/internal/archiveio"
 	"github.com/pagrus7/kaferry/internal/config"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/pagrus7/kaferry/internal/kafkaport"
@@ -136,6 +137,64 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 		})
 	}
 }
+func TestStatusExposesIncompatibleProgressAndActivity(t *testing.T) {
+	for _, activity := range []string{"idle", "active", "foreign"} {
+		t.Run(activity, func(t *testing.T) {
+			// Given source-safe, stopped progress with different fingerprints, including an excluded partition.
+			service, p, factory, _ := fixture()
+			p.Partitions = &plan.PartitionFilter{IDs: []int32{0}}
+			source := factory.connections["input"]
+			source.positions = map[int32]int64{0: 3, 1: 7}
+			source.metadata = map[int32]kafkaport.Progress{
+				0: {Fingerprint: "old-a", End: new(int64(3)), Stop: &core.Stop{Reason: "tip", At: 3}},
+				1: {Fingerprint: "old-b", End: new(int64(7)), Stop: &core.Stop{Reason: "tip", At: 7}},
+			}
+			source.fail, source.failure = "saved", &kafkaport.Conflict{Err: &plan.FingerprintMismatch{}}
+			if activity != "idle" {
+				source.memberships = []kafkaport.Membership{{Foreign: activity == "foreign"}}
+			}
+			// When status observes incompatible progress without joining or committing.
+			report, err := service.Status(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
+			// Then all saved rows remain visible, identity wins over completion, and activity remains observable.
+			require.NoError(t, err)
+			require.Equal(t, "unknown", report.Verdict)
+			require.Equal(t, 5, report.ExitCode())
+			require.Len(t, report.Partitions, 2)
+			require.Equal(t, int32(0), report.Partitions[0].ID)
+			require.Equal(t, new(int64(7)), report.Partitions[1].Position)
+			require.Equal(t, "old-a", report.Partitions[0].Fingerprint)
+			require.Equal(t, "old-b", report.Partitions[1].Fingerprint)
+			require.Equal(t, source.metadata[1].Stop, report.Partitions[1].Stop)
+			require.Equal(t, 2, source.membershipReads)
+			require.Contains(t, report.Reason, "saved positions are for inspection")
+			if activity == "foreign" {
+				require.Contains(t, report.Reason, "incompatible active member")
+			} else if activity == "active" {
+				require.Contains(t, report.Reason, "group activity")
+			} else {
+				require.Contains(t, report.Activity, "idle twice")
+			}
+		})
+	}
+}
+
+func TestStatusExposesIncompatibleArchiveCursor(t *testing.T) {
+	// Given source-validated archive progress whose fingerprint differs from the inspected query.
+	service, p, _, files := fixture()
+	p.Source.Kind, p.Source.Format = "ARCHIVE", "avro"
+	files.source = archiveio.SourceInspection{Saved: true, Position: 7, Fingerprint: "old", Stop: &core.Stop{Reason: "worker_record_cap", At: 7}}
+	files.failSource = &archiveio.Conflict{Err: &plan.FingerprintMismatch{}}
+	// When checking status, then the cursor remains inspectable without claiming completion or compatibility.
+	report, err := service.Status(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
+	require.NoError(t, err)
+	require.Equal(t, "unknown", report.Verdict)
+	require.Equal(t, 5, report.ExitCode())
+	require.Len(t, report.Partitions, 1)
+	require.Equal(t, new(int64(7)), report.Partitions[0].Position)
+	require.Equal(t, "old", report.Partitions[0].Fingerprint)
+	require.Equal(t, files.source.Stop, report.Partitions[0].Stop)
+}
+
 func TestStatusPreservesOperationalFailuresAndRejectsOneOff(t *testing.T) {
 	for _, stage := range []string{"members", "saved", "close", "ONE_OFF"} {
 		t.Run(stage, func(t *testing.T) {
@@ -186,7 +245,7 @@ func TestStatusRejectsStaleStopsAfterFinalObservationFailure(t *testing.T) {
 			if failure == "changed topic identity" {
 				require.NoError(t, err)
 				require.Equal(t, "unknown", report.Verdict)
-				require.Equal(t, "saved progress does not match this query or source", report.Reason)
+				require.Equal(t, "saved progress does not match this query or endpoints", report.Reason)
 				require.Equal(t, 5, report.ExitCode())
 			} else {
 				require.ErrorIs(t, err, source.failure)

@@ -33,7 +33,7 @@ func TestFactoryOwnsReplayCheckpointAndRejectsUnsafePaths(t *testing.T) {
 	require.NoError(t, sink.Finish())
 	sink.Close()
 	// When one process owns a replay group, then another process cannot acquire it.
-	fp, err := p.Fingerprint("", "")
+	fp, err := p.Fingerprint("", "", "")
 	require.NoError(t, err)
 	source, err := factory.OpenSource(p, fp, limits, 0)
 	require.NoError(t, err)

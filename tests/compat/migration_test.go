@@ -4,6 +4,7 @@ package compat
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -185,4 +186,77 @@ func TestPreviousBinaryRejectsUnsupportedCaptureState(t *testing.T) {
 	// A fresh group can still read the completed Avro records from the old release.
 	runMigrationBinary(t, testBinary(t), fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='fresh-release')", fresh, output), config)
 	require.Equal(t, before, archiveRecords(t, fresh))
+}
+
+func TestPreviousBinaryDestinationProgressCompatibility(t *testing.T) {
+	previous := os.Getenv("KAFERRY_PREVIOUS_BINARY")
+	require.NotEmpty(t, previous)
+	candidate := testBinary(t)
+	for _, kind := range []string{"TOPIC", "ARCHIVE"} {
+		for _, direction := range []struct{ name, first, second string }{
+			{"previous to candidate", previous, candidate}, {"candidate to previous", candidate, previous},
+		} {
+			t.Run(kind+"/"+direction.name, func(t *testing.T) {
+				// Given two source records and binaries that may bind Kafka destination identity differently.
+				a := admin(t)
+				destination := topic(t, a, 1)
+				source := ""
+				if kind == "TOPIC" {
+					source = topic(t, a, 1)
+					p := producer(t)
+					for n := range 2 {
+						publish(t, p, &kgo.Record{Topic: source, Value: []byte(fmt.Sprint(n))})
+					}
+				} else {
+					source = filepath.Join(t.TempDir(), "input")
+					seedArchive(t, source, 2)
+				}
+				config := configuration(t)
+				group := destination + "-migration"
+				query := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM %s '%s' WITH(GROUP='%s')", destination, kind, source, group)
+				fingerprint := func(binary string) string {
+					ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+					defer cancel()
+					process := startCLI(t, ctx, binary, "", "explain", "-e", query, "-c", config, "--json")
+					require.NoError(t, process.wait(), process.logs())
+					var report struct {
+						Fingerprint string `json:"fingerprint"`
+					}
+					require.NoError(t, json.Unmarshal([]byte(process.logs()), &report))
+					require.NotEmpty(t, report.Fingerprint)
+					return report.Fingerprint
+				}
+				// Compatibility is defined by the declared fingerprints, including after both binaries support UUID binding.
+				compatible := fingerprint(direction.first) == fingerprint(direction.second)
+				limited := query + " OPTIONS(WORKER_STOP_AFTER_RECORDS=1)"
+				runMigrationBinary(t, direction.first, limited, config)
+				require.EqualValues(t, 1, topicRecordCount(t, a, destination, 1))
+				if kind == "TOPIC" {
+					waitMembers(t, a, group, 0, 0, nil)
+				}
+				var beforeOffsets []kadm.Offset
+				var beforeReplay *replay.State
+				if kind == "TOPIC" {
+					beforeOffsets = committedPartitions(t, a, group, source, 1)
+				} else {
+					beforeReplay = migrationCheckpoint(t, config, group)
+				}
+
+				// When the other binary resumes, then different identities reject before output or progress changes.
+				if !compatible {
+					runMigrationExpect(t, direction.second, limited, config, 2, "query (fingerprint|identity) mismatch")
+					require.EqualValues(t, 1, topicRecordCount(t, a, destination, 1))
+					if kind == "TOPIC" {
+						require.Equal(t, beforeOffsets, committedPartitions(t, a, group, source, 1))
+					} else {
+						require.Equal(t, beforeReplay, migrationCheckpoint(t, config, group))
+					}
+				} else {
+					// Matching destination bindings preserve cross-version continuation without duplicates.
+					runMigrationBinary(t, direction.second, limited, config)
+					require.EqualValues(t, 2, topicRecordCount(t, a, destination, 1))
+				}
+			})
+		}
+	}
 }

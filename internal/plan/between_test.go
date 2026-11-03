@@ -10,14 +10,14 @@ import (
 
 func TestBetweenNormalizesToExistingQueryIdentity(t *testing.T) {
 	for _, tc := range []struct{ name, endpoints, between, expanded, digest string }{
-		{"offsets", "TOPIC", "RECORD_OFFSET BETWEEN 100 AND 199", "RECORD_OFFSET >= 100 AND RECORD_OFFSET <= 199", "0406afa29e38f107d88b356f4eb9714e317031029152614ceff1788b65ed544a"},
+		{"offsets", "TOPIC", "RECORD_OFFSET BETWEEN 100 AND 199", "RECORD_OFFSET >= 100 AND RECORD_OFFSET <= 199", "e1a71070b3bf1b36e98924658b73d8697a89376d5554fc0e33480b5c9f57ca27"},
 		{"one offset", "TOPIC", "RECORD_OFFSET BETWEEN 0 AND 0", "RECORD_OFFSET >= 0 AND RECORD_OFFSET < 1", ""},
 		{"large offsets", "TOPIC", "RECORD_OFFSET BETWEEN 9223372036854775805 AND 9223372036854775806", "RECORD_OFFSET >= 9223372036854775805 AND RECORD_OFFSET < 9223372036854775807", ""},
-		{"partitions", "TOPIC", "PARTITION BETWEEN 0 AND 2", "PARTITION IN (2, 0, 1, 1)", "e8670d406fd4f037fed135d264de087e5769e0245a6c9bb222bb4fb743e32028"},
-		{"exclude partitions", "TOPIC", "PARTITION NOT BETWEEN 1 AND 3", "PARTITION NOT IN (3, 2, 1)", "cd2a7ac6069037631674af2e4ca6a533a2ba9a88b138533aa4875d1bc71eec0f"},
+		{"partitions", "TOPIC", "PARTITION BETWEEN 0 AND 2", "PARTITION IN (2, 0, 1, 1)", "08c10c621df06d26903bd513dd2988d9a1bb10b56cfd252a76ec54c4da384faa"},
+		{"exclude partitions", "TOPIC", "PARTITION NOT BETWEEN 1 AND 3", "PARTITION NOT IN (3, 2, 1)", "478e27b31b82f9b2d7fc505deced45ecefc39544d02eccc7a636f886ca54a0da"},
 		{"one high partition", "TOPIC", "PARTITION BETWEEN 2147483647 AND 2147483647", "PARTITION IN (2147483647)", ""},
 		{"archive", "ARCHIVE", "PARTITION BETWEEN 0 AND 2 AND RECORD_OFFSET BETWEEN 100 AND 199", "PARTITION IN (0, 1, 2) AND RECORD_OFFSET >= 100 AND RECORD_OFFSET < 200", ""},
-		{"branches", "TOPIC", "(PARTITION BETWEEN 0 AND 1 AND RECORD_OFFSET BETWEEN 100 AND 199) OR (PARTITION IN (2) AND RECORD_OFFSET >= 900 AND RECORD_OFFSET < LATEST)", "(PARTITION IN (1, 0) AND RECORD_OFFSET >= 100 AND RECORD_OFFSET < 200) OR (PARTITION IN (2) AND RECORD_OFFSET >= 900 AND RECORD_OFFSET < LATEST)", "dba0a916a03b496e073d39661ab02d477aac3cb4368cd2e054c09357220864d9"},
+		{"branches", "TOPIC", "(PARTITION BETWEEN 0 AND 1 AND RECORD_OFFSET BETWEEN 100 AND 199) OR (PARTITION IN (2) AND RECORD_OFFSET >= 900 AND RECORD_OFFSET < LATEST)", "(PARTITION IN (1, 0) AND RECORD_OFFSET >= 100 AND RECORD_OFFSET < 200) OR (PARTITION IN (2) AND RECORD_OFFSET >= 900 AND RECORD_OFFSET < LATEST)", "6e097cee577e01bbaa5daab1fc48940d160c9bc59174994b8941c82a28280558"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given equivalent inclusive ranges, lists and comparison predicates.
@@ -27,9 +27,9 @@ func TestBetweenNormalizesToExistingQueryIdentity(t *testing.T) {
 			current := build(t, "-- shifted positions\n"+prefix+tc.between)
 			// Then normalized plans and saved query identities remain identical.
 			require.Equal(t, expanded, current)
-			x, err := expanded.Fingerprint("source-cluster", "destination-cluster")
+			x, err := expanded.testFingerprint("source-cluster", "destination-cluster")
 			require.NoError(t, err)
-			y, err := current.Fingerprint("source-cluster", "destination-cluster")
+			y, err := current.testFingerprint("source-cluster", "destination-cluster")
 			require.NoError(t, err)
 			require.Equal(t, x, y)
 			if tc.digest != "" {

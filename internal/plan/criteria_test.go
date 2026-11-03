@@ -52,9 +52,9 @@ func TestOffsetRangesAndPartitionBranches(t *testing.T) {
 	require.EqualValues(t, -1, p.DisorderMS())
 	// Reordering branches and partition IDs does not change query identity.
 	reordered := strings.Replace(q, "(PARTITION IN(2) AND RECORD_OFFSET>=900 AND RECORD_OFFSET<LATEST) OR (PARTITION IN(0,1) AND RECORD_OFFSET>99 AND RECORD_OFFSET<=499)", "(PARTITION IN(1,0) AND RECORD_OFFSET>99 AND RECORD_OFFSET<=499) OR (PARTITION IN(2) AND RECORD_OFFSET>=900 AND RECORD_OFFSET<LATEST)", 1)
-	a, e := p.Fingerprint("source", "destination")
+	a, e := p.testFingerprint("source", "destination")
 	require.NoError(t, e)
-	b, e := build(t, reordered).Fingerprint("source", "destination")
+	b, e := build(t, reordered).testFingerprint("source", "destination")
 	require.NoError(t, e)
 	require.Equal(t, a, b)
 	for _, fragment := range []string{"RECORD_OFFSET<LATEST", "RECORD_OFFSET>=10", "RECORD_OFFSET<20", "RECORD_OFFSET>=10 AND RECORD_OFFSET<20"} {
@@ -111,18 +111,18 @@ func TestCriteriaIdentityIncludesBehaviorAndExcludesPositions(t *testing.T) {
 		// Given equivalent whitespace and source positions, when fingerprinting, then preserve identity.
 		a := build(t, base+suffix)
 		b := build(t, "-- shifted positions\n"+base+suffix)
-		x, err := a.Fingerprint("s", "d")
+		x, err := a.testFingerprint("s", "d")
 		require.NoError(t, err)
-		y, err := b.Fingerprint("s", "d")
+		y, err := b.testFingerprint("s", "d")
 		require.NoError(t, err)
 		require.Equal(t, x, y)
 	}
 	a := build(t, base+"WHERE RECORD_TIMESTAMP<NOW()")
 	b := build(t, base+"WITH(MAX_OUT_OF_ORDER=INTERVAL '5' MINUTE) WHERE RECORD_TIMESTAMP<NOW()")
-	x, _ := a.Fingerprint("s", "d")
-	y, _ := b.Fingerprint("s", "d")
+	x, _ := a.testFingerprint("s", "d")
+	y, _ := b.testFingerprint("s", "d")
 	require.NotEqual(t, x, y)
 	b = build(t, base+"WITH(MAX_OUT_OF_ORDER=OFF) WHERE RECORD_TIMESTAMP<NOW()")
-	y, _ = b.Fingerprint("s", "d")
+	y, _ = b.testFingerprint("s", "d")
 	require.Equal(t, x, y)
 }

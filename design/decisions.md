@@ -107,12 +107,12 @@ Resume requires matching query and endpoint identity:
 
 | Included in query fingerprint | Excluded |
 | --- | --- |
-| Endpoint kinds and archive formats; Kafka cluster IDs and topics; normalized timestamp and partition predicates; effective timestamp allowances and offset criteria; Kafka output partitioning mode | Connection aliases/properties, file paths/IDs, `GROUP`, `START`, `WORKER_STOP_AFTER_RECORDS`, error policies and tuning |
+| Endpoint kinds and archive formats; Kafka cluster IDs and topics; destination topic UUID; normalized timestamp and partition predicates; effective timestamp allowances and offset criteria; Kafka output partitioning mode | Connection aliases/properties, file paths/IDs, `GROUP`, `START`, `WORKER_STOP_AFTER_RECORDS`, error policies and tuning |
 
 Policies can therefore change to SKIP when resuming a failed record. Changing partitioning mode requires a new group. `NOW()` bounds are fingerprinted as expressions; resolved windows are stored separately.
 
 - Kafka saves each next offset with [commit metadata](#commit-metadata).
-- Startup and assignment reject mismatched fingerprints/topic IDs, foreign metadata and missing saved `NOW()` windows. Topic IDs must be nonzero. Source identity is checked at startup and assignment, without continuous monitoring. Destination identity is not monitored.
+- Startup and assignment reject mismatched fingerprints/topic IDs, foreign metadata and missing saved `NOW()` windows. Topic IDs must be nonzero. The destination UUID in the fingerprint is read at startup and is not refreshed while a worker runs. Adding partitions with the same UUID keeps that identity.
 - File-source checkpoints save the query fingerprint, resolved window, fixed file selection, confirmed cursors and optional stop. [Checkpoint contract](archive.md#checkpoints).
 
 Before subscribing, group inspection also rejects active members whose client IDs do not start with `kaferry-` or are assigned to another topic. An absent group passes; an unavailable check fails. The topic check sees assigned partitions, so it cannot check subscriptions of members with no partitions.
@@ -136,7 +136,7 @@ The initial assignment commit preserves saved timestamp and end stops and clears
 - One asynchronous idempotent producer per worker, with delivery reports and client batching.
 - With `PARTITIONING = PRESERVE`: write original partition N to destination partition N, keeping original key bytes, including nulls. Check all selected input partition IDs before output; Kafka assignments recheck the destination. Archive replay uses the fixed selection's original IDs, never its replay cursor. This includes selected partitions whose records the timestamp filter excludes. Destination counts may be larger; missing IDs fail under every policy. Topics must exist.
 - `WITH (PARTITIONING = KEY)` on the destination selects Java-compatible Murmur2 key routing; null keys use sticky routing. Equal non-null keys stay together with a stable partitioner/count. Preserved placement can differ from other destination producers' key routing. Destination partition-count changes are logged. Source offsets are never copied; destination offsets are new.
-- Layout checks are not atomic with publishing. Topic recreation or partition changes during a copy can fail after partial output; missing partitions never fall back to key routing.
+- Layout checks are not atomic with publishing. Topic recreation or partition changes during a copy can fail after partial output; missing partitions never fall back to key routing. The producer retains the first topic UUID it learns and refuses a replacement; that UUID can differ from the one in the startup fingerprint. Brokers using topic-name Produce requests can accept replacement-topic writes before detection; see [franz-go's topic-recreation limits](https://github.com/twmb/franz-go/blob/v1.22.2/README.md#topic-recreation).
 - Submission order is preserved for records from one source partition routed to one destination partition during an uninterrupted producer session with stable routing. With `KEY`, null keys can spread. Replay and rebalances can duplicate and reorder output; there is no cross-partition order guarantee.
 - Client delivery retries use `worker.delivery_timeout` ([worker settings](../docs/reference.md#worker-settings)). Connection `message.timeout.ms` / `delivery.timeout.ms` overrides it; values must be positive and conflicting aliases fail. Deadlines start at submission, independently of record timestamps. Exhausted delivery fails the run.
 - Queue-full refusal pauses reading and retries the same record first, up to `worker.delivery_timeout`. Accepted records are not submitted again within that assignment.

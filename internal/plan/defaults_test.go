@@ -23,9 +23,9 @@ func TestMinimalStatementsMatchExplicitDefaults(t *testing.T) {
 				// Then both execute the same copy and retain its persisted identity.
 				require.Equal(t, explicit, implicit)
 				require.True(t, implicit.OneOff, "bare SQL must start a fresh invocation")
-				implicitID, err := implicit.Fingerprint("source", "destination")
+				implicitID, err := implicit.testFingerprint("source", "destination")
 				require.NoError(t, err)
-				explicitID, err := explicit.Fingerprint("source", "destination")
+				explicitID, err := explicit.testFingerprint("source", "destination")
 				require.NoError(t, err)
 				require.Equal(t, explicitID, implicitID, "spelling a default must not change saved identity")
 			})

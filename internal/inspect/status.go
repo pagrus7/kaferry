@@ -53,11 +53,12 @@ type StatusReport struct {
 	Activity    string           `json:"activity"`
 }
 type SavedPartition struct {
-	ID       int32        `json:"id"`
-	Position *int64       `json:"position,omitempty"`
-	End      *int64       `json:"captured_end,omitempty"`
-	Stop     *core.Stop   `json:"stop,omitempty"`
-	Window   *plan.Window `json:"window,omitempty"`
+	ID          int32        `json:"id"`
+	Fingerprint string       `json:"fingerprint,omitempty"`
+	Position    *int64       `json:"position,omitempty"`
+	End         *int64       `json:"captured_end,omitempty"`
+	Stop        *core.Stop   `json:"stop,omitempty"`
+	Window      *plan.Window `json:"window,omitempty"`
 }
 
 func (r StatusReport) ExitCode() int {
@@ -107,7 +108,7 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 			return report, &kafkaport.Conflict{Err: err}
 		}
 	}
-	report.Fingerprint, err = p.Fingerprint(sourceInfo.ClusterID, destinationInfo.ClusterID)
+	report.Fingerprint, err = p.Fingerprint(sourceInfo.ClusterID, destinationInfo.ClusterID, destinationInfo.TopicID)
 	if err != nil {
 		return report, &kafkaport.Conflict{Err: err}
 	}
@@ -120,7 +121,10 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 	var kafkaConflict *kafkaport.Conflict
 	var archiveConflict *archiveio.Conflict
 	if errors.As(err, &kafkaConflict) || errors.As(err, &archiveConflict) {
-		report.Verdict, report.Reason = "unknown", "saved progress does not match this query or source"
+		report.Verdict = "unknown"
+		if report.Reason == "" {
+			report.Reason = "saved progress does not match this query or endpoints"
+		}
 		return report, nil
 	}
 	if err == nil {
@@ -134,9 +138,10 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 	if err != nil {
 		return err
 	}
-	saved, metadata, err := c.Saved(ctx, p.Group, r.Fingerprint, p.Window, p.MaxStalenessMS)
-	if err != nil {
-		return err
+	saved, metadata, progressErr := c.Saved(ctx, p.Group, r.Fingerprint, p.Window, p.MaxStalenessMS)
+	var mismatch *plan.FingerprintMismatch
+	if progressErr != nil && !errors.As(progressErr, &mismatch) {
+		return progressErr
 	}
 	after, err := c.Membership(ctx, p.Group, kafkaport.GroupProtocol(p, r.Fingerprint))
 	if err != nil {
@@ -154,6 +159,10 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 	if err != nil {
 		return &kafkaport.Conflict{Err: err}
 	}
+	if progressErr != nil {
+		selected = topic.Partitions
+		slices.Sort(selected)
+	}
 	for _, id := range selected {
 		row := SavedPartition{ID: id}
 		if position, ok := saved[id]; ok {
@@ -161,10 +170,23 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 			row.Stop = metadata[id].Stop
 			row.End = metadata[id].End
 			row.Window = metadata[id].Window
+			row.Fingerprint = metadata[id].Fingerprint
 		}
 		r.Partitions = append(r.Partitions, row)
 	}
-	r.Activity = "group checked twice; observations are not atomic"
+	r.Activity = "group observed idle twice; observations are not atomic"
+	if before.Foreign || after.Foreign {
+		r.Activity = "group has an incompatible active member"
+	} else if !before.Idle || !after.Idle || before.State != after.State {
+		r.Activity = "group activity or a membership change was observed"
+	}
+	if progressErr != nil {
+		r.Reason = "saved query or endpoint fingerprint mismatch; saved positions are for inspection"
+		if before.Foreign || after.Foreign || !before.Idle || !after.Idle || before.State != after.State {
+			r.Reason += "; " + r.Activity
+		}
+		return progressErr
+	}
 	r.observed(before, after, p)
 	return nil
 }
@@ -182,7 +204,8 @@ func (r *StatusReport) observed(before, after kafkaport.Membership, p plan.Plan)
 
 func (s *Service) fileStatus(p plan.Plan, limits config.Worker, r *StatusReport) error {
 	info, err := s.files.Source(p, r.Fingerprint, limits)
-	if err != nil {
+	var mismatch *plan.FingerprintMismatch
+	if err != nil && !errors.As(err, &mismatch) {
 		return err
 	}
 	r.Source.File = fileSummary(info.ArchiveInspection)
@@ -191,8 +214,12 @@ func (s *Service) fileStatus(p plan.Plan, limits config.Worker, r *StatusReport)
 	row := SavedPartition{ID: 0}
 	if info.Saved {
 		row.Position, row.Stop, row.Window = &info.Position, info.Stop, &info.Window
+		row.Fingerprint = info.Fingerprint
 	}
 	r.Partitions = append(r.Partitions, row)
+	if err != nil {
+		return err
+	}
 	r.classify(p)
 	return nil
 }

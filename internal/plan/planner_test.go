@@ -186,29 +186,29 @@ func TestFingerprintIdentity(t *testing.T) {
 	p := build(t, base)
 
 	// When
-	want, err := p.Fingerprint("source-cluster", "destination-cluster")
+	want, err := p.testFingerprint("source-cluster", "destination-cluster")
 
 	// Then
 	require.NoError(t, err)
 	q := build(t, strings.Replace(base, "GROUP='g'", "GROUP='h'", 1)+" OPTIONS(ON_ERROR=SKIP)")
-	got, err := q.Fingerprint("source-cluster", "destination-cluster")
+	got, err := q.testFingerprint("source-cluster", "destination-cluster")
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	q = build(t, strings.Replace(base, "2026-10-01T00:00:00Z", "2026-10-01T01:00:00+01:00", 1))
-	got, err = q.Fingerprint("source-cluster", "destination-cluster")
+	got, err = q.testFingerprint("source-cluster", "destination-cluster")
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	q = build(t, strings.Replace(base, "TIMESTAMP '2026-10-01T00:00:00Z'", "TIMESTAMP '2026-09-30T23:00:00Z' + INTERVAL '1' HOUR", 1))
-	got, err = q.Fingerprint("source-cluster", "destination-cluster")
+	got, err = q.testFingerprint("source-cluster", "destination-cluster")
 	require.NoError(t, err)
 	require.Equal(t, want, got)
-	got, err = p.Fingerprint("other-cluster", "destination-cluster")
+	got, err = p.testFingerprint("other-cluster", "destination-cluster")
 	require.NoError(t, err)
 	require.NotEqual(t, want, got)
-	_, err = p.Fingerprint("", "destination-cluster")
+	_, err = p.testFingerprint("", "destination-cluster")
 	require.Error(t, err)
 	self := build(t, "INSERT INTO TOPIC 'a@staging' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='g', START=EARLIEST) ")
-	_, err = self.Fingerprint("same", "same")
+	_, err = self.testFingerprint("same", "same")
 	require.Error(t, err)
 }
 
