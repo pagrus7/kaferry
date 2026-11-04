@@ -231,6 +231,10 @@ jobs:
         env:
           SOURCE_SHA: ${{ github.sha }}
         run: python3 scripts/ci.py release-summary .cache/release-evidence "release/kaferry-$RELEASE_TAG-linux-amd64.tar.gz" "$SOURCE_SHA" "$RELEASE_TAG" release/qualification.md
+      - name: Retain measurements and render the latest-release front page
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: python3 scripts/release_results.py .cache/release-evidence "release/kaferry-$RELEASE_TAG-linux-amd64.tar.gz" release/compatibility.json "$SOURCE_SHA" "$RELEASE_TAG" release
       - name: Checksums
         run: |
           python3 - <<'PY'

@@ -11,6 +11,12 @@ A lightweight command-line tool for copying Kafka records between topics and fil
 [![Go coverage](https://codecov.io/gh/pagrus7/kaferry/branch/main/graph/badge.svg?flag=go)](https://codecov.io/gh/pagrus7/kaferry)
 [![Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml/badge.svg?branch=main)](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml)
 
+## Latest release results
+
+[![Latest release compatibility and measured throughput](https://github.com/pagrus7/kaferry/releases/latest/download/release-results.svg)](https://github.com/pagrus7/kaferry/releases/latest/download/release-results.md)
+
+[Measurement data](https://github.com/pagrus7/kaferry/releases/latest/download/release-results.json) · [Scope and release comparisons](docs/release-results.md). Throughput comes from short checks on shared CI runners.
+
 ## Examples
 
 Prepare your [Kafka connections and destination topics](docs/usage.md#copy-between-kafka-topics). Save one statement as `copy.sql` and run:
