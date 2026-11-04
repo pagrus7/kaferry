@@ -38,7 +38,20 @@ Each platform build generates `archive-demo.tar.gz` from the SQL, TOML and JSON 
 
 The full broker/authentication matrix also produces checksummed `compatibility.json` and `compatibility.md` assets. Publication requires their source and binary identities to match the Linux AMD64 archive. [Standalone qualification commands](../design/qualification.md).
 
-Publishing saves `qualification.md` as a checksummed release asset. It identifies the tagged source, tested Linux AMD64 binary, fixture environments, major scenarios, suite results and configured soak duration. The generator rejects missing, failed or mismatched source/binary evidence. Per-platform build information and attestations remain separate assets. The summary describes the exercised configurations; detailed workflow artifacts expire after 30 days.
+Publishing saves `qualification.md` as a checksummed release asset. It identifies the tagged source, tested Linux AMD64 binary, fixture environments, major scenarios, suite results and configured soak duration. The generator rejects missing, failed or mismatched source/binary evidence. Per-platform build information and attestations remain separate assets. The summary describes the exercised configurations; detailed workflow artifacts have limited retention.
+
+`release-results.png`, `release-results.svg`, `release-results.md` and `release-results.json` retain the front-page matrix, observed throughput and every load/soak measurement with its environment. The README embeds the latest stable release's PNG; GitHub serves release SVG downloads as binary attachments. No branch write is needed after publication. These assets are generated from passing evidence for the exact Linux AMD64 binary before checksums and publication. [Measurement scope and comparisons](../docs/release-results.md).
+
+To supplement an existing release, install librsvg's `rsvg-convert`, then download and verify the archive, `compatibility.json` and original `qualification-load`/`qualification-soak` workflow artifacts. Extract both artifact directories under `EVIDENCE`, then generate and review the reports:
+
+```sh
+python3 scripts/release_results.py EVIDENCE LINUX_AMD64_ARCHIVE COMPATIBILITY_JSON FULL_COMMIT vX.Y.Z OUTPUT
+rsvg-convert --output=OUTPUT/release-results.png OUTPUT/release-results.svg
+(cd OUTPUT && shasum -a 256 release-results.png >> release-results.SHA256SUMS)
+gh release upload vX.Y.Z OUTPUT/release-results.*
+```
+
+Upload the five files without `--clobber`. Their `release-results.SHA256SUMS` verifies the supplemental files; existing tags, binaries and `SHA256SUMS` stay unchanged. [Artifact retention](../docs/release-results.md#throughput-measurements).
 
 ## Build and validation
 
