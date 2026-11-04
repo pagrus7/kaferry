@@ -1,4 +1,4 @@
-"""Retain release measurements and render the README's latest-release image."""
+"""Retain release measurements and render the SVG source for the README image."""
 
 import argparse
 import hashlib

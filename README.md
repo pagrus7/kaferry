@@ -13,7 +13,7 @@ A lightweight command-line tool for copying Kafka records between topics and fil
 
 ## Latest release results
 
-[![Latest release compatibility and measured throughput](https://github.com/pagrus7/kaferry/releases/latest/download/release-results.svg)](https://github.com/pagrus7/kaferry/releases/latest/download/release-results.md)
+[![Latest release compatibility and measured throughput](https://github.com/pagrus7/kaferry/releases/latest/download/release-results.png)](https://github.com/pagrus7/kaferry/releases/latest/download/release-results.md)
 
 [Measurement data](https://github.com/pagrus7/kaferry/releases/latest/download/release-results.json) · [Scope and release comparisons](docs/release-results.md). Throughput comes from short checks on shared CI runners.
 
