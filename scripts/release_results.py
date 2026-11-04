@@ -12,7 +12,7 @@ from qualify import verify_release
 
 
 LOAD_CASES = {
-    'TestLoadBoundedKafkaCopy/default': 'Kafka → Kafka',
+    'TestLoadBoundedKafkaCopy/default': 'Kafka → Kafka (key)',
     'TestLoadBoundedKafkaCopy/preserved_partitions': 'Kafka → Kafka (preserve)',
     'TestLoadArchiveCopy/capture': 'Kafka → archive',
     'TestLoadArchiveCopy/replay': 'Archive → Kafka',
@@ -141,7 +141,7 @@ def svg(report):
     counts = {item['records'] for item in selected}
     scope = f'{next(iter(counts)):,} records per load case' if len(counts) == 1 else 'Mixed load record counts; see full data'
     text(24, 341, scope + ' · one invocation per scenario')
-    text(24, 362, 'Shared CI runners; timing includes process startup and shutdown.')
+    text(24, 362, 'Timing: SQL input release through process exit · shared CI runners.')
     text(24, 383, 'Click for measurement inputs, qualification scope and full data.')
     parts += ['</g>', '</svg>']
     return '\n'.join(parts) + '\n'

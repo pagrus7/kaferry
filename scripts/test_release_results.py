@@ -64,6 +64,7 @@ class ReleaseResultsTest(unittest.TestCase):
         text = ''.join(image.itertext())
         self.assertIn('31/31', text)
         self.assertIn('12,346', text)
+        self.assertIn('Kafka → Kafka (key)', text)
         self.assertIn('soak 30m passed', text)
         self.assertIn('3.9.2', text)
         self.assertIn('4.4.0', text)
