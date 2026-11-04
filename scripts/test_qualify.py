@@ -42,6 +42,14 @@ class MatrixTest(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
                 duration(value)
 
+    def test_endurance_deadline_includes_five_minute_consume_only_period(self):
+        for suite in ('soak', 'capture'):
+            with self.subTest(suite=suite):
+                args = argparse.Namespace(suite=suite, duration=259200, rate=50)
+                command, required = suite_command(args, {})
+                self.assertIn('-timeout=259800s', command)
+                self.assertEqual(['TestStreamingSoakFidelityCommitLagMemoryAndShutdown'], required)
+
     def test_reports_reject_missing_failed_duplicate_and_mismatched_runs(self):
         for problem in ('missing', 'failed', 'digest', 'commit', 'duplicate', None):
             with self.subTest(problem=problem), tempfile.TemporaryDirectory() as temporary:

@@ -34,7 +34,7 @@ python3 scripts/qualify.py matrix --tier pr
 python3 scripts/qualify.py matrix --tier full --output build-results/full-matrix
 ```
 
-Every tier also runs a two-minute archive-capture endurance smoke. A matrix runs sequentially locally; CI runs up to six cases in parallel on separate hosted runners. Existing output directories are refused so failed evidence cannot be overwritten. Use a new output path for a follow-up run.
+Every tier also runs archive-capture endurance with two minutes of publishing and five minutes without new input. A matrix runs sequentially locally; CI runs up to six cases in parallel on separate hosted runners. Existing output directories are refused so failed evidence cannot be overwritten. Use a new output path for a follow-up run.
 
 Scheduled main runs reuse a suite or matrix tier only when its latest completed attempt passed on the same commit and its test executions are less than 30 days old. Nightly results cannot substitute for the full matrix. Failed or cancelled attempts require retry; skipped runs and rerunning only the aggregate report do not renew evidence age. Missing or unavailable history runs the tests.
 
@@ -89,14 +89,18 @@ The temporary certificate path satisfies Compose interpolation during teardown; 
 
 ## Endurance on a persistent host
 
-Keep a process alive continuously for the duration being claimed. Separate short runs do not add up to continuous uptime. The runner accepts integer seconds, minutes, hours or days, from one minute through seven days; it derives the Go test timeout from that duration.
+Keep a process alive continuously for the duration being claimed. Separate short runs do not add up to continuous uptime. The runner accepts publishing durations from one minute through seven days, adds a five-minute consume-only period and derives the Go test timeout from both periods plus cleanup time.
 
 ```sh
 python3 scripts/qualify.py run soak --duration 24h --rate 50
 python3 scripts/qualify.py run capture --duration 72h --rate 50
 ```
 
-`soak` verifies topic output as it arrives and pauses the separate disposable destination once per minute. `capture` runs continuous topic→archive copying and streams its completed files through verification after shutdown. Replay/file-to-file load tests are finite jobs; their repeated execution is not reported as continuous streaming uptime.
+`soak` verifies topic output as it arrives and pauses the separate disposable destination once per minute during publishing. Both modes keep the same copy process alive for five more minutes after publishing stops. After shutdown, `soak` consumes through the destination's final offsets; `capture` scans all completed archive files. Replay/file-to-file load tests are finite jobs; their repeated execution is not reported as continuous streaming uptime.
+
+Metrics and JSONL samples record submitted input, broker-acknowledged publications, total and unique received records, verified records, pending IDs, duplicates, corruption, unexpected IDs and reordering. Final missing counts are available only after all publications are acknowledged and the final output scan completes; incomplete evidence reports `missing: null`. Failure reports preserve observed counters. Verification stops with partial totals if unresolved ID history exceeds 8,192 entries. Rates include the consume-only period and reconciliation.
+
+For Kafka output, destination lag is acknowledged source records minus unique IDs received by the verifier, bounded below by zero. Destination consumer lag is the sum of destination end offsets minus the verifier's next consumed offsets. Samples and metrics retain both peak lag values, with final values after reconciliation. Offset distance is a backlog measure, not an independently verified record count. Archive output has no live destination-lag measurement.
 
 The verifier releases contiguous record IDs and bounds outstanding streaming input; RSS monitoring retains fixed warm/final windows and a peak. JSONL samples go to disk. Checks cover record fidelity, saved progress, worker work caps, a 512 MiB sampled RSS ceiling and at most 32 MiB final-median RSS growth after warm-up. These measurements do not include Go heap or goroutine profiles, and sampling can miss short peaks.
 

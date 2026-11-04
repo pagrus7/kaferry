@@ -99,6 +99,7 @@ def summarize(directory):
         rows += ['', 'Parent tests include subtest time; these durations must not be added together.', '']
     rows.extend(["", "| Test | Result | Records | Records/s | Sampled peak RSS MiB | RSS samples | RSS growth MiB | Peak uncommitted records / bytes | Sampled max lag | Shutdown s |",
                  "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"])
+    deliveries = []
     for filename in sorted(directory.glob("*.metrics.json")):
         r = json.loads(filename.read_text())
         status = "SKIP" if r["skipped"] else "PASS" if r["passed"] else "FAIL"
@@ -106,6 +107,17 @@ def summarize(directory):
                   if "final_median_rss_bytes" in r and "warm_median_rss_bytes" in r else None)
         shutdown = f"{r['shutdown_seconds']:.3f}" if "shutdown_seconds" in r else "—"
         rows.append(f"| {r['test']} | {status} | {r['records']} | {r['records_per_second']:.0f} | {r['sampled_peak_rss_bytes'] / (1 << 20):.1f} | {r.get('rss_samples', '—')} | {f'{growth:.1f}' if growth is not None else '—'} | {r['peak_uncommitted_records']} / {r['peak_uncommitted_bytes']} | {r.get('max_sampled_commit_lag', '—')} | {shutdown} |")
+        if d := r.get('delivery'):
+            missing = d['missing'] if d['missing'] is not None else 'unresolved'
+            deliveries.append(f"| {r['test']} | {d['submitted']} | {d['published']} | {d['received']} | {d['unique_received']} | {missing} | {d['duplicates']} | {d['corrupted']} / {d['unexpected']} / {d['reordered']} | {d['reconciliation_complete']} | {r.get('max_sampled_destination_lag', '—')} / {r.get('final_destination_lag', '—')} | {r.get('max_sampled_destination_consumer_lag', '—')} / {r.get('final_destination_consumer_lag', '—')} |")
+    if deliveries:
+        rows += ['', '### Endurance delivery', '',
+                 '| Test | Submitted | Published (acked) | Received | Unique | Missing | Duplicates | Corrupted / unexpected / reordered | Complete | Destination lag max / final (records) | Consumer lag max / final (offsets) |',
+                 '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: |',
+                 *deliveries, '',
+                 'Missing is unresolved until all source publications are acknowledged and final output is reconciled. '
+                 'Destination lag is acknowledged source records minus unique received IDs; consumer lag is the destination end-offset distance to the verifier. '
+                 'Archive capture verifies output after shutdown and has no live destination-lag measurement.', '']
     benchmark = directory / "benchmark.log"
     if benchmark.exists():
         rows += ["", "### Codec microbenchmarks", "", "| Benchmark | ns/op | B/op | allocs/op |",

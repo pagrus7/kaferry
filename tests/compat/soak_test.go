@@ -4,13 +4,13 @@ package compat
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	core "github.com/pagrus7/kaferry/internal/copy"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,6 +20,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
+
+const soakDrainDuration = 5 * time.Minute
 
 func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	// Given
@@ -74,7 +76,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	}
 	configPath := filepath.Join(t.TempDir(), "soak.toml")
 	require.NoError(t, os.WriteFile(configPath, []byte("[worker]\nrecord_cap=1024\npartition_record_cap=256\n"), 0600))
-	ctx, cancel := context.WithTimeout(context.Background(), duration+4*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), duration+soakDrainDuration+4*time.Minute)
 	defer cancel()
 	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", configPath)
 	report.cli = process
@@ -88,6 +90,28 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	stalls := &destinationStalls{container: stall, next: nextStall}
 	t.Cleanup(func() { stalls.recover(t) })
 	monitor := soakMonitor{next: nextSample}
+	reconciled := false
+	report.PublishingSeconds, report.DrainSeconds = duration.Seconds(), soakDrainDuration.Seconds()
+	t.Cleanup(func() {
+		delivery := records.delivery(reconciled)
+		report.Delivery = &delivery
+		report.Records, report.ElapsedSeconds = records.verified, time.Since(start).Seconds()
+		report.RecordsPerSecond = float64(report.Records) / report.ElapsedSeconds
+		report.Bursts, report.DestinationStalls = bursts, stalls.count
+		report.RSSSamples, report.MaxSampledCommitLag = monitor.samples, monitor.maxLag
+		report.SampledPeakRSSBytes = monitor.peak * 1024
+		if process.finished() {
+			report.ChildCPUSeconds = process.cpu().Seconds()
+		}
+		if !archiveMode {
+			peak, consumerPeak := monitor.maxDestinationLag, monitor.maxDestinationConsumerLag
+			report.MaxSampledDestinationLag, report.MaxSampledDestinationConsumerLag = &peak, &consumerPeak
+			if reconciled {
+				lag, consumerLag := max(0, records.acknowledged-records.unique), monitor.destinationConsumerLag
+				report.FinalDestinationLag, report.FinalDestinationConsumerLag = &lag, &consumerLag
+			}
+		}
+	})
 	if directory := os.Getenv("KAFERRY_REPORT_DIR"); directory != "" {
 		file, err := os.Create(filepath.Join(directory, "soak.samples.jsonl"))
 		require.NoError(t, err)
@@ -98,7 +122,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	period := time.Second * time.Duration(batch) / time.Duration(rate)
 
 	// When copying the controlled stream with periodic bursts and optional destination stalls.
-	for time.Since(start) < duration || records.acknowledged < records.published || (!archiveMode && records.verified < records.published) || (archiveMode && monitor.committed < records.published) {
+	for time.Since(start) < duration+soakDrainDuration {
 		select {
 		case <-process.done:
 			t.Fatalf("soak process exited early: %v %s", process.wait(), process.logs())
@@ -124,10 +148,14 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		} else {
 			records.catchUp(t, c, reports)
 		}
-		monitor.sample(t, now, process.pid(), a, group, src, records.published)
+		var destinationEnds map[int32]int64
+		if !archiveMode && !now.Before(monitor.next) {
+			destinationEnds = destinationOffsets(t, destinationAdmin, dst, 5)
+		}
+		monitor.sample(t, now, process.pid(), a, group, src, records, destinationEnds)
 	}
 
-	// When stopping intake after every fixture record is verified.
+	// When the full consume-only period ends, stop copying and reconcile the final output.
 	shutdown := time.Now()
 	require.NoError(t, process.signal(os.Interrupt))
 	select {
@@ -142,30 +170,45 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	report.ElapsedSeconds = time.Since(start).Seconds()
 	if archiveMode {
 		identity := brokerSourceIdentity(t, a, src)
-		next := [4]int{0, 1, 2, 3}
 		scanArchive(t, archive, func(record core.Record) {
-			require.NotNil(t, record.Source)
-			require.GreaterOrEqual(t, len(record.Value), 4)
-			id := int(binary.BigEndian.Uint32(record.Value))
+			id, unique := records.receive(t, record.Value)
+			if !unique {
+				return
+			}
 			part := id % 4
-			require.Equal(t, next[part], id, "archive has missing, duplicated or reordered input")
-			next[part] += 4
 			want := archiveLoadRecord(id)
 			want.Source.Cluster, want.Source.Topic, want.Source.TopicID = identity.Cluster, identity.Topic, identity.TopicID
 			stamp := records.stamp.UnixMilli()
 			want.TimestampMS = &stamp
-			require.Equal(t, want, record)
+			if !reflect.DeepEqual(want, record) {
+				records.corrupted++
+				return
+			}
+			pair := [2]int32{int32(part), int32(part)}
+			if prior, exists := records.order[pair]; exists && id <= prior {
+				records.reordered++
+			}
+			records.order[pair] = max(records.order[pair], id)
 			records.verified++
 		})
-		require.Equal(t, records.published, records.verified)
+	} else {
+		ends := destinationOffsets(t, destinationAdmin, dst, 5)
+		for destinationOffsetLag(ends, records.offsets) != 0 {
+			require.NoError(t, ctx.Err(), "destination verifier did not reach the final offsets")
+			records.catchUp(t, c, reports)
+		}
+		monitor.destinationConsumerLag = destinationOffsetLag(ends, records.offsets)
 	}
-	report.Records = records.verified
-	report.RecordsPerSecond = float64(report.Records) / report.ElapsedSeconds
-	report.ChildCPUSeconds = process.cpu().Seconds()
+	records.drainReports(t, reports)
+	reconciled = true
 	report.ShutdownSeconds = shutdownTime.Seconds()
-	report.Bursts, report.DestinationStalls = bursts, stalls.count
-	report.MaxSampledCommitLag = monitor.maxLag
-	report.RSSSamples = monitor.samples
+	delivery := records.delivery(reconciled)
+	require.True(t, delivery.ReconciliationComplete, "source publication did not complete: %+v", delivery)
+	require.Zero(t, *delivery.Missing, "missing destination records")
+	require.Zero(t, delivery.Duplicates, "duplicate destination records")
+	require.Zero(t, delivery.Corrupted, "corrupted destination records")
+	require.Zero(t, delivery.Unexpected, "unexpected destination records")
+	require.Zero(t, delivery.Reordered, "reordered destination records")
 
 	// Then shutdown saves all progress, preserves fidelity and stays within work/RSS caps.
 	committed := 0
@@ -227,15 +270,18 @@ func (s *destinationStalls) step(t *testing.T, now time.Time, publishing bool) {
 }
 
 type soakMonitor struct {
-	next               time.Time
-	rss                []int64
-	peak               int64
-	maxLag             int
-	committed, samples int
-	encoder            *json.Encoder
+	next                      time.Time
+	rss                       []int64
+	peak                      int64
+	maxLag                    int
+	samples                   int
+	encoder                   *json.Encoder
+	maxDestinationLag         int
+	destinationConsumerLag    int64
+	maxDestinationConsumerLag int64
 }
 
-func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *kadm.Client, group, source string, published int) {
+func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *kadm.Client, group, source string, records *streamRecords, destinationEnds map[int32]int64) {
 	t.Helper()
 	if now.Before(m.next) {
 		return
@@ -254,14 +300,44 @@ func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *kadm.C
 	for _, part := range committedPartitions(t, admin, group, source, 4) {
 		committed += int(part.At)
 	}
-	lag := published - committed
+	lag := records.published - committed
 	if lag < 0 {
 		t.Fatal("committed work never published to the source")
 	}
-	m.committed = committed
+	sample := map[string]any{"at": now.UTC(), "rss_kib": rss, "commit_lag": lag, "published": records.published, "delivery": records.delivery(false)}
+	if destinationEnds != nil {
+		destinationLag := max(0, records.acknowledged-records.unique)
+		m.destinationConsumerLag = destinationOffsetLag(destinationEnds, records.offsets)
+		m.maxDestinationLag = max(m.maxDestinationLag, destinationLag)
+		m.maxDestinationConsumerLag = max(m.maxDestinationConsumerLag, m.destinationConsumerLag)
+		sample["destination_lag"], sample["destination_consumer_lag"] = destinationLag, m.destinationConsumerLag
+	}
 	if m.encoder != nil {
-		require.NoError(t, m.encoder.Encode(map[string]any{"at": now.UTC(), "rss_kib": rss, "commit_lag": lag, "published": published}))
+		require.NoError(t, m.encoder.Encode(sample))
 	}
 	m.maxLag = max(m.maxLag, lag)
 	m.next = now.Add(time.Second)
+}
+
+func destinationOffsets(t *testing.T, admin *kadm.Client, topic string, partitions int) map[int32]int64 {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	ends, err := admin.ListEndOffsets(ctx, topic)
+	require.NoError(t, err)
+	require.NoError(t, ends.Error())
+	require.Len(t, ends[topic], partitions)
+	result := make(map[int32]int64, partitions)
+	for partition, end := range ends[topic] {
+		result[partition] = end.Offset
+	}
+	return result
+}
+
+func destinationOffsetLag(ends, consumed map[int32]int64) int64 {
+	var lag int64
+	for partition, end := range ends {
+		lag += max(int64(0), end-consumed[partition])
+	}
+	return lag
 }
