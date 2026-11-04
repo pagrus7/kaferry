@@ -102,6 +102,12 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 					require.EqualValues(t, binary.BigEndian.Uint32(record.Value)%4, record.Partition, "preserved source partition")
 				}
 			}
+			require.Equal(t, want, records.unique, "unique destination records")
+			require.Equal(t, want, records.verified, "verified destination records")
+			require.Zero(t, records.duplicates, "duplicate destination records")
+			require.Zero(t, records.corrupted, "corrupted destination records")
+			require.Zero(t, records.unexpected, "unexpected destination records")
+			require.Zero(t, records.reordered, "reordered destination records")
 			require.EqualValues(t, want, topicRecordCount(t, a, dst, 5), "destination must not exceed the cap")
 			cpu := process.cpu()
 			t.Logf("records=%d elapsed=%s records/s=%.0f child_cpu=%s sampled_peak_rss_MiB=%.1f peak_uncommitted_records=%d peak_uncommitted_bytes=%d", report.Records, time.Duration(report.ElapsedSeconds*float64(time.Second)), report.RecordsPerSecond, cpu, float64(report.SampledPeakRSSBytes)/(1<<20), summary.PeakRecords, summary.PeakBytes)

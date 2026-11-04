@@ -89,7 +89,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	bursts := 0
 	stalls := &destinationStalls{container: stall, next: nextStall}
 	t.Cleanup(func() { stalls.recover(t) })
-	monitor := soakMonitor{next: nextSample}
+	monitor := soakMonitor{next: nextSample, kafka: !archiveMode}
 	reconciled := false
 	report.PublishingSeconds, report.DrainSeconds = duration.Seconds(), soakDrainDuration.Seconds()
 	t.Cleanup(func() {
@@ -104,9 +104,15 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 			report.ChildCPUSeconds = process.cpu().Seconds()
 		}
 		if !archiveMode {
-			peak, consumerPeak := monitor.maxDestinationLag, monitor.maxDestinationConsumerLag
-			report.MaxSampledDestinationLag, report.MaxSampledDestinationConsumerLag = &peak, &consumerPeak
-			if reconciled {
+			if monitor.samples > 0 {
+				peak := monitor.maxDestinationLag
+				report.MaxSampledDestinationLag = &peak
+			}
+			if monitor.destinationConsumerSamples > 0 {
+				consumerPeak := monitor.maxDestinationConsumerLag
+				report.MaxSampledDestinationConsumerLag = &consumerPeak
+			}
+			if delivery.ReconciliationComplete {
 				lag, consumerLag := max(0, records.acknowledged-records.unique), monitor.destinationConsumerLag
 				report.FinalDestinationLag, report.FinalDestinationConsumerLag = &lag, &consumerLag
 			}
@@ -149,7 +155,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 			records.catchUp(t, c, reports)
 		}
 		var destinationEnds map[int32]int64
-		if !archiveMode && !now.Before(monitor.next) {
+		if !archiveMode && !stalls.paused && !now.Before(monitor.next) {
 			destinationEnds = destinationOffsets(t, destinationAdmin, dst, 5)
 		}
 		monitor.sample(t, now, process.pid(), a, group, src, records, destinationEnds)
@@ -270,15 +276,17 @@ func (s *destinationStalls) step(t *testing.T, now time.Time, publishing bool) {
 }
 
 type soakMonitor struct {
-	next                      time.Time
-	rss                       []int64
-	peak                      int64
-	maxLag                    int
-	samples                   int
-	encoder                   *json.Encoder
-	maxDestinationLag         int
-	destinationConsumerLag    int64
-	maxDestinationConsumerLag int64
+	next                       time.Time
+	rss                        []int64
+	peak                       int64
+	maxLag                     int
+	samples                    int
+	encoder                    *json.Encoder
+	maxDestinationLag          int
+	destinationConsumerLag     int64
+	maxDestinationConsumerLag  int64
+	kafka                      bool
+	destinationConsumerSamples int
 }
 
 func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *kadm.Client, group, source string, records *streamRecords, destinationEnds map[int32]int64) {
@@ -304,13 +312,17 @@ func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *kadm.C
 	if lag < 0 {
 		t.Fatal("committed work never published to the source")
 	}
-	sample := map[string]any{"at": now.UTC(), "rss_kib": rss, "commit_lag": lag, "published": records.published, "delivery": records.delivery(false)}
-	if destinationEnds != nil {
+	sample := map[string]any{"at": now.UTC(), "rss_kib": rss, "commit_lag": lag, "submitted": records.published, "delivery": records.delivery(false)}
+	if m.kafka {
 		destinationLag := max(0, records.acknowledged-records.unique)
-		m.destinationConsumerLag = destinationOffsetLag(destinationEnds, records.offsets)
 		m.maxDestinationLag = max(m.maxDestinationLag, destinationLag)
+		sample["destination_lag"] = destinationLag
+	}
+	if destinationEnds != nil {
+		m.destinationConsumerSamples++
+		m.destinationConsumerLag = destinationOffsetLag(destinationEnds, records.offsets)
 		m.maxDestinationConsumerLag = max(m.maxDestinationConsumerLag, m.destinationConsumerLag)
-		sample["destination_lag"], sample["destination_consumer_lag"] = destinationLag, m.destinationConsumerLag
+		sample["destination_consumer_lag"] = m.destinationConsumerLag
 	}
 	if m.encoder != nil {
 		require.NoError(t, m.encoder.Encode(sample))
