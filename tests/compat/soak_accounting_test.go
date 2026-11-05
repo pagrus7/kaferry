@@ -230,10 +230,19 @@ func TestLoadDeliveryObservationSynchronizesCallbacksAndReceipts(t *testing.T) {
 			observer.snapshot()
 		}
 	}()
-	workers.Wait()
+	completed := make(chan observedDelivery, 1)
+	go func() {
+		workers.Wait()
+		completed <- observer.snapshot()
+	}()
 
 	// Then each ID is timed once and all state settles without a race.
-	result := observer.snapshot()
+	var result observedDelivery
+	select {
+	case result = <-completed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("delivery observer callbacks and receipts did not settle")
+	}
 	require.Zero(t, result.Backlog)
 	require.Zero(t, result.Unsettled)
 	require.Equal(t, count, result.TimedReceipts)
