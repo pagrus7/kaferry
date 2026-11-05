@@ -15,7 +15,7 @@ python3 scripts/qualify.py plan --tier pr
 
 If `python3` is an older system interpreter, use `make qualification-setup PYTHON=python3.14` and `python3.14` for the CLI commands. Setup builds Kaferry and installs the independent librdkafka checker into a checkout-local Python virtual environment. Run setup and qualification with the same Python major/minor version. Pass `--binary /absolute/path/to/kaferry` to test a downloaded executable; qualification does not rebuild that executable.
 
-Reserve ports 39092/40092 for plain brokers, 41092–43094 for the security listeners and 44088 for Kerberos. Run one lab per host, across all checkouts and do not run `make broker` or `make qualification` alongside it. The runner takes a host-wide lock for its fixed ports and Compose names; legacy Make entrypoints do not take that lock. Broker containers use only the `kaferry-compat` and `kaferry-qualification` Compose projects. Other Docker workloads are outside the lab.
+Reserve ports 39092/40092 for ordinary plain brokers, 39192/40192 for dedicated endurance brokers, 41092–43094 for the security listeners and 44088 for Kerberos. Run one lab per host, across all checkouts and do not run `make broker` or `make qualification` alongside it. The runner takes a host-wide lock for its fixed ports and Compose names; legacy Make entrypoints do not take that lock. Broker containers use only the `kaferry-compat`, `kaferry-endurance` and `kaferry-qualification` Compose projects. Other Docker workloads are outside the lab.
 
 Start with one workload, 8 available CPUs, 16–20 GiB available RAM and 100 GiB free test storage; measure actual usage before increasing load. These are starting allocations, not capacity guarantees. Fixtures cap broker JVM heaps at 512 MiB and use four internal offset/transaction partitions.
 
@@ -82,6 +82,7 @@ If Docker itself is unavailable, cleanup can fail. The receipt preserves both su
 
 ```sh
 docker compose -p kaferry-compat --profile cross-cluster down -v --remove-orphans
+docker compose -p kaferry-endurance --profile cross-cluster down -v --remove-orphans
 KAFERRY_QUAL_CERT_DIR=/tmp docker compose -p kaferry-qualification -f tests/qualification/compose.yaml down -v --remove-orphans
 ```
 
@@ -91,7 +92,7 @@ The temporary certificate path satisfies Compose interpolation during teardown; 
 
 Keep a process alive continuously for the duration being claimed. Separate short runs do not add up to continuous uptime. The runner accepts publishing durations from one minute through seven days, adds a five-minute consume-only period and derives the Go test timeout from both periods plus cleanup time.
 
-Prerequisites: Python 3.11+, Go, Docker and Compose, a host that stays awake, and exclusive use of the selected disposable brokers. `endurance` owns the separate `kaferry-endurance` project on localhost ports 39192 and 40192; other fixture suites use `kaferry-compat` on 39092 and 40092. The runner starts and removes its project and pauses its destination. Do not run another job against that project while it is active. Other host workloads can affect measurements.
+Prerequisites: Python 3.11+, Go, Docker and Compose, a host that stays awake, and exclusive use of the selected disposable brokers. `endurance` owns the separate `kaferry-endurance` project on localhost ports 39192 and 40192; other plain-broker suites use `kaferry-compat` on 39092 and 40092. The runner starts and removes its project and pauses its destination. Do not run another job against that project while it is active. Other host workloads can affect measurements.
 
 ```sh
 make build
