@@ -346,3 +346,22 @@ func TestLoadDeliveryPercentilesCoverZeroSmallPopulationsAndLongDurations(t *tes
 		})
 	}
 }
+
+func TestLoadDeliveryPercentilesRoundNonIntegralRanksUp(t *testing.T) {
+	// Given 101 distinct receipt times, entered in descending order.
+	now := time.Now()
+	observer := newDeliveryObserver(func() time.Time { return now })
+	for id := range 101 {
+		observer.submit(id)
+		observer.publication(id, nil)
+		now = now.Add(time.Duration(101-id) * time.Nanosecond)
+		observer.receive(id)
+	}
+
+	// When percentile ranks are fractional, then the next full rank is selected.
+	result := observer.snapshot()
+	require.Equal(t, 101, result.TimedReceipts)
+	require.Equal(t, (96 * time.Nanosecond).Seconds(), *result.P95LatencySeconds)
+	require.Equal(t, (100 * time.Nanosecond).Seconds(), *result.P99LatencySeconds)
+	require.Equal(t, (101 * time.Nanosecond).Seconds(), *result.P999LatencySeconds)
+}
