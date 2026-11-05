@@ -83,6 +83,9 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	waitMembers(t, a, group, 1, 4, nil)
 	committedPartitions(t, a, group, src, 4)
 	records := newStreamRecords(src, time.Now().Truncate(time.Millisecond))
+	if !archiveMode {
+		records.observer = newDeliveryObserver(time.Now)
+	}
 	start := time.Now()
 	nextPublish, nextSample := start, start.Add(time.Second)
 	nextBurst, nextStall := start.Add(10*time.Second), start.Add(30*time.Second)
@@ -215,6 +218,16 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	require.Zero(t, delivery.Corrupted, "corrupted destination records")
 	require.Zero(t, delivery.Unexpected, "unexpected destination records")
 	require.Zero(t, delivery.Reordered, "reordered destination records")
+	if delivery.Observed != nil {
+		require.Zero(t, delivery.Observed.Backlog, "unreceived acknowledged records")
+		require.Zero(t, delivery.Observed.Unsettled, "unsettled delivery timings")
+		require.Equal(t, delivery.UniqueReceived, delivery.Observed.TimedReceipts, "every unique receipt is timed")
+		if delivery.UniqueReceived > 0 {
+			require.NotNil(t, delivery.Observed.MaxLatencySeconds)
+			t.Logf("observed_peak_backlog=%d timed_receipts=%d max_delivery_seconds=%.6f",
+				delivery.Observed.PeakBacklog, delivery.Observed.TimedReceipts, *delivery.Observed.MaxLatencySeconds)
+		}
+	}
 
 	// Then shutdown saves all progress, preserves fidelity and stays within work/RSS caps.
 	committed := 0

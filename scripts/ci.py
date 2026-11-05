@@ -100,6 +100,7 @@ def summarize(directory):
     rows.extend(["", "| Test | Result | Records | Records/s | Sampled peak RSS MiB | RSS samples | RSS growth MiB | Peak uncommitted records / bytes | Sampled max lag | Shutdown s |",
                  "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"])
     deliveries = []
+    observations = []
     for filename in sorted(directory.glob("*.metrics.json")):
         r = json.loads(filename.read_text())
         status = "SKIP" if r["skipped"] else "PASS" if r["passed"] else "FAIL"
@@ -110,14 +111,25 @@ def summarize(directory):
         if d := r.get('delivery'):
             missing = d['missing'] if d['missing'] is not None else 'unresolved'
             deliveries.append(f"| {r['test']} | {d['submitted']} | {d['published']} | {d['received']} | {d['unique_received']} | {missing} | {d['duplicates']} | {d['corrupted']} / {d['unexpected']} / {d['reordered']} | {d['reconciliation_complete']} | {r.get('max_sampled_destination_lag', '—')} / {r.get('final_destination_lag', '—')} | {r.get('max_sampled_destination_consumer_lag', '—')} / {r.get('final_destination_consumer_lag', '—')} |")
+            if observed := d.get('observed'):
+                seconds = observed['max_latency_seconds']
+                latency = 'unavailable' if seconds is None else f'{seconds * 1000:.3f}'
+                observations.append(f"| {r['test']} | {observed['backlog']} | {observed['peak_backlog']} | {observed['timed_receipts']} | {latency} | {observed['unsettled']} |")
     if deliveries:
         rows += ['', '### Endurance delivery', '',
-                 '| Test | Submitted | Published (acked) | Received | Unique | Missing | Duplicates | Corrupted / unexpected / reordered | Complete | Destination lag max / final (records) | Consumer lag max / final (offsets) |',
+                 '| Test | Submitted | Published (acked) | Received | Unique | Missing | Duplicates | Corrupted / unexpected / reordered | Complete | Destination lag sampled max / final (records) | Consumer lag sampled max / final (offsets) |',
                  '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: |',
                  *deliveries, '',
                  'Missing is unresolved until all source publications are acknowledged and final output is reconciled. '
                  'Destination lag is acknowledged source records minus unique received IDs; consumer lag is the destination end-offset distance to the verifier. '
                  'Archive capture verifies output after shutdown and has no live destination-lag measurement.', '']
+    if observations:
+        rows += ['', '### Per-record delivery observations', '',
+                 '| Test | Backlog now | Observed peak backlog (records) | Timed first receipts | Maximum delivery time (ms) | Unsettled IDs |',
+                 '| --- | ---: | ---: | ---: | ---: | ---: |', *observations, '',
+                 'Backlog changes on each source acknowledgement and first unique destination receipt, matched by record ID. '
+                 'Its maximum is event-based at the test observer. Delivery time runs from test submission to first receipt using one host clock; '
+                 'it includes producer queueing, copying and verifier delay. Broker-offset lag remains sampled.', '']
     benchmark = directory / "benchmark.log"
     if benchmark.exists():
         rows += ["", "### Codec microbenchmarks", "", "| Benchmark | ns/op | B/op | allocs/op |",

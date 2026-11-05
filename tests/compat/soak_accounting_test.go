@@ -5,6 +5,7 @@ package compat
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -126,4 +127,152 @@ func TestLoadStreamingVerifierConsumesTrailingDuplicates(t *testing.T) {
 	require.Zero(t, *result.Missing)
 	require.Equal(t, 1, result.Duplicates)
 	require.Zero(t, destinationOffsetLag(ends, stream.offsets))
+}
+
+func TestLoadDeliveryObservationRetainsTransientPeakAndLongestLatency(t *testing.T) {
+	// Given three submissions made at different instants, with no periodic samples.
+	start := time.Now()
+	now := start
+	observer := newDeliveryObserver(func() time.Time { return now })
+	for id := range 3 {
+		now = start.Add(time.Duration(id) * 100 * time.Millisecond)
+		observer.submit(id)
+	}
+	require.Zero(t, observer.snapshot().Backlog)
+
+	// When all acknowledgements arrive, then receipts clear the backlog before the next snapshot.
+	for id := range 3 {
+		observer.publication(id, nil)
+	}
+	for id := range 3 {
+		now = start.Add(500*time.Millisecond + time.Duration(id)*50*time.Millisecond)
+		observer.receive(id)
+	}
+
+	// Then the transient peak and longest record time survive even though current lag is zero.
+	result := observer.snapshot()
+	require.Zero(t, result.Backlog)
+	require.Zero(t, result.Unsettled)
+	require.Equal(t, 3, result.PeakBacklog)
+	require.Equal(t, 3, result.TimedReceipts)
+	require.InDelta(t, 0.5, *result.MaxLatencySeconds, 1e-9)
+}
+
+func TestLoadDeliveryObservationMatchesIDsWhenReceiptPrecedesAcknowledgement(t *testing.T) {
+	// Given one acknowledged ID and a different ID received before its acknowledgement.
+	now := time.Now()
+	observer := newDeliveryObserver(func() time.Time { return now })
+	observer.submit(0)
+	observer.submit(1)
+	observer.publication(0, nil)
+	observer.receive(1)
+	observer.receive(1)
+	require.Equal(t, 1, observer.snapshot().Backlog, "a different receipt cannot hide the acknowledged ID")
+
+	// When the late acknowledgement arrives, followed by the outstanding receipt.
+	observer.publication(1, nil)
+	require.Equal(t, 1, observer.snapshot().Backlog)
+	now = now.Add(time.Second)
+	observer.receive(0)
+
+	// Then acknowledgement ordering creates neither a false peak nor duplicate timing samples.
+	result := observer.snapshot()
+	require.Zero(t, result.Backlog)
+	require.Zero(t, result.Unsettled)
+	require.Equal(t, 1, result.PeakBacklog)
+	require.Equal(t, 2, result.TimedReceipts)
+	require.Equal(t, 1.0, *result.MaxLatencySeconds)
+}
+
+func TestLoadDeliveryObservationReleasesFailedAndCompletedHistory(t *testing.T) {
+	// Given a failed source publication without a destination receipt.
+	observer := newDeliveryObserver(time.Now)
+	observer.submit(0)
+	observer.publication(0, errors.New("fixture failure"))
+	require.Nil(t, observer.snapshot().MaxLatencySeconds, "no receipts is not a measured zero latency")
+	require.Zero(t, observer.snapshot().Unsettled)
+
+	// When many later records are acknowledged and received.
+	for id := 1; id <= 10000; id++ {
+		observer.submit(id)
+		observer.publication(id, nil)
+		observer.receive(id)
+	}
+
+	// Then timing history does not grow with the total number of completed records.
+	result := observer.snapshot()
+	require.Zero(t, result.Backlog)
+	require.Zero(t, result.Unsettled)
+	require.Equal(t, 10000, result.TimedReceipts)
+}
+
+func TestLoadDeliveryObservationSynchronizesCallbacksAndReceipts(t *testing.T) {
+	// Given submissions whose callbacks and receipts can run on different goroutines.
+	observer := newDeliveryObserver(time.Now)
+	const count = 4096
+	for id := range count {
+		observer.submit(id)
+	}
+	var workers sync.WaitGroup
+	workers.Add(2)
+
+	// When callbacks arrive forwards while receipts arrive backwards.
+	go func() {
+		defer workers.Done()
+		for id := range count {
+			observer.publication(id, nil)
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		for id := count - 1; id >= 0; id-- {
+			observer.receive(id)
+			observer.snapshot()
+		}
+	}()
+	workers.Wait()
+
+	// Then each ID is timed once and all state settles without a race.
+	result := observer.snapshot()
+	require.Zero(t, result.Backlog)
+	require.Zero(t, result.Unsettled)
+	require.Equal(t, count, result.TimedReceipts)
+	require.GreaterOrEqual(t, result.PeakBacklog, 0)
+	require.LessOrEqual(t, result.PeakBacklog, count)
+}
+
+func TestLoadDeliveryObservationSeesCallbacksBeforeReportDrain(t *testing.T) {
+	// Given a real producer whose fixture report channel has not yet been drained.
+	a := admin(t)
+	name := topic(t, a, 4)
+	stream := newStreamRecords(name, time.Now().Truncate(time.Millisecond))
+	stream.observer = newDeliveryObserver(time.Now)
+	p := producer(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	reports := make(chan kgo.ProduceResult, 8)
+	stream.publish(t, ctx, p, reports, 8)
+	require.NoError(t, p.Flush(ctx))
+	require.Eventually(t, func() bool { return len(reports) == 8 }, 5*time.Second, time.Millisecond,
+		"all callbacks must reach the undrained report channel")
+
+	// When callbacks complete before the verifier starts consuming.
+	require.Zero(t, stream.acknowledged)
+	require.Equal(t, 8, stream.observer.snapshot().Backlog)
+	c := consumer(t)
+	assign(t, c, name, 4)
+	for stream.unique < 8 {
+		require.NoError(t, ctx.Err())
+		stream.catchUp(t, c, reports)
+	}
+	stream.drainReports(t, reports)
+
+	// Then the peak was measured at callback time and every first receipt has a duration.
+	result := stream.delivery(true)
+	require.True(t, result.ReconciliationComplete)
+	require.Equal(t, 8, result.Observed.PeakBacklog)
+	require.Equal(t, 8, result.Observed.TimedReceipts)
+	require.Zero(t, result.Observed.Backlog)
+	require.Zero(t, result.Observed.Unsettled)
+	require.Positive(t, *result.Observed.MaxLatencySeconds)
 }

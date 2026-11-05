@@ -49,22 +49,24 @@ type streamRecords struct {
 	publishErrors          int
 	next                   [4]int
 	offsets                map[int32]int64
+	observer               *deliveryObserver
 }
 
 type soakDelivery struct {
-	Submitted              int  `json:"submitted"`
-	Published              int  `json:"published"`
-	PublishErrors          int  `json:"publish_errors"`
-	Received               int  `json:"received"`
-	UniqueReceived         int  `json:"unique_received"`
-	Verified               int  `json:"verified"`
-	Missing                *int `json:"missing"`
-	Pending                int  `json:"pending"`
-	Duplicates             int  `json:"duplicates"`
-	Corrupted              int  `json:"corrupted"`
-	Unexpected             int  `json:"unexpected"`
-	Reordered              int  `json:"reordered"`
-	ReconciliationComplete bool `json:"reconciliation_complete"`
+	Submitted              int               `json:"submitted"`
+	Published              int               `json:"published"`
+	PublishErrors          int               `json:"publish_errors"`
+	Received               int               `json:"received"`
+	UniqueReceived         int               `json:"unique_received"`
+	Verified               int               `json:"verified"`
+	Missing                *int              `json:"missing"`
+	Pending                int               `json:"pending"`
+	Duplicates             int               `json:"duplicates"`
+	Corrupted              int               `json:"corrupted"`
+	Unexpected             int               `json:"unexpected"`
+	Reordered              int               `json:"reordered"`
+	ReconciliationComplete bool              `json:"reconciliation_complete"`
+	Observed               *observedDelivery `json:"observed,omitempty"`
 }
 
 func (s *streamRecords) delivery(complete bool) soakDelivery {
@@ -76,6 +78,10 @@ func (s *streamRecords) delivery(complete bool) soakDelivery {
 	if r.ReconciliationComplete {
 		missing := r.Pending
 		r.Missing = &missing
+	}
+	if s.observer != nil {
+		observed := s.observer.snapshot()
+		r.Observed = &observed
 	}
 	return r
 }
@@ -93,7 +99,17 @@ func (s *streamRecords) publish(t *testing.T, ctx context.Context, producer *kgo
 			key = nil
 		}
 		message := &kgo.Record{Topic: s.topic, Partition: int32(id % 4), Key: key, Value: payload, Timestamp: s.stamp, Headers: s.headers}
-		producer.Produce(ctx, message, deliveryReporter(ctx, reports))
+		callback := deliveryReporter(ctx, reports)
+		if observer := s.observer; observer != nil {
+			observer.submit(id)
+			report := callback
+			callback = func(record *kgo.Record, err error) {
+				// Observe before report-channel buffering can delay the acknowledgement.
+				observer.publication(id, err)
+				report(record, err)
+			}
+		}
+		producer.Produce(ctx, message, callback)
 		s.published++
 	}
 }
@@ -139,6 +155,9 @@ func (s *streamRecords) receive(t *testing.T, value []byte) (int, bool) {
 		return id, false
 	}
 	s.unique++
+	if s.observer != nil {
+		s.observer.receive(id)
+	}
 	s.seen[id] = true
 	for s.seen[s.next[part]] {
 		delete(s.seen, s.next[part])

@@ -41,7 +41,9 @@ class SelectedTestsTest(unittest.TestCase):
                     max_sampled_destination_consumer_lag=5, final_destination_consumer_lag=0,
                     delivery=dict(submitted=12, published=12, received=13, unique_received=12,
                         missing=0 if complete else None, duplicates=1, corrupted=0,
-                        unexpected=0, reordered=0, reconciliation_complete=complete))
+                        unexpected=0, reordered=0, reconciliation_complete=complete,
+                        observed=dict(backlog=0, peak_backlog=13, timed_receipts=12 if complete else 0,
+                            max_latency_seconds=0.123 if complete else None, unsettled=0)))
                 (directory / 'soak.metrics.json').write_text(json.dumps(measurement))
 
                 # When GitHub's summary is rendered from the retained metrics.
@@ -51,7 +53,11 @@ class SelectedTestsTest(unittest.TestCase):
 
                 # Then counts, unresolved evidence and the two lag definitions stay visible.
                 self.assertIn('Published (acked)', summary)
-                self.assertIn('Destination lag max / final (records)', summary)
-                self.assertIn('Consumer lag max / final (offsets)', summary)
+                self.assertIn('Destination lag sampled max / final (records)', summary)
+                self.assertIn('Consumer lag sampled max / final (offsets)', summary)
                 self.assertIn(f'| 12 | 12 | 13 | 12 | {0 if complete else "unresolved"} | 1 |', summary)
                 self.assertIn('| 11 / 0 | 5 / 0 |', summary)
+                self.assertIn('Observed peak backlog (records)', summary)
+                self.assertIn('Maximum delivery time (ms)', summary)
+                self.assertIn('| soak | 0 | 13 | 12 | 123.000 | 0 |' if complete else
+                              '| soak | 0 | 13 | 0 | unavailable | 0 |', summary)
