@@ -43,7 +43,13 @@ class SelectedTestsTest(unittest.TestCase):
                         missing=0 if complete else None, duplicates=1, corrupted=0,
                         unexpected=0, reordered=0, reconciliation_complete=complete,
                         observed=dict(backlog=0, peak_backlog=13, timed_receipts=12 if complete else 0,
-                            max_latency_seconds=0.123 if complete else None, unsettled=0)))
+                            max_latency_seconds=0.123 if complete else None, unsettled=0,
+                            p95_latency_seconds=0.01 if complete else None,
+                            p99_latency_seconds=0.02 if complete else None,
+                            p999_latency_seconds=0.03 if complete else None),
+                        integrity=dict(algorithm='sha256-canonical-records-v1', submitted_records=12,
+                            received_records=12, pending_records=0, submitted_sha256='a'*64,
+                            received_sha256='a'*64, matched=True if complete else None)))
                 (directory / 'soak.metrics.json').write_text(json.dumps(measurement))
 
                 # When GitHub's summary is rendered from the retained metrics.
@@ -59,5 +65,18 @@ class SelectedTestsTest(unittest.TestCase):
                 self.assertIn('| 11 / 0 | 5 / 0 |', summary)
                 self.assertIn('Observed peak backlog (records)', summary)
                 self.assertIn('Maximum delivery time (ms)', summary)
-                self.assertIn('| soak | 0 | 13 | 12 | 123.000 | 0 |' if complete else
-                              '| soak | 0 | 13 | 0 | unavailable | 0 |', summary)
+                self.assertIn('p99.9 (ms)', summary)
+                self.assertIn('| soak | 0 | 13 | 12 | 10.000 | 20.000 | 30.000 | 123.000 | 0 |' if complete else
+                              '| soak | 0 | 13 | 0 | unavailable | unavailable | unavailable | unavailable | 0 |', summary)
+                self.assertIn(f'| soak | {True if complete else "unresolved"} | 12 / 12 | 0 | `{"a"*64}` | `{"a"*64}` |', summary)
+
+                # Older artifacts retain their maximum while new measurements remain unavailable.
+                for field in ('p95_latency_seconds', 'p99_latency_seconds', 'p999_latency_seconds'):
+                    del measurement['delivery']['observed'][field]
+                del measurement['delivery']['integrity']
+                (directory / 'soak.metrics.json').write_text(json.dumps(measurement))
+                with redirect_stdout(StringIO()), patch.dict(os.environ, {'GITHUB_STEP_SUMMARY': ''}):
+                    summarize(directory)
+                older_summary = (directory / 'summary.md').read_text()
+                self.assertIn('| unavailable | unavailable | unavailable |', older_summary)
+                self.assertNotIn('### Key, payload and header integrity', older_summary)

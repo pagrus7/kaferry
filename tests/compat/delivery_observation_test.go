@@ -8,11 +8,14 @@ import (
 )
 
 type observedDelivery struct {
-	Backlog           int      `json:"backlog"`
-	PeakBacklog       int      `json:"peak_backlog"`
-	TimedReceipts     int      `json:"timed_receipts"`
-	MaxLatencySeconds *float64 `json:"max_latency_seconds"`
-	Unsettled         int      `json:"unsettled"`
+	Backlog            int      `json:"backlog"`
+	PeakBacklog        int      `json:"peak_backlog"`
+	TimedReceipts      int      `json:"timed_receipts"`
+	MaxLatencySeconds  *float64 `json:"max_latency_seconds"`
+	P95LatencySeconds  *float64 `json:"p95_latency_seconds"`
+	P99LatencySeconds  *float64 `json:"p99_latency_seconds"`
+	P999LatencySeconds *float64 `json:"p999_latency_seconds"`
+	Unsettled          int      `json:"unsettled"`
 }
 
 type deliveryTiming struct {
@@ -30,6 +33,7 @@ type deliveryObserver struct {
 	peakBacklog int
 	receipts    int
 	maxLatency  time.Duration
+	latencies   latencyHistogram
 }
 
 func newDeliveryObserver(now func() time.Time) *deliveryObserver {
@@ -77,7 +81,9 @@ func (o *deliveryObserver) receive(id int) {
 		return
 	}
 	o.receipts++
-	o.maxLatency = max(o.maxLatency, o.now().Sub(entry.start))
+	latency := max(0, o.now().Sub(entry.start))
+	o.maxLatency = max(o.maxLatency, latency)
+	o.latencies.record(latency)
 	if entry.acknowledged {
 		o.backlog--
 		delete(o.pending, id)
@@ -95,6 +101,8 @@ func (o *deliveryObserver) snapshot() observedDelivery {
 	if o.receipts != 0 {
 		seconds := o.maxLatency.Seconds()
 		result.MaxLatencySeconds = &seconds
+		percentiles := o.latencies.percentiles(o.receipts, o.maxLatency)
+		result.P95LatencySeconds, result.P99LatencySeconds, result.P999LatencySeconds = &percentiles[0], &percentiles[1], &percentiles[2]
 	}
 	return result
 }

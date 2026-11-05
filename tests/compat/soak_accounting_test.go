@@ -5,6 +5,7 @@ package compat
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -190,6 +191,9 @@ func TestLoadDeliveryObservationReleasesFailedAndCompletedHistory(t *testing.T) 
 	observer.submit(0)
 	observer.publication(0, errors.New("fixture failure"))
 	require.Nil(t, observer.snapshot().MaxLatencySeconds, "no receipts is not a measured zero latency")
+	require.Nil(t, observer.snapshot().P95LatencySeconds)
+	require.Nil(t, observer.snapshot().P99LatencySeconds)
+	require.Nil(t, observer.snapshot().P999LatencySeconds)
 	require.Zero(t, observer.snapshot().Unsettled)
 
 	// When many later records are acknowledged and received.
@@ -227,7 +231,9 @@ func TestLoadDeliveryObservationSynchronizesCallbacksAndReceipts(t *testing.T) {
 		defer workers.Done()
 		for id := count - 1; id >= 0; id-- {
 			observer.receive(id)
-			observer.snapshot()
+			if id%64 == 0 {
+				observer.snapshot()
+			}
 		}
 	}()
 	completed := make(chan observedDelivery, 1)
@@ -284,4 +290,59 @@ func TestLoadDeliveryObservationSeesCallbacksBeforeReportDrain(t *testing.T) {
 	require.Zero(t, result.Observed.Backlog)
 	require.Zero(t, result.Observed.Unsettled)
 	require.Positive(t, *result.Observed.MaxLatencySeconds)
+	require.True(t, *result.Integrity.Matched)
+	require.Equal(t, 8, result.Integrity.SubmittedRecords)
+	require.Equal(t, 8, result.Integrity.ReceivedRecords)
+}
+
+func TestLoadDeliveryPercentilesCountEveryReceiptAndRetainTheTail(t *testing.T) {
+	// Given 10,000 receipts with known percentile boundaries and a longer maximum.
+	now := time.Now()
+	observer := newDeliveryObserver(func() time.Time { return now })
+	for id := range 10000 {
+		latency := time.Millisecond
+		switch {
+		case id >= 9990:
+			latency = time.Second
+		case id >= 9900:
+			latency = 100 * time.Millisecond
+		case id >= 9500:
+			latency = 10 * time.Millisecond
+		}
+		observer.submit(id)
+		observer.publication(id, nil)
+		now = now.Add(latency)
+		observer.receive(id)
+		observer.receive(id) // A duplicate cannot enter the timing population.
+	}
+
+	// When all first receipts are summarized, then each nearest-rank boundary is retained.
+	result := observer.snapshot()
+	require.Equal(t, 10000, result.TimedReceipts)
+	require.Equal(t, 1.0, *result.MaxLatencySeconds)
+	for i, measured := range []*float64{result.P95LatencySeconds, result.P99LatencySeconds, result.P999LatencySeconds} {
+		want := []float64{0.001, 0.01, 0.1}[i]
+		require.GreaterOrEqual(t, *measured, want)
+		require.Less(t, *measured, want*1.001)
+	}
+}
+
+func TestLoadDeliveryPercentilesCoverZeroSmallPopulationsAndLongDurations(t *testing.T) {
+	// Given populations spanning zero, nanoseconds, bucket boundaries and int64's limit.
+	for _, latency := range []time.Duration{0, 1, 2047, 2048, time.Microsecond * 77, 24 * time.Hour, math.MaxInt64} {
+		t.Run(latency.String(), func(t *testing.T) {
+			now := time.Now()
+			observer := newDeliveryObserver(func() time.Time { return now })
+			observer.submit(0)
+			observer.publication(0, nil)
+			now = now.Add(latency)
+			observer.receive(0)
+
+			// When one receipt is summarized, then all percentiles are capped at its exact maximum.
+			result := observer.snapshot()
+			for _, measured := range []*float64{result.P95LatencySeconds, result.P99LatencySeconds, result.P999LatencySeconds} {
+				require.Equal(t, latency.Seconds(), *measured)
+			}
+		})
+	}
 }

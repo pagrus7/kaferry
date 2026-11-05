@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -180,25 +179,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	if archiveMode {
 		identity := brokerSourceIdentity(t, a, src)
 		scanArchive(t, archive, func(record core.Record) {
-			id, unique := records.receive(t, record.Value)
-			if !unique {
-				return
-			}
-			part := id % 4
-			want := archiveLoadRecord(id)
-			want.Source.Cluster, want.Source.Topic, want.Source.TopicID = identity.Cluster, identity.Topic, identity.TopicID
-			stamp := records.stamp.UnixMilli()
-			want.TimestampMS = &stamp
-			if !reflect.DeepEqual(want, record) {
-				records.corrupted++
-				return
-			}
-			pair := [2]int32{int32(part), int32(part)}
-			if prior, exists := records.order[pair]; exists && id <= prior {
-				records.reordered++
-			}
-			records.order[pair] = max(records.order[pair], id)
-			records.verified++
+			records.verifyArchive(t, record, identity)
 		})
 	} else {
 		ends := destinationOffsets(t, destinationAdmin, dst, 5)
@@ -218,14 +199,18 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	require.Zero(t, delivery.Corrupted, "corrupted destination records")
 	require.Zero(t, delivery.Unexpected, "unexpected destination records")
 	require.Zero(t, delivery.Reordered, "reordered destination records")
+	require.NotNil(t, delivery.Integrity.Matched)
+	require.True(t, *delivery.Integrity.Matched, "submitted and received key/value/header fingerprints differ: %+v", delivery.Integrity)
+	t.Logf("integrity=%s submitted_sha256=%s received_sha256=%s", delivery.Integrity.Algorithm, delivery.Integrity.SubmittedSHA256, delivery.Integrity.ReceivedSHA256)
 	if delivery.Observed != nil {
 		require.Zero(t, delivery.Observed.Backlog, "unreceived acknowledged records")
 		require.Zero(t, delivery.Observed.Unsettled, "unsettled delivery timings")
 		require.Equal(t, delivery.UniqueReceived, delivery.Observed.TimedReceipts, "every unique receipt is timed")
 		if delivery.UniqueReceived > 0 {
 			require.NotNil(t, delivery.Observed.MaxLatencySeconds)
-			t.Logf("observed_peak_backlog=%d timed_receipts=%d max_delivery_seconds=%.6f",
-				delivery.Observed.PeakBacklog, delivery.Observed.TimedReceipts, *delivery.Observed.MaxLatencySeconds)
+			t.Logf("observed_peak_backlog=%d timed_receipts=%d max_delivery_seconds=%.6f p95=%.6f p99=%.6f p99.9=%.6f",
+				delivery.Observed.PeakBacklog, delivery.Observed.TimedReceipts, *delivery.Observed.MaxLatencySeconds,
+				*delivery.Observed.P95LatencySeconds, *delivery.Observed.P99LatencySeconds, *delivery.Observed.P999LatencySeconds)
 		}
 	}
 

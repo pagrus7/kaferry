@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	core "github.com/pagrus7/kaferry/internal/copy"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -50,6 +51,7 @@ type streamRecords struct {
 	next                   [4]int
 	offsets                map[int32]int64
 	observer               *deliveryObserver
+	integrity              *streamIntegrity
 }
 
 type soakDelivery struct {
@@ -67,6 +69,7 @@ type soakDelivery struct {
 	Reordered              int               `json:"reordered"`
 	ReconciliationComplete bool              `json:"reconciliation_complete"`
 	Observed               *observedDelivery `json:"observed,omitempty"`
+	Integrity              integrityEvidence `json:"integrity"`
 }
 
 func (s *streamRecords) delivery(complete bool) soakDelivery {
@@ -83,11 +86,12 @@ func (s *streamRecords) delivery(complete bool) soakDelivery {
 		observed := s.observer.snapshot()
 		r.Observed = &observed
 	}
+	r.Integrity = s.integrity.snapshot(r.ReconciliationComplete, s.published, s.unique)
 	return r
 }
 
 func newStreamRecords(topic string, stamp time.Time) *streamRecords {
-	return &streamRecords{topic: topic, stamp: stamp, headers: []kgo.RecordHeader{{Key: "trace", Value: []byte{0, 255}}, {Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, seen: make(map[int]bool), order: make(map[[2]int32]int), next: [4]int{0, 1, 2, 3}, offsets: make(map[int32]int64)}
+	return &streamRecords{topic: topic, stamp: stamp, headers: []kgo.RecordHeader{{Key: "trace", Value: []byte{0, 255}}, {Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, seen: make(map[int]bool), order: make(map[[2]int32]int), next: [4]int{0, 1, 2, 3}, offsets: make(map[int32]int64), integrity: newStreamIntegrity()}
 }
 func (s *streamRecords) publish(t *testing.T, ctx context.Context, producer *kgo.Client, reports chan kgo.ProduceResult, count int) {
 	t.Helper()
@@ -99,6 +103,7 @@ func (s *streamRecords) publish(t *testing.T, ctx context.Context, producer *kgo
 			key = nil
 		}
 		message := &kgo.Record{Topic: s.topic, Partition: int32(id % 4), Key: key, Value: payload, Timestamp: s.stamp, Headers: s.headers}
+		s.integrity.submit(id, message)
 		callback := deliveryReporter(ctx, reports)
 		if observer := s.observer; observer != nil {
 			observer.submit(id)
@@ -120,6 +125,7 @@ func (s *streamRecords) verify(t *testing.T, record *kgo.Record) {
 	if !unique {
 		return
 	}
+	s.integrity.receive(t, id, record.Key, record.Value, record.Headers)
 	key := []byte(fmt.Sprintf("key-%d", id%257))
 	if id%7 == 0 {
 		key = nil
@@ -130,6 +136,33 @@ func (s *streamRecords) verify(t *testing.T, record *kgo.Record) {
 		return
 	}
 	pair := [2]int32{int32(id % 4), record.Partition}
+	if prior, exists := s.order[pair]; exists && id <= prior {
+		s.reordered++
+	}
+	s.order[pair] = max(s.order[pair], id)
+	s.verified++
+}
+
+func (s *streamRecords) verifyArchive(t *testing.T, record core.Record, identity *core.Provenance) {
+	t.Helper()
+	id, unique := s.receive(t, record.Value)
+	if !unique {
+		return
+	}
+	headers := make([]kgo.RecordHeader, len(record.Headers))
+	for i, header := range record.Headers {
+		headers[i] = kgo.RecordHeader{Key: header.Name, Value: header.Value}
+	}
+	s.integrity.receive(t, id, record.Key, record.Value, headers)
+	want := archiveLoadRecord(id)
+	want.Source.Cluster, want.Source.Topic, want.Source.TopicID = identity.Cluster, identity.Topic, identity.TopicID
+	stamp := s.stamp.UnixMilli()
+	want.TimestampMS = &stamp
+	if !reflect.DeepEqual(want, record) {
+		s.corrupted++
+		return
+	}
+	pair := [2]int32{int32(id % 4), int32(id % 4)}
 	if prior, exists := s.order[pair]; exists && id <= prior {
 		s.reordered++
 	}
