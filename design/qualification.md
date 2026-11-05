@@ -34,7 +34,7 @@ python3 scripts/qualify.py matrix --tier pr
 python3 scripts/qualify.py matrix --tier full --output build-results/full-matrix
 ```
 
-Every tier also runs a two-minute archive-capture endurance smoke. A matrix runs sequentially locally; CI runs up to six cases in parallel on separate hosted runners. Existing output directories are refused so failed evidence cannot be overwritten. Use a new output path for a follow-up run.
+Every tier also runs archive-capture endurance with two minutes of publishing and five minutes without new input. A matrix runs sequentially locally; CI runs up to six cases in parallel on separate hosted runners. Existing output directories are refused so failed evidence cannot be overwritten. Use a new output path for a follow-up run.
 
 Scheduled main runs reuse a suite or matrix tier only when its latest completed attempt passed on the same commit and its test executions are less than 30 days old. Nightly results cannot substitute for the full matrix. Failed or cancelled attempts require retry; skipped runs and rerunning only the aggregate report do not renew evidence age. Missing or unavailable history runs the tests.
 
@@ -89,14 +89,24 @@ The temporary certificate path satisfies Compose interpolation during teardown; 
 
 ## Endurance on a persistent host
 
-Keep a process alive continuously for the duration being claimed. Separate short runs do not add up to continuous uptime. The runner accepts integer seconds, minutes, hours or days, from one minute through seven days; it derives the Go test timeout from that duration.
+Keep a process alive continuously for the duration being claimed. Separate short runs do not add up to continuous uptime. The runner accepts publishing durations from one minute through seven days, adds a five-minute consume-only period and derives the Go test timeout from both periods plus cleanup time.
 
 ```sh
 python3 scripts/qualify.py run soak --duration 24h --rate 50
 python3 scripts/qualify.py run capture --duration 72h --rate 50
 ```
 
-`soak` verifies topic output as it arrives and pauses the separate disposable destination once per minute. `capture` runs continuous topic→archive copying and streams its completed files through verification after shutdown. Replay/file-to-file load tests are finite jobs; their repeated execution is not reported as continuous streaming uptime.
+`soak` verifies topic output as it arrives and pauses the separate disposable destination once per minute during publishing. Both modes keep the same copy process alive for five more minutes after publishing stops. After shutdown, `soak` consumes through the destination's final offsets; `capture` scans all completed archive files. Replay/file-to-file load tests are finite jobs; their repeated execution is not reported as continuous streaming uptime.
+
+Metrics and JSONL samples record submitted input, broker-acknowledged publications, total and unique received records, verified records, pending IDs, duplicates, corruption, unexpected IDs and reordering. Final missing counts are available only after all publications are acknowledged and the final output scan completes; incomplete evidence reports `missing: null`. Failure reports preserve observed counters. Verification stops with partial totals if unresolved ID history exceeds 8,192 entries. Rates include the consume-only period and reconciliation.
+
+Both Kafka and archive verifiers compare complete key/value bytes, ordered headers (including duplicate names and null versus empty values) and timestamps against the fixture. Archive verification also compares source cluster, topic ID, partition and offset. `delivery.integrity` adds SHA-256 evidence from actual submissions and first unique receipts, retaining the byte comparisons. Its `sha256-canonical-records-v1` encoding length-prefixes key/value bytes and ordered header names/values, distinguishes null from empty bytes and includes the header count. Each source partition hashes record fingerprints in logical-ID order; a final SHA-256 combines the four partition digests in partition order. This permits different arrival orders between destination partitions. Only unresolved receipt digests are buffered, with the same 8,192-ID limit. Metrics and GitHub summaries retain both hashes, hashed counts and pending gaps; `matched` is null until final reconciliation. The digest covers key/value/headers; timestamps, provenance, missing records, duplicates and reordering have separate checks. Archive hashes are completed by the scan after shutdown; their live JSONL snapshots remain unresolved.
+
+For Kafka output, destination lag is acknowledged source records minus unique IDs received by the verifier, bounded below by zero. Destination consumer lag is the sum of destination end offsets minus the verifier's next consumed offsets. JSONL samples retain instantaneous lags; metrics retain sampled peaks and, after reconciliation, final values. Consumer-offset sampling pauses while the destination fixture is paused; record-lag sampling continues. Offset distance is a backlog measure, not an independently verified record count. Archive output has no live destination-lag measurement.
+
+Kafka endurance also records `delivery.observed`: source acknowledgements and first unique destination receipts update a synchronized tracker immediately, matching record IDs even when receipt precedes acknowledgement. `peak_backlog` is the maximum number of acknowledged IDs not yet received at those observation points; it is updated per event rather than sampled. `max_latency_seconds` measures every tracked first receipt from test submission, using the same host's monotonic clock. This includes producer queueing, copying and verifier delay; it does not isolate broker arrival or Kaferry processing time. `timed_receipts` states the measurement count; no receipts gives a null maximum. Completed timing state is released, leaving only unsettled IDs. These observations appear in metrics, JSONL snapshots and the GitHub summary. Absent observation fields mean unmeasured. Broker-offset peaks remain sampled, and archive verification after shutdown does not provide these live observations.
+
+`p95_latency_seconds`, `p99_latency_seconds` and `p999_latency_seconds` report the nearest-rank 95th, 99th and 99.9th percentiles over every timed first receipt. A fixed 432 KiB histogram rounds percentile durations upward by less than 0.1%, capped at the exact maximum; it never samples or drops timings. No receipts gives null percentiles. Small populations can put p99.9 at the maximum. The histogram covers nonnegative 64-bit nanosecond durations, and its size does not grow with uptime.
 
 The verifier releases contiguous record IDs and bounds outstanding streaming input; RSS monitoring retains fixed warm/final windows and a peak. JSONL samples go to disk. Checks cover record fidelity, saved progress, worker work caps, a 512 MiB sampled RSS ceiling and at most 32 MiB final-median RSS growth after warm-up. These measurements do not include Go heap or goroutine profiles, and sampling can miss short peaks.
 

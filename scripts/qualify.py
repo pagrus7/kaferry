@@ -28,6 +28,7 @@ RELEASES = json.loads((ROOT / 'tests/qualification/releases.json').read_text())
 SUITES = ('broker', 'auth', 'fault', 'load', 'soak', 'capture', 'migration',
           'model', 'resources', 'integration', 'fuzz', 'benchmark', 'smoke', 'cloud')
 STOP_GRACE = 5
+SOAK_DRAIN_SECONDS = 300
 LAB_LOCK = Path('/tmp/kaferry-qualification.lock')
 VENV = ROOT / ('.cache/qualification/venv-' + str(sys.version_info.major) + '.' + str(sys.version_info.minor))
 
@@ -127,7 +128,7 @@ def suite_command(args, env):
             env['KAFERRY_SOAK_DEST_STALL_CONTAINER'] = 'kaferry-compat-kafka-dr-1'
         else:
             env.pop('KAFERRY_SOAK_DEST_STALL_CONTAINER', None)
-        return prefix + [f'-timeout={args.duration + 300}s', '-tags=integration,load', '-run',
+        return prefix + [f'-timeout={args.duration + SOAK_DRAIN_SECONDS + 300}s', '-tags=integration,load', '-run',
                          '^TestStreamingSoak', './tests/compat'], ['TestStreamingSoakFidelityCommitLagMemoryAndShutdown']
     if args.suite == 'auth':
         env['KAFERRY_AUTH_IMAGE'] = IMAGES[args.source]
@@ -177,6 +178,8 @@ def run_suite(args):
                'go': capture([os.environ.get('GO', 'go'), 'version']),
                'execution': 'checkout component tests' if args.suite in ('model', 'resources', 'fuzz', 'benchmark') else 'CLI scenarios with checkout fixture tests',
                'requested_seconds': args.duration if args.suite in ('soak', 'capture') else None}
+    if args.suite in ('soak', 'capture'):
+        receipt['drain_seconds'] = SOAK_DRAIN_SECONDS
     if args.suite == 'cloud':
         receipt.update(source_version='external', destination_version='external', id='cloud-external-external')
     started = time.monotonic()
@@ -210,7 +213,7 @@ def run_suite(args):
                 if fixtures:
                     logged(compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output, 'brokers-up', env, timeout=180)
                     receipt['broker_images'] = capture(compose + ['images', '--format', 'json'])
-                logged(command, args.output, 'suite', env, timeout=args.duration + 300 if args.suite in ('soak', 'capture') else 1800)
+                logged(command, args.output, 'suite', env, timeout=args.duration + SOAK_DRAIN_SECONDS + 300 if args.suite in ('soak', 'capture') else 1800)
                 if expected:
                     verify_tests((args.output / 'suite.log').read_text(), expected)
                 if args.suite == 'benchmark':

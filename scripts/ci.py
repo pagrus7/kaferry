@@ -99,6 +99,9 @@ def summarize(directory):
         rows += ['', 'Parent tests include subtest time; these durations must not be added together.', '']
     rows.extend(["", "| Test | Result | Records | Records/s | Sampled peak RSS MiB | RSS samples | RSS growth MiB | Peak uncommitted records / bytes | Sampled max lag | Shutdown s |",
                  "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"])
+    deliveries = []
+    observations = []
+    integrities = []
     for filename in sorted(directory.glob("*.metrics.json")):
         r = json.loads(filename.read_text())
         status = "SKIP" if r["skipped"] else "PASS" if r["passed"] else "FAIL"
@@ -106,6 +109,42 @@ def summarize(directory):
                   if "final_median_rss_bytes" in r and "warm_median_rss_bytes" in r else None)
         shutdown = f"{r['shutdown_seconds']:.3f}" if "shutdown_seconds" in r else "—"
         rows.append(f"| {r['test']} | {status} | {r['records']} | {r['records_per_second']:.0f} | {r['sampled_peak_rss_bytes'] / (1 << 20):.1f} | {r.get('rss_samples', '—')} | {f'{growth:.1f}' if growth is not None else '—'} | {r['peak_uncommitted_records']} / {r['peak_uncommitted_bytes']} | {r.get('max_sampled_commit_lag', '—')} | {shutdown} |")
+        if d := r.get('delivery'):
+            missing = d['missing'] if d['missing'] is not None else 'unresolved'
+            deliveries.append(f"| {r['test']} | {d['submitted']} | {d['published']} | {d['received']} | {d['unique_received']} | {missing} | {d['duplicates']} | {d['corrupted']} / {d['unexpected']} / {d['reordered']} | {d['reconciliation_complete']} | {r.get('max_sampled_destination_lag', '—')} / {r.get('final_destination_lag', '—')} | {r.get('max_sampled_destination_consumer_lag', '—')} / {r.get('final_destination_consumer_lag', '—')} |")
+            if observed := d.get('observed'):
+                times = []
+                for field in ('p95_latency_seconds', 'p99_latency_seconds', 'p999_latency_seconds', 'max_latency_seconds'):
+                    seconds = observed.get(field)
+                    times.append('unavailable' if seconds is None else f'{seconds * 1000:.3f}')
+                observations.append(f"| {r['test']} | {observed['backlog']} | {observed['peak_backlog']} | {observed['timed_receipts']} | {' | '.join(times)} | {observed['unsettled']} |")
+            if integrity := d.get('integrity'):
+                matched = 'unresolved' if integrity['matched'] is None else integrity['matched']
+                integrities.append(f"| {r['test']} | {matched} | {integrity['submitted_records']} / {integrity['received_records']} | {integrity['pending_records']} | `{integrity['submitted_sha256']}` | `{integrity['received_sha256']}` |")
+    if deliveries:
+        rows += ['', '### Endurance delivery', '',
+                 '| Test | Submitted | Published (acked) | Received | Unique | Missing | Duplicates | Corrupted / unexpected / reordered | Complete | Destination lag sampled max / final (records) | Consumer lag sampled max / final (offsets) |',
+                 '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: |',
+                 *deliveries, '',
+                 'Missing is unresolved until all source publications are acknowledged and final output is reconciled. '
+                 'Destination lag is acknowledged source records minus unique received IDs; consumer lag is the destination end-offset distance to the verifier. '
+                 'Archive capture verifies output after shutdown and has no live destination-lag measurement.', '']
+    if observations:
+        rows += ['', '### Per-record delivery observations', '',
+                 '| Test | Backlog now | Observed peak backlog (records) | Timed first receipts | p95 (ms) | p99 (ms) | p99.9 (ms) | Maximum delivery time (ms) | Unsettled IDs |',
+                 '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |', *observations, '',
+                 'Backlog changes on each source acknowledgement and first unique destination receipt, matched by record ID. '
+                 'Its maximum is event-based at the test observer. Delivery time runs from test submission to first receipt using one host clock; '
+                 'it includes producer queueing, copying and verifier delay. Percentiles count every timed receipt, use nearest ranks and round up by less than 0.1%; '
+                 'the maximum is exact. Small populations can put p99.9 at the maximum. Broker-offset lag remains sampled.', '']
+    if integrities:
+        rows += ['', '### Key, payload and header integrity', '',
+                 '| Test | SHA-256 match | Hashed submitted / unique received | Pending gaps | Submitted SHA-256 | Received SHA-256 |',
+                 '| --- | --- | ---: | ---: | --- | --- |', *integrities, '',
+                 'SHA-256 fingerprints cover actual submitted and first unique received key/value bytes and ordered headers, '
+                 'preserving duplicate headers and null versus empty bytes. Length-prefixed records are hashed in logical-ID order within each source partition. '
+                 'Match is unresolved until final reconciliation. Byte comparisons also check timestamps and archive provenance; '
+                 'duplicate, missing and ordering checks remain separate.', '']
     benchmark = directory / "benchmark.log"
     if benchmark.exists():
         rows += ["", "### Codec microbenchmarks", "", "| Benchmark | ns/op | B/op | allocs/op |",
