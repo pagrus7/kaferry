@@ -133,7 +133,7 @@ def suite_command(args, env):
                 raise ValueError('endurance uses a fixed --rate 200')
             env.update(KAFERRY_SOAK_PROFILE='application', KAFERRY_ARCHIVE_PAYLOAD='random')
         if args.suite in ('soak', 'endurance'):
-            env['KAFERRY_SOAK_DEST_STALL_CONTAINER'] = 'kaferry-compat-kafka-dr-1'
+            env['KAFERRY_SOAK_DEST_STALL_CONTAINER'] = ('kaferry-endurance-kafka-dr-1' if args.suite == 'endurance' else 'kaferry-compat-kafka-dr-1')
         else:
             env.pop('KAFERRY_SOAK_DEST_STALL_CONTAINER', None)
         return prefix + [f'-timeout={args.duration + SOAK_DRAIN_SECONDS + 300}s', '-tags=integration,load', '-run',
@@ -216,11 +216,13 @@ def run_suite(args):
     if args.suite == 'cloud':
         receipt.update(source_version='external', destination_version='external', id='cloud-external-external')
     started = time.monotonic()
-    env = dict(os.environ, KAFERRY_REPORT_DIR=str(args.output), KAFERRY_TEST_OUTPUT='-json',
-               KAFKA_TEST_BROKERS='127.0.0.1:39092', KAFKA_TEST_DEST_BROKERS='127.0.0.1:40092',
+    project = 'kaferry-endurance' if args.suite == 'endurance' else 'kaferry-compat'
+    source_port, destination_port = (39192, 40192) if args.suite == 'endurance' else (39092, 40092)
+    env = dict(os.environ, KAFERRY_SOURCE_PORT=str(source_port), KAFERRY_DESTINATION_PORT=str(destination_port), KAFERRY_REPORT_DIR=str(args.output), KAFERRY_TEST_OUTPUT='-json',
+               KAFKA_TEST_BROKERS=f'127.0.0.1:{source_port}', KAFKA_TEST_DEST_BROKERS=f'127.0.0.1:{destination_port}',
                KAFKA_FAULT_CONTAINER='kaferry-compat-kafka-1', CGO_ENABLED='1')
     write_json(args.output / 'manifest.json', receipt)
-    compose = ['docker', 'compose', '-p', 'kaferry-compat', '--profile', 'cross-cluster']
+    compose = ['docker', 'compose', '-p', project, '--profile', 'cross-cluster']
     fixtures = args.suite in ('broker', 'fault', 'load', 'soak', 'capture', 'endurance', 'integration') or (args.suite == 'migration' and args.state_contract == 'resume')
     try:
         args.binary = str(Path(args.binary).resolve())
@@ -240,6 +242,8 @@ def run_suite(args):
             raise ValueError('cloud requires --config; this command never provisions a service')
         command, expected = suite_command(args, env)
         receipt.update(command=list(map(str, command)), expected_tests=expected)
+        if fixtures:
+            receipt.update(fixture_project=project, fixture_brokers=[env['KAFKA_TEST_BROKERS'], env['KAFKA_TEST_DEST_BROKERS']])
         write_json(args.output / 'manifest.json', receipt)
         with lab_lock():
             try:

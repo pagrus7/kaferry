@@ -91,7 +91,7 @@ The temporary certificate path satisfies Compose interpolation during teardown; 
 
 Keep a process alive continuously for the duration being claimed. Separate short runs do not add up to continuous uptime. The runner accepts publishing durations from one minute through seven days, adds a five-minute consume-only period and derives the Go test timeout from both periods plus cleanup time.
 
-Prerequisites: Python 3.11+, Go, Docker and Compose, a host that stays awake, and exclusive use of the disposable `kaferry-compat` brokers. Stop other jobs using those brokers before invoking the runner: it starts and removes both clusters, and pauses the destination. Do not run it against fixtures owned by an active workload.
+Prerequisites: Python 3.11+, Go, Docker and Compose, a host that stays awake, and exclusive use of the selected disposable brokers. `endurance` owns the separate `kaferry-endurance` project on localhost ports 39192 and 40192; other fixture suites use `kaferry-compat` on 39092 and 40092. The runner starts and removes its project and pauses its destination. Do not run another job against that project while it is active. Other host workloads can affect measurements.
 
 ```sh
 make build

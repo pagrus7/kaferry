@@ -62,7 +62,7 @@ class MatrixTest(unittest.TestCase):
             self.assertEqual('application' if suite == 'endurance' else None, env.get('KAFERRY_SOAK_PROFILE'))
             if suite == 'endurance':
                 self.assertEqual('random', env['KAFERRY_ARCHIVE_PAYLOAD'])
-                self.assertIn('KAFERRY_SOAK_DEST_STALL_CONTAINER', env)
+                self.assertEqual('kaferry-endurance-kafka-dr-1', env['KAFERRY_SOAK_DEST_STALL_CONTAINER'])
         with self.assertRaisesRegex(ValueError, 'fixed'):
             suite_command(argparse.Namespace(suite='endurance', duration=60, rate=50), {})
 
@@ -82,6 +82,33 @@ class MatrixTest(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError, 'insufficient'):
                             endurance_capacity(86400, output, ['docker', 'compose'], {})
                 self.assertTrue((output / 'capacity.json').is_file(), 'failed preflight must retain evidence')
+
+    def test_endurance_cleanup_owns_only_its_isolated_project(self):
+        @contextmanager
+        def unlocked(): yield
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            binary = directory / 'kaferry'; binary.write_bytes(b'fixture')
+            args = argparse.Namespace(suite='endurance', source='3.9.2', destination='3.9.2',
+                output=directory / 'evidence', binary=str(binary), config=None, duration=1800, rate=200)
+            calls = []
+            def command(command, output, label, env, **kwargs):
+                calls.append((command, label, env.copy()))
+                if label == 'suite': raise KeyboardInterrupt()
+            with patch('qualify.lab_lock', unlocked), patch('qualify.capture', return_value='fixture'), \
+                 patch('qualify.endurance_capacity', return_value={}), patch('qualify.logged', side_effect=command), \
+                 patch('qualify.subprocess.run') as diagnostics:
+                with self.assertRaises(KeyboardInterrupt): run_suite(args)
+            for command, label, env in calls:
+                if label != 'suite': self.assertEqual('kaferry-endurance', command[3])
+                self.assertEqual('127.0.0.1:39192', env['KAFKA_TEST_BROKERS'])
+                self.assertEqual('127.0.0.1:40192', env['KAFKA_TEST_DEST_BROKERS'])
+                self.assertEqual('39192', env['KAFERRY_SOURCE_PORT'])
+                self.assertEqual('40192', env['KAFERRY_DESTINATION_PORT'])
+            self.assertEqual('kaferry-endurance', diagnostics.call_args.args[0][3])
+            receipt = json.loads((args.output / 'manifest.json').read_text())
+            self.assertEqual('kaferry-endurance', receipt['fixture_project'])
+            self.assertEqual('interrupted', receipt['status'])
 
     def test_reports_reject_missing_failed_duplicate_and_mismatched_runs(self):
         for problem in ('missing', 'failed', 'digest', 'commit', 'duplicate', None):

@@ -327,7 +327,11 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 func ownedSoakDestination(t *testing.T, container string) {
 	t.Helper()
 	data, err := exec.Command("docker", "inspect", "--format", "{{index .Config.Labels \"com.docker.compose.project\"}} {{index .Config.Labels \"com.docker.compose.service\"}}", container).Output()
-	if err != nil || strings.TrimSpace(string(data)) != "kaferry-compat kafka-dr" {
+	project := "kaferry-compat"
+	if os.Getenv("KAFERRY_SOAK_PROFILE") == "application" {
+		project = "kaferry-endurance"
+	}
+	if err != nil || strings.TrimSpace(string(data)) != project+" kafka-dr" {
 		t.Fatal("destination stalls require the project's disposable kafka-dr service", err)
 	}
 }
