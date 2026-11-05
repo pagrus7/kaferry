@@ -112,6 +112,10 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	committedPartitions(t, a, group, src, sourcePartitions)
 	records := newPartitionedStreamRecords(src, time.Now().Truncate(time.Millisecond), sourcePartitions)
 	records.nonblocking = endurance
+	if endurance {
+		records.keyRouting = kgo.StickyKeyPartitioner(nil).ForTopic(dst)
+		records.destinationPartitions = destinationPartitions
+	}
 	if !archiveMode {
 		records.observer = newDeliveryObserver(time.Now)
 	}

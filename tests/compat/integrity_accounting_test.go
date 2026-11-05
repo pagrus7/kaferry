@@ -50,6 +50,30 @@ func TestLoadEndurancePartitionedFidelityAndHistory(t *testing.T) {
 	}
 }
 
+func TestLoadEnduranceRejectsWrongKeyRouting(t *testing.T) {
+	// Given an intact keyed record whose source placement is independent of its key route.
+	for _, wrong := range []bool{false, true} {
+		stream := newPartitionedStreamRecords("fixture", time.Now().Truncate(time.Millisecond), 24)
+		stream.keyRouting = kgo.StickyKeyPartitioner(nil).ForTopic("destination")
+		stream.destinationPartitions = 32
+		stream.published = 2
+		record := streamFixtureRecord(1, stream.stamp)
+		record.Partition = int32(stream.keyRouting.Partition(record, 32))
+		if wrong {
+			record.Partition = (record.Partition + 1) % 32
+		}
+		// When only the route changes, then byte/hash fidelity cannot hide the failure.
+		stream.verify(t, record)
+		if wrong {
+			require.Equal(t, 1, stream.corrupted)
+			require.Zero(t, stream.verified)
+		} else {
+			require.Zero(t, stream.corrupted)
+			require.Equal(t, 1, stream.verified)
+		}
+	}
+}
+
 func TestLoadIntegrityFingerprintPreservesFieldBoundariesAndNullBytes(t *testing.T) {
 	// Given records that naive concatenation or header maps would conflate.
 	pairs := [][2]*kgo.Record{

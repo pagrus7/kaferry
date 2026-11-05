@@ -69,7 +69,9 @@ func (e *enduranceEvidence) check(elapsed, duration time.Duration, submitted, ac
 	if !e.endRecorded && elapsed >= duration {
 		e.SubmittedAtEnd, e.AcknowledgedAtEnd, e.endRecorded = submitted, acknowledged, true
 	}
-	if at-e.lastAt >= time.Minute || (at == duration && e.lastAt < duration) {
+	// The final window includes records due exactly at the publishing boundary.
+	// Let those records settle during grace before judging that window.
+	if (at < duration && at-e.lastAt >= time.Minute) || (elapsed >= duration+5*time.Second && e.lastAt < duration) {
 		planned := expected - e.lastExpected
 		ratio := float64(acknowledged-e.lastAcknowledged) / float64(planned)
 		e.Windows++
@@ -101,7 +103,7 @@ func TestLoadEnduranceRejectsUnderloadedRuns(t *testing.T) {
 		t.Run(counts.name, func(t *testing.T) {
 			e := newEnduranceEvidence(duration)
 			// When backpressure lowers input, then fidelity alone cannot qualify the run.
-			require.ErrorContains(t, e.check(duration, duration, counts.submitted, counts.acknowledged), "load invalid")
+			require.ErrorContains(t, e.check(duration+5*time.Second, duration, counts.submitted, counts.acknowledged), "load invalid")
 			require.False(t, e.LoadValidated)
 		})
 	}
@@ -112,6 +114,22 @@ func TestLoadEnduranceRejectsUnderloadedRuns(t *testing.T) {
 	e = newEnduranceEvidence(duration)
 	require.NoError(t, e.check(duration, duration, 12399, 12399))
 	require.ErrorContains(t, e.check(duration+5*time.Second, duration, 12399, 12399), "all scheduled input")
+}
+
+func TestLoadEnduranceAllowsFinalBurstToSettleDuringGrace(t *testing.T) {
+	// Given the last 400-record burst is due exactly at a 70-second publishing boundary.
+	duration := 70 * time.Second
+	e := newEnduranceEvidence(duration)
+	require.NoError(t, e.check(time.Minute, duration, 12400, 12400))
+	// When that burst has not yet been submitted, then the final window waits for grace.
+	require.NoError(t, e.check(duration, duration, 14400, 14400))
+	require.False(t, e.LoadValidated)
+	require.Equal(t, 1, e.Windows)
+	// Then the last burst must be fully acknowledged before the run can qualify.
+	require.NoError(t, e.check(duration+5*time.Second, duration, 14800, 14800))
+	require.True(t, e.LoadValidated)
+	require.Equal(t, 2, e.Windows)
+	require.Equal(t, 1.0, e.MinWindowRatio)
 }
 
 func TestLoadEnduranceTracksBurstsWindowsAndFinalAcknowledgements(t *testing.T) {

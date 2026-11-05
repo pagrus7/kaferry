@@ -51,6 +51,8 @@ type streamRecords struct {
 	next                   []int
 	offsets                map[int32]int64
 	nonblocking            bool
+	keyRouting             kgo.TopicPartitioner
+	destinationPartitions  int
 	observer               *deliveryObserver
 	integrity              *streamIntegrity
 }
@@ -145,6 +147,10 @@ func (s *streamRecords) verify(t *testing.T, record *kgo.Record) {
 	}
 	if !reflect.DeepEqual(key, record.Key) || !record.Timestamp.Equal(s.stamp) ||
 		!reflect.DeepEqual(s.headers, record.Headers) || !reflect.DeepEqual(archiveLoadRecordPartitions(id, len(s.next)).Value, record.Value) {
+		s.corrupted++
+		return
+	}
+	if s.keyRouting != nil && record.Key != nil && int(record.Partition) != s.keyRouting.Partition(record, s.destinationPartitions) {
 		s.corrupted++
 		return
 	}
