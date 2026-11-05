@@ -50,6 +50,10 @@ class SelectedTestsTest(unittest.TestCase):
                         integrity=dict(algorithm='sha256-canonical-records-v1', submitted_records=12,
                             received_records=12, pending_records=0, submitted_sha256='a'*64,
                             received_sha256='a'*64, matched=True if complete else None)))
+                measurement['endurance'] = dict(profile='application-24x32-v1', target_records_per_second=200,
+                    target_records=12400, submitted_at_publish_end=12399, acknowledged_at_publish_end=12398,
+                    acknowledged_after_grace=12400 if complete else 11000, min_acknowledged_window_ratio=.999,
+                    load_validated=complete, max_scheduling_debt_records=400)
                 (directory / 'soak.metrics.json').write_text(json.dumps(measurement))
 
                 # When GitHub's summary is rendered from the retained metrics.
@@ -59,6 +63,8 @@ class SelectedTestsTest(unittest.TestCase):
 
                 # Then counts, unresolved evidence and the two lag definitions stay visible.
                 self.assertIn('Published (acked)', summary)
+                self.assertIn('### Application endurance load', summary)
+                self.assertIn(f'| application-24x32-v1 | 200 | 12400 | 12399 / 12398 | {12400 if complete else 11000} | 0.999 | {complete} | 400 |', summary)
                 self.assertIn('Destination lag sampled max / final (records)', summary)
                 self.assertIn('Consumer lag sampled max / final (offsets)', summary)
                 self.assertIn(f'| 12 | 12 | 13 | 12 | {0 if complete else "unresolved"} | 1 |', summary)

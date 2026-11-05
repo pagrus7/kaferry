@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import signal
 import subprocess
 import sys
@@ -25,10 +26,11 @@ ROOT = Path(__file__).resolve().parents[1]
 IMAGES = json.loads((ROOT / 'tests/qualification/matrix.json').read_text())
 VERSIONS = list(IMAGES)
 RELEASES = json.loads((ROOT / 'tests/qualification/releases.json').read_text())
-SUITES = ('broker', 'auth', 'fault', 'load', 'soak', 'capture', 'migration',
+SUITES = ('broker', 'auth', 'fault', 'load', 'soak', 'capture', 'endurance', 'migration',
           'model', 'resources', 'integration', 'fuzz', 'benchmark', 'smoke', 'cloud')
 STOP_GRACE = 5
 SOAK_DRAIN_SECONDS = 300
+STREAMING_SUITES = ('soak', 'capture', 'endurance')
 LAB_LOCK = Path('/tmp/kaferry-qualification.lock')
 VENV = ROOT / ('.cache/qualification/venv-' + str(sys.version_info.major) + '.' + str(sys.version_info.minor))
 
@@ -121,10 +123,16 @@ def suite_command(args, env):
         return [python, 'scripts/broker_probe.py', '--binary', args.binary, '--output', str(args.output),
                 '--source', env['KAFKA_TEST_BROKERS'], '--destination', env['KAFKA_TEST_DEST_BROKERS']] + (
                     ['--config', str(args.config.resolve())] if args.config else []), []
-    if args.suite in ('soak', 'capture'):
+    if args.suite in STREAMING_SUITES:
+        # Clear inherited workload selectors so the receipt describes this run.
+        env.pop('KAFERRY_SOAK_PROFILE', None)
         env.update(KAFERRY_SOAK_DURATION=f'{args.duration}s', KAFERRY_SOAK_RATE=str(args.rate),
                    KAFERRY_SOAK_MODE='archive' if args.suite == 'capture' else 'kafka')
-        if args.suite == 'soak':
+        if args.suite == 'endurance':
+            if args.rate != 200:
+                raise ValueError('endurance uses a fixed --rate 200')
+            env.update(KAFERRY_SOAK_PROFILE='application', KAFERRY_ARCHIVE_PAYLOAD='random')
+        if args.suite in ('soak', 'endurance'):
             env['KAFERRY_SOAK_DEST_STALL_CONTAINER'] = 'kaferry-compat-kafka-dr-1'
         else:
             env.pop('KAFERRY_SOAK_DEST_STALL_CONTAINER', None)
@@ -164,6 +172,27 @@ def suite_command(args, env):
         'TestCrashResumeReconcilesRetainedRecords']
 
 
+def endurance_capacity(seconds, output, compose, env):
+    # No compression credit. Require the combined allowance on each filesystem
+    # because Docker may put both writable container layers on the same disk.
+    bursts = 1 + (seconds - 10) // 60
+    records = seconds * 200 + bursts * 400
+    broker_bytes = records * (5120 + 256) * 3 + 4 * 1024**3
+    evidence_bytes = max(1024**3, seconds * 8192)
+    free = {}
+    for service in ('kafka', 'kafka-dr'):
+        result = subprocess.check_output(compose + ['exec', '-T', service, 'df', '-Pk',
+            '/tmp/kaferry-logs'], env=env, cwd=ROOT, text=True, timeout=15)
+        free[service] = int(result.splitlines()[-1].split()[3]) * 1024
+    evidence_free = shutil.disk_usage(output).free
+    capacity = dict(records=records, required_broker_bytes=broker_bytes,
+        broker_free_bytes=free, required_evidence_bytes=evidence_bytes, evidence_free_bytes=evidence_free)
+    write_json(output / 'capacity.json', capacity)
+    if min(free.values()) < broker_bytes or evidence_free < evidence_bytes:
+        raise ValueError('insufficient endurance disk allowance; inspect capacity.json')
+    return capacity
+
+
 def run_suite(args):
     if args.suite == 'auth':
         args.destination = args.source
@@ -177,9 +206,13 @@ def run_suite(args):
                'started_at': datetime.now(timezone.utc).isoformat(), 'status': 'running',
                'go': capture([os.environ.get('GO', 'go'), 'version']),
                'execution': 'checkout component tests' if args.suite in ('model', 'resources', 'fuzz', 'benchmark') else 'CLI scenarios with checkout fixture tests',
-               'requested_seconds': args.duration if args.suite in ('soak', 'capture') else None}
-    if args.suite in ('soak', 'capture'):
+               'requested_seconds': args.duration if args.suite in STREAMING_SUITES else None}
+    if args.suite in STREAMING_SUITES:
         receipt['drain_seconds'] = SOAK_DRAIN_SECONDS
+    if args.suite == 'endurance':
+        receipt['workload'] = dict(profile='application-24x32-v1', processes=1, routing='KEY',
+            source_partitions=24, destination_partitions=32, replication_factor=1,
+            rate=200, payload='random', duration_claim='endurance' if args.duration >= 86400 else 'rehearsal')
     if args.suite == 'cloud':
         receipt.update(source_version='external', destination_version='external', id='cloud-external-external')
     started = time.monotonic()
@@ -188,7 +221,7 @@ def run_suite(args):
                KAFKA_FAULT_CONTAINER='kaferry-compat-kafka-1', CGO_ENABLED='1')
     write_json(args.output / 'manifest.json', receipt)
     compose = ['docker', 'compose', '-p', 'kaferry-compat', '--profile', 'cross-cluster']
-    fixtures = args.suite in ('broker', 'fault', 'load', 'soak', 'capture', 'integration') or (args.suite == 'migration' and args.state_contract == 'resume')
+    fixtures = args.suite in ('broker', 'fault', 'load', 'soak', 'capture', 'endurance', 'integration') or (args.suite == 'migration' and args.state_contract == 'resume')
     try:
         args.binary = str(Path(args.binary).resolve())
         if not Path(args.binary).is_file():
@@ -213,7 +246,10 @@ def run_suite(args):
                 if fixtures:
                     logged(compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output, 'brokers-up', env, timeout=180)
                     receipt['broker_images'] = capture(compose + ['images', '--format', 'json'])
-                logged(command, args.output, 'suite', env, timeout=args.duration + SOAK_DRAIN_SECONDS + 300 if args.suite in ('soak', 'capture') else 1800)
+                if args.suite == 'endurance':
+                    receipt['capacity'] = endurance_capacity(args.duration, args.output, compose, env)
+                    write_json(args.output / 'manifest.json', receipt)
+                logged(command, args.output, 'suite', env, timeout=args.duration + SOAK_DRAIN_SECONDS + 300 if args.suite in STREAMING_SUITES else 1800)
                 if expected:
                     verify_tests((args.output / 'suite.log').read_text(), expected)
                 if args.suite == 'benchmark':
@@ -357,8 +393,8 @@ def main(argv=None):
         running.add_argument('--previous-binary', type=Path)
         running.add_argument('--state-contract', choices=('resume', 'reject'), default='resume')
         running.add_argument('--config', type=Path)
-        running.add_argument('--duration', type=duration, default=120)
-        running.add_argument('--rate', type=int, choices=range(1, 10001), metavar='1..10000', default=50)
+        running.add_argument('--duration', type=duration)
+        running.add_argument('--rate', type=int, choices=range(1, 10001), metavar='1..10000')
         running.add_argument('--output', type=Path, default=Path('build-results/qualification') /
             (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]))
     verifying = sub.add_parser('verify-release', help='validate full matrix evidence against an exact release archive')
@@ -369,6 +405,10 @@ def main(argv=None):
     reporting.add_argument('directory', type=Path)
     reporting.add_argument('--tier', choices=('pr', 'nightly', 'full'), default='pr')
     args = parser.parse_args(argv)
+    if args.action in ('run', 'matrix', 'releases'):
+        endurance = getattr(args, 'suite', None) == 'endurance'
+        args.duration = args.duration if args.duration is not None else (86400 if endurance else 120)
+        args.rate = args.rate if args.rate is not None else (200 if endurance else 50)
     os.chdir(ROOT)
     if args.action == 'setup':
         if sys.version_info < (3, 11):

@@ -25,9 +25,19 @@ const soakDrainDuration = 5 * time.Minute
 func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	// Given
 	report := newLoadReport(t, "soak")
-	report.SourcePartitions, report.DestinationPartitions = 4, 5
+	sourcePartitions, destinationPartitions := 4, 5
+	profile := os.Getenv("KAFERRY_SOAK_PROFILE")
+	require.True(t, profile == "" || profile == "application", "unknown soak profile")
+	endurance := profile == "application"
+	if endurance {
+		sourcePartitions, destinationPartitions = 24, 32
+	}
+	report.SourcePartitions, report.DestinationPartitions = sourcePartitions, destinationPartitions
 	report.WorkerRecordCap, report.WorkerByteCap = 1024, 128<<20
 	duration := 2 * time.Minute
+	if endurance {
+		duration = 24 * time.Hour
+	}
 	if value := os.Getenv("KAFERRY_SOAK_DURATION"); value != "" {
 		var err error
 		duration, err = time.ParseDuration(value)
@@ -39,11 +49,21 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	require.True(t, mode == "" || mode == "kafka" || mode == "archive", "unknown soak mode")
 	archiveMode := mode == "archive"
 	rate := 800
+	if endurance {
+		rate = 200
+	}
 	if value := os.Getenv("KAFERRY_SOAK_RATE"); value != "" {
 		var err error
 		rate, err = strconv.Atoi(value)
 		require.NoError(t, err)
 		require.True(t, rate > 0 && rate <= 10000, "soak rate must be 1..10000")
+	}
+	if endurance {
+		require.False(t, archiveMode, "application endurance requires Kafka output")
+		require.Equal(t, 200, rate, "application endurance uses a fixed 200 records/second")
+		require.Equal(t, "random", os.Getenv("KAFERRY_ARCHIVE_PAYLOAD"), "application endurance requires high entropy payloads")
+		require.NotEmpty(t, os.Getenv("KAFERRY_SOAK_DEST_STALL_CONTAINER"), "application endurance requires destination stalls")
+		report.Endurance = newEnduranceEvidence(duration)
 	}
 	require.Less(t, duration.Seconds()*float64(rate)*1.05, float64(1<<32)-8192, "requested stream exceeds the fixture ID range")
 	a := admin(t)
@@ -61,12 +81,21 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		}
 		destinationAdmin = kadm.NewClient(fixtureClient(t, destinationBrokers))
 	}
-	src, dst := topic(t, a, 4), topic(t, destinationAdmin, 5)
+	src, dst := topic(t, a, sourcePartitions), topic(t, destinationAdmin, destinationPartitions)
+	if endurance {
+		// Retain all input/output until final reconciliation, even for seven-day runs.
+		for _, fixture := range []struct {
+			admin *kadm.Client
+			topic string
+		}{{a, src}, {destinationAdmin, dst}} {
+			alterTopicConfig(t, fixture.admin, fixture.topic, map[string]string{"retention.ms": "-1", "retention.bytes": "-1"})
+		}
+	}
 	group := src + "-soak"
-	p := producer(t)
+	p := producer(t, kgo.MaxBufferedRecords(2048))
 	reports := make(chan kgo.ProduceResult, 4096)
 	c := fixtureClient(t, destinationBrokers, kgo.FetchIsolationLevel(kgo.ReadCommitted()))
-	assign(t, c, dst, 5)
+	assign(t, c, dst, destinationPartitions)
 	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'), CONNECTION destination AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s@destination' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", broker(t), destinationBrokers, dst, src, group)
 	archive := filepath.Join(t.TempDir(), "captured")
 	if archiveMode {
@@ -74,14 +103,15 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		statement = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", broker(t), archive, src, group)
 	}
 	configPath := filepath.Join(t.TempDir(), "soak.toml")
-	require.NoError(t, os.WriteFile(configPath, []byte("[worker]\nrecord_cap=1024\npartition_record_cap=256\n"), 0600))
+	require.NoError(t, os.WriteFile(configPath, []byte("[worker]\nrecord_cap=1024\npartition_record_cap=256\nprogress_interval='0'\n"), 0600))
 	ctx, cancel := context.WithTimeout(context.Background(), duration+soakDrainDuration+4*time.Minute)
 	defer cancel()
 	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", configPath)
 	report.cli = process
-	waitMembers(t, a, group, 1, 4, nil)
-	committedPartitions(t, a, group, src, 4)
-	records := newStreamRecords(src, time.Now().Truncate(time.Millisecond))
+	waitMembers(t, a, group, 1, sourcePartitions, nil)
+	committedPartitions(t, a, group, src, sourcePartitions)
+	records := newPartitionedStreamRecords(src, time.Now().Truncate(time.Millisecond), sourcePartitions)
+	records.nonblocking = endurance
 	if !archiveMode {
 		records.observer = newDeliveryObserver(time.Now)
 	}
@@ -91,7 +121,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	bursts := 0
 	stalls := &destinationStalls{container: stall, next: nextStall}
 	t.Cleanup(func() { stalls.recover(t) })
-	monitor := soakMonitor{next: nextSample, kafka: !archiveMode}
+	monitor := soakMonitor{next: nextSample, kafka: !archiveMode, endurance: report.Endurance}
 	reconciled := false
 	report.PublishingSeconds, report.DrainSeconds = duration.Seconds(), soakDrainDuration.Seconds()
 	t.Cleanup(func() {
@@ -139,8 +169,47 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		default:
 		}
 		now := time.Now()
+		wasPaused := stalls.paused
 		stalls.step(t, now, now.Sub(start) < duration)
-		if now.Sub(start) < duration && !now.Before(nextPublish) && (archiveMode || records.published-records.contiguous < 8192) && records.published-records.acknowledged < 8192 {
+		if endurance && wasPaused && !stalls.paused {
+			report.Endurance.recoveryAt = time.Now()
+		}
+		if endurance {
+			e := report.Endurance
+			if !e.endRecorded && now.Sub(start) >= duration {
+				_, loadedFinal, _ := memoryEnvelope(t, monitor.rss)
+				e.LoadedFinalMedianRSSBytes = loadedFinal * 1024
+			}
+			require.NoError(t, e.check(now.Sub(start), duration, records.published, records.acknowledged))
+			require.Zero(t, records.publishErrors, "endurance producer rejected input")
+			if !e.recoveryAt.IsZero() {
+				recovery := time.Since(e.recoveryAt)
+				require.LessOrEqual(t, recovery, 15*time.Second, "backlog failed to recover after destination stall")
+				if records.acknowledged-records.unique <= rate/10 {
+					e.MaxRecoverySeconds = max(e.MaxRecoverySeconds, recovery.Seconds())
+					e.Recoveries++
+					e.recoveryAt = time.Time{}
+				}
+			}
+		}
+		if endurance && now.Sub(start) < duration+5*time.Second {
+			e := report.Endurance
+			if records.published-records.contiguous >= 8192 {
+				e.VerifierGates++
+			}
+			if records.published-records.acknowledged >= 8192 {
+				e.ProducerGates++
+			}
+			count := min(512, enduranceScheduled(min(now.Sub(start), duration))-records.published,
+				8192-(records.published-records.contiguous), 8192-(records.published-records.acknowledged))
+			if count > 0 {
+				publishStart := time.Now()
+				records.publish(t, ctx, p, reports, count)
+				e.ProducerSeconds += time.Since(publishStart).Seconds()
+			}
+			bursts = max(0, (enduranceScheduled(min(now.Sub(start), duration))-int(min(now.Sub(start), duration)*200/time.Second))/400)
+		}
+		if !endurance && now.Sub(start) < duration && !now.Before(nextPublish) && (archiveMode || records.published-records.contiguous < 8192) && records.published-records.acknowledged < 8192 {
 			count := batch
 			if !now.Before(nextBurst) {
 				count = min(2048, rate*2)
@@ -150,17 +219,28 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 			records.publish(t, ctx, p, reports, count)
 			nextPublish = now.Add(period)
 		}
+		verifyStart := time.Now()
 		if archiveMode {
 			records.drainReports(t, reports)
 			time.Sleep(5 * time.Millisecond)
 		} else {
 			records.catchUp(t, c, reports)
 		}
+		if endurance {
+			report.Endurance.VerifierSeconds += time.Since(verifyStart).Seconds()
+		}
+		sampleStart := time.Now()
 		var destinationEnds map[int32]int64
 		if !archiveMode && !stalls.paused && !now.Before(monitor.next) {
-			destinationEnds = destinationOffsets(t, destinationAdmin, dst, 5)
+			destinationEnds = destinationOffsets(t, destinationAdmin, dst, destinationPartitions)
 		}
 		monitor.sample(t, now, process.pid(), a, group, src, records, destinationEnds)
+		if endurance {
+			report.Endurance.SamplingSeconds += time.Since(sampleStart).Seconds()
+		}
+		if endurance && now.Sub(start) >= duration+15*time.Second {
+			require.Equal(t, records.published, records.unique, "backlog remains fifteen seconds after input stopped")
+		}
 	}
 
 	// When the full consume-only period ends, stop copying and reconcile the final output.
@@ -171,10 +251,16 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		if err := process.wait(); err != nil {
 			t.Fatalf("soak shutdown: %v %s", err, process.logs())
 		}
-	case <-ctx.Done():
-		t.Fatal("soak shutdown timed out")
+	case <-time.After(30 * time.Second):
+		t.Fatal("soak shutdown timed out after 30s")
 	}
 	shutdownTime := time.Since(shutdown)
+	if endurance {
+		require.True(t, report.Endurance.LoadValidated, "load verification did not finish")
+		require.Equal(t, 1+int((duration-30*time.Second-time.Nanosecond)/time.Minute), stalls.count,
+			"destination stall schedule was not completed")
+		require.Equal(t, stalls.count, report.Endurance.Recoveries, "not all stalls recovered")
+	}
 	report.ElapsedSeconds = time.Since(start).Seconds()
 	if archiveMode {
 		identity := brokerSourceIdentity(t, a, src)
@@ -182,7 +268,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 			records.verifyArchive(t, record, identity)
 		})
 	} else {
-		ends := destinationOffsets(t, destinationAdmin, dst, 5)
+		ends := destinationOffsets(t, destinationAdmin, dst, destinationPartitions)
 		for destinationOffsetLag(ends, records.offsets) != 0 {
 			require.NoError(t, ctx.Err(), "destination verifier did not reach the final offsets")
 			records.catchUp(t, c, reports)
@@ -216,7 +302,9 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 
 	// Then shutdown saves all progress, preserves fidelity and stays within work/RSS caps.
 	committed := 0
-	for _, part := range committedPartitions(t, a, group, src, 4) {
+	for _, part := range committedPartitions(t, a, group, src, sourcePartitions) {
+		require.Equal(t, int64((records.published+sourcePartitions-1-int(part.Partition))/sourcePartitions), part.At,
+			"shutdown saved the wrong next offset for source partition %d", part.Partition)
 		committed += int(part.At)
 	}
 	require.Equal(t, records.published, committed, "shutdown did not commit all verified records")
@@ -266,7 +354,7 @@ func (s *destinationStalls) step(t *testing.T, now time.Time, publishing bool) {
 		s.paused = true
 		s.count++
 		s.until = time.Now().Add(time.Second)
-		s.next = now.Add(time.Minute)
+		s.next = s.next.Add(time.Minute)
 	}
 	if s.paused && !now.Before(s.until) {
 		s.recover(t)
@@ -274,6 +362,7 @@ func (s *destinationStalls) step(t *testing.T, now time.Time, publishing bool) {
 }
 
 type soakMonitor struct {
+	endurance                  *enduranceEvidence
 	next                       time.Time
 	rss                        []int64
 	peak                       int64
@@ -303,7 +392,7 @@ func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *kadm.C
 	}
 	m.peak = max(m.peak, rss)
 	committed := 0
-	for _, part := range committedPartitions(t, admin, group, source, 4) {
+	for _, part := range committedPartitions(t, admin, group, source, len(records.next)) {
 		committed += int(part.At)
 	}
 	lag := records.published - committed
@@ -311,6 +400,9 @@ func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *kadm.C
 		t.Fatal("committed work never published to the source")
 	}
 	sample := map[string]any{"at": now.UTC(), "rss_kib": rss, "commit_lag": lag, "submitted": records.published, "delivery": records.delivery(false)}
+	if m.endurance != nil {
+		sample["endurance"] = m.endurance
+	}
 	if m.kafka {
 		destinationLag := max(0, records.acknowledged-records.unique)
 		m.maxDestinationLag = max(m.maxDestinationLag, destinationLag)
