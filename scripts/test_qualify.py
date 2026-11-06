@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import signal
@@ -84,6 +85,34 @@ class MatrixTest(unittest.TestCase):
             result = json.loads((args.output/'parallel.json').read_text())
             self.assertEqual('failed', result['status'])
             self.assertEqual({'failed', 'interrupted'}, {case['status'] for case in result['cases']})
+
+    def test_interrupt_during_second_submission_cancels_started_worker(self):
+        # Given an executor whose first job runs before the next submission is interrupted.
+        with tempfile.TemporaryDirectory() as temporary, ThreadPoolExecutor(max_workers=2) as pool:
+            root = Path(temporary)
+            binary = root/'candidate'; binary.write_bytes(b'candidate')
+            args = argparse.Namespace(output=root/'run', companion='recovery', duration=60,
+                companion_duration=60, binary=str(binary), source='3.9.2', destination='3.9.2')
+            started, stopped = threading.Event(), threading.Event()
+            def run(args, *, fixture, cancelled):
+                args.output.mkdir()
+                started.set()
+                if cancelled.wait(2): stopped.set()
+                (args.output/'manifest.json').write_text(json.dumps({'suite': args.suite, 'status': 'interrupted'}))
+            submit = pool.submit
+            def interrupt(*args, **kwargs):
+                if started.is_set(): raise KeyboardInterrupt()
+                future = submit(*args, **kwargs)
+                self.assertTrue(started.wait(2))
+                return future
+            # When submission is interrupted, then the first worker is cancelled before pool exit waits.
+            with patch('qualify.ThreadPoolExecutor', return_value=pool), patch.object(pool, 'submit', side_effect=interrupt), \
+                 patch('qualify.LAB_LOCK', root/'host.lock'), patch('qualify.run_suite', side_effect=run):
+                with self.assertRaises(KeyboardInterrupt): parallel_run(args)
+            self.assertTrue(stopped.is_set(), 'started worker was left running after interruption')
+            result = json.loads((args.output/'parallel.json').read_text())
+            self.assertEqual('interrupted', result['status'])
+            self.assertEqual({'interrupted', 'missing'}, {case['status'] for case in result['cases']})
 
     def test_parallel_capacity_rejects_space_that_only_fits_one_run(self):
         required = parallel_allowance(86400, 'capture', 86400)

@@ -256,8 +256,8 @@ def parallel_run(args):
     write_json(args.output / 'parallel.json', result)
     try:
         with lab_lock(), ThreadPoolExecutor(max_workers=2) as pool:
-            futures = {pool.submit(run_suite, case, fixture=fixture, cancelled=cancelled): case for case, fixture in jobs}
             try:
+                futures = {pool.submit(run_suite, case, fixture=fixture, cancelled=cancelled): case for case, fixture in jobs}
                 for future in as_completed(futures):
                     future.result()
             except BaseException:
