@@ -157,13 +157,15 @@ To package an older run, or retry report generation into a new directory:
 python3 scripts/endurance_results.py build-results/endurance-24h --output build-results/endurance-package
 ```
 
-For a report visible directly from the README, copy the generated Markdown and JSON together to `docs/endurance-results.md` and `docs/endurance-results.json`, then review and commit them. Keep the measured version, source, date, workload and limitations in the report. The runner never edits tracked documentation. [Current results](../docs/endurance-results.md).
+For a report visible directly from the README, copy the generated Markdown and JSON together into a dated directory under `docs/endurance/`, then add its report link to [the results index](../docs/endurance-results.md). Review and commit these small files; keep logs and sample streams in the evidence archive. Keep the measured version, source, date, workload and limitations in the report. The runner never edits tracked documentation.
 
 To publish downloadable evidence, run against a verified release executable using `--binary` from the start. After reviewing the package, use an authenticated `gh` CLI with permission to upload release assets:
 
 ```sh
 python3 scripts/endurance_results.py build-results/endurance-24h --publish vX.Y.Z
 ```
+
+If you prepared a custom package directory, pass the same `--output` when publishing: `python3 scripts/endurance_results.py build-results/endurance-24h --output build-results/endurance-package --publish vX.Y.Z`.
 
 The command downloads the selected release's platform archive and requires its executable SHA-256 to match the measured binary. It also checks the package checksums and requires a clean fixture checkout. Runs of a newer development executable cannot be published as an older release's evidence. `--repo OWNER/REPO` selects another repository. Failed runs with measured identity can be published and retain their failure status; preflight failures without metrics cannot be uploaded.
 

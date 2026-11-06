@@ -8,6 +8,7 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+from contextlib import redirect_stdout
 
 from endurance_results import prepare, publish
 
@@ -108,6 +109,26 @@ class PublicationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'checksums'):
                 publish(package, 'v0.12.0', 'pagrus7/kaferry')
             run.assert_not_called()
+
+    def test_early_failure_renders_unmeasured_resources_as_unavailable(self):
+        # Given a failed copy before RSS sampling, shutdown or stall recovery.
+        self.receipt['status'] = 'failed'
+        self.metrics.update(test='soak', passed=False, records=1, records_per_second=1,
+            sampled_peak_rss_bytes=0, child_cpu_seconds=0, peak_uncommitted_records=0,
+            peak_uncommitted_bytes=0, endurance=dict(recoveries=0, max_recovery_seconds=0))
+        self.metrics.pop('delivery')
+        self.metrics['endurance'].update(profile='application-24x32-v1', target_records_per_second=200,
+            target_records=12400, submitted_at_publish_end=0, acknowledged_at_publish_end=0,
+            acknowledged_after_grace=0, min_acknowledged_window_ratio=1, load_validated=False,
+            max_scheduling_debt_records=0)
+        self.save()
+        # When rendering the real metric tables, then zero defaults are not observations.
+        with redirect_stdout(io.StringIO()):
+            package = prepare(self.evidence, self.evidence / 'publication')
+        text = (package / 'endurance-results.md').read_text()
+        self.assertIn('| CLI CPU seconds | unavailable |', text)
+        self.assertIn('| Maximum stall recovery seconds | unavailable |', text)
+        self.assertIn('| soak | FAIL | 1 | 1 | unavailable |', text)
 
 
 if __name__ == '__main__':

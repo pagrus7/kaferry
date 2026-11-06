@@ -109,6 +109,30 @@ class MatrixTest(unittest.TestCase):
             receipt = json.loads((args.output / 'manifest.json').read_text())
             self.assertEqual('kaferry-endurance', receipt['fixture_project'])
             self.assertEqual('interrupted', receipt['status'])
+            publication = args.output / 'publication'
+            published = json.loads((publication / 'endurance-results.json').read_text())
+            self.assertEqual('interrupted', published['manifest']['status'])
+            self.assertEqual([], published['measurements'])
+            self.assertTrue((publication / 'endurance-evidence.tar.gz').is_file())
+            self.assertTrue((publication / 'endurance.SHA256SUMS').is_file())
+
+    def test_report_error_does_not_replace_the_original_interruption(self):
+        # Given an interrupted endurance run whose report directory cannot be written.
+        @contextmanager
+        def unlocked(): yield
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            binary = directory / 'kaferry'; binary.write_bytes(b'fixture')
+            args = argparse.Namespace(suite='endurance', source='3.9.2', destination='3.9.2',
+                output=directory / 'evidence', binary=str(binary), config=None, duration=60, rate=200)
+            with patch('qualify.lab_lock', unlocked), patch('qualify.capture', return_value='fixture'), \
+                 patch('qualify.logged', side_effect=KeyboardInterrupt()), \
+                 patch('qualify.subprocess.run'), patch('endurance_results.prepare', side_effect=OSError('disk full')):
+                # When finalization fails too, then the original interruption and receipt survive.
+                with self.assertRaises(KeyboardInterrupt): run_suite(args)
+            receipt = json.loads((args.output / 'manifest.json').read_text())
+            self.assertEqual('interrupted', receipt['status'])
+            self.assertEqual('interrupted', receipt['suite_error'])
 
     def test_reports_reject_missing_failed_duplicate_and_mismatched_runs(self):
         for problem in ('missing', 'failed', 'digest', 'commit', 'duplicate', None):

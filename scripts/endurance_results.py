@@ -64,9 +64,9 @@ def prepare(evidence, output):
         item = metrics[0]
         endurance = item.get('endurance', {})
         rows += ['| Additional measurement | Value |', '| --- | ---: |',
-                 f"| CLI CPU seconds | {item.get('child_cpu_seconds', 'unavailable')} |",
+                 f"| CLI CPU seconds | {item.get('child_cpu_seconds', 'unavailable') if item.get('passed') else 'unavailable'} |",
                  f"| Destination stalls / recovered | {item.get('destination_stalls', 'unavailable')} / {endurance.get('recoveries', 'unavailable')} |",
-                 f"| Maximum stall recovery seconds | {endurance.get('max_recovery_seconds', 'unavailable')} |", '',
+                 f"| Maximum stall recovery seconds | {endurance.get('max_recovery_seconds', 'unavailable') if endurance.get('recoveries', 0) > 0 else 'unavailable'} |", '',
                  'Delivery times include producer queueing, copying and verifier delay. Memory peaks are sampled.', '']
     rows += [body]
     output.parent.mkdir(parents=True, exist_ok=True)
