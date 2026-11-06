@@ -162,17 +162,35 @@ func recoveryBlockedOutput(t *testing.T, failure string) {
 	if failure != "source-outage-shutdown" {
 		restoreDestination = pauseRecoveryBroker(t, os.Getenv("KAFKA_FAULT_DEST_CONTAINER"))
 	}
-	publishBatch(2, 18)
-	confirmed := 0
 	if failure == "source-outage-shutdown" {
-		confirmed = 18
-	}
-	waitRecoveryProgress(t, process, 3, confirmed)
-	for _, part := range committedPartitions(t, a, group, src, 2) {
-		require.EqualValues(t, 1, part.At, "failure must be injected before the next save")
-	}
-	if failure == "source-outage-shutdown" {
-		restoreSource = pauseRecoveryBroker(t, os.Getenv("KAFKA_FAULT_CONTAINER"))
+		// Freeze the copier before inspecting progress, so host scheduling cannot
+		// move it across the one-second commit boundary while we pause the broker.
+		pending := false
+		for attempt := 0; attempt < 5; attempt++ {
+			first := len(ledger.expected)
+			publishBatch(first, first+16)
+			waitRecoveryProgress(t, process, first+16, first+16)
+			require.NoError(t, process.signal(syscall.SIGSTOP))
+			parts := committedPartitions(t, a, group, src, 2)
+			for _, part := range parts {
+				pending = pending || part.At < int64((first+16)/2)
+			}
+			if pending {
+				restoreSource = pauseRecoveryBroker(t, os.Getenv("KAFKA_FAULT_CONTAINER"))
+			}
+			require.NoError(t, process.signal(syscall.SIGCONT))
+			if pending {
+				break
+			}
+			t.Log("batch already saved before suspension; retrying fault setup")
+		}
+		require.True(t, pending, "could not establish unsaved work for source fault")
+	} else {
+		publishBatch(2, 18)
+		waitRecoveryProgress(t, process, 3, 0)
+		for _, part := range committedPartitions(t, a, group, src, 2) {
+			require.EqualValues(t, 1, part.At, "blocked delivery must not advance progress")
+		}
 	}
 	stop := time.Now()
 	switch failure {
@@ -200,7 +218,7 @@ func recoveryBlockedOutput(t *testing.T, failure string) {
 	for _, part := range committedPartitions(t, a, group, src, 2) {
 		if failure == "source-outage-shutdown" {
 			// An offset request may have reached the broker before its response was lost.
-			require.LessOrEqual(t, part.At, int64(9))
+			require.LessOrEqual(t, part.At, int64(len(ledger.expected)/2))
 		} else {
 			require.EqualValues(t, 1, part.At, "failure saved unacknowledged output")
 		}
@@ -238,7 +256,7 @@ func recoveryBlockedOutput(t *testing.T, failure string) {
 		consume()
 	}
 	for _, part := range committedPartitions(t, a, group, src, 2) {
-		require.EqualValues(t, 9, part.At)
+		require.EqualValues(t, len(ledger.expected)/2, part.At)
 	}
 	summary := summaryFrom(t, replacement.logs())
 	require.LessOrEqual(t, summary.PeakBytes, byteCap)
