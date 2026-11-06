@@ -1,6 +1,7 @@
 """Qualification must preserve failures, missing coverage and binary identity."""
 
 import argparse
+import hashlib
 from contextlib import contextmanager
 import json
 import os
@@ -14,7 +15,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from qualify import duration, endurance_capacity, lab_lock, logged, main, plan, report, run_suite, suite_command, valid_receipts
+from qualify import duration, endurance_capacity, lab_lock, logged, main, plan, report, run_suite, suite_command, valid_receipts, parallel_allowance, parallel_capacity, parallel_run
 from broker_probe import logical, reconcile, records
 
 
@@ -41,6 +42,100 @@ class MatrixTest(unittest.TestCase):
         args.duration = 86401
         with self.assertRaisesRegex(ValueError, '24h'):
             suite_command(args, {})
+
+    def test_parallel_jobs_overlap_with_distinct_fixtures_and_combined_allowance(self):
+        # Given two jobs sharing one host lease, require both to reach the barrier.
+        barrier = threading.Barrier(2, timeout=2)
+        observed = []
+        def run(args, *, fixture, cancelled):
+            args.output.mkdir()
+            barrier.wait()
+            observed.append((args.suite, fixture))
+            (args.output / 'manifest.json').write_text(json.dumps({'suite': args.suite, 'status': 'passed'}))
+        with tempfile.TemporaryDirectory() as temporary:
+            binary = Path(temporary)/'candidate'; binary.write_bytes(b'candidate')
+            args = argparse.Namespace(output=Path(temporary)/'run', companion='recovery', duration=60,
+                companion_duration=60, binary=str(binary), source='3.9.2', destination='3.9.2')
+            with patch('qualify.LAB_LOCK', Path(temporary)/'host.lock'), patch('qualify.run_suite', side_effect=run):
+                parallel_run(args)
+            self.assertEqual(2, len(observed))
+            self.assertNotEqual(observed[0][1]['project'], observed[1][1]['project'])
+            self.assertFalse(set(observed[0][1]['ports']) & set(observed[1][1]['ports']))
+            self.assertEqual(observed[0][1]['reserved_bytes'], observed[1][1]['reserved_bytes'])
+            result = json.loads((args.output/'parallel.json').read_text())
+            self.assertEqual('passed', result['status'])
+            self.assertEqual(2, len(result['cases']))
+
+    def test_parallel_failure_cancels_peer_and_preserves_both_receipts(self):
+        barrier = threading.Barrier(2, timeout=2)
+        def run(args, *, fixture, cancelled):
+            args.output.mkdir()
+            barrier.wait()
+            status = 'failed' if args.suite == 'recovery' else 'interrupted'
+            if args.suite != 'recovery': self.assertTrue(cancelled.wait(2))
+            (args.output/'manifest.json').write_text(json.dumps({'suite': args.suite, 'status': status}))
+            if args.suite == 'recovery': raise RuntimeError('injected failure')
+        with tempfile.TemporaryDirectory() as temporary:
+            binary = Path(temporary)/'candidate'; binary.write_bytes(b'candidate')
+            args = argparse.Namespace(output=Path(temporary)/'run', companion='recovery', duration=60,
+                companion_duration=60, binary=str(binary), source='3.9.2', destination='3.9.2')
+            with patch('qualify.LAB_LOCK', Path(temporary)/'host.lock'), patch('qualify.run_suite', side_effect=run):
+                with self.assertRaisesRegex(RuntimeError, 'injected failure'): parallel_run(args)
+            result = json.loads((args.output/'parallel.json').read_text())
+            self.assertEqual('failed', result['status'])
+            self.assertEqual({'failed', 'interrupted'}, {case['status'] for case in result['cases']})
+
+    def test_parallel_capacity_rejects_space_that_only_fits_one_run(self):
+        required = parallel_allowance(86400, 'capture', 86400)
+        self.assertGreater(required, parallel_allowance(86400, 'recovery', 7200))
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            with patch('qualify.shutil.disk_usage', return_value=argparse.Namespace(free=required-1)), \
+                 patch('qualify.subprocess.check_output', return_value=f'Filesystem Blocks Used Available Capacity Mounted\nfs 0 0 {required//1024+1} 0% /tmp\n'):
+                with self.assertRaisesRegex(ValueError, 'combined'): parallel_capacity(required, output, ['docker'], {})
+            self.assertEqual(required, json.loads((output/'parallel-capacity.json').read_text())['required_combined_bytes'])
+
+    def test_parallel_child_uses_only_its_assigned_fixture_on_failure(self):
+        # Given a child admitted by the coordinator with its own project and ports.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root/'candidate'; binary.write_bytes(b'candidate')
+            args = argparse.Namespace(suite='recovery', source='3.9.2', destination='3.9.2',
+                output=root/'evidence', binary=str(binary), config=None, duration=60, rate=50)
+            fixture = dict(project='kaferry-lab-test-2', ports=[45292, 45293], reserved_bytes=1000,
+                           binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest())
+            calls = []
+            def command(command, output, label, env, **kwargs):
+                calls.append((command, label, env.copy()))
+                if label == 'suite': raise RuntimeError('injected failure')
+            with patch('qualify.capture', return_value='fixture'), patch('qualify.parallel_capacity', return_value={}), \
+                 patch('qualify.lab_lock', side_effect=AssertionError('child reacquired coordinator lease')), \
+                 patch('qualify.logged', side_effect=command), patch('qualify.subprocess.run') as logs:
+                # When the suite fails, then diagnostics and teardown address only that project.
+                with self.assertRaisesRegex(RuntimeError, 'injected failure'):
+                    run_suite(args, fixture=fixture)
+            for command, label, env in calls:
+                if label != 'suite': self.assertEqual('kaferry-lab-test-2', command[3])
+                self.assertEqual('127.0.0.1:45292', env['KAFKA_TEST_BROKERS'])
+                self.assertEqual('127.0.0.1:45293', env['KAFKA_TEST_DEST_BROKERS'])
+                self.assertEqual('kaferry-lab-test-2-kafka-dr-1', env['KAFKA_FAULT_DEST_CONTAINER'])
+                self.assertEqual('kaferry-lab-test-2', env['KAFERRY_FIXTURE_PROJECT'])
+            self.assertEqual('kaferry-lab-test-2', logs.call_args.args[0][3])
+            self.assertEqual('failed', json.loads((args.output/'manifest.json').read_text())['status'])
+
+    def test_log_cancellation_stops_running_subprocess(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cancelled = threading.Event()
+            timer = threading.Timer(0.2, cancelled.set)
+            timer.start()
+            started = time.monotonic()
+            try:
+                with self.assertRaises(InterruptedError):
+                    logged([sys.executable, '-c', 'import time; time.sleep(30)'], Path(temporary),
+                           'cancel', dict(os.environ), cancelled=cancelled)
+            finally:
+                timer.cancel()
+            self.assertLess(time.monotonic()-started, 5)
 
     def test_host_lock_is_shared_across_checkouts(self):
         with tempfile.TemporaryDirectory() as temporary:

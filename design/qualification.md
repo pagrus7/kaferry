@@ -15,9 +15,50 @@ python3 scripts/qualify.py plan --tier pr
 
 If `python3` is an older system interpreter, use `make qualification-setup PYTHON=python3.14` and `python3.14` for the CLI commands. Setup builds Kaferry and installs the independent librdkafka checker into a checkout-local Python virtual environment. Run setup and qualification with the same Python major/minor version. Pass `--binary /absolute/path/to/kaferry` to test a downloaded executable; qualification does not rebuild that executable.
 
-Reserve ports 39092/40092 for ordinary plain brokers, 39192/40192 for dedicated endurance brokers, 41092–43094 for the security listeners and 44088 for Kerberos. Run one lab per host, across all checkouts and do not run `make broker` or `make qualification` alongside it. The runner takes a host-wide lock for its fixed ports and Compose names; legacy Make entrypoints do not take that lock. Broker containers use only the `kaferry-compat`, `kaferry-endurance` and `kaferry-qualification` Compose projects. Other Docker workloads are outside the lab.
+Reserve ports 39092/40092 for ordinary plain brokers, 39192/40192 for dedicated endurance brokers, 41092–43094 for the security listeners and 44088 for Kerberos. Run one lab coordinator per host, across all checkouts and do not run `make broker` or `make qualification` alongside it. The runner takes a host-wide lock for its fixed ports and Compose names; legacy Make entrypoints do not take that lock. Broker containers use only the `kaferry-compat`, `kaferry-endurance` and `kaferry-qualification` Compose projects. Other Docker workloads are outside the lab.
 
 Start with one workload, 8 available CPUs, 16–20 GiB available RAM and 100 GiB free test storage; measure actual usage before increasing load. These are starting allocations, not capacity guarantees. Fixtures cap broker JVM heaps at 512 MiB and use four internal offset/transaction partitions.
+
+## Two concurrent workloads
+
+The `parallel` command holds the host lease for a pair of independent runs. It starts
+one uninterrupted Kafka endurance run alongside repeated recovery (default two hours)
+or archive capture. Each uses a unique Compose project, separate ports, temporary
+files and evidence directory. Ports 45192/45193 and 45292/45293 must be available.
+
+```sh
+# Rehearse both jobs before committing the host to a day-long run.
+python3 scripts/qualify.py parallel --duration 1m --companion-duration 1m --output build-results/parallel-rehearsal
+# Keep Kafka copying for 24 hours while recovery scenarios repeat for two hours.
+python3 scripts/qualify.py parallel --output build-results/parallel-24h
+# Alternatively run Kafka endurance and archive capture for 24 hours each.
+python3 scripts/qualify.py parallel --companion capture --output build-results/parallel-capture-24h
+```
+
+Use `--binary` to give both jobs the same candidate executable. `--duration` controls
+Kafka publishing; `--companion-duration` controls recovery or capture. Each streaming
+job still includes its five-minute drain. The summary `parallel.json` retains both
+manifests and the declared co-running workloads. Failure or Ctrl-C cancels the peer,
+preserves both receipts and tears down only this pair's projects. Existing output
+paths are refused. Other standalone suites, security fixtures and legacy Make commands
+must not run alongside the pair. A short paired rehearsal also runs in PR CI when the
+parallel runner, its workflow or relevant fault/soak tests change.
+
+Admission checks the **combined** full disk allowance on both jobs' broker filesystems,
+the host temporary filesystem and the evidence filesystem. This is deliberately
+conservative when they are separate disks. A 24-hour Kafka run plus recovery needs
+about 278 GiB; the archive alternative reserves additional input/output space. The
+checks cannot reserve space against unrelated disk users. `--output` relocates evidence,
+not Kafka storage; free NAS space does not expand Docker's backing storage. Output must
+be writable. A network archive filesystem additionally needs the sync, rename and lock
+semantics described in the [archive contract](archive.md).
+
+Parallel execution uses four broker processes and shares the host's CPU, memory and
+storage bandwidth. Check the container runtime's memory limit as well as host RAM.
+Compare a single-job rehearsal with a paired rehearsal before increasing concurrency;
+retain the input-rate and recovery gates in both. Pairing qualifies correctness under
+the recorded co-load, not isolated performance. Run comparative benchmarks separately.
+The executable's platform determines whether evidence covers native macOS or Linux.
 
 ## Compatibility matrix
 

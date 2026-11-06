@@ -2,7 +2,8 @@
 """Plan, execute and report standalone local/CI qualification suites."""
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -62,7 +63,7 @@ def write_json(path, value):
     temporary.replace(path)
 
 
-def logged(command, directory, label, env, timeout=1800):
+def logged(command, directory, label, env, timeout=1800, cancelled=None):
     print('+ ' + ' '.join(map(str, command)), flush=True)
     with (directory / f'{label}.log').open('w') as log:
         process = subprocess.Popen(list(map(str, command)), cwd=ROOT, env=env,
@@ -80,9 +81,14 @@ def logged(command, directory, label, env, timeout=1800):
             signal_group(signal.SIGTERM)
             if not finished.wait(STOP_GRACE):
                 signal_group(signal.SIGKILL)
-        timer = threading.Timer(timeout, terminate)
-        timer.daemon = True
-        timer.start()
+        def watch():
+            deadline = time.monotonic() + timeout
+            while not finished.wait(0.1):
+                if time.monotonic() >= deadline or cancelled is not None and cancelled.is_set():
+                    terminate()
+                    return
+        watchdog = threading.Thread(target=watch, daemon=True)
+        watchdog.start()
         try:
             for line in process.stdout:
                 print(line, end='', flush=True)
@@ -90,7 +96,7 @@ def logged(command, directory, label, env, timeout=1800):
                 log.flush()
             code = process.wait()
         finally:
-            timer.cancel()
+            finished.set()
             signal_group(signal.SIGTERM)
             try:
                 process.wait(timeout=STOP_GRACE)
@@ -98,8 +104,10 @@ def logged(command, directory, label, env, timeout=1800):
                 signal_group(signal.SIGKILL)
                 process.wait()
             signal_group(signal.SIGKILL)
-            finished.set()
             process.stdout.close()
+            watchdog.join(timeout=STOP_GRACE+1)
+    if cancelled is not None and cancelled.is_set():
+        raise InterruptedError(f'{label} cancelled')
     if expired.is_set():
         raise RuntimeError(f'{label} exceeded {timeout}s; inspect {directory / (label + ".log")}')
     if code:
@@ -135,7 +143,7 @@ def suite_command(args, env):
                 raise ValueError('endurance uses a fixed --rate 200')
             env.update(KAFERRY_SOAK_PROFILE='application', KAFERRY_ARCHIVE_PAYLOAD='random')
         if args.suite in ('soak', 'endurance'):
-            env['KAFERRY_SOAK_DEST_STALL_CONTAINER'] = ('kaferry-endurance-kafka-dr-1' if args.suite == 'endurance' else 'kaferry-compat-kafka-dr-1')
+            env['KAFERRY_SOAK_DEST_STALL_CONTAINER'] = env.get('KAFKA_FAULT_DEST_CONTAINER', 'kaferry-endurance-kafka-dr-1' if args.suite == 'endurance' else 'kaferry-compat-kafka-dr-1')
         else:
             env.pop('KAFERRY_SOAK_DEST_STALL_CONTAINER', None)
         return prefix + [f'-timeout={args.duration + SOAK_DRAIN_SECONDS + 300}s', '-tags=integration,load', '-run',
@@ -201,7 +209,73 @@ def endurance_capacity(seconds, output, compose, env):
     return capacity
 
 
-def run_suite(args):
+def parallel_allowance(duration, companion, companion_duration):
+    # Sum full remaining allowances before admitting either workload. Check this
+    # combined amount on every participating filesystem, even if they are distinct.
+    def stream_bytes(seconds, rate):
+        records = seconds * rate + (1 + seconds // 60) * min(2048, rate * 2)
+        return records * 5376 * 3 + 4 * 1024**3
+    primary = stream_bytes(duration, 200)
+    secondary = stream_bytes(companion_duration, 50) if companion == 'capture' else 4 * 1024**3
+    return primary + secondary + max(2 * 1024**3, (duration + companion_duration) * 8192)
+
+
+def parallel_capacity(required, output, compose, env):
+    free = {'evidence': shutil.disk_usage(output).free,
+            'temporary': shutil.disk_usage(env.get('TMPDIR') or '/tmp').free}
+    for service in ('kafka', 'kafka-dr'):
+        result = subprocess.check_output(compose + ['exec', '-T', service, 'df', '-Pk', '/tmp/kaferry-logs'],
+                                         env=env, cwd=ROOT, text=True, timeout=15)
+        free[service] = int(result.splitlines()[-1].split()[3]) * 1024
+    result = dict(required_combined_bytes=required, free_bytes=free)
+    write_json(output / 'parallel-capacity.json', result)
+    if min(free.values()) < required:
+        raise ValueError('insufficient combined space for parallel workloads; inspect parallel-capacity.json')
+    return result
+
+
+def parallel_run(args):
+    if args.companion == 'recovery' and args.companion_duration > 86400:
+        raise ValueError('recovery duration must not exceed 24h')
+    args.output = args.output.resolve()
+    args.output.mkdir(parents=True, exist_ok=False)
+    args.binary = str(Path(args.binary).resolve())
+    binary_sha256 = hashlib.sha256(Path(args.binary).read_bytes()).hexdigest()
+    run_id = uuid.uuid4().hex[:12]
+    reserved = parallel_allowance(args.duration, args.companion, args.companion_duration)
+    cancelled = threading.Event()
+    jobs = []
+    for index, (suite, seconds, rate) in enumerate((('endurance', args.duration, 200),
+            (args.companion, args.companion_duration, 50)), 1):
+        case = argparse.Namespace(**dict(vars(args), suite=suite, duration=seconds, rate=rate,
+            output=args.output / suite, config=None, previous_binary=None))
+        fixture = dict(project=f'kaferry-lab-{run_id}-{index}', ports=[45092+index*100, 45093+index*100],
+                       reserved_bytes=reserved, binary_sha256=binary_sha256, companions=['endurance', args.companion])
+        jobs.append((case, fixture))
+    result = dict(schema=1, status='running', reserved_bytes=reserved, cases=[])
+    write_json(args.output / 'parallel.json', result)
+    try:
+        with lab_lock(), ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {pool.submit(run_suite, case, fixture=fixture, cancelled=cancelled): case for case, fixture in jobs}
+            try:
+                for future in as_completed(futures):
+                    future.result()
+            except BaseException:
+                cancelled.set()
+                raise
+        result['status'] = 'passed'
+    except (Exception, KeyboardInterrupt) as error:
+        result.update(status='interrupted' if isinstance(error, (KeyboardInterrupt, InterruptedError)) else 'failed',
+                      error=str(error) or 'interrupted')
+        raise
+    finally:
+        for case, _ in jobs:
+            receipt = case.output / 'manifest.json'
+            result['cases'].append(json.loads(receipt.read_text()) if receipt.is_file() else {'suite': case.suite, 'status': 'missing'})
+        write_json(args.output / 'parallel.json', result)
+
+
+def run_suite(args, *, fixture=None, cancelled=None):
     if args.suite == 'auth':
         args.destination = args.source
     args.output = args.output.resolve()
@@ -226,6 +300,10 @@ def run_suite(args):
     started = time.monotonic()
     project = 'kaferry-endurance' if args.suite == 'endurance' else 'kaferry-compat'
     source_port, destination_port = (39192, 40192) if args.suite == 'endurance' else (39092, 40092)
+    if fixture is not None:
+        project = fixture['project']
+        source_port, destination_port = fixture['ports']
+        receipt['parallel'] = fixture
     env = dict(os.environ, KAFERRY_SOURCE_PORT=str(source_port), KAFERRY_DESTINATION_PORT=str(destination_port), KAFERRY_REPORT_DIR=str(args.output), KAFERRY_TEST_OUTPUT='-json',
                KAFKA_TEST_BROKERS=f'127.0.0.1:{source_port}', KAFKA_TEST_DEST_BROKERS=f'127.0.0.1:{destination_port}',
                KAFKA_FAULT_CONTAINER=project+'-kafka-1', KAFKA_FAULT_DEST_CONTAINER=project+'-kafka-dr-1', KAFERRY_FIXTURE_PROJECT=project, CGO_ENABLED='1')
@@ -237,6 +315,8 @@ def run_suite(args):
         if not Path(args.binary).is_file():
             raise ValueError('binary is missing; run make build or pass --binary')
         receipt['binary_sha256'] = hashlib.sha256(Path(args.binary).read_bytes()).hexdigest()
+        if fixture is not None and receipt['binary_sha256'] != fixture['binary_sha256']:
+            raise ValueError('candidate binary changed after parallel admission')
         receipt['binary_version'] = capture([args.binary, '--version'])
         if args.suite == 'migration' and args.previous_binary:
             receipt['previous_binary_sha256'] = hashlib.sha256(args.previous_binary.read_bytes()).hexdigest()
@@ -253,15 +333,19 @@ def run_suite(args):
         if fixtures:
             receipt.update(fixture_project=project, fixture_brokers=[env['KAFKA_TEST_BROKERS'], env['KAFKA_TEST_DEST_BROKERS']])
         write_json(args.output / 'manifest.json', receipt)
-        with lab_lock():
+        # Only parallel_run supplies a fixture, while holding the host lock for both jobs.
+        with lab_lock() if fixture is None else nullcontext():
             try:
                 if fixtures:
-                    logged(compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output, 'brokers-up', env, timeout=180)
+                    logged(compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output, 'brokers-up', env, timeout=180, cancelled=cancelled)
                     receipt['broker_images'] = capture(compose + ['images', '--format', 'json'])
+                if fixture is not None:
+                    receipt['parallel_capacity'] = parallel_capacity(fixture['reserved_bytes'], args.output, compose, env)
+                    write_json(args.output / 'manifest.json', receipt)
                 if args.suite == 'endurance':
                     receipt['capacity'] = endurance_capacity(args.duration, args.output, compose, env)
                     write_json(args.output / 'manifest.json', receipt)
-                logged(command, args.output, 'suite', env, timeout=args.duration + SOAK_DRAIN_SECONDS + 300 if args.suite in (*STREAMING_SUITES, 'recovery') else 1800)
+                logged(command, args.output, 'suite', env, timeout=args.duration + SOAK_DRAIN_SECONDS + 300 if args.suite in (*STREAMING_SUITES, 'recovery') else 1800, cancelled=cancelled)
                 if expected:
                     verify_tests((args.output / 'suite.log').read_text(), expected)
                 if args.suite == 'benchmark':
@@ -303,7 +387,7 @@ def run_suite(args):
                             raise RuntimeError('fixture diagnostics or teardown failed; inspect manifest.json')
         receipt['status'] = 'passed'
     except (Exception, KeyboardInterrupt) as error:
-        receipt.update(status='interrupted' if isinstance(error, KeyboardInterrupt) else 'failed', error=str(error) or 'interrupted')
+        receipt.update(status='interrupted' if isinstance(error, (KeyboardInterrupt, InterruptedError)) else 'failed', error=str(error) or 'interrupted')
         raise
     finally:
         receipt.update(elapsed_seconds=time.monotonic() - started, finished_at=datetime.now(timezone.utc).isoformat())
@@ -417,6 +501,14 @@ def main(argv=None):
         running.add_argument('--rate', type=int, choices=range(1, 10001), metavar='1..10000')
         running.add_argument('--output', type=Path, default=Path('build-results/qualification') /
             (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]))
+    parallel = sub.add_parser('parallel', help='run isolated endurance and recovery/capture together under one host lease')
+    parallel.add_argument('--companion', choices=('recovery', 'capture'), default='recovery')
+    parallel.add_argument('--duration', type=duration, default=86400)
+    parallel.add_argument('--companion-duration', type=duration)
+    parallel.add_argument('--source', choices=VERSIONS, default=VERSIONS[0])
+    parallel.add_argument('--destination', choices=VERSIONS, default=VERSIONS[0])
+    parallel.add_argument('--binary', default='bin/kaferry')
+    parallel.add_argument('--output', type=Path, required=True)
     verifying = sub.add_parser('verify-release', help='validate full matrix evidence against an exact release archive')
     verifying.add_argument('report', type=Path)
     verifying.add_argument('archive', type=Path)
@@ -430,6 +522,10 @@ def main(argv=None):
         args.duration = args.duration if args.duration is not None else (86400 if endurance else 7200 if getattr(args, 'suite', None) == 'recovery' else 120)
         args.rate = args.rate if args.rate is not None else (200 if endurance else 50)
     os.chdir(ROOT)
+    if args.action == 'parallel':
+        args.companion_duration = args.companion_duration or (7200 if args.companion == 'recovery' else args.duration)
+        parallel_run(args)
+        return 0
     if args.action == 'setup':
         if sys.version_info < (3, 11):
             raise ValueError('qualification setup requires Python 3.11+; select that interpreter for setup and runs')
