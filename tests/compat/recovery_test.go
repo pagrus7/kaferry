@@ -89,7 +89,17 @@ func TestRecoveryBlockedOutput(t *testing.T) {
 	}()
 	for {
 		for _, failure := range []string{"kill", "signal", "delivery-timeout", "source-outage-shutdown", "ownership-loss"} {
-			if !t.Run(fmt.Sprintf("cycle-%d/%s", cycles, failure), func(t *testing.T) { recoveryBlockedOutput(t, failure) }) {
+			if !t.Run(fmt.Sprintf("cycle-%d/%s", cycles, failure), func(t *testing.T) {
+				qualified := false
+				for attempt := 0; attempt < 3 && !qualified; attempt++ {
+					if !t.Run(fmt.Sprintf("attempt-%d", attempt), func(t *testing.T) {
+						qualified = recoveryBlockedOutput(t, failure)
+					}) {
+						return
+					}
+				}
+				require.True(t, qualified, "source commits completed before every attempted injection")
+			}) {
 				return
 			}
 		}
@@ -100,7 +110,7 @@ func TestRecoveryBlockedOutput(t *testing.T) {
 	}
 }
 
-func recoveryBlockedOutput(t *testing.T, failure string) {
+func recoveryBlockedOutput(t *testing.T, failure string) bool {
 	// Given a live copier with a durable prefix on two partitions.
 	a := admin(t)
 	destination := os.Getenv("KAFKA_TEST_DEST_BROKERS")
@@ -204,6 +214,17 @@ func recoveryBlockedOutput(t *testing.T, failure string) {
 	case <-time.After(8 * time.Second):
 		t.Fatal("failed copier did not terminate within its budget")
 	}
+	if failure == "source-outage-shutdown" && process.wait() == nil {
+		restoreSource()
+		// SIGSTOP cannot retract a request already sent to Kafka. Only classify
+		// this as a missed injection when independent offsets prove a safe exit.
+		for _, part := range committedPartitions(t, a, group, src, 2) {
+			require.EqualValues(t, len(ledger.expected)/2, part.At,
+				"successful shutdown must have saved all confirmed input")
+		}
+		t.Log("in-flight commit completed before broker suspension; retrying setup")
+		return false
+	}
 	require.Error(t, process.wait(), "blocked delivery must not report successful shutdown")
 	if failure != "kill" && failure != "ownership-loss" {
 		var exit *exec.ExitError
@@ -262,4 +283,5 @@ func recoveryBlockedOutput(t *testing.T, failure string) {
 	require.LessOrEqual(t, summary.PeakBytes, byteCap)
 	require.LessOrEqual(t, summary.PeakRecords, recordCap)
 	t.Logf("unique=%d duplicates=%d missing=0 corrupt=0", len(ledger.seen), ledger.duplicates)
+	return true
 }
