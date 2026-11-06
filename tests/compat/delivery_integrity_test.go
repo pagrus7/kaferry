@@ -26,15 +26,20 @@ type integrityEvidence struct {
 // streamIntegrity hashes actual submissions and unique receipts in logical-ID
 // order within each source partition. Only out-of-order receipt digests wait.
 type streamIntegrity struct {
-	submitted, received           [4]hash.Hash
+	submitted, received           []hash.Hash
 	submittedCount, receivedCount int
-	next                          [4]int
+	next                          []int
 	pending                       map[int][sha256.Size]byte
 }
 
 func newStreamIntegrity() *streamIntegrity {
-	s := &streamIntegrity{next: [4]int{0, 1, 2, 3}, pending: make(map[int][sha256.Size]byte)}
-	for partition := range 4 {
+	return newPartitionedStreamIntegrity(4)
+}
+
+func newPartitionedStreamIntegrity(partitions int) *streamIntegrity {
+	s := &streamIntegrity{next: make([]int, partitions), submitted: make([]hash.Hash, partitions), received: make([]hash.Hash, partitions), pending: make(map[int][sha256.Size]byte)}
+	for partition := range partitions {
+		s.next[partition] = partition
 		s.submitted[partition], s.received[partition] = sha256.New(), sha256.New()
 	}
 	return s
@@ -66,7 +71,7 @@ func recordFingerprint(key, value []byte, headers []kgo.RecordHeader) [sha256.Si
 
 func (s *streamIntegrity) submit(id int, record *kgo.Record) {
 	digest := recordFingerprint(record.Key, record.Value, record.Headers)
-	s.submitted[id%4].Write(digest[:])
+	s.submitted[id%len(s.next)].Write(digest[:])
 	s.submittedCount++
 }
 
@@ -74,7 +79,7 @@ func (s *streamIntegrity) receive(t *testing.T, id int, key, value []byte, heade
 	t.Helper()
 	s.pending[id] = recordFingerprint(key, value, headers)
 	s.receivedCount++
-	partition := id % 4
+	partition := id % len(s.next)
 	for {
 		digest, exists := s.pending[s.next[partition]]
 		if !exists {
@@ -82,13 +87,13 @@ func (s *streamIntegrity) receive(t *testing.T, id int, key, value []byte, heade
 		}
 		s.received[partition].Write(digest[:])
 		delete(s.pending, s.next[partition])
-		s.next[partition] += 4
+		s.next[partition] += len(s.next)
 	}
 	require.LessOrEqual(t, len(s.pending), 8192, "integrity gaps exceeded the bounded ID window; fingerprints are partial")
 }
 
 func (s *streamIntegrity) snapshot(complete bool, submitted, received int) integrityEvidence {
-	root := func(partitions [4]hash.Hash) string {
+	root := func(partitions []hash.Hash) string {
 		h := sha256.New()
 		h.Write([]byte("kaferry-stream-v1\x00"))
 		for _, partition := range partitions {

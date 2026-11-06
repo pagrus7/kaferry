@@ -48,8 +48,11 @@ type streamRecords struct {
 	duplicates, corrupted  int
 	unexpected, reordered  int
 	publishErrors          int
-	next                   [4]int
+	next                   []int
 	offsets                map[int32]int64
+	nonblocking            bool
+	keyRouting             kgo.TopicPartitioner
+	destinationPartitions  int
 	observer               *deliveryObserver
 	integrity              *streamIntegrity
 }
@@ -91,18 +94,26 @@ func (s *streamRecords) delivery(complete bool) soakDelivery {
 }
 
 func newStreamRecords(topic string, stamp time.Time) *streamRecords {
-	return &streamRecords{topic: topic, stamp: stamp, headers: []kgo.RecordHeader{{Key: "trace", Value: []byte{0, 255}}, {Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, seen: make(map[int]bool), order: make(map[[2]int32]int), next: [4]int{0, 1, 2, 3}, offsets: make(map[int32]int64), integrity: newStreamIntegrity()}
+	return newPartitionedStreamRecords(topic, stamp, 4)
+}
+
+func newPartitionedStreamRecords(topic string, stamp time.Time, partitions int) *streamRecords {
+	next := make([]int, partitions)
+	for i := range next {
+		next[i] = i
+	}
+	return &streamRecords{topic: topic, stamp: stamp, headers: []kgo.RecordHeader{{Key: "trace", Value: []byte{0, 255}}, {Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, seen: make(map[int]bool), order: make(map[[2]int32]int), next: next, offsets: make(map[int32]int64), integrity: newPartitionedStreamIntegrity(partitions)}
 }
 func (s *streamRecords) publish(t *testing.T, ctx context.Context, producer *kgo.Client, reports chan kgo.ProduceResult, count int) {
 	t.Helper()
 	for range count {
 		id := s.published
-		payload := archiveLoadRecord(id).Value
+		payload := archiveLoadRecordPartitions(id, len(s.next)).Value
 		key := []byte(fmt.Sprintf("key-%d", id%257))
 		if id%7 == 0 {
 			key = nil
 		}
-		message := &kgo.Record{Topic: s.topic, Partition: int32(id % 4), Key: key, Value: payload, Timestamp: s.stamp, Headers: s.headers}
+		message := &kgo.Record{Topic: s.topic, Partition: int32(id % len(s.next)), Key: key, Value: payload, Timestamp: s.stamp, Headers: s.headers}
 		s.integrity.submit(id, message)
 		callback := deliveryReporter(ctx, reports)
 		if observer := s.observer; observer != nil {
@@ -114,7 +125,11 @@ func (s *streamRecords) publish(t *testing.T, ctx context.Context, producer *kgo
 				report(record, err)
 			}
 		}
-		producer.Produce(ctx, message, callback)
+		if s.nonblocking {
+			producer.TryProduce(ctx, message, callback)
+		} else {
+			producer.Produce(ctx, message, callback)
+		}
 		s.published++
 	}
 }
@@ -131,11 +146,15 @@ func (s *streamRecords) verify(t *testing.T, record *kgo.Record) {
 		key = nil
 	}
 	if !reflect.DeepEqual(key, record.Key) || !record.Timestamp.Equal(s.stamp) ||
-		!reflect.DeepEqual(s.headers, record.Headers) || !reflect.DeepEqual(archiveLoadRecord(id).Value, record.Value) {
+		!reflect.DeepEqual(s.headers, record.Headers) || !reflect.DeepEqual(archiveLoadRecordPartitions(id, len(s.next)).Value, record.Value) {
 		s.corrupted++
 		return
 	}
-	pair := [2]int32{int32(id % 4), record.Partition}
+	if s.keyRouting != nil && record.Key != nil && int(record.Partition) != s.keyRouting.Partition(record, s.destinationPartitions) {
+		s.corrupted++
+		return
+	}
+	pair := [2]int32{int32(id % len(s.next)), record.Partition}
 	if prior, exists := s.order[pair]; exists && id <= prior {
 		s.reordered++
 	}
@@ -154,7 +173,7 @@ func (s *streamRecords) verifyArchive(t *testing.T, record core.Record, identity
 		headers[i] = kgo.RecordHeader{Key: header.Name, Value: header.Value}
 	}
 	s.integrity.receive(t, id, record.Key, record.Value, headers)
-	want := archiveLoadRecord(id)
+	want := archiveLoadRecordPartitions(id, len(s.next))
 	want.Source.Cluster, want.Source.Topic, want.Source.TopicID = identity.Cluster, identity.Topic, identity.TopicID
 	stamp := s.stamp.UnixMilli()
 	want.TimestampMS = &stamp
@@ -162,7 +181,7 @@ func (s *streamRecords) verifyArchive(t *testing.T, record core.Record, identity
 		s.corrupted++
 		return
 	}
-	pair := [2]int32{int32(id % 4), int32(id % 4)}
+	pair := [2]int32{int32(id % len(s.next)), int32(id % len(s.next))}
 	if prior, exists := s.order[pair]; exists && id <= prior {
 		s.reordered++
 	}
@@ -182,7 +201,7 @@ func (s *streamRecords) receive(t *testing.T, value []byte) (int, bool) {
 		s.unexpected++
 		return id, false
 	}
-	part := id % 4
+	part := id % len(s.next)
 	if id < s.next[part] || s.seen[id] {
 		s.duplicates++
 		return id, false
@@ -194,9 +213,12 @@ func (s *streamRecords) receive(t *testing.T, value []byte) (int, bool) {
 	s.seen[id] = true
 	for s.seen[s.next[part]] {
 		delete(s.seen, s.next[part])
-		s.next[part] += 4
+		s.next[part] += len(s.next)
 	}
-	s.contiguous = min(s.next[0], s.next[1], s.next[2], s.next[3])
+	s.contiguous = s.next[0]
+	for _, next := range s.next {
+		s.contiguous = min(s.contiguous, next)
+	}
 	require.LessOrEqual(t, len(s.seen), 8192, "verification gaps exceeded the bounded ID window; totals are partial")
 	return id, true
 }
@@ -219,7 +241,7 @@ func (s *streamRecords) catchUp(t *testing.T, consumer *kgo.Client, reports <-ch
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Millisecond)
 	defer cancel()
-	fetches := consumer.PollRecords(ctx, 1)
+	fetches := consumer.PollRecords(ctx, 512)
 	for _, failure := range fetches.Errors() {
 		if !errors.Is(failure.Err, context.DeadlineExceeded) {
 			t.Fatal(failure)

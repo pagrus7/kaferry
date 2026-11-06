@@ -25,6 +25,10 @@ import (
 var archiveFixtureTimestamp = time.Now().Add(-time.Hour).UnixMilli()
 
 func archiveLoadRecord(id int) core.Record {
+	return archiveLoadRecordPartitions(id, 4)
+}
+
+func archiveLoadRecordPartitions(id, partitions int) core.Record {
 	value := bytes.Repeat([]byte{byte(id % 251)}, 1024+id%4096)
 	if os.Getenv("KAFERRY_ARCHIVE_PAYLOAD") == "random" {
 		random := rand.New(rand.NewPCG(uint64(id), 42))
@@ -38,7 +42,7 @@ func archiveLoadRecord(id int) core.Record {
 	if id%7 == 0 {
 		key = nil
 	}
-	return core.Record{Key: key, Value: value, TimestampMS: &stamp, TimestampType: "create_time", Source: &core.Provenance{Cluster: "fixture", TopicID: [16]byte{1}, Topic: "orders", Partition: int32(id % 4), Offset: int64(id / 4)}, Headers: []core.Header{{Name: "trace", Value: []byte{0, 255}}, {Name: "dup", Value: nil}, {Name: "dup", Value: []byte{}}}}
+	return core.Record{Key: key, Value: value, TimestampMS: &stamp, TimestampType: "create_time", Source: &core.Provenance{Cluster: "fixture", TopicID: [16]byte{1}, Topic: "orders", Partition: int32(id % partitions), Offset: int64(id / partitions)}, Headers: []core.Header{{Name: "trace", Value: []byte{0, 255}}, {Name: "dup", Value: nil}, {Name: "dup", Value: []byte{}}}}
 }
 
 func archiveFixtureWriter(t *testing.T, path string) *capture.Capture {

@@ -102,6 +102,7 @@ def summarize(directory):
     deliveries = []
     observations = []
     integrities = []
+    workloads = []
     for filename in sorted(directory.glob("*.metrics.json")):
         r = json.loads(filename.read_text())
         status = "SKIP" if r["skipped"] else "PASS" if r["passed"] else "FAIL"
@@ -109,6 +110,8 @@ def summarize(directory):
                   if "final_median_rss_bytes" in r and "warm_median_rss_bytes" in r else None)
         shutdown = f"{r['shutdown_seconds']:.3f}" if "shutdown_seconds" in r else "—"
         rows.append(f"| {r['test']} | {status} | {r['records']} | {r['records_per_second']:.0f} | {r['sampled_peak_rss_bytes'] / (1 << 20):.1f} | {r.get('rss_samples', '—')} | {f'{growth:.1f}' if growth is not None else '—'} | {r['peak_uncommitted_records']} / {r['peak_uncommitted_bytes']} | {r.get('max_sampled_commit_lag', '—')} | {shutdown} |")
+        if e := r.get('endurance'):
+            workloads.append(f"| {r['test']} | {e['profile']} | {e['target_records_per_second']} | {e['target_records']} | {e['submitted_at_publish_end']} / {e['acknowledged_at_publish_end']} | {e['acknowledged_after_grace']} | {e['min_acknowledged_window_ratio']:.3f} | {e['load_validated']} | {e['max_scheduling_debt_records']} |")
         if d := r.get('delivery'):
             missing = d['missing'] if d['missing'] is not None else 'unresolved'
             deliveries.append(f"| {r['test']} | {d['submitted']} | {d['published']} | {d['received']} | {d['unique_received']} | {missing} | {d['duplicates']} | {d['corrupted']} / {d['unexpected']} / {d['reordered']} | {d['reconciliation_complete']} | {r.get('max_sampled_destination_lag', '—')} / {r.get('final_destination_lag', '—')} | {r.get('max_sampled_destination_consumer_lag', '—')} / {r.get('final_destination_consumer_lag', '—')} |")
@@ -121,6 +124,12 @@ def summarize(directory):
             if integrity := d.get('integrity'):
                 matched = 'unresolved' if integrity['matched'] is None else integrity['matched']
                 integrities.append(f"| {r['test']} | {matched} | {integrity['submitted_records']} / {integrity['received_records']} | {integrity['pending_records']} | `{integrity['submitted_sha256']}` | `{integrity['received_sha256']}` |")
+    if workloads:
+        rows += ['', '### Application endurance load', '',
+                 '| Test | Profile | Base records/s | Scheduled records including bursts | Submitted / acked at publishing end | Acked after grace | Minimum window ratio | Load valid | Maximum scheduling debt |',
+                 '| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |', *workloads, '',
+                 'Load validity requires achieved source input; eventual fidelity cannot qualify an underloaded run. '
+                 'The general records/s column includes drain and reconciliation time.', '']
     if deliveries:
         rows += ['', '### Endurance delivery', '',
                  '| Test | Submitted | Published (acked) | Received | Unique | Missing | Duplicates | Corrupted / unexpected / reordered | Complete | Destination lag sampled max / final (records) | Consumer lag sampled max / final (offsets) |',

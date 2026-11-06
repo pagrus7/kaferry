@@ -11,6 +11,69 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+func TestLoadEndurancePartitionedFidelityAndHistory(t *testing.T) {
+	// Given all 24 source partitions and high entropy records, independent of brokers.
+	t.Setenv("KAFERRY_ARCHIVE_PAYLOAD", "random")
+	const partitions, count = 24, 2400
+	for _, archive := range []bool{false, true} {
+		stream := newPartitionedStreamRecords("fixture", time.Now().Truncate(time.Millisecond), partitions)
+		stream.published, stream.acknowledged = count, count
+		for id := range count {
+			r := archiveLoadRecordPartitions(id, partitions)
+			require.Equal(t, int32(id%partitions), r.Source.Partition)
+			require.Equal(t, int64(id/partitions), r.Source.Offset)
+			stream.integrity.submit(id, &kgo.Record{Key: r.Key, Value: r.Value, Headers: stream.headers})
+		}
+		// When partitions arrive in reverse order, per-partition history must still be released.
+		for partition := partitions - 1; partition >= 0; partition-- {
+			for id := partition; id < count; id += partitions {
+				r := archiveLoadRecordPartitions(id, partitions)
+				stamp := stream.stamp.UnixMilli()
+				r.TimestampMS = &stamp
+				if archive {
+					stream.verifyArchive(t, r, r.Source)
+				} else {
+					stream.verify(t, &kgo.Record{Key: r.Key, Value: r.Value, Timestamp: stream.stamp, Headers: stream.headers, Partition: int32(id % 32)})
+				}
+			}
+			require.Empty(t, stream.seen)
+			require.Empty(t, stream.integrity.pending)
+		}
+		// Then every record reconciles; a late duplicate is still detected after history was released.
+		delivery := stream.delivery(true)
+		require.Equal(t, count, delivery.Verified)
+		require.Zero(t, *delivery.Missing)
+		require.Zero(t, delivery.Reordered)
+		require.True(t, *delivery.Integrity.Matched)
+		stream.receive(t, archiveLoadRecordPartitions(23, partitions).Value)
+		require.Equal(t, 1, stream.duplicates)
+	}
+}
+
+func TestLoadEnduranceRejectsWrongKeyRouting(t *testing.T) {
+	// Given an intact keyed record whose source placement is independent of its key route.
+	for _, wrong := range []bool{false, true} {
+		stream := newPartitionedStreamRecords("fixture", time.Now().Truncate(time.Millisecond), 24)
+		stream.keyRouting = kgo.StickyKeyPartitioner(nil).ForTopic("destination")
+		stream.destinationPartitions = 32
+		stream.published = 2
+		record := streamFixtureRecord(1, stream.stamp)
+		record.Partition = int32(stream.keyRouting.Partition(record, 32))
+		if wrong {
+			record.Partition = (record.Partition + 1) % 32
+		}
+		// When only the route changes, then byte/hash fidelity cannot hide the failure.
+		stream.verify(t, record)
+		if wrong {
+			require.Equal(t, 1, stream.corrupted)
+			require.Zero(t, stream.verified)
+		} else {
+			require.Zero(t, stream.corrupted)
+			require.Equal(t, 1, stream.verified)
+		}
+	}
+}
+
 func TestLoadIntegrityFingerprintPreservesFieldBoundariesAndNullBytes(t *testing.T) {
 	// Given records that naive concatenation or header maps would conflate.
 	pairs := [][2]*kgo.Record{

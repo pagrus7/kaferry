@@ -17,6 +17,8 @@ import (
 
 // Reports are optional build artifacts, never part of the archive or CLI API.
 type loadReport struct {
+	Endurance *enduranceEvidence `json:"endurance,omitempty"`
+
 	Test                             string        `json:"test"`
 	ReadySeconds                     float64       `json:"ready_seconds,omitempty"`
 	ArchivePayload                   string        `json:"archive_payload,omitempty"`

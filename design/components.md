@@ -121,7 +121,7 @@ PR and release integration jobs enable this test and verify that it ran; ordinar
 
 [scripts/ci.py](../scripts/ci.py) writes logs, environment/result JSON and measurements to ignored `build-results/`, setting `KAFERRY_REPORT_DIR`. Direct load/soak commands need that variable to save metrics.
 
-Soak defaults to two minutes of publishing locally. `KAFERRY_SOAK_DURATION` overrides it (minimum one minute); every run adds five consume-only minutes before shutdown and final reconciliation.
+The dedicated [application endurance profile](qualification.md#endurance-on-a-persistent-host) uses 24 hours and 24/32 partitions with achieved-load gates; it is outside the scheduled CI suites. Soak defaults to two minutes of publishing locally. `KAFERRY_SOAK_DURATION` overrides it (minimum one minute); every run adds five consume-only minutes before shutdown and final reconciliation.
 
 ```sh
 make broker
