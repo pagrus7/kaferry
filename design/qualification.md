@@ -88,6 +88,48 @@ KAFERRY_QUAL_CERT_DIR=/tmp docker compose -p kaferry-qualification -f tests/qual
 
 The temporary certificate path satisfies Compose interpolation during teardown; it does not create new brokers. Restarting Docker can interrupt other workloads and is outside the lab's automatic cleanup.
 
+## Recovery and endurance coverage
+
+Safety assertions run before long qualification. `make check` exercises confirmed-prefix
+tracking, stale deliveries, partial saves, shutdown deadlines and injected archive I/O
+failures with the race detector. `make fault` adds real-process recovery on the disposable
+source/destination brokers; start them with `make broker`. Code PRs run this fault suite.
+
+The blocked-output cases first save a prefix on two partitions, pause the destination,
+and wait for the copier to report new submissions. They then kill it, signal it, wait
+for its delivery timeout, interrupt its source during shutdown, or transfer ownership.
+Saved offsets must stay at the delivered prefix. Restart must recover every retained
+record, and every received copy is checked, including permitted duplicates. The small
+byte caps exercise backpressure without a large dataset. CLI logs go to temporary files
+rather than accumulating in the test process's memory.
+
+Run repeated recovery separately from uninterrupted uptime:
+
+```sh
+python3 scripts/qualify.py run recovery --duration 2h --output build-results/recovery-2h
+```
+
+`recovery` defaults to two hours and accepts one minute through 24 hours. It repeats
+complete cycles of the same five cases with fresh topics and processes. A final cycle
+may finish after the requested duration; the runner allows ten extra minutes. Each
+completed subtest releases its fixture resources. `recovery.json` records completed
+cycles, elapsed time and failure status; it does not claim continuous process uptime
+or a sustained publishing rate. Required broker settings cannot produce a successful
+empty run. Short CI cases and long repetitions use the same assertions.
+
+| Execution | Purpose |
+| --- | --- |
+| Every code PR: component tests and one fault cycle | Catch unsafe progress, corrupt replay and shutdown regressions quickly |
+| Scheduled main / pre-release: `recovery` for two hours | Exercise repeated failure, reassignment and restart on the tested executable |
+| Pre-release: `resources`, `capture` and `auth` | Check archive storage cuts, continuous capture, authentication and replicated failover separately |
+| Release candidate: `endurance` for 24 hours | Keep one copier alive through sustained input and recoverable destination stalls |
+
+Use the exact candidate executable for CLI qualification and retain its digest in each
+manifest. Component tests compile the checkout. A recovery pass cannot substitute for
+an endurance pass; a shorter rehearsal cannot establish 24-hour uptime. Broker-version
+compatibility remains the separate matrix above. Broader failure combinations and
+longer runs should follow changes to the relevant adapters or lifecycle behavior.
+
 ## Endurance on a persistent host
 
 Keep a process alive continuously for the duration being claimed. Separate short runs do not add up to continuous uptime. The runner accepts publishing durations from one minute through seven days, adds a five-minute consume-only period and derives the Go test timeout from both periods plus cleanup time.

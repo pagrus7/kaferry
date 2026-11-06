@@ -11,7 +11,7 @@ SOAK_TEST_TIMEOUT ?= 1h
 ifeq ($(KAFERRY_TEST_BINARY),)
 TEST_BINARY_PREREQUISITE = build
 # A leading "load " is a GNU Make plugin directive.
-qualification load soak smoke: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/kaferry
+qualification load soak smoke fault: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/kaferry
 endif
 export KAFERRY_TEST_OUTPUT
 
@@ -46,8 +46,8 @@ broker-down:
 	docker compose -p kaferry-compat --profile cross-cluster down
 integration:
 	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_TEST_DEST_BROKERS=$(KAFKA_TEST_DEST_BROKERS) CGO_ENABLED=1 $(GO) test -count=1 -race -tags=integration ./...
-fault:
-	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_FAULT_CONTAINER=kaferry-compat-kafka-1 $(GO) test -count=1 -tags=integration,fault -run 'TestBlockingCommit|TestRebalanceChurn|TestCrashResume' $(KAFERRY_TEST_OUTPUT) ./tests/compat
+fault: $(TEST_BINARY_PREREQUISITE)
+	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_TEST_DEST_BROKERS=$(KAFKA_TEST_DEST_BROKERS) KAFKA_FAULT_CONTAINER=kaferry-compat-kafka-1 KAFKA_FAULT_DEST_CONTAINER=kaferry-compat-kafka-dr-1 $(GO) test -count=1 -tags=integration,fault -run 'TestBlockingCommit|TestRebalanceChurn|TestCrashResume|TestRecoveryBlockedOutput' $(KAFERRY_TEST_OUTPUT) ./tests/compat
 load: $(TEST_BINARY_PREREQUISITE)
 	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) $(GO) test -count=1 -tags=integration,load -run '^TestLoad' $(KAFERRY_TEST_OUTPUT) ./tests/compat
 soak: $(TEST_BINARY_PREREQUISITE)

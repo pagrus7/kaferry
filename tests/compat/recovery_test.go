@@ -1,0 +1,217 @@
+//go:build integration && fault
+
+package compat
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kgo"
+)
+
+func waitSubmitted(t *testing.T, process *cliProcess, count int) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(process.output)
+		require.NoError(t, err)
+		for _, line := range strings.Split(string(data), "\n") {
+			var progress copySummary
+			if json.Unmarshal([]byte(line), &progress) == nil && progress.Message == "progress" && progress.Submitted >= count {
+				return true
+			}
+		}
+		return false
+	}, 15*time.Second, 20*time.Millisecond, "copier never submitted the blocked batch")
+}
+
+func pauseRecoveryBroker(t *testing.T, container string) func() {
+	t.Helper()
+	require.NotEmpty(t, container, "recovery requires an owned fault container")
+	data, err := exec.Command("docker", "inspect", "--format", `{{index .Config.Labels "com.docker.compose.project"}}`, container).Output()
+	require.NoError(t, err)
+	project := os.Getenv("KAFERRY_FIXTURE_PROJECT")
+	if project == "" {
+		project = "kaferry-compat"
+	}
+	require.Equal(t, project, strings.TrimSpace(string(data)), "fault target must belong to this run")
+	data, err = exec.Command("docker", "pause", container).CombinedOutput()
+	require.NoError(t, err, "%s", data)
+	paused := true
+	recover := func() {
+		if paused {
+			data, err := exec.Command("docker", "unpause", container).CombinedOutput()
+			require.NoError(t, err, "%s", data)
+			paused = false
+		}
+	}
+	t.Cleanup(recover)
+	return recover
+}
+
+func TestRecoveryBlockedOutput(t *testing.T) {
+	if os.Getenv("KAFKA_FAULT_DEST_CONTAINER") == "" {
+		t.Skip("requires separate owned source/destination brokers")
+	}
+	_ = broker(t) // Missing prerequisites skip the parent, never a successful empty cycle.
+	require.NotEmpty(t, os.Getenv("KAFKA_TEST_DEST_BROKERS"))
+	require.NotEmpty(t, os.Getenv("KAFKA_FAULT_CONTAINER"))
+	duration := time.Duration(0)
+	if value := os.Getenv("KAFERRY_RECOVERY_DURATION"); value != "" {
+		var err error
+		duration, err = time.ParseDuration(value)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, duration, time.Minute)
+		require.LessOrEqual(t, duration, 24*time.Hour)
+	}
+	started := time.Now()
+	cycles := 0
+	defer func() {
+		if directory := os.Getenv("KAFERRY_REPORT_DIR"); directory != "" {
+			data, err := json.MarshalIndent(map[string]any{"completed_cycles": cycles, "elapsed_seconds": time.Since(started).Seconds(),
+				"requested_seconds": duration.Seconds(), "passed": !t.Failed(), "continuous_uptime": false}, "", "  ")
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(directory, "recovery.json"), data, 0600))
+		}
+	}()
+	for {
+		for _, failure := range []string{"kill", "signal", "delivery-timeout", "source-outage-shutdown", "ownership-loss"} {
+			if !t.Run(fmt.Sprintf("cycle-%d/%s", cycles, failure), func(t *testing.T) { recoveryBlockedOutput(t, failure) }) {
+				return
+			}
+		}
+		cycles++
+		if time.Since(started) >= duration {
+			return
+		}
+	}
+}
+
+func recoveryBlockedOutput(t *testing.T, failure string) {
+	// Given a live copier with a durable prefix on two partitions.
+	a := admin(t)
+	destination := os.Getenv("KAFKA_TEST_DEST_BROKERS")
+	require.NotEmpty(t, destination)
+	require.NotEqual(t, broker(t), destination)
+	da := kadm.NewClient(fixtureClient(t, destination))
+	src, dst := topic(t, a, 2), topic(t, da, 2)
+	group := src + "-recovery"
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer cancel()
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000','heartbeat.interval.ms'='1000'), CONNECTION destination AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s@destination' SELECT * FROM TOPIC '%s' WITH (GROUP='%s')", broker(t), destination, dst, src, group)
+	deliveryTimeout := "30s"
+	if failure == "delivery-timeout" {
+		deliveryTimeout = "2s"
+	}
+	settings := "record_cap=32\npartition_record_cap=16\nbyte_cap=8192\npartition_byte_cap=4096\nprogress_interval='20ms'\nshutdown_timeout='3s'\ndelivery_timeout='" + deliveryTimeout + "'\n"
+	config := configuration(t, settings)
+	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+	waitMembers(t, a, group, 1, 2, nil)
+	p := producer(t)
+	ledger := recoveryLedger{expected: map[string]*kgo.Record{}, seen: map[string]bool{}}
+	stamp := time.Now().Truncate(time.Millisecond)
+	publishBatch := func(first, end int) {
+		for id := first; id < end; id++ {
+			record := &kgo.Record{Topic: src, Partition: int32(id % 2), Key: []byte(fmt.Sprint(id)),
+				Value: []byte(strings.Repeat(fmt.Sprintf("%02d", id), 1024)), Timestamp: stamp,
+				Headers: []kgo.RecordHeader{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}}
+			ledger.expected[string(record.Key)] = record
+			publish(t, p, record)
+		}
+	}
+	publishBatch(0, 2)
+	waitTopicCount(t, da, dst, 2, 2)
+	require.Eventually(t, func() bool {
+		parts := committedPartitions(t, a, group, src, 2)
+		return parts[0].At == 1 && parts[1].At == 1
+	}, 10*time.Second, 50*time.Millisecond)
+
+	var replacement *cliProcess
+	if failure == "ownership-loss" {
+		replacement = startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+		waitMembers(t, a, group, 2, 2, nil)
+	}
+
+	// When output is unavailable, wait for actual submission before injecting failure.
+	restoreDestination := pauseRecoveryBroker(t, os.Getenv("KAFKA_FAULT_DEST_CONTAINER"))
+	publishBatch(2, 18)
+	waitSubmitted(t, process, 3)
+	for _, part := range committedPartitions(t, a, group, src, 2) {
+		require.EqualValues(t, 1, part.At, "blocked output advanced progress")
+	}
+	restoreSource := func() {}
+	if failure == "source-outage-shutdown" {
+		restoreSource = pauseRecoveryBroker(t, os.Getenv("KAFKA_FAULT_CONTAINER"))
+	}
+	stop := time.Now()
+	switch failure {
+	case "kill", "ownership-loss":
+		require.NoError(t, process.command.Process.Kill())
+	case "signal", "source-outage-shutdown":
+		require.NoError(t, process.signal(syscall.SIGTERM))
+	}
+	select {
+	case <-process.done:
+	case <-time.After(8 * time.Second):
+		t.Fatal("failed copier did not terminate within its budget")
+	}
+	require.Error(t, process.wait(), "blocked delivery must not report successful shutdown")
+	if failure != "kill" && failure != "ownership-loss" {
+		var exit *exec.ExitError
+		require.ErrorAs(t, process.wait(), &exit)
+		require.Equal(t, 1, exit.ExitCode())
+	}
+	t.Logf("failure=%s exit_seconds=%.3f", failure, time.Since(stop).Seconds())
+	restoreSource()
+	for _, part := range committedPartitions(t, a, group, src, 2) {
+		require.EqualValues(t, 1, part.At, "failure saved unacknowledged output")
+	}
+	restoreDestination()
+	if replacement == nil {
+		waitMembers(t, a, group, 0, 0, nil)
+		replacement = startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+	}
+	waitMembers(t, a, group, 1, 2, nil)
+	reader := fixtureClient(t, destination)
+	assign(t, reader, dst, 2)
+	positions := map[int32]int64{}
+	consume := func() {
+		poll, done := context.WithTimeout(ctx, time.Second)
+		defer done()
+		fetches := reader.PollFetches(poll)
+		for _, record := range fetches.Records() {
+			require.NoError(t, ledger.observe(record))
+			positions[record.Partition] = record.Offset + 1
+		}
+		require.NoError(t, ctx.Err(), "recovery failed to reconcile")
+	}
+	for len(ledger.seen) < len(ledger.expected) {
+		consume()
+	}
+	require.NoError(t, replacement.signal(os.Interrupt))
+	require.NoError(t, replacement.wait(), replacement.logs())
+
+	// Then scan through final offsets, validating duplicates as well as first receipts.
+	ends, err := da.ListEndOffsets(ctx, dst)
+	require.NoError(t, err)
+	require.NoError(t, ends.Error())
+	for positions[0] < ends[dst][0].Offset || positions[1] < ends[dst][1].Offset {
+		consume()
+	}
+	for _, part := range committedPartitions(t, a, group, src, 2) {
+		require.EqualValues(t, 9, part.At)
+	}
+	summary := summaryFrom(t, replacement.logs())
+	require.LessOrEqual(t, summary.PeakBytes, int64(8192))
+	require.LessOrEqual(t, summary.PeakRecords, 32)
+	t.Logf("unique=%d duplicates=%d missing=0 corrupt=0", len(ledger.seen), ledger.duplicates)
+}
