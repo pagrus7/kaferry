@@ -97,6 +97,14 @@ func newStreamRecords(topic string, stamp time.Time) *streamRecords {
 	return newPartitionedStreamRecords(topic, stamp, 4)
 }
 
+// A finite copy may be read one destination partition at a time after key routing.
+// Bound both ID and digest history by the entire input, independent of arrival order.
+func newFiniteStreamRecords(topic string, stamp time.Time, count int) *streamRecords {
+	s := newStreamRecords(topic, stamp)
+	s.integrity.maxPending = count
+	return s
+}
+
 func newPartitionedStreamRecords(topic string, stamp time.Time, partitions int) *streamRecords {
 	next := make([]int, partitions)
 	for i := range next {
@@ -219,7 +227,7 @@ func (s *streamRecords) receive(t *testing.T, value []byte) (int, bool) {
 	for _, next := range s.next {
 		s.contiguous = min(s.contiguous, next)
 	}
-	require.LessOrEqual(t, len(s.seen), 8192, "verification gaps exceeded the bounded ID window; totals are partial")
+	require.LessOrEqual(t, len(s.seen), s.integrity.maxPending, "verification gaps exceeded the bounded ID window; totals are partial")
 	return id, true
 }
 func (s *streamRecords) drainReports(t *testing.T, reports <-chan kgo.ProduceResult) {
