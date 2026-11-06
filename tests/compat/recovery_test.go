@@ -19,19 +19,23 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func waitSubmitted(t *testing.T, process *cliProcess, count int) {
+func waitRecoveryProgress(t *testing.T, process *cliProcess, submitted, confirmed int) {
 	t.Helper()
-	require.Eventually(t, func() bool {
+	deadline := time.Now().Add(15 * time.Second)
+	for {
 		data, err := os.ReadFile(process.output)
 		require.NoError(t, err)
 		for _, line := range strings.Split(string(data), "\n") {
 			var progress copySummary
-			if json.Unmarshal([]byte(line), &progress) == nil && progress.Message == "progress" && progress.Submitted >= count {
-				return true
+			if json.Unmarshal([]byte(line), &progress) == nil && progress.Message == "progress" &&
+				progress.Submitted >= submitted && progress.Confirmed >= confirmed {
+				return
 			}
 		}
-		return false
-	}, 15*time.Second, 20*time.Millisecond, "copier never submitted the blocked batch")
+		require.False(t, process.finished(), "copier exited before the required progress")
+		require.True(t, time.Now().Before(deadline), "copier never reported the required progress")
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func pauseRecoveryBroker(t *testing.T, container string) func() {
@@ -113,6 +117,12 @@ func recoveryBlockedOutput(t *testing.T, failure string) {
 		deliveryTimeout = "2s"
 	}
 	settings := "record_cap=32\npartition_record_cap=16\nbyte_cap=8192\npartition_byte_cap=4096\nprogress_interval='20ms'\nshutdown_timeout='3s'\ndelivery_timeout='" + deliveryTimeout + "'\n"
+	byteCap, recordCap := int64(8192), 32
+	if failure == "source-outage-shutdown" {
+		// Leave room for the whole batch so capacity cannot commit each delivery.
+		settings = "record_cap=1024\npartition_record_cap=512\nbyte_cap=134217728\npartition_byte_cap=16777216\nprogress_interval='20ms'\nshutdown_timeout='3s'\n"
+		byteCap, recordCap = 134217728, 1024
+	}
 	config := configuration(t, settings)
 	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
 	waitMembers(t, a, group, 1, 2, nil)
@@ -130,10 +140,15 @@ func recoveryBlockedOutput(t *testing.T, failure string) {
 	}
 	publishBatch(0, 2)
 	waitTopicCount(t, da, dst, 2, 2)
-	require.Eventually(t, func() bool {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
 		parts := committedPartitions(t, a, group, src, 2)
-		return parts[0].At == 1 && parts[1].At == 1
-	}, 10*time.Second, 50*time.Millisecond)
+		if parts[0].At == 1 && parts[1].At == 1 {
+			break
+		}
+		require.True(t, time.Now().Before(deadline), "initial prefix was not saved")
+		time.Sleep(50 * time.Millisecond)
+	}
 
 	var replacement *cliProcess
 	if failure == "ownership-loss" {
@@ -141,14 +156,21 @@ func recoveryBlockedOutput(t *testing.T, failure string) {
 		waitMembers(t, a, group, 2, 2, nil)
 	}
 
-	// When output is unavailable, wait for actual submission before injecting failure.
-	restoreDestination := pauseRecoveryBroker(t, os.Getenv("KAFKA_FAULT_DEST_CONTAINER"))
-	publishBatch(2, 18)
-	waitSubmitted(t, process, 3)
-	for _, part := range committedPartitions(t, a, group, src, 2) {
-		require.EqualValues(t, 1, part.At, "blocked output advanced progress")
+	// When output is blocked, establish outstanding submissions. For the source
+	// outage, keep output healthy and establish confirmed but unsaved work instead.
+	restoreDestination, restoreSource := func() {}, func() {}
+	if failure != "source-outage-shutdown" {
+		restoreDestination = pauseRecoveryBroker(t, os.Getenv("KAFKA_FAULT_DEST_CONTAINER"))
 	}
-	restoreSource := func() {}
+	publishBatch(2, 18)
+	confirmed := 0
+	if failure == "source-outage-shutdown" {
+		confirmed = 18
+	}
+	waitRecoveryProgress(t, process, 3, confirmed)
+	for _, part := range committedPartitions(t, a, group, src, 2) {
+		require.EqualValues(t, 1, part.At, "failure must be injected before the next save")
+	}
 	if failure == "source-outage-shutdown" {
 		restoreSource = pauseRecoveryBroker(t, os.Getenv("KAFKA_FAULT_CONTAINER"))
 	}
@@ -171,9 +193,17 @@ func recoveryBlockedOutput(t *testing.T, failure string) {
 		require.Equal(t, 1, exit.ExitCode())
 	}
 	t.Logf("failure=%s exit_seconds=%.3f", failure, time.Since(stop).Seconds())
+	if failure == "source-outage-shutdown" {
+		require.Contains(t, process.logs(), "shutdown timed out while saving progress")
+	}
 	restoreSource()
 	for _, part := range committedPartitions(t, a, group, src, 2) {
-		require.EqualValues(t, 1, part.At, "failure saved unacknowledged output")
+		if failure == "source-outage-shutdown" {
+			// An offset request may have reached the broker before its response was lost.
+			require.LessOrEqual(t, part.At, int64(9))
+		} else {
+			require.EqualValues(t, 1, part.At, "failure saved unacknowledged output")
+		}
 	}
 	restoreDestination()
 	if replacement == nil {
@@ -211,7 +241,7 @@ func recoveryBlockedOutput(t *testing.T, failure string) {
 		require.EqualValues(t, 9, part.At)
 	}
 	summary := summaryFrom(t, replacement.logs())
-	require.LessOrEqual(t, summary.PeakBytes, int64(8192))
-	require.LessOrEqual(t, summary.PeakRecords, 32)
+	require.LessOrEqual(t, summary.PeakBytes, byteCap)
+	require.LessOrEqual(t, summary.PeakRecords, recordCap)
 	t.Logf("unique=%d duplicates=%d missing=0 corrupt=0", len(ledger.seen), ledger.duplicates)
 }

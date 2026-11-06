@@ -97,8 +97,9 @@ source/destination brokers; start them with `make broker`. Code PRs run this fau
 
 The blocked-output cases first save a prefix on two partitions, pause the destination,
 and wait for the copier to report new submissions. They then kill it, signal it, wait
-for its delivery timeout, interrupt its source during shutdown, or transfer ownership.
-Saved offsets must stay at the delivered prefix. Restart must recover every retained
+for its delivery timeout, or transfer ownership. Saved offsets must stay at the delivered
+prefix. A separate case keeps output healthy, establishes confirmed but unsaved records,
+then pauses the source and requires shutdown to time out while saving progress. Restart must recover every retained
 record, and every received copy is checked, including permitted duplicates. The small
 byte caps exercise backpressure without a large dataset. CLI logs go to temporary files
 rather than accumulating in the test process's memory.
@@ -117,12 +118,15 @@ cycles, elapsed time and failure status; it does not claim continuous process up
 or a sustained publishing rate. Required broker settings cannot produce a successful
 empty run. Short CI cases and long repetitions use the same assertions.
 
+The longer runs below are a recommended local qualification schedule. Hosted scheduled
+CI continues to run one fault cycle; it does not launch the two-hour recovery suite.
+
 | Execution | Purpose |
 | --- | --- |
 | Every code PR: component tests and one fault cycle | Catch unsafe progress, corrupt replay and shutdown regressions quickly |
-| Scheduled main / pre-release: `recovery` for two hours | Exercise repeated failure, reassignment and restart on the tested executable |
-| Pre-release: `resources`, `capture` and `auth` | Check archive storage cuts, continuous capture, authentication and replicated failover separately |
-| Release candidate: `endurance` for 24 hours | Keep one copier alive through sustained input and recoverable destination stalls |
+| Manually or locally scheduled before release: `recovery` for two hours | Exercise repeated failure, reassignment and restart on the tested executable |
+| Manually before release: `resources`, `capture` and `auth` | Check archive storage cuts, continuous capture, authentication and replicated failover separately |
+| Manually for a release candidate: `endurance` for 24 hours | Keep one copier alive through sustained input and recoverable destination stalls |
 
 Use the exact candidate executable for CLI qualification and retain its digest in each
 manifest. Component tests compile the checkout. A recovery pass cannot substitute for
