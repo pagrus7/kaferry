@@ -147,6 +147,30 @@ Start at a moderate rate: 50 records/second with this fixture's roughly 3 KiB av
 
 Use a local scheduler such as launchd/cron to invoke these commands against approved commits or release executables, with one workload at a time and host sleep disabled for the run. No scheduler is installed automatically. Keep public PR execution on disposable hosted runners. GitHub-hosted jobs cannot remain alive for a multi-day run.
 
+### Publish endurance results
+
+Every standalone `endurance` run writes `summary.md` and a `publication/` directory after cleanup, including failed or interrupted runs. The package contains `endurance-results.md`, `endurance-results.json`, `endurance-evidence.tar.gz` and `endurance.SHA256SUMS`. The JSON keeps the complete manifest and measurements; the archive keeps the manifest, metrics, logs and JSONL samples. Missing observations remain unavailable. Short runs are labeled rehearsals. Existing publication directories are refused.
+
+To package an older run, or retry report generation into a new directory:
+
+```sh
+python3 scripts/endurance_results.py build-results/endurance-24h --output build-results/endurance-package
+```
+
+For a report visible directly from the README, copy the generated Markdown and JSON together into a dated directory under `docs/endurance/`, then add its report link to [the results index](../docs/endurance-results.md). Review and commit these small files; keep logs and sample streams in the evidence archive. Keep the measured version, source, date, workload and limitations in the report. The runner never edits tracked documentation.
+
+To publish downloadable evidence, run against a verified release executable using `--binary` from the start. After reviewing the package, use an authenticated `gh` CLI with permission to upload release assets:
+
+```sh
+python3 scripts/endurance_results.py build-results/endurance-24h --publish vX.Y.Z
+```
+
+If you prepared a custom package directory, pass the same `--output` when publishing: `python3 scripts/endurance_results.py build-results/endurance-24h --output build-results/endurance-package --publish vX.Y.Z`.
+
+The command downloads the selected release's platform archive and requires its executable SHA-256 to match the measured binary. It also checks the package checksums and requires a clean fixture checkout. Runs of a newer development executable cannot be published as an older release's evidence. `--repo OWNER/REPO` selects another repository. Failed runs with measured identity can be published and retain their failure status; preflight failures without metrics cannot be uploaded.
+
+Each upload uses platform/date-prefixed asset names and its own checksums; existing assets, tags and release notes remain unchanged. Add the printed release link to the committed results page for downloads. Uploading is explicit; running qualification does not contact GitHub. The existing release-results generator covers release load/soak evidence and does not import this dedicated profile.
+
 ## Published-version contracts
 
 [The release catalog](../tests/qualification/releases.json) states the expected contract for each selected release: successful resume or explicit rejection. It is intentionally explicit rather than assuming all older versions share state formats.

@@ -109,7 +109,8 @@ def summarize(directory):
         growth = ((r["final_median_rss_bytes"] - r["warm_median_rss_bytes"]) / (1 << 20)
                   if "final_median_rss_bytes" in r and "warm_median_rss_bytes" in r else None)
         shutdown = f"{r['shutdown_seconds']:.3f}" if "shutdown_seconds" in r else "—"
-        rows.append(f"| {r['test']} | {status} | {r['records']} | {r['records_per_second']:.0f} | {r['sampled_peak_rss_bytes'] / (1 << 20):.1f} | {r.get('rss_samples', '—')} | {f'{growth:.1f}' if growth is not None else '—'} | {r['peak_uncommitted_records']} / {r['peak_uncommitted_bytes']} | {r.get('max_sampled_commit_lag', '—')} | {shutdown} |")
+        peak_rss = f"{r['sampled_peak_rss_bytes'] / (1 << 20):.1f}" if r.get('rss_samples', 0) > 0 else 'unavailable'
+        rows.append(f"| {r['test']} | {status} | {r['records']} | {r['records_per_second']:.0f} | {peak_rss} | {r.get('rss_samples', '—')} | {f'{growth:.1f}' if growth is not None else '—'} | {r['peak_uncommitted_records']} / {r['peak_uncommitted_bytes']} | {r.get('max_sampled_commit_lag', '—')} | {shutdown} |")
         if e := r.get('endurance'):
             workloads.append(f"| {r['test']} | {e['profile']} | {e['target_records_per_second']} | {e['target_records']} | {e['submitted_at_publish_end']} / {e['acknowledged_at_publish_end']} | {e['acknowledged_after_grace']} | {e['min_acknowledged_window_ratio']:.3f} | {e['load_validated']} | {e['max_scheduling_debt_records']} |")
         if d := r.get('delivery'):
@@ -162,7 +163,7 @@ def summarize(directory):
             rows.append(f"| {name} | {ns} | {size} | {allocations} |")
     rows.extend(markdown(directory))
     rows.extend(comparison(directory))
-    rows.extend(["", "Throughput is informational on shared runners. Bounded load timing starts at SQL input release and ends at process exit. RSS includes one sample before SQL input; short copies may finish before another sample. JSON metrics, environment, coverage and logs are retained in this run's artifacts.", ""])
+    rows.extend(["", "Throughput is informational on shared runners. Bounded load timing starts at SQL input release and ends at process exit. RSS includes one sample before SQL input; short copies may finish before another sample. JSON metrics and available environment, coverage and logs are retained in the report directory; CI uploads that directory as an artifact.", ""])
     text = "\n".join(rows)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "summary.md").write_text(text)
@@ -170,6 +171,7 @@ def summarize(directory):
         with open(destination, "a") as summary:
             summary.write(text)
     print(text)
+    return text
 
 
 def release_summary(evidence, archive, commit, version, output):
