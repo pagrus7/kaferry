@@ -3,6 +3,7 @@
 package compat
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -201,6 +202,60 @@ func TestLoadIntegrityKeepsTimestampAndArchiveProvenanceChecks(t *testing.T) {
 			require.True(t, *result.Integrity.Matched)
 			require.Equal(t, 1, result.Corrupted)
 			require.Zero(t, result.Verified)
+		})
+	}
+}
+
+func TestLoadFiniteVerifierAllowsDestinationPartitionSkew(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing=%t", missing), func(t *testing.T) {
+			// Given a finite key-routed copy whose destination partitions can arrive independently.
+			const count = 20000
+			stream := newFiniteStreamRecords("fixture", time.Now().Truncate(time.Millisecond), count)
+			stream.published, stream.acknowledged = count, count
+			stream.keyRouting = kgo.StickyKeyPartitioner(nil).ForTopic("destination")
+			stream.destinationPartitions = 5
+			var routes [5][]int
+			for id := range count {
+				r := streamFixtureRecord(id, stream.stamp)
+				partition := id % 5
+				if r.Key != nil {
+					partition = stream.keyRouting.Partition(r, 5)
+				}
+				routes[partition] = append(routes[partition], id)
+				stream.integrity.submit(id, r)
+			}
+			// When each destination partition is exhausted before reading the next.
+			peak := 0
+			for partition, ids := range routes {
+				for _, id := range ids {
+					if missing && id == 1 {
+						continue
+					}
+					r := streamFixtureRecord(id, stream.stamp)
+					r.Partition = int32(partition)
+					stream.verify(t, r)
+					peak = max(peak, len(stream.seen))
+				}
+			}
+			// Then legal skew reconciles, while a missing record and late duplicate remain visible.
+			require.Greater(t, peak, 8192)
+			result := stream.delivery(true)
+			require.Zero(t, result.Corrupted)
+			require.Zero(t, result.Reordered)
+			if missing {
+				require.Equal(t, 1, *result.Missing)
+				require.Equal(t, count-1, result.Verified)
+				require.False(t, *result.Integrity.Matched)
+			} else {
+				require.Zero(t, *result.Missing)
+				require.Equal(t, count, result.Verified)
+				require.True(t, *result.Integrity.Matched)
+				require.Empty(t, stream.seen)
+				require.Empty(t, stream.integrity.pending)
+			}
+			stream.verify(t, streamFixtureRecord(0, stream.stamp))
+			require.Equal(t, 1, stream.duplicates)
 		})
 	}
 }

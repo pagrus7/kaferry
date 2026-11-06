@@ -52,7 +52,7 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			seedCtx, seedCancel := context.WithTimeout(t.Context(), seedTimeout)
 			defer seedCancel()
 			stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
-			records := newStreamRecords(src, stamp)
+			records := newFiniteStreamRecords(src, stamp, count)
 			records.publish(t, seedCtx, p, reports, count)
 			for range count {
 				select {

@@ -30,6 +30,7 @@ type streamIntegrity struct {
 	submittedCount, receivedCount int
 	next                          []int
 	pending                       map[int][sha256.Size]byte
+	maxPending                    int
 }
 
 func newStreamIntegrity() *streamIntegrity {
@@ -37,7 +38,7 @@ func newStreamIntegrity() *streamIntegrity {
 }
 
 func newPartitionedStreamIntegrity(partitions int) *streamIntegrity {
-	s := &streamIntegrity{next: make([]int, partitions), submitted: make([]hash.Hash, partitions), received: make([]hash.Hash, partitions), pending: make(map[int][sha256.Size]byte)}
+	s := &streamIntegrity{maxPending: 8192, next: make([]int, partitions), submitted: make([]hash.Hash, partitions), received: make([]hash.Hash, partitions), pending: make(map[int][sha256.Size]byte)}
 	for partition := range partitions {
 		s.next[partition] = partition
 		s.submitted[partition], s.received[partition] = sha256.New(), sha256.New()
@@ -89,7 +90,7 @@ func (s *streamIntegrity) receive(t *testing.T, id int, key, value []byte, heade
 		delete(s.pending, s.next[partition])
 		s.next[partition] += len(s.next)
 	}
-	require.LessOrEqual(t, len(s.pending), 8192, "integrity gaps exceeded the bounded ID window; fingerprints are partial")
+	require.LessOrEqual(t, len(s.pending), s.maxPending, "integrity gaps exceeded the bounded ID window; fingerprints are partial")
 }
 
 func (s *streamIntegrity) snapshot(complete bool, submitted, received int) integrityEvidence {
