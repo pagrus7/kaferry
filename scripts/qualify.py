@@ -300,6 +300,14 @@ def run_suite(args):
     finally:
         receipt.update(elapsed_seconds=time.monotonic() - started, finished_at=datetime.now(timezone.utc).isoformat())
         write_json(args.output / 'manifest.json', receipt)
+        if args.suite == 'endurance':
+            from endurance_results import prepare
+            try:
+                prepare(args.output, args.output / 'publication')
+            except (OSError, ValueError) as error:
+                if receipt['status'] == 'passed':
+                    raise
+                print(f'Endurance report unavailable: {error}', file=sys.stderr)
 
 
 def released_binaries(args):

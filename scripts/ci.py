@@ -162,7 +162,7 @@ def summarize(directory):
             rows.append(f"| {name} | {ns} | {size} | {allocations} |")
     rows.extend(markdown(directory))
     rows.extend(comparison(directory))
-    rows.extend(["", "Throughput is informational on shared runners. Bounded load timing starts at SQL input release and ends at process exit. RSS includes one sample before SQL input; short copies may finish before another sample. JSON metrics, environment, coverage and logs are retained in this run's artifacts.", ""])
+    rows.extend(["", "Throughput is informational on shared runners. Bounded load timing starts at SQL input release and ends at process exit. RSS includes one sample before SQL input; short copies may finish before another sample. JSON metrics and available environment, coverage and logs are retained in the report directory; CI uploads that directory as an artifact.", ""])
     text = "\n".join(rows)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "summary.md").write_text(text)
@@ -170,6 +170,7 @@ def summarize(directory):
         with open(destination, "a") as summary:
             summary.write(text)
     print(text)
+    return text
 
 
 def release_summary(evidence, archive, commit, version, output):
