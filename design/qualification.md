@@ -15,7 +15,7 @@ python3 scripts/qualify.py plan --tier pr
 
 If `python3` is an older system interpreter, use `make qualification-setup PYTHON=python3.14` and `python3.14` for the CLI commands. Setup builds Kaferry and installs the independent librdkafka checker into a checkout-local Python virtual environment. Run setup and qualification with the same Python major/minor version. Pass `--binary /absolute/path/to/kaferry` to test a downloaded executable; qualification does not rebuild that executable.
 
-Reserve ports 39092/40092 for ordinary plain brokers, 39192/40192 for dedicated endurance brokers, 41092–43094 for the security listeners and 44088 for Kerberos. Run one lab coordinator per host, across all checkouts and do not run `make broker` or `make qualification` alongside it. The runner takes a host-wide lock for its fixed ports and Compose names; legacy Make entrypoints do not take that lock. Broker containers use only the `kaferry-compat`, `kaferry-endurance` and `kaferry-qualification` Compose projects. Other Docker workloads are outside the lab.
+Reserve ports 39092/40092 for ordinary plain brokers, 39192/40192 for dedicated endurance brokers, 41092–43094 for the security listeners and 44088 for Kerberos. Run one lab coordinator per host, across all checkouts and do not run `make broker` or `make qualification` alongside it. The runner takes a host-wide lock for its fixed ports and Compose names; legacy Make entrypoints do not take that lock. Standalone broker containers use the `kaferry-compat`, `kaferry-endurance` and `kaferry-qualification` Compose projects; parallel jobs use `kaferry-lab-<run-id>-<slot>`. Other Docker workloads are outside the lab.
 
 Start with one workload, 8 available CPUs, 16–20 GiB available RAM and 100 GiB free test storage; measure actual usage before increasing load. These are starting allocations, not capacity guarantees. Fixtures cap broker JVM heaps at 512 MiB and use four internal offset/transaction partitions.
 
@@ -129,6 +129,15 @@ KAFERRY_QUAL_CERT_DIR=/tmp docker compose -p kaferry-qualification -f tests/qual
 
 The temporary certificate path satisfies Compose interpolation during teardown; it does not create new brokers. Restarting Docker can interrupt other workloads and is outside the lab's automatic cleanup.
 
+For a parallel run, use the exact `fixture_project` from each child manifest. For example,
+clean up the endurance job below, then repeat with the `recovery/manifest.json` or
+`capture/manifest.json` from that same run. Check that the run has stopped first.
+
+```sh
+project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixture_project"])' build-results/parallel-24h/endurance/manifest.json)
+docker compose -p "$project" --profile cross-cluster down -v --remove-orphans
+```
+
 ## Recovery and endurance coverage
 
 Safety assertions run before long qualification. `make check` exercises confirmed-prefix
@@ -232,7 +241,7 @@ The verifier releases contiguous record IDs and bounds outstanding streaming inp
 
 Start at a moderate rate: 50 records/second with this fixture's roughly 3 KiB average payload is about 40 GB of raw input over 72 hours, before Kafka replicas, destination output and archives. Payloads compress heavily by default. Set `KAFERRY_ARCHIVE_PAYLOAD=random` for deterministic high-entropy values. Bound the test duration/rate to available disk; the script does not prune active records or archives during verification. Source retention must exceed the maximum test backlog or interruption. Record-ID overflow is rejected before intake.
 
-Use a local scheduler such as launchd/cron to invoke these commands against approved commits or release executables, with one workload at a time and host sleep disabled for the run. No scheduler is installed automatically. Keep public PR execution on disposable hosted runners. GitHub-hosted jobs cannot remain alive for a multi-day run.
+Use a local scheduler such as launchd/cron to invoke these commands against approved commits or release executables, with one coordinator at a time (which may own a parallel pair) and host sleep disabled for the run. No scheduler is installed automatically. Keep public PR execution on disposable hosted runners. GitHub-hosted jobs cannot remain alive for a multi-day run.
 
 ### Publish endurance results
 
