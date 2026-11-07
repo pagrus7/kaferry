@@ -331,6 +331,9 @@ func ownedSoakDestination(t *testing.T, container string) {
 	if os.Getenv("KAFERRY_SOAK_PROFILE") == "application" {
 		project = "kaferry-endurance"
 	}
+	if assigned := os.Getenv("KAFERRY_FIXTURE_PROJECT"); assigned != "" {
+		project = assigned
+	}
 	if err != nil || strings.TrimSpace(string(data)) != project+" kafka-dr" {
 		t.Fatal("destination stalls require the project's disposable kafka-dr service", err)
 	}

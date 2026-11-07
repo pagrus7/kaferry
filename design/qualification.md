@@ -15,9 +15,50 @@ python3 scripts/qualify.py plan --tier pr
 
 If `python3` is an older system interpreter, use `make qualification-setup PYTHON=python3.14` and `python3.14` for the CLI commands. Setup builds Kaferry and installs the independent librdkafka checker into a checkout-local Python virtual environment. Run setup and qualification with the same Python major/minor version. Pass `--binary /absolute/path/to/kaferry` to test a downloaded executable; qualification does not rebuild that executable.
 
-Reserve ports 39092/40092 for ordinary plain brokers, 39192/40192 for dedicated endurance brokers, 41092–43094 for the security listeners and 44088 for Kerberos. Run one lab per host, across all checkouts and do not run `make broker` or `make qualification` alongside it. The runner takes a host-wide lock for its fixed ports and Compose names; legacy Make entrypoints do not take that lock. Broker containers use only the `kaferry-compat`, `kaferry-endurance` and `kaferry-qualification` Compose projects. Other Docker workloads are outside the lab.
+Reserve ports 39092/40092 for ordinary plain brokers, 39192/40192 for dedicated endurance brokers, 41092–43094 for the security listeners and 44088 for Kerberos. Run one lab coordinator per host, across all checkouts and do not run `make broker` or `make qualification` alongside it. The runner takes a host-wide lock for its fixed ports and Compose names; legacy Make entrypoints do not take that lock. Standalone broker containers use the `kaferry-compat`, `kaferry-endurance` and `kaferry-qualification` Compose projects; parallel jobs use `kaferry-lab-<run-id>-<slot>`. Other Docker workloads are outside the lab.
 
 Start with one workload, 8 available CPUs, 16–20 GiB available RAM and 100 GiB free test storage; measure actual usage before increasing load. These are starting allocations, not capacity guarantees. Fixtures cap broker JVM heaps at 512 MiB and use four internal offset/transaction partitions.
+
+## Two concurrent workloads
+
+The `parallel` command holds the host lease for a pair of independent runs. It starts
+one uninterrupted Kafka endurance run alongside repeated recovery (default two hours)
+or archive capture. Each uses a unique Compose project, separate ports, temporary
+files and evidence directory. Ports 45192/45193 and 45292/45293 must be available.
+
+```sh
+# Rehearse both jobs before committing the host to a day-long run.
+python3 scripts/qualify.py parallel --duration 1m --companion-duration 1m --output build-results/parallel-rehearsal
+# Keep Kafka copying for 24 hours while recovery scenarios repeat for two hours.
+python3 scripts/qualify.py parallel --output build-results/parallel-24h
+# Alternatively run Kafka endurance and archive capture for 24 hours each.
+python3 scripts/qualify.py parallel --companion capture --output build-results/parallel-capture-24h
+```
+
+Use `--binary` to give both jobs the same candidate executable. `--duration` controls
+Kafka publishing; `--companion-duration` controls recovery or capture. Each streaming
+job still includes its five-minute drain. The summary `parallel.json` retains both
+manifests and the declared co-running workloads. Failure or Ctrl-C cancels the peer,
+preserves both receipts and tears down only this pair's projects. Existing output
+paths are refused. Other standalone suites, security fixtures and legacy Make commands
+must not run alongside the pair. A short paired rehearsal also runs in PR CI when the
+parallel runner, its workflow or relevant fault/soak tests change.
+
+Admission checks the **combined** full disk allowance on both jobs' broker filesystems,
+the host temporary filesystem and the evidence filesystem. This is deliberately
+conservative when they are separate disks. A 24-hour Kafka run plus recovery needs
+about 278 GiB; the archive alternative reserves additional input/output space. The
+checks cannot reserve space against unrelated disk users. `--output` relocates evidence,
+not Kafka storage; free NAS space does not expand Docker's backing storage. Output must
+be writable. A network archive filesystem additionally needs the sync, rename and lock
+semantics described in the [archive contract](archive.md).
+
+Parallel execution uses four broker processes and shares the host's CPU, memory and
+storage bandwidth. Check the container runtime's memory limit as well as host RAM.
+Compare a single-job rehearsal with a paired rehearsal before increasing concurrency;
+retain the input-rate and recovery gates in both. Pairing qualifies correctness under
+the recorded co-load, not isolated performance. Run comparative benchmarks separately.
+The executable's platform determines whether evidence covers native macOS or Linux.
 
 ## Compatibility matrix
 
@@ -87,6 +128,15 @@ KAFERRY_QUAL_CERT_DIR=/tmp docker compose -p kaferry-qualification -f tests/qual
 ```
 
 The temporary certificate path satisfies Compose interpolation during teardown; it does not create new brokers. Restarting Docker can interrupt other workloads and is outside the lab's automatic cleanup.
+
+For a parallel run, use the exact `fixture_project` from each child manifest. For example,
+clean up the endurance job below, then repeat with the `recovery/manifest.json` or
+`capture/manifest.json` from that same run. Check that the run has stopped first.
+
+```sh
+project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixture_project"])' build-results/parallel-24h/endurance/manifest.json)
+docker compose -p "$project" --profile cross-cluster down -v --remove-orphans
+```
 
 ## Recovery and endurance coverage
 
@@ -191,7 +241,7 @@ The verifier releases contiguous record IDs and bounds outstanding streaming inp
 
 Start at a moderate rate: 50 records/second with this fixture's roughly 3 KiB average payload is about 40 GB of raw input over 72 hours, before Kafka replicas, destination output and archives. Payloads compress heavily by default. Set `KAFERRY_ARCHIVE_PAYLOAD=random` for deterministic high-entropy values. Bound the test duration/rate to available disk; the script does not prune active records or archives during verification. Source retention must exceed the maximum test backlog or interruption. Record-ID overflow is rejected before intake.
 
-Use a local scheduler such as launchd/cron to invoke these commands against approved commits or release executables, with one workload at a time and host sleep disabled for the run. No scheduler is installed automatically. Keep public PR execution on disposable hosted runners. GitHub-hosted jobs cannot remain alive for a multi-day run.
+Use a local scheduler such as launchd/cron to invoke these commands against approved commits or release executables, with one coordinator at a time (which may own a parallel pair) and host sleep disabled for the run. No scheduler is installed automatically. Keep public PR execution on disposable hosted runners. GitHub-hosted jobs cannot remain alive for a multi-day run.
 
 ### Publish endurance results
 
