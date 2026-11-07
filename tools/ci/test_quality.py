@@ -4,12 +4,39 @@ import unittest
 import json
 from pathlib import Path
 import tempfile
+from unittest.mock import patch
 
-from tools.ci.quality import benchmarks, coverage, production_files
+from tools.ci.quality import benchmarks, coverage, maintainability, markdown, production_files
 from tools.ci.history import comparison
 
 
 class CoverageTest(unittest.TestCase):
+    def test_new_duplication_locations_survive_into_the_summary(self):
+        # Given a scan containing an existing match and a new normalized test match.
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / 'duplication').mkdir()
+            clone = {'firstFile': {'name': str(Path.cwd() / 'src/a_test.go'), 'start': 10, 'end': 20},
+                     'secondFile': {'name': str(Path.cwd() / 'src/b_test.go'), 'start': 30, 'end': 40},
+                     'tokens': 80, 'isNew': True}
+            scan = {'statistics': {'total': {'sources': 4, 'clones': 2, 'percentage': 5, 'newClones': 1}},
+                    'duplicates': [dict(clone, isNew=False), clone]}
+            (directory / 'duplication/jscpd-report.json').write_text(json.dumps(scan))
+            functions = [{'file': 'src/a.go', 'package': 'a', 'function': 'F', 'complexity': 1, 'line': 1}]
+            with patch('tools.ci.quality.complexity', return_value=functions), \
+                 patch('tools.ci.quality.base_complexity', return_value=[]), \
+                 patch('tools.ci.quality.production_files', return_value=[Path('src/a.go')]), \
+                 patch.dict('os.environ', {'QUALITY_BASE_SHA': 'a' * 40}):
+                result = maintainability(directory)
+            (directory / 'quality.json').write_text(json.dumps(result))
+            # When rendering, then only new findings require action and both locations are visible.
+            self.assertEqual([clone], result['new_clones'])
+            summary = '\n'.join(markdown(directory))
+            self.assertIn('New clones: **1**', summary)
+            self.assertIn('src/a_test.go:10-20', summary)
+            self.assertIn('src/b_test.go:30-40', summary)
+            self.assertIn('New duplication fails CI', summary)
+
     def test_production_scan_supports_both_layouts_and_excludes_tests(self):
         # Given a base or head checkout with production and test source files.
         for prefix in ('', 'src/'):

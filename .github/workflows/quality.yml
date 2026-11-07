@@ -37,14 +37,17 @@ jobs:
           echo '216bae5de2b30c57f893286585c7a348e8af7cd36810949831f569d29f495a3b  .cache/quality-tools/jscpd.tar.gz' | sha256sum --check
           tar -xzf .cache/quality-tools/jscpd.tar.gz -C .cache/quality-tools
       - name: Script tests
+        env:
+          JSCPD: ${{ github.workspace }}/.cache/quality-tools/jscpd
         run: python3 -m unittest discover -s tools -t . -p 'test_*.py'
       - name: Staticcheck
         run: python3 -m tools.ci.ci staticcheck staticcheck ./...
+      - name: Duplication gate
+        if: success() || failure()
+        run: make duplicates JSCPD=.cache/quality-tools/jscpd DUPLICATION_BASE="${QUALITY_BASE_SHA:-HEAD}"
       - name: Maintainability reports
         if: success() || failure()
-        run: |
-          .cache/quality-tools/jscpd src/cmd src/internal --format go --ignore '**/*_test.go' --min-tokens 100 --min-lines 10 --reporters json,sarif --output build-results/duplication --fail-on-empty --baseline-from-ref "${QUALITY_BASE_SHA:-HEAD}" --no-tips
-          python3 -m tools.ci.quality maintainability
+        run: python3 -m tools.ci.quality maintainability
       - name: Go vulnerability gate
         id: vulnerabilities
         if: success() || failure()

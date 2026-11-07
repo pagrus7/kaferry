@@ -25,3 +25,9 @@ make fast
 Run Python tools as modules, for example `python3 -m tools.docs.docs`. Their tests live beside them; run all with `python3 -m unittest discover -s tools -t .`.
 
 [Component boundaries](docs/design/components.md) · [Review process](docs/development/reviews/README.md) · [Release procedure](docs/releases/README.md) · [Publishing endurance results](docs/endurance-results.md).
+
+## Duplication checks
+
+Install [jscpd 5.4.2](https://github.com/kucherenko/jscpd/releases/tag/v5.4.2), make the binary available as `jscpd`, and run `make duplicates`. It uses the same [.jscpd.json](.jscpd.json) as CI to scan Go and Python under `src/` and `tools/`, including tests with any build tags. Comments are skipped; consistent identifier renaming and changes to literal values still match. The default comparison is the locally available `origin/main`; use `make duplicates DUPLICATION_BASE=<base-sha>` for another base, or `JSCPD=/path/to/jscpd` for a downloaded binary.
+
+The quality job compares both revisions with the current scan settings and fails on new clones of at least 50 tokens and 5 lines. Existing matches form the comparison baseline. JSON/SARIF reports remain in `build-results/duplication` even when the gate fails; the Actions summary lists both locations of each new match. Fix the duplication or ask the simplicity reviewer to approve a narrow `jscpd:ignore-start` / `jscpd:ignore-end` comment block with a reason when sharing would harm test clarity or correctness. Configuration changes and suppressions need the same review as code.
