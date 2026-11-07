@@ -39,15 +39,6 @@ func (s *Service) source(ctx context.Context, p plan.Plan, limits config.Worker,
 }
 
 func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafkaport.InspectionConnection, report *Report) error {
-	if p.Partitions != nil {
-		topic, err := connection.Describe(ctx, false)
-		if err != nil {
-			return err
-		}
-		if _, err = p.Partitions.Select(topic.Partitions); err != nil {
-			return &kafkaport.Conflict{Err: err}
-		}
-	}
 	saved := map[int32]kafkaport.SavedProgress{}
 	if !p.OneOff {
 		if err := connection.CheckMembers(ctx, p.Group, kafkaport.GroupProtocol(p, report.Fingerprint)); err != nil {

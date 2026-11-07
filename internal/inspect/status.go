@@ -87,27 +87,18 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 	if err := ctx.Err(); err != nil {
 		return report, err
 	}
-	source, sourceInfo, err := s.open(ctx, p.Source, false, stop)
+	source, sourceInfo, err := s.open(ctx, p.Source, false, p.Partitions, stop)
 	if err != nil {
 		return report, err
 	}
 	defer closeConnection(source, stop, &result)
-	destination, destinationInfo, err := s.open(ctx, p.Destination, false, stop)
+	destination, destinationInfo, err := s.open(ctx, p.Destination, false, nil, stop)
 	if err != nil {
 		return report, err
 	}
 	defer closeConnection(destination, stop, &result)
 	report.Source, report.Destination = sourceInfo, destinationInfo
 	report.Source.PartitionFilter = p.Partitions
-	if p.Source.Kind == "TOPIC" && p.Partitions != nil {
-		topic, err := source.Describe(ctx, false)
-		if err != nil {
-			return report, err
-		}
-		if _, err = p.Partitions.Select(topic.Partitions); err != nil {
-			return report, &kafkaport.Conflict{Err: err}
-		}
-	}
 	report.Fingerprint, err = p.Fingerprint(sourceInfo.ClusterID, destinationInfo.ClusterID, destinationInfo.TopicID)
 	if err != nil {
 		return report, &kafkaport.Conflict{Err: err}
@@ -226,12 +217,14 @@ func (s *Service) fileStatus(p plan.Plan, limits config.Worker, r *StatusReport)
 
 func (r *StatusReport) classify(p plan.Plan) {
 	anySaved, allStopped := false, len(r.Partitions) > 0
+	usesTime := false
 	reasons := make(map[string]bool)
-	for _, p := range r.Partitions {
-		anySaved = anySaved || p.Position != nil
-		allStopped = allStopped && p.Position != nil && p.Stop != nil
-		if p.Stop != nil {
-			reasons[p.Stop.Reason] = true
+	for _, row := range r.Partitions {
+		anySaved = anySaved || row.Position != nil
+		allStopped = allStopped && row.Position != nil && row.Stop != nil
+		if row.Stop != nil {
+			reasons[row.Stop.Reason] = true
+			usesTime = usesTime || p.StopUsesTime(row.Stop.Reason)
 		}
 	}
 	switch {
@@ -244,7 +237,7 @@ func (r *StatusReport) classify(p plan.Plan) {
 		switch {
 		case reasons["worker_record_cap"]:
 			r.Verdict = "limit_reached"
-		case reasons["timestamp"] || !p.HasOffsetEnd() && (reasons["tip"] || reasons["eof"] && p.DisorderMS() >= 0):
+		case usesTime:
 			r.Verdict = "complete_within_staleness"
 		}
 		var descriptions []string

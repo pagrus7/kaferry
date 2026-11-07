@@ -245,7 +245,7 @@ func (r *Runner) stopAtTimestamp(p *partition, input Input) (bool, error) {
 	if r.plan.Source.Kind != "TOPIC" {
 		return false, nil
 	}
-	if r.plan.DisorderMS() < 0 || r.plan.HasOffsetEnd() {
+	if !r.plan.TimestampStopEnabled() {
 		return false, nil
 	}
 	stop, err := p.pastTimestamp(input.Record.TimestampMS, r.plan.DisorderMS())
@@ -380,7 +380,7 @@ func (r *Runner) tips() error {
 	wait := r.limits.TipWait.Duration
 	sampled := false // Interleave watermark queries with consumer polling.
 	for id, p := range r.partitions {
-		if p.stop != nil || r.plan.Source.Kind != "TOPIC" || p.high == nil && (p.window.Upper == nil || r.plan.MaxStalenessMS < 0) {
+		if p.stop != nil || r.plan.Source.Kind != "TOPIC" || p.high == nil && (p.window.Upper == nil || !r.plan.ClockCaptureEnabled()) {
 			continue
 		}
 		action := p.tipAction(r.clock.Now(), r.plan.MaxStalenessMS, wait)

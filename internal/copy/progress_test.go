@@ -32,6 +32,8 @@ func TestConfirmedPrefixIncludesNumericGaps(t *testing.T) {
 
 	// When only the first confirmed position is committed.
 	tk.Committed(Cursor{Partition: 0, Position: 101})
+	require.False(t, tk.Settle(a, true), "saved tokens leave the retained prefix")
+	require.EqualValues(t, 105, tk.PositionOf(b))
 
 	// Then later confirmed work still counts against the caps.
 	records, bytes = tk.Total()
@@ -40,6 +42,13 @@ func TestConfirmedPrefixIncludesNumericGaps(t *testing.T) {
 
 	// When the remaining confirmed position is committed.
 	tk.Committed(Cursor{Partition: 0, Position: 106})
+	require.False(t, tk.Settle(b, true))
+	// When new work follows an empty queue, then its sequence still identifies it.
+	c, err := tk.Observe(Cursor{Partition: 0, Position: 106}, 107, 1)
+	require.NoError(t, err)
+	require.EqualValues(t, 106, tk.PositionOf(c))
+	require.True(t, tk.Settle(c, true))
+	tk.Committed(Cursor{Partition: 0, Position: 107})
 
 	// Then its work is released.
 	records, bytes = tk.Total()
@@ -156,4 +165,25 @@ func TestBackwardsSourceCursorCannotChangeProgressOrWork(t *testing.T) {
 	require.Zero(t, records)
 	require.Zero(t, bytes)
 	require.Equal(t, int64(12), tracker.Saved(0))
+}
+
+func TestUnknownDeliveryTokensDoNotChangeTrackedWork(t *testing.T) {
+	// Given an outstanding write in a current assignment.
+	tracker := NewTracker()
+	tracker.Assign(Cursor{Partition: 0})
+	token, err := tracker.Observe(Cursor{Partition: 0}, 1, 10)
+	require.NoError(t, err)
+	// When unknown or future tokens arrive, then they cannot submit or settle it.
+	for _, unknown := range []Token{
+		{Partition: 1, Generation: token.Generation, Sequence: token.Sequence},
+		{Partition: 0, Generation: token.Generation, Sequence: token.Sequence + 1},
+		{Partition: 0, Generation: token.Generation, Sequence: 0},
+	} {
+		tracker.Submitted(unknown)
+		require.False(t, tracker.Settle(unknown, true))
+	}
+	require.False(t, tracker.InFlight())
+	require.Zero(t, tracker.Confirmed(0).Position)
+	require.True(t, tracker.Settle(token, true))
+	require.EqualValues(t, 1, tracker.Confirmed(0).Position)
 }

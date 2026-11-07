@@ -126,3 +126,39 @@ func TestCriteriaIdentityIncludesBehaviorAndExcludesPositions(t *testing.T) {
 	y, _ = b.testFingerprint("s", "d")
 	require.Equal(t, x, y)
 }
+
+func TestCompletionPoliciesKeepIndependentStops(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, options, where                       string
+		clock, timestamp, finite, tipUsesTime, eofUsesTime bool
+	}{
+		{"following", "TOPIC 'a'", "", "", true, false, false, true, false},
+		{"clock only", "TOPIC 'a'", "", "RECORD_TIMESTAMP<NOW()", true, false, true, true, false},
+		{"both off", "TOPIC 'a'", "MAX_STALENESS=OFF", "RECORD_TIMESTAMP<NOW()", false, false, false, true, false},
+		{"disorder only", "TOPIC 'a'", "MAX_STALENESS=OFF,MAX_OUT_OF_ORDER=INTERVAL '0' SECOND", "RECORD_TIMESTAMP<NOW()", false, true, true, true, true},
+		{"both enabled", "TOPIC 'a'", "MAX_OUT_OF_ORDER=INTERVAL '1' SECOND", "RECORD_TIMESTAMP<NOW()", true, true, true, true, true},
+		{"offset end", "TOPIC 'a'", "", "RECORD_OFFSET<LATEST AND RECORD_TIMESTAMP<NOW()", false, false, true, false, false},
+		{"archive EOF", "ARCHIVE 'a'", "", "RECORD_TIMESTAMP<NOW()", false, false, true, true, false},
+		{"archive disorder", "ARCHIVE 'a'", "MAX_OUT_OF_ORDER=INTERVAL '0' SECOND", "RECORD_TIMESTAMP<NOW()", false, true, true, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given a valid query with independently selectable completion rules.
+			query := "INSERT INTO TOPIC 'b' SELECT * FROM " + tc.source
+			if tc.options != "" {
+				query += " WITH(" + tc.options + ")"
+			}
+			if tc.where != "" {
+				query += " WHERE " + tc.where
+			}
+			// When planning, then execution and saved-stop classification share the rules.
+			p := build(t, query)
+			require.Equal(t, tc.clock, p.ClockCaptureEnabled())
+			require.Equal(t, tc.timestamp, p.TimestampStopEnabled())
+			require.Equal(t, tc.finite, p.Finite())
+			require.Equal(t, tc.tipUsesTime, p.StopUsesTime("tip"))
+			require.Equal(t, tc.eofUsesTime, p.StopUsesTime("eof"))
+			require.True(t, p.StopUsesTime("timestamp"))
+			require.False(t, p.StopUsesTime("worker_record_cap"))
+		})
+	}
+}

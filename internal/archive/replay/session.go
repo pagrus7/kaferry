@@ -58,7 +58,7 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 	if maxPending < 1 {
 		return nil, errors.New("replay pending-record cap must be positive")
 	}
-	s := &Session{store: store, blocks: blocks, limit: maxPending, criteria: plan.Plan{Offsets: query.Offsets, PartitionOffsets: query.PartitionOffsets}}
+	s := &Session{store: store, blocks: blocks, limit: maxPending, criteria: plan.Plan{Offsets: query.Offsets, PartitionOffsets: query.PartitionOffsets, MaxOutOfOrderMS: query.MaxOutOfOrderMS}}
 	saved, err := store.Load()
 	if err != nil {
 		return nil, err
@@ -113,8 +113,8 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 			}
 		}
 	}
-	if query.MaxOutOfOrderMS != nil && *query.MaxOutOfOrderMS >= 0 && !s.criteria.HasOffsetEnd() && s.saved.Window.Upper != nil {
-		threshold := *s.saved.Window.Upper + *query.MaxOutOfOrderMS
+	if s.criteria.TimestampStopEnabled() && s.saved.Window.Upper != nil {
+		threshold := *s.saved.Window.Upper + s.criteria.DisorderMS()
 		s.threshold = &threshold
 	}
 	if !s.saved.Complete {
