@@ -3,9 +3,6 @@ package app
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"strings"
 	"testing"
 
@@ -61,20 +58,6 @@ func TestStatusTextIsBoundedAndJSONRetainsAllPartitions(t *testing.T) {
 	require.Zero(t, *decoded.Partitions[1].Position)
 	require.Equal(t, &zero, decoded.Partitions[1].End)
 	require.Equal(t, "tip", decoded.Partitions[11].Stop.Reason)
-}
-
-type statusWriter struct{ err error }
-
-func (w statusWriter) Write([]byte) (int, error) { return 0, w.err }
-func TestStatusOutputFailuresRemainErrors(t *testing.T) {
-	for _, asJSON := range []bool{false, true} {
-		t.Run(fmt.Sprint(asJSON), func(t *testing.T) {
-			// Given a failed or short stdout write, when rendering a status, then the caller gets an error.
-			failed := errors.New("stdout failed")
-			require.ErrorIs(t, renderStatus(statusWriter{failed}, inspect.StatusReport{}, asJSON), failed)
-			require.ErrorIs(t, renderStatus(statusWriter{}, inspect.StatusReport{}, asJSON), io.ErrShortWrite)
-		})
-	}
 }
 
 func TestArchiveStatusTextReportsSavedSnapshot(t *testing.T) {

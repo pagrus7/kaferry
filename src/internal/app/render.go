@@ -11,36 +11,42 @@ import (
 )
 
 func renderExplanation(output io.Writer, report inspect.Report, asJSON bool) error {
-	var buffer bytes.Buffer
 	if asJSON {
-		encoder := json.NewEncoder(&buffer)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(report); err != nil {
-			return err
+		return renderJSON(output, report)
+	}
+	var buffer bytes.Buffer
+	fmt.Fprintln(&buffer, "Endpoints")
+	renderEndpoint(&buffer, "Source", report.Source)
+	renderEndpoint(&buffer, "Destination", report.Destination)
+	renderProgress(&buffer, report)
+	renderWindows(&buffer, report)
+	renderBehavior(&buffer, report)
+	if len(report.Warnings) > 0 {
+		fmt.Fprintln(&buffer, "\nAttention")
+		for _, warning := range report.Warnings[:min(8, len(report.Warnings))] {
+			fmt.Fprintf(&buffer, "  - %s\n", warning)
 		}
-	} else {
-		fmt.Fprintln(&buffer, "Endpoints")
-		renderEndpoint(&buffer, "Source", report.Source)
-		renderEndpoint(&buffer, "Destination", report.Destination)
-		renderProgress(&buffer, report)
-		renderWindows(&buffer, report)
-		renderBehavior(&buffer, report)
-		if len(report.Warnings) > 0 {
-			fmt.Fprintln(&buffer, "\nAttention")
-			for _, warning := range report.Warnings[:min(8, len(report.Warnings))] {
-				fmt.Fprintf(&buffer, "  - %s\n", warning)
-			}
-			if len(report.Warnings) > 8 {
-				fmt.Fprintf(&buffer, "  %d more warnings; see --json.\n", len(report.Warnings)-8)
-			}
+		if len(report.Warnings) > 8 {
+			fmt.Fprintf(&buffer, "  %d more warnings; see --json.\n", len(report.Warnings)-8)
 		}
-		fmt.Fprintln(&buffer, "\nPreview limits")
-		fmt.Fprintln(&buffer, "  Read-only; metadata and progress may change before the run.")
-		fmt.Fprintln(&buffer, "  Write access is not checked. Records, output bytes and duration are not estimated.")
-		if report.Source.File != nil || report.Destination.File != nil {
-			fmt.Fprintln(&buffer, "  Archive records are not scanned; full archive integrity is not checked.")
-		}
-		fmt.Fprintln(&buffer, "  Full partition details and identities: --json.")
+	}
+	fmt.Fprintln(&buffer, "\nPreview limits")
+	fmt.Fprintln(&buffer, "  Read-only; metadata and progress may change before the run.")
+	fmt.Fprintln(&buffer, "  Write access is not checked. Records, output bytes and duration are not estimated.")
+	if report.Source.File != nil || report.Destination.File != nil {
+		fmt.Fprintln(&buffer, "  Archive records are not scanned; full archive integrity is not checked.")
+	}
+	fmt.Fprintln(&buffer, "  Full partition details and identities: --json.")
+	_, err := buffer.WriteTo(output)
+	return err
+}
+
+func renderJSON(output io.Writer, report any) error {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(report); err != nil {
+		return err
 	}
 	_, err := buffer.WriteTo(output)
 	return err

@@ -124,21 +124,11 @@ func (p *parser) statement() Statement {
 	}
 	p.expect("INSERT")
 	p.expect("INTO")
-	s.Destination = p.endpoint()
-	if p.is("WITH") {
-		s.Destination.OptionsPosition = p.current.Position
-		p.next()
-		s.Destination.Options = p.settings(DestinationSettings)
-	}
+	s.Destination = p.endpoint(DestinationSettings)
 	p.expect("SELECT")
 	p.expect("*")
 	p.expect("FROM")
-	s.Source = p.endpoint()
-	if p.is("WITH") {
-		s.Source.OptionsPosition = p.current.Position
-		p.next()
-		s.Source.Options = p.settings(SourceSettings)
-	}
+	s.Source = p.endpoint(SourceSettings)
 	if p.is("WHERE") {
 		s.WherePosition = p.current.Position
 		p.next()
@@ -157,17 +147,22 @@ func (p *parser) statement() Statement {
 	return s
 }
 
-func (p *parser) endpoint() Endpoint {
-	if p.take("TOPIC") {
-		position := p.current.Position
-		return Endpoint{Position: position, Kind: "TOPIC", Name: p.text("string")}
-	}
-	if !p.take("ARCHIVE") {
-		p.fail()
+func (p *parser) endpoint(scope Scope) Endpoint {
+	kind := p.oneOf("TOPIC", "ARCHIVE")
+	if kind == "" {
 		return Endpoint{}
 	}
 	position := p.current.Position
-	return Endpoint{Position: position, Kind: "ARCHIVE", Name: p.text("string"), Format: "avro"}
+	endpoint := Endpoint{Position: position, Kind: kind, Name: p.text("string")}
+	if kind == "ARCHIVE" {
+		endpoint.Format = "avro"
+	}
+	if p.is("WITH") {
+		endpoint.OptionsPosition = p.current.Position
+		p.next()
+		endpoint.Options = p.settings(scope)
+	}
+	return endpoint
 }
 
 func (p *parser) connection() Connection {

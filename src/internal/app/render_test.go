@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -61,19 +62,24 @@ func TestTextExplanationStructuresBehaviorAndEscapesNames(t *testing.T) {
 	}
 }
 
-type shortOutput struct{}
+type reportWriter struct{ err error }
 
-func (shortOutput) Write([]byte) (int, error) { return 0, nil }
+func (w reportWriter) Write([]byte) (int, error) { return 0, w.err }
 
-func TestExplanationOutputFailures(t *testing.T) {
-	for _, asJSON := range []bool{false, true} {
-		// Given closed and short-writing output streams.
-		// When writing the buffered report.
-		closedErr := renderExplanation(closedOutput{}, explanationFixture(), asJSON)
-		shortErr := renderExplanation(shortOutput{}, explanationFixture(), asJSON)
-		// Then both output failures reach the caller with their original classification.
-		require.EqualError(t, closedErr, "output closed")
-		require.ErrorIs(t, shortErr, io.ErrShortWrite)
+func TestReportOutputFailures(t *testing.T) {
+	for name, render := range map[string]func(io.Writer, bool) error{
+		"explain": func(w io.Writer, json bool) error { return renderExplanation(w, explanationFixture(), json) },
+		"status":  func(w io.Writer, json bool) error { return renderStatus(w, inspect.StatusReport{}, json) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Given failed and short-writing streams, when rendering either format,
+			// then both output failures reach the caller with their original classification.
+			failed := errors.New("stdout failed")
+			for _, asJSON := range []bool{false, true} {
+				require.ErrorIs(t, render(reportWriter{failed}, asJSON), failed)
+				require.ErrorIs(t, render(reportWriter{}, asJSON), io.ErrShortWrite)
+			}
+		})
 	}
 }
 
