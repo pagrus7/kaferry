@@ -9,7 +9,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -269,10 +268,7 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	}
 	leader := described[dst].Partitions[0].Leader
 	container := fmt.Sprintf("kaferry-qualification-kafka-secure-%d-1", leader)
-	label, err := exec.Command("docker", "inspect", "--format", `{{index .Config.Labels "com.docker.compose.project"}}`, container).Output()
-	if err != nil || strings.TrimSpace(string(label)) != "kaferry-qualification" {
-		t.Fatal("failover target is not the disposable qualification broker", err)
-	}
+	owned := ownBroker(t, container, "kaferry-qualification", "")
 	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", dst, src, group)
 	properties := secureProperties(t, "copier", "fixture-copy-secret")
 	properties["socket.timeout.ms"] = "5000"
@@ -287,14 +283,7 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	waitEnd(t, a, dst, 16)
 
 	// When the destination leader stops while the copy is running.
-	if data, err := exec.Command("docker", "stop", "-t", "1", container).CombinedOutput(); err != nil {
-		t.Fatalf("stop owned leader: %v %s", err, data)
-	}
-	defer func() {
-		if data, err := exec.Command("docker", "start", container).CombinedOutput(); err != nil {
-			t.Errorf("restore owned broker: %v %s", err, data)
-		}
-	}()
+	require.NoError(t, owned.stop(t))
 	for i := 16; i < 64; i++ {
 		publish(t, p, &kgo.Record{Topic: src, Partition: 0, Key: []byte("stable"), Value: []byte(fmt.Sprint(i)), Timestamp: stamp})
 	}

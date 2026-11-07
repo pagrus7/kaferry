@@ -37,11 +37,11 @@ func TestOffsetLookupOperationsAndTimestampOutcomes(t *testing.T) {
 	require.Equal(t, []offsetCall{{EarliestOffset, false}, {LatestOffset, true}, {LatestOffset, false}}, b.calls)
 	// An old timestamp still returns a retained match; a no-match is a distinct successful result.
 	b.values = map[int32]int64{0: 12, 2: -1}
-	q := []TimestampOffsetQuery{{Partition: 0, TimestampMS: 1000}, {Partition: 2, TimestampMS: 2000}}
+	q := map[int32]int64{0: 1000, 2: 2000}
 	found, err := l.AtOrAfterTimestamp(t.Context(), q)
 	require.NoError(t, err)
 	require.Equal(t, map[int32]int64{0: 1000, 2: 2000}, b.stamps)
-	require.Equal(t, []TimestampOffsetMatch{{Partition: 0, Offset: 12, Found: true}, {Partition: 2, Offset: -1}}, found)
+	require.Equal(t, map[int32]TimestampOffsetMatch{0: {Offset: 12, Found: true}, 2: {Offset: -1}}, found)
 	_, err = l.AtOrAfterTimestamp(t.Context(), nil)
 	require.NoError(t, err)
 }
@@ -62,7 +62,7 @@ func TestOffsetLookupCannotTurnFailuresIntoNoMatch(t *testing.T) {
 			// Given incomplete or failed metadata, when looking up, then return an error without matches.
 			b := &lookupBackend{values: tc.values, err: tc.err}
 			l := NewOffsetLookupFactory().New(b, b)
-			found, err := l.AtOrAfterTimestamp(t.Context(), []TimestampOffsetQuery{{Partition: 0, TimestampMS: tc.stamp}})
+			found, err := l.AtOrAfterTimestamp(t.Context(), map[int32]int64{0: tc.stamp})
 			require.Error(t, err)
 			require.Nil(t, found)
 			if tc.stamp >= 0 {
@@ -71,8 +71,4 @@ func TestOffsetLookupCannotTurnFailuresIntoNoMatch(t *testing.T) {
 			}
 		})
 	}
-	b := &lookupBackend{values: map[int32]int64{0: 1}}
-	l := NewOffsetLookupFactory().New(b, b)
-	_, err := l.AtOrAfterTimestamp(t.Context(), []TimestampOffsetQuery{{Partition: 0}, {Partition: 0}})
-	require.ErrorContains(t, err, "repeats")
 }

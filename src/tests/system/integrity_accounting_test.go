@@ -23,7 +23,7 @@ func TestLoadEndurancePartitionedFidelityAndHistory(t *testing.T) {
 			r := archiveLoadRecordPartitions(id, partitions)
 			require.Equal(t, int32(id%partitions), r.Source.Partition)
 			require.Equal(t, int64(id/partitions), r.Source.Offset)
-			stream.integrity.submit(id, &kgo.Record{Key: r.Key, Value: r.Value, Headers: stream.headers})
+			stream.receipts.submit(id, &kgo.Record{Key: r.Key, Value: r.Value, Headers: stream.headers})
 		}
 		// When partitions arrive in reverse order, per-partition history must still be released.
 		for partition := partitions - 1; partition >= 0; partition-- {
@@ -37,8 +37,7 @@ func TestLoadEndurancePartitionedFidelityAndHistory(t *testing.T) {
 					stream.verify(t, &kgo.Record{Key: r.Key, Value: r.Value, Timestamp: stream.stamp, Headers: stream.headers, Partition: int32(id % 32)})
 				}
 			}
-			require.Empty(t, stream.seen)
-			require.Empty(t, stream.integrity.pending)
+			require.Empty(t, stream.receipts.pending)
 		}
 		// Then every record reconciles; a late duplicate is still detected after history was released.
 		delivery := stream.delivery(true)
@@ -46,7 +45,7 @@ func TestLoadEndurancePartitionedFidelityAndHistory(t *testing.T) {
 		require.Zero(t, *delivery.Missing)
 		require.Zero(t, delivery.Reordered)
 		require.True(t, *delivery.Integrity.Matched)
-		stream.receive(t, archiveLoadRecordPartitions(23, partitions).Value)
+		stream.verify(t, streamFixtureRecord(23, stream.stamp))
 		require.Equal(t, 1, stream.duplicates)
 	}
 }
@@ -97,7 +96,7 @@ func TestLoadIntegrityFingerprintPreservesFieldBoundariesAndNullBytes(t *testing
 
 func TestLoadIntegrityReconcilesDifferentPartitionArrivalOrdersAndReleasesHistory(t *testing.T) {
 	// Given submitted records and receipts that cross partitions in a different order.
-	integrity := newStreamIntegrity()
+	integrity := newReceiptLedger(4)
 	const count = 65536
 	stamp := time.Now()
 	for id := range count {
@@ -124,6 +123,29 @@ func TestLoadIntegrityReconcilesDifferentPartitionArrivalOrdersAndReleasesHistor
 	require.Equal(t, result.SubmittedSHA256, result.ReceivedSHA256)
 }
 
+func TestLoadReceiptLedgerKeepsFirstDigestAcrossGapsAndLateDuplicates(t *testing.T) {
+	// Given two submitted records in one partition, received in reverse order.
+	ledger := newReceiptLedger(1)
+	first := &kgo.Record{Value: []byte("first")}
+	second := &kgo.Record{Value: []byte("second")}
+	ledger.submit(0, first)
+	ledger.submit(1, second)
+	require.True(t, ledger.receive(t, 1, nil, second.Value, nil))
+	require.Zero(t, ledger.contiguous())
+
+	// When duplicates carry different bytes before and after the gap closes.
+	require.False(t, ledger.receive(t, 1, nil, []byte("changed"), nil))
+	require.True(t, ledger.receive(t, 0, nil, first.Value, nil))
+	require.False(t, ledger.receive(t, 1, nil, []byte("changed again"), nil))
+
+	// Then each first receipt is counted and hashed once, with no retained history.
+	result := ledger.snapshot(true, 2, 2)
+	require.Equal(t, 2, ledger.contiguous())
+	require.Equal(t, 2, result.ReceivedRecords)
+	require.Zero(t, result.PendingRecords)
+	require.True(t, *result.Matched)
+}
+
 func TestLoadIntegrityDetectsKafkaAndArchiveMutationsAlongsideByteChecks(t *testing.T) {
 	// Given original submitted bytes and individually damaged destination fields.
 	mutations := map[string]func(*kgo.Record){
@@ -142,7 +164,7 @@ func TestLoadIntegrityDetectsKafkaAndArchiveMutationsAlongsideByteChecks(t *test
 				stream.published, stream.acknowledged = 4, 4
 				for id := range 4 {
 					record := streamFixtureRecord(id, stream.stamp)
-					stream.integrity.submit(id, record)
+					stream.receipts.submit(id, record)
 					if id == 1 {
 						mutate(record)
 					}
@@ -177,7 +199,7 @@ func TestLoadIntegrityKeepsTimestampAndArchiveProvenanceChecks(t *testing.T) {
 			stream := newStreamRecords("fixture", time.Now().Truncate(time.Millisecond))
 			stream.published, stream.acknowledged = 1, 1
 			record := streamFixtureRecord(0, stream.stamp)
-			stream.integrity.submit(0, record)
+			stream.receipts.submit(0, record)
 			if field == "kafka-timestamp" {
 				record.Timestamp = record.Timestamp.Add(time.Millisecond)
 				stream.verify(t, record)
@@ -223,7 +245,7 @@ func TestLoadFiniteVerifierAllowsDestinationPartitionSkew(t *testing.T) {
 					partition = stream.keyRouting.Partition(r, 5)
 				}
 				routes[partition] = append(routes[partition], id)
-				stream.integrity.submit(id, r)
+				stream.receipts.submit(id, r)
 			}
 			// When each destination partition is exhausted before reading the next.
 			peak := 0
@@ -235,7 +257,7 @@ func TestLoadFiniteVerifierAllowsDestinationPartitionSkew(t *testing.T) {
 					r := streamFixtureRecord(id, stream.stamp)
 					r.Partition = int32(partition)
 					stream.verify(t, r)
-					peak = max(peak, len(stream.seen))
+					peak = max(peak, len(stream.receipts.pending))
 				}
 			}
 			// Then legal skew reconciles, while a missing record and late duplicate remain visible.
@@ -251,8 +273,7 @@ func TestLoadFiniteVerifierAllowsDestinationPartitionSkew(t *testing.T) {
 				require.Zero(t, *result.Missing)
 				require.Equal(t, count, result.Verified)
 				require.True(t, *result.Integrity.Matched)
-				require.Empty(t, stream.seen)
-				require.Empty(t, stream.integrity.pending)
+				require.Empty(t, stream.receipts.pending)
 			}
 			stream.verify(t, streamFixtureRecord(0, stream.stamp))
 			require.Equal(t, 1, stream.duplicates)

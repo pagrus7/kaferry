@@ -5,14 +5,9 @@ import (
 	"fmt"
 )
 
-type TimestampOffsetQuery struct {
-	Partition   int32
-	TimestampMS int64
-}
 type TimestampOffsetMatch struct {
-	Partition int32
-	Offset    int64
-	Found     bool
+	Offset int64
+	Found  bool
 }
 
 // OffsetLookup reads positions without changing a consumer or saving progress.
@@ -26,8 +21,9 @@ type OffsetLookup interface {
 	ReadableEnd(context.Context, []int32) (map[int32]int64, error)
 	// ReplicatedEnd returns the exclusive replicated end, including unresolved transactions.
 	ReplicatedEnd(context.Context, []int32) (map[int32]int64, error)
-	// AtOrAfterTimestamp returns the earliest retained match per query, or Found=false.
-	AtOrAfterTimestamp(context.Context, []TimestampOffsetQuery) ([]TimestampOffsetMatch, error)
+	// AtOrAfterTimestamp accepts Unix milliseconds keyed by partition and returns
+	// the earliest retained match for each partition, or Found=false.
+	AtOrAfterTimestamp(context.Context, map[int32]int64) (map[int32]TimestampOffsetMatch, error)
 }
 type OffsetLookupFactory interface {
 	New(OffsetReader, TimeReader) OffsetLookup
@@ -66,31 +62,26 @@ func (l *offsetLookup) ReadableEnd(ctx context.Context, ids []int32) (map[int32]
 func (l *offsetLookup) ReplicatedEnd(ctx context.Context, ids []int32) (map[int32]int64, error) {
 	return l.read(ctx, ids, LatestOffset, false)
 }
-func (l *offsetLookup) AtOrAfterTimestamp(ctx context.Context, queries []TimestampOffsetQuery) ([]TimestampOffsetMatch, error) {
+func (l *offsetLookup) AtOrAfterTimestamp(ctx context.Context, queries map[int32]int64) (map[int32]TimestampOffsetMatch, error) {
 	if len(queries) == 0 {
-		return []TimestampOffsetMatch{}, nil
+		return map[int32]TimestampOffsetMatch{}, nil
 	}
-	stamps := make(map[int32]int64, len(queries))
-	for _, q := range queries {
-		if q.TimestampMS < 0 {
+	for _, stamp := range queries {
+		if stamp < 0 {
 			return nil, fmt.Errorf("timestamp lookup requires a non-negative timestamp")
 		}
-		if _, exists := stamps[q.Partition]; exists {
-			return nil, fmt.Errorf("timestamp lookup repeats a partition")
-		}
-		stamps[q.Partition] = q.TimestampMS
 	}
-	found, err := l.times.OffsetsForTimes(ctx, stamps)
+	found, err := l.times.OffsetsForTimes(ctx, queries)
 	if err != nil {
 		return nil, err
 	}
-	matches := make([]TimestampOffsetMatch, 0, len(queries))
-	for _, q := range queries {
-		offset, ok := found[q.Partition]
+	matches := make(map[int32]TimestampOffsetMatch, len(queries))
+	for id := range queries {
+		offset, ok := found[id]
 		if !ok || offset < -1 {
-			return nil, fmt.Errorf("missing or invalid timestamp result for partition %d", q.Partition)
+			return nil, fmt.Errorf("missing or invalid timestamp result for partition %d", id)
 		}
-		matches = append(matches, TimestampOffsetMatch{Partition: q.Partition, Offset: offset, Found: offset >= 0})
+		matches[id] = TimestampOffsetMatch{Offset: offset, Found: offset >= 0}
 	}
 	return matches, nil
 }
