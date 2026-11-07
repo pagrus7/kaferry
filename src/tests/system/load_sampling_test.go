@@ -49,11 +49,11 @@ func TestLoadStreamingVerifierBoundsHistory(t *testing.T) {
 				}
 				// When consumed records are verified, then completed history is released.
 				stream.verify(t, &kgo.Record{Key: input.Key, Value: input.Value, Headers: headers, Timestamp: stamp, Partition: int32(id % 4)})
-				require.LessOrEqual(t, len(stream.seen), 16)
+				require.LessOrEqual(t, len(stream.receipts.pending), 16)
 			}
 		}
 	}
 	require.Equal(t, stream.published, stream.verified)
-	require.Equal(t, stream.published, stream.contiguous)
-	require.Empty(t, stream.seen)
+	require.Equal(t, stream.published, stream.receipts.contiguous())
+	require.Empty(t, stream.receipts.pending)
 }

@@ -8,10 +8,8 @@ import (
 	"fmt"
 	core "github.com/pagrus7/kaferry/src/internal/copy"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -70,11 +68,16 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	destinationBrokers := broker(t)
 	destinationAdmin := a
 	stall := os.Getenv("KAFERRY_SOAK_DEST_STALL_CONTAINER")
+	var stalledBroker *ownedBroker
 	if archiveMode && stall != "" {
 		t.Fatal("archive soak does not use a destination broker stall")
 	}
 	if stall != "" {
-		ownedSoakDestination(t, stall)
+		project := "kaferry-compat"
+		if endurance {
+			project = "kaferry-endurance"
+		}
+		stalledBroker = ownBroker(t, stall, fixtureProject(project), "kafka-dr")
 		destinationBrokers = os.Getenv("KAFKA_TEST_DEST_BROKERS")
 		if destinationBrokers == "" || destinationBrokers == broker(t) {
 			t.Fatal("destination stalls require a separate KAFKA_TEST_DEST_BROKERS cluster")
@@ -123,8 +126,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	nextPublish, nextSample := start, start.Add(time.Second)
 	nextBurst, nextStall := start.Add(10*time.Second), start.Add(30*time.Second)
 	bursts := 0
-	stalls := &destinationStalls{container: stall, next: nextStall}
-	t.Cleanup(func() { stalls.recover(t) })
+	stalls := &destinationStalls{broker: stalledBroker, next: nextStall}
 	monitor := soakMonitor{next: nextSample, kafka: !archiveMode, endurance: report.Endurance}
 	reconciled := false
 	report.PublishingSeconds, report.DrainSeconds = duration.Seconds(), soakDrainDuration.Seconds()
@@ -173,9 +175,9 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		default:
 		}
 		now := time.Now()
-		wasPaused := stalls.paused
+		wasPaused := stalls.broker.paused()
 		stalls.step(t, now, now.Sub(start) < duration)
-		if endurance && wasPaused && !stalls.paused {
+		if endurance && wasPaused && !stalls.broker.paused() {
 			report.Endurance.recoveryAt = time.Now()
 		}
 		if endurance {
@@ -198,14 +200,14 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		}
 		if endurance && now.Sub(start) < duration+5*time.Second {
 			e := report.Endurance
-			if records.published-records.contiguous >= 8192 {
+			if records.published-records.receipts.contiguous() >= 8192 {
 				e.VerifierGates++
 			}
 			if records.published-records.acknowledged >= 8192 {
 				e.ProducerGates++
 			}
 			count := min(512, enduranceScheduled(min(now.Sub(start), duration))-records.published,
-				8192-(records.published-records.contiguous), 8192-(records.published-records.acknowledged))
+				8192-(records.published-records.receipts.contiguous()), 8192-(records.published-records.acknowledged))
 			if count > 0 {
 				publishStart := time.Now()
 				records.publish(t, ctx, p, reports, count)
@@ -213,7 +215,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 			}
 			bursts = max(0, (enduranceScheduled(min(now.Sub(start), duration))-int(min(now.Sub(start), duration)*200/time.Second))/400)
 		}
-		if !endurance && now.Sub(start) < duration && !now.Before(nextPublish) && (archiveMode || records.published-records.contiguous < 8192) && records.published-records.acknowledged < 8192 {
+		if !endurance && now.Sub(start) < duration && !now.Before(nextPublish) && (archiveMode || records.published-records.receipts.contiguous() < 8192) && records.published-records.acknowledged < 8192 {
 			count := batch
 			if !now.Before(nextBurst) {
 				count = min(2048, rate*2)
@@ -235,7 +237,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		}
 		sampleStart := time.Now()
 		var destinationEnds map[int32]int64
-		if !archiveMode && !stalls.paused && !now.Before(monitor.next) {
+		if !archiveMode && !stalls.broker.paused() && !now.Before(monitor.next) {
 			destinationEnds = destinationOffsets(t, destinationAdmin, dst, destinationPartitions)
 		}
 		monitor.sample(t, now, process.pid(), a, group, src, records, destinationEnds)
@@ -324,51 +326,22 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	t.Logf("duration=%s bursts=%d destination_stalls=%d records=%d records/s=%.0f child_cpu=%s peak_RSS_MiB=%.1f warm_median_RSS_MiB=%.1f final_median_RSS_MiB=%.1f max_sampled_commit_lag=%d shutdown=%s peak_uncommitted_records=%d peak_uncommitted_bytes=%d", duration, bursts, stalls.count, records.published, float64(records.published)/time.Since(start).Seconds(), process.cpu(), float64(peak)/1024, float64(warm)/1024, float64(final)/1024, monitor.maxLag, shutdownTime, summary.PeakRecords, summary.PeakBytes)
 }
 
-func ownedSoakDestination(t *testing.T, container string) {
-	t.Helper()
-	data, err := exec.Command("docker", "inspect", "--format", "{{index .Config.Labels \"com.docker.compose.project\"}} {{index .Config.Labels \"com.docker.compose.service\"}}", container).Output()
-	project := "kaferry-compat"
-	if os.Getenv("KAFERRY_SOAK_PROFILE") == "application" {
-		project = "kaferry-endurance"
-	}
-	if assigned := os.Getenv("KAFERRY_FIXTURE_PROJECT"); assigned != "" {
-		project = assigned
-	}
-	if err != nil || strings.TrimSpace(string(data)) != project+" kafka-dr" {
-		t.Fatal("destination stalls require the project's disposable kafka-dr service", err)
-	}
-}
-
 type destinationStalls struct {
-	container   string
-	paused      bool
+	broker      *ownedBroker
 	until, next time.Time
 	count       int
 }
 
-func (s *destinationStalls) recover(t *testing.T) {
-	t.Helper()
-	if !s.paused {
-		return
-	}
-	if data, err := exec.Command("docker", "unpause", s.container).CombinedOutput(); err != nil {
-		t.Fatalf("destination recovery: %v %s", err, data)
-	}
-	s.paused = false
-}
 func (s *destinationStalls) step(t *testing.T, now time.Time, publishing bool) {
 	t.Helper()
-	if s.container != "" && !s.paused && publishing && !now.Before(s.next) {
-		if data, err := exec.Command("docker", "pause", s.container).CombinedOutput(); err != nil {
-			t.Fatalf("destination pause: %v %s", err, data)
-		}
-		s.paused = true
+	if s.broker != nil && !s.broker.paused() && publishing && !now.Before(s.next) {
+		require.NoError(t, s.broker.pause(t))
 		s.count++
 		s.until = time.Now().Add(time.Second)
 		s.next = s.next.Add(time.Minute)
 	}
-	if s.paused && !now.Before(s.until) {
-		s.recover(t)
+	if s.broker.paused() && !now.Before(s.until) {
+		require.NoError(t, s.broker.recover())
 	}
 }
 
@@ -403,7 +376,7 @@ func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *kadm.C
 	}
 	m.peak = max(m.peak, rss)
 	committed := 0
-	for _, part := range committedPartitions(t, admin, group, source, len(records.next)) {
+	for _, part := range committedPartitions(t, admin, group, source, len(records.receipts.next)) {
 		committed += int(part.At)
 	}
 	lag := records.published - committed

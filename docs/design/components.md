@@ -42,7 +42,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Archive capture | [archive/capture](../../src/internal/archive/capture) | Route records and rotate by size, age, rewind and file budget | Segments, Clock; no Kafka or copy-loop state |
 | Archive storage | [archive/capture](../../src/internal/archive/capture) | Lock writer namespaces, save durable boundaries, publish and recover files | Filesystem/DataFile, StateStore; Journal uses AtomicWriter for synced replacement |
 | Archive replay | [archive/replay](../../src/internal/archive/replay) | Pin completed inputs, merge source offsets and save confirmed physical cursors | Snapshot, Blocks, Checkpoints; bounded Pool and read-only Catalog |
-| Checkpoint encoding | [checkpoint](../../src/internal/checkpoint) | Derive safe group filenames, encode bounded canonical JSON with checksums and replace files durably | AtomicWriter, private filesystem port; owners validate their state |
+| Checkpoints | [checkpoint](../../src/internal/checkpoint) | Read bounded regular files, derive safe group filenames, encode canonical JSON with checksums and replace files durably | ReadFile, AtomicWriter, private filesystem port; owners open/close files and validate their state |
 | CLI | [cmd](../../src/cmd/kaferry), [app](../../src/internal/app) | Parse flags, compose components and handle signals | Command/Engine; Fx at composition only |
 
 ## Starting a component change
