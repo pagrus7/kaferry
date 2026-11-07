@@ -5,6 +5,7 @@ import argparse
 from contextlib import contextmanager, nullcontext
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from dataclasses import dataclass
 import fcntl
 import hashlib
 import itertools
@@ -263,10 +264,114 @@ def parallel_run(args):
         write_json(args.output / 'parallel.json', result)
 
 
-def run_suite(args, *, fixture=None, cancelled=None):
+@dataclass(frozen=True)
+class RunSpec:
+    command: list
+    expected: list
+    env: dict
+    compose: list
+    timeout: int
+
+
+def resolve_run(args, receipt, fixture):
+    project = 'kaferry-endurance' if args.suite == 'endurance' else 'kaferry-compat'
+    source_port, destination_port = (39192, 40192) if args.suite == 'endurance' else (39092, 40092)
+    if fixture is not None:
+        project = fixture['project']
+        source_port, destination_port = fixture['ports']
+        receipt['parallel'] = fixture
+    env = dict(os.environ, KAFERRY_SOURCE_PORT=str(source_port), KAFERRY_DESTINATION_PORT=str(destination_port), KAFERRY_REPORT_DIR=str(args.output), KAFERRY_TEST_OUTPUT='-json',
+               KAFKA_TEST_BROKERS=f'127.0.0.1:{source_port}', KAFKA_TEST_DEST_BROKERS=f'127.0.0.1:{destination_port}',
+               KAFKA_FAULT_CONTAINER=project+'-kafka-1', KAFKA_FAULT_DEST_CONTAINER=project+'-kafka-dr-1', KAFERRY_FIXTURE_PROJECT=project, CGO_ENABLED='1')
+    compose = ['docker', 'compose', '-p', project, '--profile', 'cross-cluster']
+    fixtures = args.suite in ('broker', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration') or (args.suite == 'migration' and args.state_contract == 'resume')
+    if not Path(args.binary).is_file():
+        raise ValueError('binary is missing; run make build or pass --binary')
+    receipt['binary_sha256'] = hashlib.sha256(Path(args.binary).read_bytes()).hexdigest()
+    if fixture is not None and receipt['binary_sha256'] != fixture['binary_sha256']:
+        raise ValueError('candidate binary changed after parallel admission')
+    receipt['binary_version'] = capture([args.binary, '--version'])
+    if args.suite == 'migration' and args.previous_binary:
+        receipt['previous_binary_sha256'] = hashlib.sha256(args.previous_binary.read_bytes()).hexdigest()
+        receipt['state_contract'] = args.state_contract
+    env.update(KAFERRY_TEST_BINARY=args.binary, KAFERRY_EXPECT_BINARY_SHA256=receipt['binary_sha256'],
+               KAFERRY_SOURCE_IMAGE=IMAGES[args.source], KAFERRY_DESTINATION_IMAGE=IMAGES[args.destination])
+    receipt['requested_images'] = [env['KAFERRY_SOURCE_IMAGE'], env['KAFERRY_DESTINATION_IMAGE']] if fixtures else []
+    if args.config and args.suite != 'cloud':
+        raise ValueError('--config is only accepted by the external cloud suite')
+    if args.suite == 'cloud' and not args.config:
+        raise ValueError('cloud requires --config; this command never provisions a service')
+    command, expected = suite_command(args, env)
+    receipt.update(command=list(map(str, command)), expected_tests=expected)
+    if fixtures:
+        receipt.update(fixture_project=project, fixture_brokers=[env['KAFKA_TEST_BROKERS'], env['KAFKA_TEST_DEST_BROKERS']])
+    timeout = args.duration + SOAK_DRAIN_SECONDS + 300 if args.suite in (*STREAMING_SUITES, 'recovery') else 1800
+    return RunSpec(command, expected, env, compose if fixtures else [], timeout)
+
+
+@contextmanager
+def broker_fixture(args, spec, receipt, fixture, cancelled):
+    # Parallel children use the coordinator's lease and their assigned project.
+    with lab_lock() if fixture is None else nullcontext():
+        try:
+            if spec.compose:
+                logged(spec.compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output,
+                       'brokers-up', spec.env, timeout=180, cancelled=cancelled)
+                receipt['broker_images'] = capture(spec.compose + ['images', '--format', 'json'])
+            if fixture is not None:
+                receipt['parallel_capacity'] = parallel_capacity(fixture['reserved_bytes'], args.output, spec.compose, spec.env)
+                write_json(args.output / 'manifest.json', receipt)
+            if args.suite == 'endurance':
+                receipt['capacity'] = endurance_capacity(args.duration, args.output, spec.compose, spec.env)
+                write_json(args.output / 'manifest.json', receipt)
+            yield
+        except (Exception, KeyboardInterrupt) as error:
+            receipt['suite_error'] = str(error) or 'interrupted'
+            raise
+        finally:
+            if spec.compose:
+                errors = []
+                try:
+                    with (args.output / 'brokers.log').open('w') as log:
+                        subprocess.run(spec.compose + ['logs', '--no-color'], cwd=ROOT, env=spec.env,
+                                       stdout=log, stderr=subprocess.STDOUT, timeout=30, check=False)
+                except (OSError, subprocess.SubprocessError) as error:
+                    errors.append({'phase': 'logs', 'error': str(error)})
+                finally:
+                    try:
+                        logged(spec.compose + ['down', '-v', '--remove-orphans'], args.output, 'brokers-down', spec.env, timeout=60)
+                    except (OSError, RuntimeError) as error:
+                        errors.append({'phase': 'teardown', 'error': str(error)})
+                if errors:
+                    receipt['cleanup_errors'] = errors
+                    if 'suite_error' not in receipt:
+                        raise RuntimeError('fixture diagnostics or teardown failed; inspect manifest.json')
+
+
+def verify_run(args, spec, receipt):
+    if spec.expected:
+        verify_tests((args.output / 'suite.log').read_text(), spec.expected)
+    if args.suite == 'benchmark':
+        from quality import benchmarks
+        measured = benchmarks((args.output / 'suite.log').read_text())
+        for name in ('BenchmarkEncode', 'BenchmarkDecode', 'BenchmarkReplayOverlap', 'BenchmarkCheckpointEncoding', 'BenchmarkCheckpointSaving'):
+            if not any(key.startswith(name) for key in measured):
+                raise ValueError('required benchmark did not execute: ' + name)
+    if args.suite in ('broker', 'cloud'):
+        probe = json.loads((args.output / 'reconciliation.json').read_text())
+        if (probe['status'] != 'passed' or probe['binary_sha256'] != receipt['binary_sha256'] or
+                {c['name'] for c in probe['cases']} != {route + '/' + phase for route in ('topic-preserve', 'topic-key', 'capture', 'clone', 'replay') for phase in ('partial', 'resume', 'completed')} or
+                any(c['verified'] <= 0 or c['verified'] != c['expected'] or
+                    c['missing'] or c['duplicates'] or c['corrupted'] for c in probe['cases'])):
+            raise ValueError('independent reconciliation did not pass for the tested binary')
+        receipt['reconciliation'] = probe
     if args.suite == 'auth':
-        args.destination = args.source
-    args.output = args.output.resolve()
+        receipt['broker_images'] = (args.output / 'qualification.broker-images.json').read_text()
+
+
+def run_suite(args, *, fixture=None, cancelled=None):
+    args = argparse.Namespace(**dict(vars(args), output=args.output.resolve(),
+        binary=str(Path(args.binary).resolve()), destination=args.source if args.suite == 'auth' else args.destination))
     args.output.mkdir(parents=True, exist_ok=False)
     receipt = {'schema': 1, 'id': f'{args.suite}-{args.source}-{args.destination}', 'suite': args.suite,
                'source_version': args.source, 'destination_version': args.destination,
@@ -286,93 +391,13 @@ def run_suite(args, *, fixture=None, cancelled=None):
     if args.suite == 'cloud':
         receipt.update(source_version='external', destination_version='external', id='cloud-external-external')
     started = time.monotonic()
-    project = 'kaferry-endurance' if args.suite == 'endurance' else 'kaferry-compat'
-    source_port, destination_port = (39192, 40192) if args.suite == 'endurance' else (39092, 40092)
-    if fixture is not None:
-        project = fixture['project']
-        source_port, destination_port = fixture['ports']
-        receipt['parallel'] = fixture
-    env = dict(os.environ, KAFERRY_SOURCE_PORT=str(source_port), KAFERRY_DESTINATION_PORT=str(destination_port), KAFERRY_REPORT_DIR=str(args.output), KAFERRY_TEST_OUTPUT='-json',
-               KAFKA_TEST_BROKERS=f'127.0.0.1:{source_port}', KAFKA_TEST_DEST_BROKERS=f'127.0.0.1:{destination_port}',
-               KAFKA_FAULT_CONTAINER=project+'-kafka-1', KAFKA_FAULT_DEST_CONTAINER=project+'-kafka-dr-1', KAFERRY_FIXTURE_PROJECT=project, CGO_ENABLED='1')
     write_json(args.output / 'manifest.json', receipt)
-    compose = ['docker', 'compose', '-p', project, '--profile', 'cross-cluster']
-    fixtures = args.suite in ('broker', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration') or (args.suite == 'migration' and args.state_contract == 'resume')
     try:
-        args.binary = str(Path(args.binary).resolve())
-        if not Path(args.binary).is_file():
-            raise ValueError('binary is missing; run make build or pass --binary')
-        receipt['binary_sha256'] = hashlib.sha256(Path(args.binary).read_bytes()).hexdigest()
-        if fixture is not None and receipt['binary_sha256'] != fixture['binary_sha256']:
-            raise ValueError('candidate binary changed after parallel admission')
-        receipt['binary_version'] = capture([args.binary, '--version'])
-        if args.suite == 'migration' and args.previous_binary:
-            receipt['previous_binary_sha256'] = hashlib.sha256(args.previous_binary.read_bytes()).hexdigest()
-            receipt['state_contract'] = args.state_contract
-        env.update(KAFERRY_TEST_BINARY=args.binary, KAFERRY_EXPECT_BINARY_SHA256=receipt['binary_sha256'],
-                   KAFERRY_SOURCE_IMAGE=IMAGES[args.source], KAFERRY_DESTINATION_IMAGE=IMAGES[args.destination])
-        receipt['requested_images'] = [env['KAFERRY_SOURCE_IMAGE'], env['KAFERRY_DESTINATION_IMAGE']] if fixtures else []
-        if args.config and args.suite != 'cloud':
-            raise ValueError('--config is only accepted by the external cloud suite')
-        if args.suite == 'cloud' and not args.config:
-            raise ValueError('cloud requires --config; this command never provisions a service')
-        command, expected = suite_command(args, env)
-        receipt.update(command=list(map(str, command)), expected_tests=expected)
-        if fixtures:
-            receipt.update(fixture_project=project, fixture_brokers=[env['KAFKA_TEST_BROKERS'], env['KAFKA_TEST_DEST_BROKERS']])
+        spec = resolve_run(args, receipt, fixture)
         write_json(args.output / 'manifest.json', receipt)
-        # Only parallel_run supplies a fixture, while holding the host lock for both jobs.
-        with lab_lock() if fixture is None else nullcontext():
-            try:
-                if fixtures:
-                    logged(compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output, 'brokers-up', env, timeout=180, cancelled=cancelled)
-                    receipt['broker_images'] = capture(compose + ['images', '--format', 'json'])
-                if fixture is not None:
-                    receipt['parallel_capacity'] = parallel_capacity(fixture['reserved_bytes'], args.output, compose, env)
-                    write_json(args.output / 'manifest.json', receipt)
-                if args.suite == 'endurance':
-                    receipt['capacity'] = endurance_capacity(args.duration, args.output, compose, env)
-                    write_json(args.output / 'manifest.json', receipt)
-                logged(command, args.output, 'suite', env, timeout=args.duration + SOAK_DRAIN_SECONDS + 300 if args.suite in (*STREAMING_SUITES, 'recovery') else 1800, cancelled=cancelled)
-                if expected:
-                    verify_tests((args.output / 'suite.log').read_text(), expected)
-                if args.suite == 'benchmark':
-                    from quality import benchmarks
-                    measured = benchmarks((args.output / 'suite.log').read_text())
-                    for name in ('BenchmarkEncode', 'BenchmarkDecode', 'BenchmarkReplayOverlap', 'BenchmarkCheckpointEncoding', 'BenchmarkCheckpointSaving'):
-                        if not any(key.startswith(name) for key in measured):
-                            raise ValueError('required benchmark did not execute: ' + name)
-                if args.suite in ('broker', 'cloud'):
-                    probe = json.loads((args.output / 'reconciliation.json').read_text())
-                    if (probe['status'] != 'passed' or probe['binary_sha256'] != receipt['binary_sha256'] or
-                            {c['name'] for c in probe['cases']} != {route + '/' + phase for route in ('topic-preserve', 'topic-key', 'capture', 'clone', 'replay') for phase in ('partial', 'resume', 'completed')} or
-                            any(c['verified'] <= 0 or c['verified'] != c['expected'] or
-                                c['missing'] or c['duplicates'] or c['corrupted'] for c in probe['cases'])):
-                        raise ValueError('independent reconciliation did not pass for the tested binary')
-                    receipt['reconciliation'] = probe
-                if args.suite == 'auth':
-                    receipt['broker_images'] = (args.output / 'qualification.broker-images.json').read_text()
-            except (Exception, KeyboardInterrupt) as error:
-                receipt['suite_error'] = str(error) or 'interrupted'
-                raise
-            finally:
-                if fixtures:
-                    errors = []
-                    try:
-                        with (args.output / 'brokers.log').open('w') as log:
-                            subprocess.run(compose + ['logs', '--no-color'], cwd=ROOT, env=env,
-                                           stdout=log, stderr=subprocess.STDOUT, timeout=30, check=False)
-                    except (OSError, subprocess.SubprocessError) as error:
-                        errors.append({'phase': 'logs', 'error': str(error)})
-                    finally:
-                        try:
-                            logged(compose + ['down', '-v', '--remove-orphans'], args.output, 'brokers-down', env, timeout=60)
-                        except (OSError, RuntimeError) as error:
-                            errors.append({'phase': 'teardown', 'error': str(error)})
-                    if errors:
-                        receipt['cleanup_errors'] = errors
-                        if 'suite_error' not in receipt:
-                            raise RuntimeError('fixture diagnostics or teardown failed; inspect manifest.json')
+        with broker_fixture(args, spec, receipt, fixture, cancelled):
+            logged(spec.command, args.output, 'suite', spec.env, timeout=spec.timeout, cancelled=cancelled)
+            verify_run(args, spec, receipt)
         receipt['status'] = 'passed'
     except (Exception, KeyboardInterrupt) as error:
         receipt.update(status='interrupted' if isinstance(error, (KeyboardInterrupt, InterruptedError)) else 'failed', error=str(error) or 'interrupted')

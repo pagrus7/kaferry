@@ -345,6 +345,30 @@ class MatrixTest(unittest.TestCase):
             self.assertEqual('original suite failure', receipt['suite_error'])
             self.assertEqual('logs', receipt['cleanup_errors'][0]['phase'])
 
+    def test_teardown_failure_rejects_success_and_preserves_suite_failure(self):
+        for suite_failure in (False, True):
+            with self.subTest(suite_failure=suite_failure), tempfile.TemporaryDirectory() as temporary:
+                # Given a recovery suite whose fixture teardown will fail.
+                directory = Path(temporary)
+                binary = directory / 'kaferry'; binary.write_bytes(b'fixture')
+                args = argparse.Namespace(suite='recovery', source='3.9.2', destination='4.4.0',
+                    output=directory / 'evidence', binary=str(binary), config=None, duration=60)
+                original = vars(args).copy()
+                def command(command, output, label, env, **kwargs):
+                    if label == 'brokers-down': raise RuntimeError('teardown failure')
+                    if label == 'suite':
+                        if suite_failure: raise RuntimeError('original suite failure')
+                        (output / 'suite.log').write_text(json.dumps({'Action': 'pass', 'Test': 'TestRecoveryBlockedOutput'}) + '\n')
+                with patch('qualify.LAB_LOCK', directory / 'host.lock'), patch('qualify.capture', return_value='fixture'), \
+                     patch('qualify.logged', side_effect=command), patch('qualify.subprocess.run'):
+                    # When cleanup fails, then success becomes failure and an existing failure remains primary.
+                    message = 'original suite failure' if suite_failure else 'fixture diagnostics or teardown failed'
+                    with self.assertRaisesRegex(RuntimeError, message): run_suite(args)
+                receipt = json.loads((args.output / 'manifest.json').read_text())
+                self.assertEqual('failed', receipt['status'])
+                self.assertEqual('teardown', receipt['cleanup_errors'][0]['phase'])
+                self.assertEqual(original, vars(args), 'execution mutated the caller request')
+
     def test_timeout_kills_stdout_inheriting_descendant_after_parent_exit(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

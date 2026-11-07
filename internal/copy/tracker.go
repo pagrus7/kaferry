@@ -3,7 +3,6 @@ package copy
 import "fmt"
 
 type entry struct {
-	token     Token
 	next      int64
 	bytes     int64
 	resolved  bool
@@ -14,8 +13,7 @@ type partitionProgress struct {
 	generation uint64
 	sequence   uint64
 	committed  int64
-	entries    []*entry
-	pending    map[uint64]*entry
+	entries    []entry
 	bytes      int64
 }
 type Tracker struct {
@@ -26,7 +24,7 @@ type Tracker struct {
 func NewTracker() *Tracker { return &Tracker{partitions: make(map[int32]*partitionProgress)} }
 func (t *Tracker) Assign(cursor Cursor) {
 	t.generation++
-	t.partitions[cursor.Partition] = &partitionProgress{generation: t.generation, committed: cursor.Position, pending: make(map[uint64]*entry)}
+	t.partitions[cursor.Partition] = &partitionProgress{generation: t.generation, committed: cursor.Position}
 }
 func (t *Tracker) Revoke(partition int32) { delete(t.partitions, partition) }
 
@@ -52,17 +50,28 @@ func (t *Tracker) observe(cursor Cursor, next, bytes int64, resolved bool) (Toke
 	}
 	p.sequence++
 	token := Token{cursor.Partition, p.generation, p.sequence}
-	e := &entry{token: token, next: next, bytes: bytes, resolved: resolved, position: cursor.Position}
+	e := entry{next: next, bytes: bytes, resolved: resolved, position: cursor.Position}
 	p.entries = append(p.entries, e)
-	p.pending[token.Sequence] = e
 	p.bytes += bytes
 	return token, nil
 }
+
+// Entries are consecutive sequences; commits remove only a prefix. The latest
+// sequence and retained length locate a token without a second index.
+func (t *Tracker) entry(token Token) *entry {
+	p := t.partitions[token.Partition]
+	if p == nil || p.generation != token.Generation || token.Sequence > p.sequence {
+		return nil
+	}
+	distance := p.sequence - token.Sequence
+	if distance >= uint64(len(p.entries)) {
+		return nil
+	}
+	return &p.entries[len(p.entries)-1-int(distance)]
+}
 func (t *Tracker) Submitted(token Token) {
-	if p := t.partitions[token.Partition]; p != nil && p.generation == token.Generation {
-		if e := p.pending[token.Sequence]; e != nil {
-			e.submitted = true
-		}
+	if e := t.entry(token); e != nil {
+		e.submitted = true
 	}
 }
 func (t *Tracker) InFlight() bool {
@@ -76,14 +85,13 @@ func (t *Tracker) InFlight() bool {
 	return false
 }
 func (t *Tracker) PositionOf(token Token) int64 {
-	return t.partitions[token.Partition].pending[token.Sequence].position
+	return t.entry(token).position
 }
 func (t *Tracker) Settle(token Token, success bool) bool {
-	p := t.partitions[token.Partition]
-	if p == nil || p.generation != token.Generation || p.pending[token.Sequence] == nil {
+	e := t.entry(token)
+	if e == nil {
 		return false
 	}
-	e := p.pending[token.Sequence]
 	e.submitted = false
 	if success {
 		e.resolved = true
@@ -116,10 +124,8 @@ func (t *Tracker) Committed(cursor Cursor) {
 			break
 		}
 		p.bytes -= e.bytes
-		delete(p.pending, e.token.Sequence)
 		n++
 	}
-	clear(p.entries[:n])
 	p.entries = p.entries[n:]
 	p.committed = cursor.Position
 }

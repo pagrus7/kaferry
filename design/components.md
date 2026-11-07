@@ -6,7 +6,7 @@ Contributor reference for boundaries, ownership and checks. See [copy behavior](
 
 Constructors receive dependencies through narrow interfaces. [Fx modules](../internal/app/modules.go) compose the application; domain packages do not depend on Fx. Records, cursors and pure helper functions use concrete types.
 
-Command parses, configures and plans; Engine acquires adapters; Runner copies through shared source, sink and progress contracts.
+Command parses, configures and plans; Engine acquires adapters; Runner copies through shared source, sink and progress contracts. Plan defines which completion rules are enabled and whether saved stops depend on timestamp assumptions. Runner and archive replay apply those rules to resolved partition windows; inspection uses them for reports.
 
 Explain and status use the same planning stages and read-only metadata/archive interfaces; explain also uses the Kafka positioner. Text and JSON render the same report; inspection never acquires execution adapters or locks.
 

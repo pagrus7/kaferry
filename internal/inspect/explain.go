@@ -36,7 +36,7 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 		return report, err
 	}
 	report = Report{Version: 2, Group: p.Group, OneOff: p.OneOff, MaxStalenessMS: p.MaxStalenessMS, WorkerStopAfterRecords: p.WorkerStopAfterRecords, StartRule: p.Start, RecordErrors: ErrorPolicies{p.Policies.MissingTimestamp, p.Policies.RejectedTimestamp, p.Policies.OtherRecord}, Partitions: []Partition{}, Warnings: []string{}}
-	if d := p.DisorderMS(); d >= 0 && p.Window.Upper != nil {
+	if d := p.DisorderMS(); p.TimestampStopEnabled() && p.Window.Upper != nil {
 		report.MaxOutOfOrderMS = &d
 	}
 	report.Offsets, report.PartitionOffsets = p.Offsets, p.PartitionOffsets
@@ -44,7 +44,7 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 		report.Group = "ONE_OFF"
 	}
 	stop.Stage("inspecting source metadata")
-	source, sourceInfo, err := s.open(ctx, p.Source, false, stop)
+	source, sourceInfo, err := s.open(ctx, p.Source, false, p.Partitions, stop)
 	if err != nil {
 		return report, err
 	}
@@ -52,7 +52,7 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 	report.Source = sourceInfo
 	report.Source.PartitionFilter = p.Partitions
 	stop.Stage("inspecting destination metadata")
-	destination, destinationInfo, err := s.open(ctx, p.Destination, true, stop)
+	destination, destinationInfo, err := s.open(ctx, p.Destination, true, nil, stop)
 	if err != nil {
 		return report, err
 	}
@@ -84,7 +84,7 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 	return report, ctx.Err()
 }
 
-func (s *Service) open(ctx context.Context, endpoint plan.Endpoint, configuration bool, stop core.StopObserver) (kafkaport.InspectionConnection, Endpoint, error) {
+func (s *Service) open(ctx context.Context, endpoint plan.Endpoint, configuration bool, filter *plan.PartitionFilter, stop core.StopObserver) (kafkaport.InspectionConnection, Endpoint, error) {
 	info := Endpoint{Kind: endpoint.Kind, Name: endpoint.Name, Format: endpoint.Format, Connection: endpoint.Alias}
 	if endpoint.Kind != "TOPIC" {
 		return nil, info, nil
@@ -94,6 +94,11 @@ func (s *Service) open(ctx context.Context, endpoint plan.Endpoint, configuratio
 		return nil, info, err
 	}
 	topic, err := connection.Describe(ctx, configuration)
+	if err == nil && filter != nil {
+		if _, selectionErr := filter.Select(topic.Partitions); selectionErr != nil {
+			err = &kafkaport.Conflict{Err: selectionErr}
+		}
+	}
 	if err != nil {
 		closeConnection(connection, stop, &err)
 		return nil, info, err
