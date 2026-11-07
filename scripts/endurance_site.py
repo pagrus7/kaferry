@@ -83,9 +83,9 @@ def duration(seconds):
     if seconds is None:
         return 'Unavailable'
     if seconds >= 3600 and seconds % 3600 == 0:
-        return f'{seconds // 3600:,} hours'
+        return f'{seconds // 3600:,} hour' + ('s' if seconds != 3600 else '')
     if seconds >= 60 and seconds % 60 == 0:
-        return f'{seconds // 60:,} minutes'
+        return f'{seconds // 60:,} minute' + ('s' if seconds != 60 else '')
     return f'{number(seconds)} seconds'
 
 
@@ -103,6 +103,7 @@ def render_run(run, latest):
     m = next(iter(run['report']['measurements']), {})
     d = m.get('delivery', {})
     observed = d.get('observed', {})
+    elapsed = m.get('elapsed_seconds')
     workload = receipt.get('workload', {})
     status = receipt['status']
     rehearsal = receipt.get('requested_seconds', 0) < 86400
@@ -111,7 +112,7 @@ def render_run(run, latest):
     badge += '<span class="rehearsal">REHEARSAL</span>' if rehearsal else ''
     measurements = table([
         ('Publishing requested / drain', f'{duration(receipt.get("requested_seconds"))} / {duration(receipt.get("drain_seconds"))}'),
-        ('Measured test duration', duration(m.get('elapsed_seconds'))),
+        ('Measured test duration', duration(elapsed if elapsed and elapsed > 0 else None)),
         ('Submitted / acknowledged', f'{number(d.get("submitted"))} / {number(d.get("published"))}'),
         ('Unique received / verified', f'{number(d.get("unique_received"))} / {number(d.get("verified"))}'),
         ('Missing / duplicate / corrupted', ' / '.join(number(d.get(k)) for k in ('missing', 'duplicates', 'corrupted'))),

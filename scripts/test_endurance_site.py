@@ -92,7 +92,7 @@ class SiteTest(unittest.TestCase):
         # Given an incomplete failed rehearsal, when displayed, then it cannot appear as a passing long run.
         result = report('failed', 60)
         m = result['measurements'][0]
-        m.update(rss_samples=0, sampled_peak_rss_bytes=0)
+        m.update(rss_samples=0, sampled_peak_rss_bytes=0, elapsed_seconds=0)
         m['delivery'].update(missing=None, reconciliation_complete=False, integrity=dict(matched=None))
         result['manifest']['binary_version'] = '<script>alert(1)</script>'
         validate(result)
@@ -102,6 +102,10 @@ class SiteTest(unittest.TestCase):
         self.assertIn('does not establish 24 hours', page)
         self.assertIn('Unavailable / 0 / 0', page)
         self.assertIn('Unavailable MiB', page)
+        self.assertIn('<dt>Measured test duration</dt><dd>Unavailable</dd>', page)
+        m['elapsed_seconds'] = 60
+        measured = render_run(dict(prefix=self.prefix, release='v0.12.0', report=result, downloads={}), True)
+        self.assertIn('<dt>Measured test duration</dt><dd>1 minute</dd>', measured)
         self.assertIn('&lt;script&gt;', page)
         self.assertNotIn('<script>', page)
         result['manifest']['status'] = 'interrupted'
