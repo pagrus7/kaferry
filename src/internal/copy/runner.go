@@ -99,15 +99,15 @@ func (r *Runner) Run(ctx context.Context) error {
 
 func (r *Runner) run(ctx context.Context) error {
 	r.nextProgress = r.clock.Now().Add(r.progressInterval)
-	if err := r.source.Start(r, r.observer); err != nil {
+	if err := r.source.Start(ctx, r, r.observer); err != nil {
 		return err
 	}
 	for {
 		if ctx.Err() != nil {
-			return r.interrupted()
+			return r.interrupted(ctx)
 		}
 		if r.failure != nil {
-			return errors.Join(r.failure, r.drain())
+			return errors.Join(r.failure, r.drain(ctx))
 		}
 		done, err := r.step(ctx)
 		r.iterations++
@@ -127,11 +127,11 @@ func (r *Runner) run(ctx context.Context) error {
 
 func (r *Runner) step(ctx context.Context) (bool, error) {
 	r.stop.Stage("copying records")
-	if err := r.advance(); err != nil {
+	if err := r.advance(ctx); err != nil {
 		return false, err
 	}
 	if r.workerStopReached() {
-		return true, r.finishWorkerStop()
+		return true, r.finishWorkerStop(ctx)
 	}
 	if r.readyToExit() {
 		r.stop.Begin()
@@ -141,53 +141,53 @@ func (r *Runner) step(ctx context.Context) (bool, error) {
 		}
 		return true, r.commit(r.ids())
 	}
-	if err := r.checkpoint(); err != nil {
+	if err := r.checkpoint(ctx); err != nil {
 		return false, err
 	}
 	if err := r.pause(); err != nil {
 		return false, err
 	}
-	event, err := r.source.Poll(20 * time.Millisecond)
+	event, err := r.source.Poll(ctx, 20*time.Millisecond)
 	if ctx.Err() != nil && (err == nil || errors.Is(err, ctx.Err())) {
 		return false, nil // A signal during Poll must not submit its input.
 	}
 	if err != nil {
 		return false, err
 	}
-	return false, r.accept(event)
+	return false, r.accept(ctx, event)
 }
 
-func (r *Runner) advance() error {
+func (r *Runner) advance(ctx context.Context) error {
 	if err := r.deliveries(); err != nil {
 		return err
 	}
-	if err := r.admitDeferred(); err != nil {
+	if err := r.admitDeferred(ctx); err != nil {
 		return err
 	}
-	if err := r.submitPending(); err != nil {
+	if err := r.submitPending(ctx); err != nil {
 		return err
 	}
 	if r.workerStopReached() {
 		return nil
 	}
-	return r.tips()
+	return r.tips(ctx)
 }
 
-func (r *Runner) checkpoint() error {
+func (r *Runner) checkpoint(ctx context.Context) error {
 	if !r.shouldCommit() {
 		return nil
 	}
-	if err := r.flush(); err != nil {
+	if err := r.flush(ctx); err != nil {
 		return err
 	}
 	return r.commit(r.ids())
 }
 
-func (r *Runner) accept(event Event) error {
+func (r *Runner) accept(ctx context.Context, event Event) error {
 	var failed error
 	if event.Input != nil {
 		r.intake = true // Filtered and skipped records count: intake has started.
-		failed = r.input(*event.Input)
+		failed = r.input(ctx, *event.Input)
 	}
 	if event.EOF != nil {
 		if err := r.eof(*event.EOF); err != nil {
@@ -195,14 +195,14 @@ func (r *Runner) accept(event Event) error {
 		}
 	}
 	if event.Input == nil {
-		if err := r.flush(); err != nil {
+		if err := r.flush(ctx); err != nil {
 			failed = err
 		}
 	}
 	return failed
 }
 
-func (r *Runner) input(input Input) error {
+func (r *Runner) input(ctx context.Context, input Input) error {
 	p := r.partitions[input.Cursor.Partition]
 	if p == nil || p.stop != nil {
 		return nil
@@ -239,7 +239,7 @@ func (r *Runner) input(input Input) error {
 	}
 
 	r.pending = &submission{input: input, token: token}
-	return r.submitPending()
+	return r.submitPending(ctx)
 }
 func (r *Runner) stopAtTimestamp(p *partition, input Input) (bool, error) {
 	if r.plan.Source.Kind != "TOPIC" {
@@ -286,14 +286,13 @@ func (r *Runner) filter(window plan.Window, record Record, token Token) (bool, e
 	return false, nil
 }
 
-func (r *Runner) submitPending() error {
+func (r *Runner) submitPending(ctx context.Context) error {
 	if r.pending == nil {
 		return nil
 	}
 	s := r.pending
-	err := r.sink.Submit(s.input.Record, s.token)
-	var busy *Busy
-	if errors.As(err, &busy) {
+	err := r.sink.Submit(ctx, s.input.Record, s.token)
+	if errors.Is(err, ErrBusy) {
 		if s.busySince.IsZero() {
 			s.busySince = r.clock.Now()
 			r.log.Warn("destination queue full; intake paused")
@@ -376,7 +375,7 @@ func (r *Runner) eof(cursor Cursor) error {
 
 	return nil
 }
-func (r *Runner) tips() error {
+func (r *Runner) tips(ctx context.Context) error {
 	wait := r.limits.TipWait.Duration
 	sampled := false // Interleave watermark queries with consumer polling.
 	for id, p := range r.partitions {
@@ -389,7 +388,7 @@ func (r *Runner) tips() error {
 				continue
 			}
 			sampled = true
-			if err := r.sampleHigh(id, p); err != nil {
+			if err := r.sampleHigh(ctx, id, p); err != nil {
 				return err
 			}
 			action = p.tipAction(r.clock.Now(), r.plan.MaxStalenessMS, wait)
@@ -406,11 +405,10 @@ func (r *Runner) tips() error {
 	return nil
 }
 
-func (r *Runner) sampleHigh(id int32, p *partition) error {
-	high, err := r.source.HighWatermark(id)
+func (r *Runner) sampleHigh(ctx context.Context, id int32, p *partition) error {
+	high, err := r.source.HighWatermark(ctx, id)
 	if err != nil {
-		var recoverable *Recoverable
-		if !errors.As(err, &recoverable) {
+		if !errors.Is(err, ErrRecoverable) {
 			return err
 		}
 		if p.sampling.failed(r.clock.Now()) {
@@ -428,8 +426,8 @@ func (r *Runner) sampleHigh(id int32, p *partition) error {
 	r.log.Info("tip watermark sampled", "partition", id, "high_watermark", high, "stable", p.stable, "position", p.position)
 	return r.commit([]int32{id})
 }
-func (r *Runner) flush() error {
-	if err := r.sink.Flush(); err != nil {
+func (r *Runner) flush(ctx context.Context) error {
+	if err := r.sink.Flush(ctx); err != nil {
 		return err
 	}
 	return r.deliveries()

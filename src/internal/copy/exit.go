@@ -1,6 +1,7 @@
 package copy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -24,11 +25,11 @@ func (r *Runner) exit(err error) error {
 	return &Exit{Err: err, Code: code}
 }
 
-func (r *Runner) interrupted() error {
+func (r *Runner) interrupted(ctx context.Context) error {
 	if r.failure == nil && r.workerStopReached() {
-		return r.finishWorkerStop()
+		return r.finishWorkerStop(ctx)
 	}
-	err := r.drain()
+	err := r.drain(ctx)
 	if r.failure != nil {
 		return errors.Join(r.failure, err)
 	}
@@ -64,12 +65,12 @@ func (r *Runner) readyToExit() bool {
 	return true
 }
 
-func (r *Runner) drain() error {
-	err := r.finishWrites()
+func (r *Runner) drain(ctx context.Context) error {
+	err := r.finishWrites(ctx)
 	return errors.Join(err, r.commit(r.ids()))
 }
 
-func (r *Runner) finishWrites() error {
+func (r *Runner) finishWrites(ctx context.Context) error {
 	r.stop.Begin()
 	r.stop.Stage("finishing writes")
 	r.pending = nil // Unsubmitted input replays from the confirmed cursor.
@@ -81,7 +82,7 @@ func (r *Runner) finishWrites() error {
 			failed = errors.Join(failed, err)
 		}
 	}
-	if err := r.sink.Flush(); err != nil {
+	if err := r.sink.Flush(ctx); err != nil {
 		return errors.Join(failed, err)
 	}
 	for r.clock.Now().Before(deadline) {

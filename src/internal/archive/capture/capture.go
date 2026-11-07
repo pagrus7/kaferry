@@ -74,8 +74,7 @@ func (c *Capture) Append(record avro.Record) error {
 	}
 	next, err := c.store.Append(p.segment.ID, record)
 	if err != nil {
-		var invalid *avro.InvalidRecord
-		if !errors.As(err, &invalid) {
+		if !errors.Is(err, avro.ErrInvalidRecord) {
 			return c.fail(err)
 		}
 		if p.segment.Records == 0 {

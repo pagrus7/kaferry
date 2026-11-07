@@ -57,7 +57,7 @@ func (g *fetchGap) Next(ctx context.Context, id int32, position int64) (int64, e
 		return position, transientFailure(err)
 	}
 	if partition.Leader < 0 {
-		return position, &core.Recoverable{Err: fmt.Errorf("source partition %d leader is being elected", id)}
+		return position, core.MarkRecoverable(fmt.Errorf("source partition %d leader is being elected", id))
 	}
 	req := kmsg.NewPtrFetchRequest()
 	req.MaxWaitMillis = 0
@@ -86,7 +86,7 @@ func (g *fetchGap) Next(ctx context.Context, id int32, position int64) (int64, e
 	}
 	failure := fmt.Errorf("gap fetch omitted partition %d", id)
 	if response.ThrottleMillis > 0 {
-		return position, &core.Recoverable{Err: failure}
+		return position, core.MarkRecoverable(failure)
 	}
 	return position, failure
 }
@@ -96,7 +96,7 @@ func transientFailure(err error) error {
 		return err // The source identity was already established before consumption.
 	}
 	if brokerUnreachable(err) || errors.Is(err, context.DeadlineExceeded) || kerr.IsRetriable(err) || kgo.IsRetryableBrokerErr(err) {
-		return &core.Recoverable{Err: err}
+		return core.MarkRecoverable(err)
 	}
 	return err
 }

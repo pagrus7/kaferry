@@ -66,8 +66,10 @@ type testSource struct {
 	high        int64
 }
 
-func (s *testSource) Start(l Lifecycle, _ Observer) error { return l.Assign(s.assignments) }
-func (s *testSource) Poll(d time.Duration) (Event, error) {
+func (s *testSource) Start(_ context.Context, l Lifecycle, _ Observer) error {
+	return l.Assign(s.assignments)
+}
+func (s *testSource) Poll(_ context.Context, d time.Duration) (Event, error) {
 	s.clock.Sleep(d)
 	if len(s.events) == 0 {
 		return Event{}, nil
@@ -79,9 +81,9 @@ func (s *testSource) Poll(d time.Duration) (Event, error) {
 	s.events = s.events[1:]
 	return e, nil
 }
-func (s *testSource) Pause(id int32, paused bool) error  { s.paused[id] = paused; return nil }
-func (s *testSource) HighWatermark(int32) (int64, error) { return s.high, nil }
-func (*testSource) Close() error                         { return nil }
+func (s *testSource) Pause(id int32, paused bool) error                   { s.paused[id] = paused; return nil }
+func (s *testSource) HighWatermark(context.Context, int32) (int64, error) { return s.high, nil }
+func (*testSource) Close() error                                          { return nil }
 
 type testSink struct {
 	reports chan Delivery
@@ -90,7 +92,7 @@ type testSink struct {
 	flush   func() error
 }
 
-func (s *testSink) Submit(record Record, token Token) error {
+func (s *testSink) Submit(_ context.Context, record Record, token Token) error {
 	if s.submit != nil {
 		if err := s.submit(record, token); err != nil {
 			return err
@@ -100,7 +102,7 @@ func (s *testSink) Submit(record Record, token Token) error {
 	return nil
 }
 func (s *testSink) Deliveries() <-chan Delivery { return s.reports }
-func (s *testSink) Flush() error {
+func (s *testSink) Flush(context.Context) error {
 	if s.flush != nil {
 		return s.flush()
 	}
@@ -177,7 +179,7 @@ func TestRunnerCapsIncludeConfirmedWorkAndOversizedAlone(t *testing.T) {
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 
 	// When
-	inputErr := r.input(incoming(0, 0, 30))
+	inputErr := r.input(context.Background(), incoming(0, 0, 30))
 
 	// Then
 	require.NoError(t, inputErr)
@@ -185,7 +187,7 @@ func TestRunnerCapsIncludeConfirmedWorkAndOversizedAlone(t *testing.T) {
 	// When the first write succeeds but is still uncommitted.
 	d.reports <- Delivery{Token: d.writes[0]}
 	require.NoError(t, r.deliveries())
-	require.NoError(t, r.input(incoming(0, 1, 200)))
+	require.NoError(t, r.input(context.Background(), incoming(0, 1, 200)))
 
 	// Then the oversized record waits for the outstanding work.
 	if len(d.writes) != 1 || r.flow.deferred == nil {
@@ -195,7 +197,7 @@ func TestRunnerCapsIncludeConfirmedWorkAndOversizedAlone(t *testing.T) {
 	// When confirmed progress is committed and intake resumes.
 	require.NoError(t, r.pause())
 	require.NoError(t, r.commit(r.ids()))
-	require.NoError(t, r.admitDeferred())
+	require.NoError(t, r.admitDeferred(context.Background()))
 
 	// Then the oversized record is admitted alone.
 	if len(d.writes) != 2 || p.saves[0][0].Position != 1 {
@@ -216,7 +218,7 @@ func TestRunnerQueueFullPreservesSubmissionOrder(t *testing.T) {
 	d.submit = func(_ Record, tok Token) error {
 		tries++
 		if tries < 3 {
-			return &Busy{}
+			return ErrBusy
 		}
 		d.reports <- Delivery{Token: tok}
 		return nil
@@ -238,7 +240,7 @@ func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 		t.Run(map[bool]string{false: "revoked", true: "lost"}[lost], func(t *testing.T) {
 			r, _, d, p, _ := fixture(t)
 			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
-			_ = r.input(incoming(0, 0, 1))
+			_ = r.input(context.Background(), incoming(0, 0, 1))
 			old := d.writes[0]
 
 			// When
@@ -247,7 +249,7 @@ func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 			// Then
 			require.NoError(t, revokeErr)
 			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
-			_ = r.input(incoming(0, 0, 1))
+			_ = r.input(context.Background(), incoming(0, 0, 1))
 			d.reports <- Delivery{Token: old, Err: errors.New("late rejected write")}
 			require.NoError(t, r.deliveries(), "late outcome affected new owner")
 			if r.tracker.Resolved(0) || len(p.saves) != 0 {
@@ -257,7 +259,7 @@ func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 	}
 	r, _, d, p, _ := fixture(t)
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
-	_ = r.input(incoming(0, 0, 1))
+	_ = r.input(context.Background(), incoming(0, 0, 1))
 
 	// When the first write succeeds but is still uncommitted.
 	d.reports <- Delivery{Token: d.writes[0]}
@@ -273,7 +275,7 @@ func TestPartialCommitReleasesSuccessfulPartitionsOnly(t *testing.T) {
 			r, _, d, p, _ := fixture(t)
 			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}, {Cursor: Cursor{Partition: 1, Position: 0}}}))
 			for _, id := range []int32{0, 1} {
-				require.NoError(t, r.input(incoming(id, 0, 1)))
+				require.NoError(t, r.input(context.Background(), incoming(id, 0, 1)))
 			}
 			for _, tok := range d.writes {
 				d.reports <- Delivery{Token: tok}
@@ -305,13 +307,13 @@ func TestShutdownDrainDeadlineCommitsConfirmedPrefix(t *testing.T) {
 	// Given
 	r, _, d, p, c := fixture(t)
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
-	_ = r.input(incoming(0, 0, 1))
-	_ = r.input(incoming(0, 1, 1))
+	_ = r.input(context.Background(), incoming(0, 0, 1))
+	_ = r.input(context.Background(), incoming(0, 1, 1))
 	d.reports <- Delivery{Token: d.writes[0]}
 	start := c.Now()
 
 	// When
-	drainErr := r.drain()
+	drainErr := r.drain(context.Background())
 
 	// Then
 	require.Error(t, drainErr, "unacknowledged write treated as drained")
@@ -360,7 +362,7 @@ func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 	_ = r.eof(Cursor{Partition: 0, Position: 0})
 
 	// When
-	tipsErr := r.tips()
+	tipsErr := r.tips(context.Background())
 
 	// Then
 	require.NoError(t, tipsErr)
@@ -368,7 +370,7 @@ func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 	// When the topic grows after the sample and tip_wait expires.
 	s.high = 999
 	c.Sleep(2 * time.Second)
-	tipsErr = r.tips()
+	tipsErr = r.tips(context.Background())
 
 	// Then the original boundary stays fixed and the diagnostic names the cursors.
 	require.Equal(t, int64(2), *r.partitions[0].high, "tip boundary moved")
@@ -447,10 +449,16 @@ type cancellingWatermark struct {
 	err    error
 }
 
-func (s *cancellingWatermark) HighWatermark(int32) (int64, error) { s.cancel(); return 0, s.err }
+func (s *cancellingWatermark) HighWatermark(context.Context, int32) (int64, error) {
+	s.cancel()
+	return 0, s.err
+}
 func TestSignalDuringWatermarkQueryReportsInterruptionAndPreservesOtherErrors(t *testing.T) {
-	for _, unrelated := range []bool{false, true} {
-		t.Run(map[bool]string{false: "cancelled query", true: "broker failure"}[unrelated], func(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		unrelated bool
+	}{{"cancelled query", false}, {"broker failure", true}} {
+		t.Run(tc.name, func(t *testing.T) {
 			// Given a bounded copy that reaches the topic tip and samples its ending offset.
 			r, source, _, _, _ := fixture(t)
 			r.plan.Source.Kind = "TOPIC"
@@ -461,37 +469,38 @@ func TestSignalDuringWatermarkQueryReportsInterruptionAndPreservesOtherErrors(t 
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			failure := error(context.Canceled)
-			if unrelated {
+			if tc.unrelated {
 				failure = errors.New("topic authorization failed")
 			}
 			r.source = &cancellingWatermark{testSource: source, cancel: cancel, err: failure}
 			// When a signal arrives during the query, then cancellation follows the ordinary interrupted-copy path.
 			err := r.Run(ctx)
-			if err == nil || unrelated && !errors.Is(err, failure) || !unrelated && !strings.Contains(err.Error(), "bounded copy interrupted before completion") {
+			if err == nil || tc.unrelated && !errors.Is(err, failure) || !tc.unrelated && !strings.Contains(err.Error(), "bounded copy interrupted before completion") {
 				t.Fatal("unclear interruption or hidden broker failure", err)
 			}
 		})
 	}
 }
 
-func (s *cancellingPoll) Poll(time.Duration) (Event, error) {
+func (s *cancellingPoll) Poll(context.Context, time.Duration) (Event, error) {
 	s.cancel()
 	input := incoming(0, 0, 1)
 	return Event{Input: &input}, s.err
 }
 
 func TestSignalDuringPollDoesNotTurnCancellationIntoCopyFailure(t *testing.T) {
-	for _, unrelated := range []bool{false, true} {
-		t.Run(map[bool]string{false: "cancellation", true: "unrelated failure"}[unrelated], func(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{{"cancellation", context.Canceled}, {"unrelated failure", errors.New("topic authorization failed")}} {
+		t.Run(tc.name, func(t *testing.T) {
 			// Given a following Kafka copy cancelled during a poll or assignment request.
+			ctx, cancel := context.WithCancel(t.Context())
 			r, source, sink, store, _ := fixture(t)
 			r.plan.Source.Kind = "TOPIC"
-			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			failure := error(context.Canceled)
-			if unrelated {
-				failure = errors.New("topic authorization failed")
-			}
+			failure := tc.err
+			unrelated := !errors.Is(failure, context.Canceled)
 			r.source = &cancellingPoll{testSource: source, cancel: cancel, err: failure}
 			// When the signal and poll result arrive together.
 			err := r.Run(ctx)
@@ -560,8 +569,8 @@ func TestRevocationCommitFailures(t *testing.T) {
 		request bool
 		fails   bool
 	}{
-		{"recoverable partition error", &Recoverable{Err: errors.New("rebalance in progress")}, false, false},
-		{"recoverable request error", &Recoverable{Err: errors.New("coordinator unavailable")}, true, false},
+		{"recoverable partition error", MarkRecoverable(errors.New("rebalance in progress")), false, false},
+		{"recoverable request error", MarkRecoverable(errors.New("coordinator unavailable")), true, false},
 		{"terminal partition error", errors.New("group authorization failed"), false, true},
 		{"terminal request error", errors.New("group authorization failed"), true, true},
 	} {
@@ -586,7 +595,7 @@ func TestRevocationCommitFailures(t *testing.T) {
 	}
 	// Outside revocation a recoverable error still fails the commit.
 	r, _, _, _, _ := fixture(t)
-	r.store = &requestStore{err: &Recoverable{Err: errors.New("rebalance in progress")}}
+	r.store = &requestStore{err: MarkRecoverable(errors.New("rebalance in progress"))}
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 	token, _ := r.tracker.Observe(Cursor{Partition: 0, Position: 0}, 1, 1)
 	r.tracker.Settle(token, true)
@@ -667,16 +676,16 @@ type failingStart struct {
 	err error
 }
 
-func (s *failingStart) Start(Lifecycle, Observer) error { return s.err }
+func (s *failingStart) Start(context.Context, Lifecycle, Observer) error { return s.err }
 
 type failingPoll struct {
 	*testSource
 	err error
 }
 
-func (s *failingPoll) Poll(d time.Duration) (Event, error) {
+func (s *failingPoll) Poll(_ context.Context, d time.Duration) (Event, error) {
 	if len(s.events) == 0 {
 		return Event{}, s.err
 	}
-	return s.testSource.Poll(d)
+	return s.testSource.Poll(context.Background(), d)
 }

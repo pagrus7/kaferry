@@ -91,13 +91,11 @@ func (l *lifecycleMock) Revoke(ids []int32, lost bool) error {
 }
 func sourceFixture(t *testing.T) (*Source, *consumerMock) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
 	client := &consumerMock{}
 	p := testPlan(t, nil)
 	store := &Committer{codec: commitmeta.NewCodec(), client: client, topic: "input", group: p.Group, metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: "id"}}}
 	metadata := &sourceMetadataMock{}
-	s := &Source{lookup: kafkaport.NewOffsetLookupFactory().New(metadata, metadata), client: client, inspector: metadata, positioning: kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory()), store: store, bridge: newRebalanceBridge(ctx, "input"), pump: &fetchPump{fetched: make(chan fetchResult, 1)}, plan: p, fingerprint: "fp", topicID: "id", query: ctx, ctx: ctx, cancel: cancel, clientCancel: func() {}, life: &lifecycleMock{}, partitions: map[int32]*sourcePartition{0: {}}, log: quietLogger(), lastTip: time.Now()}
+	s := &Source{lookup: kafkaport.NewOffsetLookupFactory().New(metadata, metadata), client: client, inspector: metadata, positioning: kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory()), store: store, bridge: newRebalanceBridge("input"), pump: &fetchPump{fetched: make(chan fetchResult, 1)}, plan: p, fingerprint: "fp", topicID: "id", clientCancel: func() {}, life: &lifecycleMock{}, partitions: map[int32]*sourcePartition{0: {}}, log: quietLogger(), lastTip: time.Now()}
 	return s, client
 }
 func feed(s *Source, record *kgo.Record, err error) {
@@ -127,7 +125,7 @@ func TestExcludedAssignmentCannotPositionOrCommit(t *testing.T) {
 	s.plan.Partitions = &plan.PartitionFilter{IDs: []int32{2}}
 	answer := make(chan lifecycleAnswer, 1)
 	// When handling the callback, then reject before reading progress or saving initial offsets.
-	err := s.lifecycle(lifecycleEvent{ids: []int32{0}, answer: answer})
+	err := s.lifecycle(context.Background(), lifecycleEvent{ids: []int32{0}, answer: answer})
 	require.ErrorContains(t, err, "excluded source partition")
 	require.Error(t, (<-answer).err)
 	require.Zero(t, s.inspector.(*sourceMetadataMock).savedReads)
@@ -140,7 +138,7 @@ func TestSourcePreservesRecordBesideTransientFetchError(t *testing.T) {
 	record := &kgo.Record{Topic: "input", Partition: 0, Offset: 0, Key: []byte{}, Value: nil, Timestamp: time.UnixMilli(0), Headers: []kgo.RecordHeader{{Key: "a\x00b", Value: nil}, {Key: "a\x00b", Value: []byte{}}}}
 	feed(s, record, kerr.NotLeaderForPartition)
 	// When polling, then the valid record is delivered even though the client's cursor already passed it.
-	event, err := s.Poll(time.Second)
+	event, err := s.Poll(context.Background(), time.Second)
 	if err != nil || event.Input == nil || event.Input.Next != 1 || event.Input.Record.Key == nil || event.Input.Record.Value != nil || *event.Input.Record.TimestampMS != 0 || !reflect.DeepEqual(event.Input.Record.Headers, []core.Header{{Name: "a\x00b", Value: nil}, {Name: "a\x00b", Value: []byte{}}}) {
 		t.Fatal("mixed fetch lost or changed its record", event, err)
 	}
@@ -151,17 +149,17 @@ func TestSourceHoldsPausedRecordWhileOtherPartitionsContinue(t *testing.T) {
 	s.partitions[2] = &sourcePartition{}
 	require.NoError(t, s.Pause(0, true))
 	feed(s, &kgo.Record{Partition: 0, Offset: 0, Value: []byte("held")}, nil)
-	if event, err := s.Poll(time.Second); err != nil || event.Input != nil {
+	if event, err := s.Poll(context.Background(), time.Second); err != nil || event.Input != nil {
 		t.Fatal("paused record delivered", event, err)
 	}
 	// When another partition has a record, then it continues despite the held record.
 	feed(s, &kgo.Record{Partition: 2, Offset: 0, Value: []byte("other")}, nil)
-	if event, err := s.Poll(time.Second); err != nil || event.Input == nil || event.Input.Cursor.Partition != 2 {
+	if event, err := s.Poll(context.Background(), time.Second); err != nil || event.Input == nil || event.Input.Cursor.Partition != 2 {
 		t.Fatal("held partition blocked another", event, err)
 	}
 	// When resuming, then the held record is delivered first and pause calls target only its partition.
 	require.NoError(t, s.Pause(0, false))
-	event, err := s.Poll(time.Second)
+	event, err := s.Poll(context.Background(), time.Second)
 	if err != nil || event.Input == nil || string(event.Input.Record.Value) != "held" || !reflect.DeepEqual(client.paused, []int32{0}) || !reflect.DeepEqual(client.resumed, []int32{0}) {
 		t.Fatal("resume lost held record", event, err, client)
 	}
@@ -177,7 +175,7 @@ func TestSourceRevokesOnlyNamedPartitionsAndTreatsLostSeparately(t *testing.T) {
 	s.partitions[2].held = &kgo.Record{Partition: 2}
 	// When partition zero is lost, then only its generation's state is removed.
 	event := lifecycleEvent{ids: []int32{0}, revoke: true, lost: true, answer: make(chan lifecycleAnswer, 1)}
-	require.NoError(t, s.lifecycle(event))
+	require.NoError(t, s.lifecycle(context.Background(), event))
 	life := s.life.(*lifecycleMock)
 	if !life.lost || !reflect.DeepEqual(life.revoked, []int32{0}) || len(s.partitions) != 1 || s.partitions[2].position != 8 || s.partitions[0] != nil || s.partitions[2].held == nil || !s.partitions[2].paused {
 		t.Fatal("revocation crossed partition boundaries", s.partitions, life)
@@ -214,7 +212,7 @@ func TestSourceCommitsResolvedStartBeforeExposingAssignment(t *testing.T) {
 			client.commitErr, client.commitResponse = tc.requestError, tc.response
 			event := lifecycleEvent{ids: []int32{0}, answer: make(chan lifecycleAnswer, 1)}
 			// When the core resolves and saves its initial position.
-			err := s.lifecycle(event)
+			err := s.lifecycle(context.Background(), event)
 			// Then the core sees the assignment only after an explicit successful partition result.
 			require.Equal(t, map[int32]int64{0: 7}, client.committed)
 			life := s.life.(*lifecycleMock)
@@ -272,7 +270,7 @@ func TestAssignmentRejectsNewMissingPartitionBeforeInitialCommit(t *testing.T) {
 	s.routing = routing
 	event := lifecycleEvent{ids: []int32{5}, answer: make(chan lifecycleAnswer, 1)}
 	// When processing the assignment, then the callback receives the failure before any initial commit or assignment.
-	require.ErrorIs(t, s.lifecycle(event), failure)
+	require.ErrorIs(t, s.lifecycle(context.Background(), event), failure)
 	select {
 	case answer := <-event.answer:
 		require.ErrorIs(t, answer.err, failure)
@@ -293,7 +291,7 @@ func TestEmptyAssignmentDoesNotInspectDestination(t *testing.T) {
 	s.routing = routing
 	event := lifecycleEvent{answer: make(chan lifecycleAnswer, 1)}
 	// When processing it, then an idle worker needs no destination request and still receives its assignment result.
-	require.NoError(t, s.lifecycle(event))
+	require.NoError(t, s.lifecycle(context.Background(), event))
 	require.Zero(t, routing.calls)
 	select {
 	case answer := <-event.answer:

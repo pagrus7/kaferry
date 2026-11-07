@@ -2,6 +2,7 @@ package franz
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -119,14 +120,14 @@ func TestCorePositioningPrecedesClientOffsetAdjustment(t *testing.T) {
 	defer input.Close()
 	life := &lifecycleMock{}
 	observer := &saveObserver{}
-	if err = input.Start(life, observer); err != nil {
+	if err = input.Start(context.Background(), life, observer); err != nil {
 		t.Fatal(err)
 	}
 	ctx := componentContext(t)
 	var first *core.Input
 	// When the core resolves the assignment before the client's adjust hook runs.
 	for first == nil && ctx.Err() == nil {
-		event, err := input.Poll(20 * time.Millisecond)
+		event, err := input.Poll(context.Background(), 20*time.Millisecond)
 		require.NoError(t, err)
 		first = event.Input
 	}
@@ -218,11 +219,11 @@ func TestKafkaSinkPreservesPartitionsUsingTheRealProducer(t *testing.T) {
 	require.True(t, actual.RequiresConsistency(&kgo.Record{}), "leaderless partitions must not renumber the layout")
 	// When submitting null, empty and binary keys, then all retain the original partition 2.
 	for _, key := range [][]byte{nil, {}, {0, 255}} {
-		require.NoError(t, output.Submit(core.Record{Source: &core.Provenance{Partition: 2}, Key: key}, core.Token{Partition: 0}))
+		require.NoError(t, output.Submit(context.Background(), core.Record{Source: &core.Provenance{Partition: 2}, Key: key}, core.Token{Partition: 0}))
 		require.NoError(t, receiveDelivery(t, output).Err)
 	}
 	// When the layout changes after preflight, then the manual partitioner fails rather than remapping.
-	require.NoError(t, output.Submit(core.Record{Source: &core.Provenance{Partition: 8}}, core.Token{}))
+	require.NoError(t, output.Submit(context.Background(), core.Record{Source: &core.Provenance{Partition: 8}}, core.Token{}))
 	require.Error(t, receiveDelivery(t, output).Err)
 	consumer := componentClient(t, cluster, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"output": {2: kgo.NewOffset().AtStart()}}))
 	for _, key := range [][]byte{nil, {}, {0, 255}} {
@@ -252,7 +253,7 @@ func TestExplicitKeyRoutingMatchesKafkaHashVectors(t *testing.T) {
 	for range 2 {
 		for _, key := range []string{"21", "foobar", "abc"} {
 			// When source partition 4 differs from every expected destination, then KEY ignores that source placement.
-			require.NoError(t, output.Submit(core.Record{Source: &core.Provenance{Partition: 4}, Key: []byte(key)}, core.Token{}))
+			require.NoError(t, output.Submit(context.Background(), core.Record{Source: &core.Provenance{Partition: 4}, Key: []byte(key)}, core.Token{}))
 			require.NoError(t, receiveDelivery(t, output).Err)
 		}
 	}
@@ -273,4 +274,49 @@ func TestExplicitKeyRoutingMatchesKafkaHashVectors(t *testing.T) {
 		}
 	}
 	require.Equal(t, map[string]int{"21": 2, "foobar": 2, "abc": 2}, seen)
+}
+
+type rejectingConsumerClients struct {
+	Clients
+	client *kgo.Client
+}
+
+func (c *rejectingConsumerClients) Consumer(options ...kgo.Opt) (ConsumerClient, error) {
+	var err error
+	c.client, err = kgo.NewClient(options...)
+	if err != nil {
+		return nil, err
+	}
+	return nil, errors.New("injected consumer failure")
+}
+
+func TestConsumerConstructionFailureCancelsClientAndBridge(t *testing.T) {
+	// Given a valid source whose consumer constructor fails after options are assembled.
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"))
+	t.Cleanup(cluster.Close)
+	p := componentPlan(t, cluster)
+	factory, connection := componentConnection(t, p)
+	rejecting := &rejectingConsumerClients{Clients: NewClients()}
+	factory.clients = rejecting
+
+	// When source construction fails, then both the client and callback bridge are cancelled.
+	_, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker, nil)
+	if rejecting.client != nil {
+		t.Cleanup(rejecting.client.CloseAllowingRebalance)
+	}
+	require.ErrorContains(t, err, "invalid Kafka consumer configuration")
+	require.NotNil(t, rejecting.client)
+	clientCtx := rejecting.client.OptValue(kgo.WithContext).(context.Context)
+	require.ErrorIs(t, clientCtx.Err(), context.Canceled)
+	assigned := rejecting.client.OptValue(kgo.OnPartitionsAssigned).(func(context.Context, *kgo.Client, map[string][]int32))
+	done := make(chan struct{})
+	go func() {
+		assigned(t.Context(), rejecting.client, map[string][]int32{"input": {0}})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("failed consumer left its bridge callback blocked")
+	}
 }

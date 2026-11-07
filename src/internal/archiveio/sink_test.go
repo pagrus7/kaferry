@@ -1,6 +1,7 @@
 package archiveio
 
 import (
+	"context"
 	"errors"
 	"github.com/pagrus7/kaferry/src/internal/archive/avro"
 	core "github.com/pagrus7/kaferry/src/internal/copy"
@@ -31,10 +32,10 @@ func TestSinkConfirmsBatchOnlyAfterDurabilityAndPreservesRecord(t *testing.T) {
 	record := core.Record{Source: &core.Provenance{Cluster: "cluster", TopicID: [16]byte{1}, Topic: "orders", Partition: 2, Offset: 42}, Key: []byte{}, TimestampType: "unknown", Headers: []core.Header{{Name: string([]byte{255}), Value: nil}, {Name: string([]byte{255}), Value: []byte{}}}}
 	// When submitting, then no delivery is acknowledged before Flush.
 	token := core.Token{Sequence: 7}
-	require.NoError(t, sink.Submit(record, token))
+	require.NoError(t, sink.Submit(context.Background(), record, token))
 	require.Empty(t, sink.Deliveries())
 	require.Equal(t, record, fromArchive(m.records[0]))
-	require.NoError(t, sink.Flush())
+	require.NoError(t, sink.Flush(context.Background()))
 	require.Equal(t, core.Delivery{Token: token}, <-sink.Deliveries())
 	// When finishing, then publication runs separately and Close releases ownership.
 	require.NoError(t, sink.Finish())
@@ -60,28 +61,28 @@ func TestSinkLatchesStorageFailuresButAllowsRecordLimitSkip(t *testing.T) {
 			}
 			// When the stage fails, then later calls cannot acknowledge work or recover silently.
 			if stage == "append" {
-				require.ErrorIs(t, sink.Submit(record, core.Token{}), failure)
+				require.ErrorIs(t, sink.Submit(context.Background(), record, core.Token{}), failure)
 			} else {
-				require.NoError(t, sink.Submit(record, core.Token{}))
+				require.NoError(t, sink.Submit(context.Background(), record, core.Token{}))
 				if stage == "flush" {
-					require.ErrorIs(t, sink.Flush(), failure)
+					require.ErrorIs(t, sink.Flush(context.Background()), failure)
 				} else {
 					require.ErrorIs(t, sink.Finish(), failure)
 				}
 			}
-			require.ErrorIs(t, sink.Submit(record, core.Token{}), failure)
-			require.ErrorIs(t, sink.Flush(), failure)
+			require.ErrorIs(t, sink.Submit(context.Background(), record, core.Token{}), failure)
+			require.ErrorIs(t, sink.Flush(context.Background()), failure)
 			require.ErrorIs(t, sink.Finish(), failure)
 			require.Empty(t, sink.Deliveries())
 		})
 	}
 	// Given an individual format-limit rejection, when it is skipped, then the sink remains usable.
-	m := &captureMock{appendErr: &avro.InvalidRecord{Err: errors.New("too large")}}
+	m := &captureMock{appendErr: avro.InvalidRecordError(errors.New("too large"))}
 	sink := NewSink(m, 1)
 	var classified *core.RecordError
-	require.ErrorAs(t, sink.Submit(core.Record{Source: &core.Provenance{}}, core.Token{}), &classified)
+	require.ErrorAs(t, sink.Submit(context.Background(), core.Record{Source: &core.Provenance{}}, core.Token{}), &classified)
 	m.appendErr = nil
-	require.NoError(t, sink.Submit(core.Record{Source: &core.Provenance{}}, core.Token{}))
-	require.NoError(t, sink.Flush())
+	require.NoError(t, sink.Submit(context.Background(), core.Record{Source: &core.Provenance{}}, core.Token{}))
+	require.NoError(t, sink.Flush(context.Background()))
 	require.Len(t, sink.Deliveries(), 1)
 }

@@ -1,13 +1,15 @@
 package copy
 
+import "context"
+
 import "errors"
 
 func (r *Runner) workerStopReached() bool {
 	return r.plan.WorkerStopAfterRecords > 0 && r.submitted >= r.plan.WorkerStopAfterRecords
 }
 
-func (r *Runner) finishWorkerStop() error {
-	err := r.finishWrites()
+func (r *Runner) finishWorkerStop(ctx context.Context) error {
+	err := r.finishWrites(ctx)
 	if err == nil {
 		for id, p := range r.partitions {
 			if p.stop == nil {

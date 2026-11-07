@@ -2,6 +2,8 @@
 package copy
 
 import (
+	"errors"
+	"fmt"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 )
 
@@ -90,13 +92,10 @@ type RecordError struct {
 func (e *RecordError) Error() string { return e.Err.Error() }
 func (e *RecordError) Unwrap() error { return e.Err }
 
-// Recoverable marks a classified transient operation error. The caller decides
-// whether to retry a tip query or release revoked progress for replay; initial
-// and periodic commit failures remain terminal.
-type Recoverable struct{ Err error }
+// ErrRecoverable marks transient errors that callers may retry or replay.
+var ErrRecoverable = errors.New("recoverable operation")
 
-func (e *Recoverable) Error() string { return e.Err.Error() }
-func (e *Recoverable) Unwrap() error { return e.Err }
+func MarkRecoverable(err error) error { return fmt.Errorf("%w: %w", ErrRecoverable, err) }
 
 // Exit carries a classified CLI outcome, including an unassigned timeout (3).
 // Unclassified conflicts use 2 before intake and 1 after intake.
@@ -109,6 +108,4 @@ func (e *Exit) Error() string { return e.Err.Error() }
 func (e *Exit) Unwrap() error { return e.Err }
 func (e *Exit) ExitCode() int { return e.Code }
 
-type Busy struct{}
-
-func (*Busy) Error() string { return "destination queue is full" }
+var ErrBusy = errors.New("destination queue is full")

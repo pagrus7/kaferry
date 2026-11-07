@@ -26,61 +26,62 @@ type sourcePartition struct {
 }
 
 type Source struct {
-	client               ConsumerClient
-	routing              kafkaport.PartitionValidator
-	inspector            sourceMetadata
-	lookup               kafkaport.OffsetLookup
-	positioning          kafkaport.PositionerFactory
-	store                *Committer
-	bridge               *rebalanceBridge
-	pump                 *fetchPump
-	plan                 plan.Plan
-	fingerprint, topicID string
-	clusterID            string
-	originalTopicID      [16]byte
-	query, ctx           context.Context
-	cancel, clientCancel context.CancelFunc
-	life                 core.Lifecycle
-	observer             core.Observer
-	partitions           map[int32]*sourcePartition
-	readyEOF             []core.Cursor
-	gaps                 gapReader
-	lastGap              int32
-	lastTip              time.Time
-	err                  error
-	retrying             bool
-	log                  *slog.Logger
+	client                             ConsumerClient
+	routing                            kafkaport.PartitionValidator
+	inspector                          sourceMetadata
+	lookup                             kafkaport.OffsetLookup
+	positioning                        kafkaport.PositionerFactory
+	store                              *Committer
+	bridge                             *rebalanceBridge
+	pump                               *fetchPump
+	plan                               plan.Plan
+	fingerprint, topicID               string
+	clusterID                          string
+	originalTopicID                    [16]byte
+	cancel, bridgeCancel, clientCancel context.CancelFunc
+	life                               core.Lifecycle
+	observer                           core.Observer
+	partitions                         map[int32]*sourcePartition
+	readyEOF                           []core.Cursor
+	gaps                               gapReader
+	lastGap                            int32
+	lastTip                            time.Time
+	err                                error
+	retrying                           bool
+	log                                *slog.Logger
 }
 
-func (s *Source) Start(life core.Lifecycle, observer core.Observer) error {
+func (s *Source) Start(ctx context.Context, life core.Lifecycle, observer core.Observer) error {
 	if s.pump != nil {
 		return fmt.Errorf("source already started")
 	}
-	if err := s.query.Err(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	s.life = life
 	s.observer = observer
 	s.client.AddConsumeTopics(s.plan.Source.Name)
-	s.pump = newFetchPump(s.ctx, s.client)
-	go s.pump.run()
+	pumpCtx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
+	s.pump = newFetchPump(s.client)
+	go s.pump.run(pumpCtx)
 	return nil
 }
-func (s *Source) Poll(timeout time.Duration) (core.Event, error) {
+func (s *Source) Poll(ctx context.Context, timeout time.Duration) (core.Event, error) {
 	if s.err != nil {
 		return core.Event{}, s.err
 	}
 	if s.pump == nil {
 		return core.Event{}, fmt.Errorf("source is not started")
 	}
-	event, err := s.poll(timeout)
+	event, err := s.poll(ctx, timeout)
 	if err != nil {
 		s.err = err
 	}
 	return event, err
 }
-func (s *Source) poll(timeout time.Duration) (core.Event, error) {
-	if err := s.checkTips(); err != nil {
+func (s *Source) poll(ctx context.Context, timeout time.Duration) (core.Event, error) {
+	if err := s.checkTips(ctx); err != nil {
 		return core.Event{}, err
 	}
 	for len(s.readyEOF) > 0 {
@@ -101,7 +102,7 @@ func (s *Source) poll(timeout time.Duration) (core.Event, error) {
 	defer timer.Stop()
 	select {
 	case event := <-s.bridge.events:
-		return core.Event{}, s.lifecycle(event)
+		return core.Event{}, s.lifecycle(ctx, event)
 	case fetched := <-s.pump.fetched:
 		defer close(fetched.done)
 		if fetched.err != nil {
@@ -124,11 +125,9 @@ func (s *Source) poll(timeout time.Duration) (core.Event, error) {
 		}
 		return s.deliver(record)
 	case <-timer.C:
-		return core.Event{}, s.checkTips()
-	case <-s.query.Done():
-		return core.Event{}, s.query.Err()
-	case <-s.ctx.Done():
-		return core.Event{}, s.ctx.Err()
+		return core.Event{}, s.checkTips(ctx)
+	case <-ctx.Done():
+		return core.Event{}, ctx.Err()
 	}
 }
 func (s *Source) deliver(r *kgo.Record) (core.Event, error) {
@@ -178,8 +177,8 @@ func (s *Source) Pause(id int32, paused bool) error {
 	}
 	return nil
 }
-func (s *Source) HighWatermark(id int32) (int64, error) {
-	ctx, cancel := context.WithTimeout(s.query, 2*time.Second)
+func (s *Source) HighWatermark(ctx context.Context, id int32) (int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	ends, err := s.lookup.ReplicatedEnd(ctx, []int32{id})
 	if err != nil {
@@ -188,8 +187,7 @@ func (s *Source) HighWatermark(id int32) (int64, error) {
 	return ends[id], nil
 }
 func (s *Source) transient(err error) bool {
-	var retry *core.Recoverable
-	if !errors.As(transientFailure(err), &retry) {
+	if !errors.Is(transientFailure(err), core.ErrRecoverable) {
 		return false
 	}
 	if !s.retrying {
@@ -199,7 +197,12 @@ func (s *Source) transient(err error) bool {
 	return true
 }
 func (s *Source) Close() error {
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.bridgeCancel != nil {
+		s.bridgeCancel()
+	}
 	force := time.AfterFunc(6*time.Second, s.clientCancel)
 	defer force.Stop()
 	if s.pump != nil {

@@ -135,6 +135,11 @@ func TestIndependentWriter(t *testing.T) {
 	require.Equal(t, records(), read(t, codec(t, 4<<20), output.Bytes()))
 }
 
+func TestInvalidRecordErrorPreservesCause(t *testing.T) {
+	cause := errors.New("record limit")
+	require.ErrorIs(t, InvalidRecordError(cause), cause)
+}
+
 func TestRejectedRecordDoesNotChangePendingBlock(t *testing.T) {
 	// Given a valid record pending in a container.
 	c := codec(t, 4096)
@@ -163,12 +168,8 @@ func TestRejectedRecordDoesNotChangePendingBlock(t *testing.T) {
 			err := w.Append(bad)
 			require.Error(t, err)
 			require.NotEmpty(t, err.Error(), "rejection explains the failure")
-			var rejected *InvalidRecord
-			require.Equal(t, tc.skip, errors.As(err, &rejected), "only format limits permit skipping")
+			require.Equal(t, tc.skip, errors.Is(err, ErrInvalidRecord), "only format limits permit skipping")
 			require.Equal(t, tc.rotate, errors.Is(err, ErrRotationRequired), "identity/ordering changes require rotation")
-			if tc.skip {
-				require.NotNil(t, errors.Unwrap(err), "classification retains the cause")
-			}
 		})
 	}
 	require.NoError(t, w.Flush())

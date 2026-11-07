@@ -101,11 +101,10 @@ func validLimit(limit int64) bool {
 // Schema returns the published record schema for standard Avro tooling.
 func Schema() string { return schemaText }
 
-// InvalidRecord identifies Append input rejected by format limits before output changes.
-type InvalidRecord struct{ Err error }
+// ErrInvalidRecord identifies Append input rejected before output changes.
+var ErrInvalidRecord = errors.New("invalid archive record")
 
-func (e *InvalidRecord) Error() string { return e.Err.Error() }
-func (e *InvalidRecord) Unwrap() error { return e.Err }
+func InvalidRecordError(err error) error { return fmt.Errorf("%w: %w", ErrInvalidRecord, err) }
 
 // ErrRotationRequired means Append needs a new file for this source or offset.
 var ErrRotationRequired = errors.New("source identity changed or offset decreased; start another file")

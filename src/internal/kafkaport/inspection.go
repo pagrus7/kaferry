@@ -27,7 +27,7 @@ type InspectionConnection interface {
 	Describe(context.Context, bool) (TopicDescription, error)
 	CheckMembers(context.Context, string, string) error
 	Membership(context.Context, string, string) (Membership, error)
-	// Saved returns source-validated rows with a FingerprintMismatch error for
+	// Saved returns source-validated rows with ErrFingerprintMismatch for
 	// diagnostic inspection. Every execution caller must stop on any error.
 	Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]SavedProgress, error)
 	Close(context.Context) error

@@ -53,16 +53,15 @@ func (s *Source) ownedIDs() []int32 {
 	}
 	return ids
 }
-func (s *Source) checkTips() error {
+func (s *Source) checkTips(ctx context.Context) error {
 	if len(s.partitions) == 0 || time.Since(s.lastTip) < time.Second {
 		return nil
 	}
 	s.lastTip = time.Now()
-	ctx, cancel := context.WithTimeout(s.query, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	err := s.pollTips(ctx)
-	var retry *core.Recoverable
-	if errors.As(transientFailure(err), &retry) {
+	if errors.Is(transientFailure(err), core.ErrRecoverable) {
 		return nil
 	}
 	return err

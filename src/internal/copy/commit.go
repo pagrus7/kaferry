@@ -83,8 +83,7 @@ func (r *Runner) confirmedCursors(ids []int32) []Cursor {
 }
 
 func (r *Runner) released(releasing bool, cursors []Cursor, err error) bool {
-	var recoverable *Recoverable
-	if !releasing || !errors.As(err, &recoverable) {
+	if !releasing || !errors.Is(err, ErrRecoverable) {
 		return false
 	}
 	for _, cursor := range cursors {

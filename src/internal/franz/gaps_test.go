@@ -171,12 +171,12 @@ func TestHotPartitionCannotStarveAQuietPartitionsGapProof(t *testing.T) {
 	proof.perPartition = map[int32]int64{0: 0, 1: 10}
 	feed(s, &kgo.Record{Partition: 0, Offset: 0, Value: []byte("hot")}, nil)
 	// When polling without waiting for an idle timer, then the quiet partition still reaches its proven end.
-	event, err := s.Poll(time.Second)
+	event, err := s.Poll(context.Background(), time.Second)
 	if err != nil || event.EOF == nil || event.EOF.Partition != 1 || event.EOF.Position != 10 {
 		t.Fatal("hot input starved the quiet tip", event, err, proof.calls)
 	}
 	// Then the hot record remains available on the following poll.
-	event, err = s.Poll(time.Second)
+	event, err = s.Poll(context.Background(), time.Second)
 	if err != nil || event.Input == nil || string(event.Input.Record.Value) != "hot" {
 		t.Fatal("tip probe discarded hot input", event, err)
 	}
@@ -201,7 +201,7 @@ func TestGapProbeErrorsRetryOnlyWhenRecoverable(t *testing.T) {
 			source, proof := sourceWithGaps(t, 1)
 			proof.err = scenario.failure
 			// When polling after a probe failure.
-			event, err := source.Poll(0)
+			event, err := source.Poll(context.Background(), 0)
 			// Then only temporary failures permit another poll, and no failure advances progress.
 			if (err != nil) != scenario.stops || event.Input != nil || event.EOF != nil || source.partitions[0].position != 0 || len(proof.calls) != 1 {
 				t.Fatal("wrong probe error handling", event, err, source.partitions, proof.calls)
@@ -227,8 +227,7 @@ func TestThrottledGapReplyProvesNothingAndCanRetry(t *testing.T) {
 		proof := &fetchGap{client: mock, topic: "input", topicID: topicID(id)}
 		// When the gap is probed, then no progress is inferred and a throttled reply can be retried.
 		next, err := proof.Next(t.Context(), 0, 7)
-		var retry *core.Recoverable
-		if next != 7 || err == nil || errors.As(err, &retry) != throttled {
+		if next != 7 || err == nil || errors.Is(err, core.ErrRecoverable) != throttled {
 			t.Fatal("unsafe empty fetch handling", next, err)
 		}
 	}
@@ -264,8 +263,7 @@ func TestGapMetadataFailureCannotAdvanceCursorOrFetch(t *testing.T) {
 			next, err := proof.Next(t.Context(), 0, 7)
 			require.Equal(t, int64(7), next)
 			require.Error(t, err)
-			var retry *core.Recoverable
-			require.Equal(t, tc.retry, errors.As(err, &retry))
+			require.Equal(t, tc.retry, errors.Is(err, core.ErrRecoverable))
 			require.Zero(t, fetches)
 		})
 	}

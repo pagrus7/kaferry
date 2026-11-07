@@ -145,7 +145,7 @@ func TestStatusExposesIncompatibleProgressAndActivity(t *testing.T) {
 				0: {Position: 3, Progress: kafkaport.Progress{Fingerprint: "old-a", End: new(int64(3)), Stop: &core.Stop{Reason: "tip", At: 3}}},
 				1: {Position: 7, Progress: kafkaport.Progress{Fingerprint: "old-b", End: new(int64(7)), Stop: &core.Stop{Reason: "tip", At: 7}}},
 			}
-			source.fail, source.failure = "saved", &kafkaport.Conflict{Err: &plan.FingerprintMismatch{}}
+			source.fail, source.failure = "saved", &kafkaport.Conflict{Err: plan.ErrFingerprintMismatch}
 			if activity != "idle" {
 				source.memberships = []kafkaport.Membership{{Foreign: activity == "foreign"}}
 			}
@@ -179,13 +179,13 @@ func TestStatusExposesIncompatibleArchiveCursor(t *testing.T) {
 	service, p, _, files := fixture()
 	p.Source.Kind, p.Source.Format = "ARCHIVE", "avro"
 	files.source = archiveio.SourceInspection{Saved: true, Position: 7, Fingerprint: "old", Stop: &core.Stop{Reason: "worker_record_cap", At: 7}}
-	files.failSource = &archiveio.Conflict{Err: &plan.FingerprintMismatch{}}
+	files.failSource = &archiveio.Conflict{Err: plan.ErrFingerprintMismatch}
 	// When checking status, then the cursor remains inspectable without claiming completion or compatibility.
 	report, err := service.Status(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
 	require.NoError(t, err)
+	require.Len(t, report.Partitions, 1)
 	require.Equal(t, "unknown", report.Verdict)
 	require.Equal(t, 5, report.ExitCode())
-	require.Len(t, report.Partitions, 1)
 	require.Equal(t, new(int64(7)), report.Partitions[0].Position)
 	require.Equal(t, "old", report.Partitions[0].Fingerprint)
 	require.Equal(t, files.source.Stop, report.Partitions[0].Stop)
