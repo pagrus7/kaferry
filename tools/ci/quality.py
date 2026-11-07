@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Report coverage, production-Go complexity and Go/Python duplication."""
+"""Report coverage and Go/Python duplication."""
 
 import json
 import os
 from pathlib import Path
 import re
-import subprocess
 import sys
-import tempfile
 
 from tools.review.review_coverage import sum_blocks
 
@@ -28,61 +26,16 @@ def coverage(text):
             "packages": packages}
 
 
-def production_files(root):
-    source = root / "src" if (root / "src").is_dir() else root
-    return sorted(p for folder in ("cmd", "internal") for p in (source / folder).rglob("*.go")
-                  if not p.name.endswith("_test.go"))
-
-
 def benchmarks(text):
     matches = re.findall(r"^(Benchmark\S+)-\d+\s+\d+\s+([\d.]+) ns/op\s+(?:[\d.]+ \S+\s+)*?(\d+) B/op\s+(\d+) allocs/op", text, re.M)
     return {name: (float(ns), int(size), int(allocations)) for name, ns, size, allocations in matches}
 
 
-def complexity(root):
-    files = production_files(root)
-    if not files:
-        raise ValueError("no production Go files")
-    output = subprocess.check_output(["gocyclo", "-over", "0", *map(str, files)], text=True)
-    rows = []
-    for line in output.splitlines():
-        score, package, function, location = line.split(maxsplit=3)
-        filename, number, column = location.rsplit(":", 2)
-        rows.append({"complexity": int(score), "package": package, "function": function,
-                     "file": str(Path(filename).relative_to(root)), "line": int(number)})
-    return rows
-
-
-def base_complexity(ref):
-    if not re.fullmatch(r"[a-f0-9]{40}", ref):
-        raise ValueError("base must be a full commit SHA")
-    with tempfile.TemporaryDirectory() as name:
-        root = Path(name)
-        files = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", ref,
-                                         "src/cmd", "src/internal", "cmd", "internal"], text=True).splitlines()
-        for filename in files:
-            if filename.endswith(".go") and not filename.endswith("_test.go"):
-                destination = root / filename
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(subprocess.check_output(["git", "show", f"{ref}:{filename}"]))
-        return complexity(root)
-
-
 def maintainability(directory):
-    current = complexity(Path.cwd())
-    base = os.environ.get("QUALITY_BASE_SHA", "")
-    previous = base_complexity(base) if base and set(base) != {"0"} else []
-    identity = lambda row: (row["file"].removeprefix("src/"), row["package"], row["function"])
-    scores = {identity(row): row["complexity"] for row in previous}
-    for row in current:
-        old = scores.get(identity(row))
-        row["change"] = row["complexity"] - old if old is not None else None
     duplicates = json.loads((directory / "duplication/jscpd-report.json").read_text())
     if duplicates["statistics"]["total"]["sources"] < 1:
         raise ValueError("duplication scan contains no sources")
-    return {"base": base or None, "files": len(production_files(Path.cwd())),
-            "functions": len(current), "max_complexity": max(r["complexity"] for r in current),
-            "hotspots": sorted(current, key=lambda r: (-r["complexity"], r["file"], r["function"]))[:10],
+    return {"base": os.environ.get("QUALITY_BASE_SHA") or None,
             "duplication": duplicates["statistics"]["total"],
             "new_clones": [clone for clone in duplicates["duplicates"] if clone["isNew"]]}
 
@@ -103,9 +56,7 @@ def markdown(directory):
     if report.exists():
         r = json.loads(report.read_text())
         d = r["duplication"]
-        rows += ["## Maintainability", "", f"Production Go complexity: {r['files']} files, {r['functions']} functions; "
-                 f"maximum cyclomatic complexity **{r['max_complexity']}**.", "",
-                 f"Go and Python under `src/` and `tools/`, including tests: {d['sources']} files scanned. "
+        rows += ["## Duplication", "", f"Go and Python under `src/` and `tools/`, including tests: {d['sources']} files scanned. "
                  f"Normalized clones ≥50 tokens and ≥5 lines: **{d['clones']}**, "
                  f"{d['percentage']:.2f}% duplicated lines. New clones: **{d['newClones']}**. "
                  "Comments, identifier names and literal values are ignored.", ""]
@@ -118,11 +69,7 @@ def markdown(directory):
                 first, second = clone["firstFile"], clone["secondFile"]
                 rows.append(f"| `{os.path.relpath(first['name'])}:{first['start']}-{first['end']}` | "
                             f"`{os.path.relpath(second['name'])}:{second['start']}-{second['end']}` | {clone['tokens']} |")
-        rows += ["", "| Function | Location | Complexity | Change |", "| --- | --- | ---: | ---: |"]
-        for h in r["hotspots"]:
-            change = f"{h['change']:+d}" if h["change"] is not None else "—"
-            rows.append(f"| {h['package']}.{h['function']} | {h['file']}:{h['line']} | {h['complexity']} | {change} |")
-        rows += ["", "New duplication fails CI; existing clones and complexity scores remain review signals.", ""]
+        rows += ["", "New duplication fails CI; existing clones remain review signals.", ""]
     return ["", *rows] if rows else []
 
 

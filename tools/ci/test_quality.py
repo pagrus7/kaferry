@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
-from tools.ci.quality import benchmarks, coverage, maintainability, markdown, production_files
+from tools.ci.quality import benchmarks, coverage, maintainability, markdown
 from tools.ci.history import comparison
 
 
@@ -22,11 +22,7 @@ class CoverageTest(unittest.TestCase):
             scan = {'statistics': {'total': {'sources': 4, 'clones': 2, 'percentage': 5, 'newClones': 1}},
                     'duplicates': [dict(clone, isNew=False), clone]}
             (directory / 'duplication/jscpd-report.json').write_text(json.dumps(scan))
-            functions = [{'file': 'src/a.go', 'package': 'a', 'function': 'F', 'complexity': 1, 'line': 1}]
-            with patch('tools.ci.quality.complexity', return_value=functions), \
-                 patch('tools.ci.quality.base_complexity', return_value=[]), \
-                 patch('tools.ci.quality.production_files', return_value=[Path('src/a.go')]), \
-                 patch.dict('os.environ', {'QUALITY_BASE_SHA': 'a' * 40}):
+            with patch.dict('os.environ', {'QUALITY_BASE_SHA': 'a' * 40}):
                 result = maintainability(directory)
             (directory / 'quality.json').write_text(json.dumps(result))
             # When rendering, then only new findings require action and both locations are visible.
@@ -36,20 +32,6 @@ class CoverageTest(unittest.TestCase):
             self.assertIn('src/a_test.go:10-20', summary)
             self.assertIn('src/b_test.go:30-40', summary)
             self.assertIn('New duplication fails CI', summary)
-
-    def test_production_scan_supports_both_layouts_and_excludes_tests(self):
-        # Given a base or head checkout with production and test source files.
-        for prefix in ('', 'src/'):
-            with self.subTest(prefix=prefix), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                for name in ('cmd/kaferry/main.go', 'internal/copy/runner.go',
-                             'internal/copy/runner_test.go', 'tests/system/copy_test.go'):
-                    path = root / (prefix + name)
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text('package fixture\n')
-                # When measured, then both revisions include the same production scope.
-                self.assertEqual([prefix + 'cmd/kaferry/main.go', prefix + 'internal/copy/runner.go'],
-                                 [str(path.relative_to(root)) for path in production_files(root)])
 
     def test_statement_weights_and_duplicate_blocks(self):
         # Given overlapping profiles with unequal statement counts.
