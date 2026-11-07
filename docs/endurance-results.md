@@ -1,11 +1,9 @@
 # Endurance test results
 
-The dedicated application endurance profile produces a readable report, full manifest and metrics JSON, and a checksummed archive containing logs and samples after every completed run, including failures.
+**[Open the endurance results page](https://pagrus7.github.io/kaferry/)** for the latest published run, run history, delivery and resource measurements, workload limits and downloadable evidence.
 
-[Run and publish an endurance test](../design/qualification.md#publish-endurance-results).
+The page is built from the `endurance-results.json` assets uploaded to stable GitHub releases. It verifies each JSON against its published checksums and retains failed, interrupted and rehearsal results with their status. Missing measurements remain unavailable. New runs require no Markdown report or result snapshot committed to the repository.
 
-| Run | Outcome | Scope |
-| --- | --- | --- |
-| [2026-11-06 · Linux ARM64 rehearsal](endurance/2026-11-06-linux-arm64-rehearsal/endurance-results.md) | Passed; 12,400 records reconciled, matching hashes, no fidelity errors | One minute publishing plus five minutes draining; 24 source / 32 destination partitions; development binary identified in the report |
+Publishing requests a refresh of the [endurance-results workflow](https://github.com/pagrus7/kaferry/actions/workflows/endurance-results.yml). Hourly discovery also picks up uploads from older runners or manual uploads. A failed build leaves the previously deployed page in place; check the workflow for refresh failures.
 
-A run shorter than 24 hours is a rehearsal and does not establish 24 hours of continuous uptime. Reports retain the tested binary identity, environment, counts, delivery times, backlog, memory and shutdown observations. The linked JSON contains the complete manifest and measurements.
+[Run and publish an endurance test](../design/qualification.md#publish-endurance-results). The [development rehearsal](endurance/2026-11-06-linux-arm64-rehearsal/endurance-results.md) is separate from release evidence. A run shorter than 24 hours does not establish 24 hours of continuous uptime.
