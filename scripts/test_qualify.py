@@ -349,12 +349,17 @@ class MatrixTest(unittest.TestCase):
         # Given an endurance candidate path that cannot resolve.
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            binary = root / 'loop'; binary.symlink_to(binary.name)
+            binary = root / 'candidate'
+            resolve = Path.resolve
+            def resolve_candidate(path, *positional, **keyword):
+                if path == binary: raise OSError('candidate resolution failed')
+                return resolve(path, *positional, **keyword)
             args = argparse.Namespace(suite='endurance', source='3.9.2', destination='3.9.2',
                 output=root / 'evidence', binary=str(binary), config=None, duration=60, rate=200)
-            with patch('qualify.capture', return_value='fixture'), patch('qualify.logged') as execute:
+            with patch.object(Path, 'resolve', resolve_candidate), patch('qualify.capture', return_value='fixture'), \
+                 patch('qualify.logged') as execute:
                 # When resolution fails, then retain the failed receipt and publication without starting fixtures.
-                with self.assertRaises((OSError, RuntimeError)): run_suite(args)
+                with self.assertRaisesRegex(OSError, 'candidate resolution failed'): run_suite(args)
             execute.assert_not_called()
             receipt = json.loads((args.output / 'manifest.json').read_text())
             self.assertEqual('failed', receipt['status'])
