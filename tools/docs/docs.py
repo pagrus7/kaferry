@@ -1,5 +1,6 @@
-"""Check shell syntax and local Markdown links without executing examples."""
+"""Check shell syntax and local Markdown/image links without executing examples."""
 
+from html.parser import HTMLParser
 from pathlib import Path
 import re
 import subprocess
@@ -13,7 +14,7 @@ def prose_and_shell(text):
     for line in text.splitlines():
         if fence:
             if re.fullmatch(r' {0,3}' + re.escape(fence[0]) + '{' + str(len(fence)) + r',}\s*', line):
-                if language in {'sh', 'bash'}:
+                if language in {'sh', 'bash', 'shell'}:
                     shell.append('\n'.join(body))
                 fence, body = None, []
             else:
@@ -39,13 +40,28 @@ def anchors(text):
     return result
 
 
+class ImageLinks(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.links = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'img':
+            self.links.extend(value for name, value in attrs if name == 'src' and value)
+
+
 def check(path):
     prose, shells = prose_and_shell(path.read_text())
     for index, script in enumerate(shells):
         result = subprocess.run(['bash', '-n'], input=script, text=True, capture_output=True)
         if result.returncode:
             raise ValueError(f'shell block {index + 1}: {result.stderr.strip()}')
-    for link in re.findall(r'\]\(([^\s)]+)(?:\s+"[^"]*")?\)', prose):
+    links = re.findall(r'\]\(([^\s)]+)(?:\s+"[^"]*")?\)', prose)
+    links.extend(re.findall(r'^ {0,3}\[[^\]\n]+\]:[ \t]*(<[^>\n]+>|\S+)', prose, re.M))
+    images = ImageLinks()
+    # HTML inside Markdown code spans is literal, including spans containing backticks.
+    images.feed(re.sub(r'(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)', '', prose, flags=re.S))
+    for link in links + images.links:
         url = urlsplit(link.strip('<>'))
         if url.scheme or url.netloc:
             continue

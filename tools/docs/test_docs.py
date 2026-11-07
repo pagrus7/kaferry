@@ -14,12 +14,51 @@ class DocsTest(unittest.TestCase):
             root = Path(directory)
             doc = root / 'README.md'
             marker = root / 'must-not-exist'
-            doc.write_text(f'```sh\ntouch "{marker}"\n```\n')
-            # When checked, then shell syntax passes without executing the command.
+            for language in ('sh', 'bash', 'shell'):
+                with self.subTest(language=language):
+                    doc.write_text(f'```{language}\ntouch "{marker}"\n```\n')
+                    # When checked, then syntax passes without executing the command.
+                    check(doc)
+                    self.assertFalse(marker.exists())
+                    doc.write_text(f'```{language}\nif true; then\n```\n')
+                    with self.assertRaisesRegex(ValueError, 'shell block 1'):
+                        check(doc)
+
+    def test_reference_links_check_files_and_headings(self):
+        # Given reference links with local and remote destinations.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            doc = root / 'README.md'
+            (root / 'guide with spaces.md').write_text('# Usage\n')
+            doc.write_text('[usage][guide]\n\n[guide]: <guide with spaces.md#usage> "Guide"\n'
+                           '[remote]: https://example.invalid/guide\n'
+                           '```markdown\n[example]: missing.md\n```\n')
+            # When checked, then valid local targets pass and examples/remote URLs are ignored.
             check(doc)
-            self.assertFalse(marker.exists())
-            doc.write_text('```sh\nif true; then\n```\n')
-            with self.assertRaisesRegex(ValueError, 'shell block 1'):
+            for target in ('missing.md', 'guide%20with%20spaces.md#missing'):
+                with self.subTest(target=target):
+                    doc.write_text(f'[usage][guide]\n\n[guide]: {target} "Guide"\n')
+                    # Then a missing file or heading fails for a reference destination.
+                    with self.assertRaisesRegex(ValueError, 'does not exist'):
+                        check(doc)
+
+    def test_html_images_check_local_sources(self):
+        # Given HTML images, including an escaped path and a remote URL.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            doc = root / 'README.md'
+            (root / 'logo&dark.svg').touch()
+            doc.write_text('<picture><img src="logo&amp;dark.svg" alt="Logo"></picture>\n'
+                           '<img src="https://example.invalid/logo.svg">\n'
+                           '<!-- <img src="missing.svg"> -->\n'
+                           'Use `<img src="missing.svg">` as an example.\n'
+                           'Or ``<img src="missing.svg" alt="a ` tick">``.\n'
+                           '```html\n<img src="missing.svg">\n```\n')
+            # When checked, then real local images pass and literal/comment examples are ignored.
+            check(doc)
+            doc.write_text("<img alt='Logo'\n src='missing.svg' />\n")
+            # Then missing HTML image sources fail, including multiline/self-closing tags.
+            with self.assertRaisesRegex(ValueError, 'local link does not exist: missing.svg'):
                 check(doc)
 
     def test_links_and_duplicate_anchors_ignore_code_blocks(self):
