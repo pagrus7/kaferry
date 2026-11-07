@@ -81,7 +81,7 @@ func TestSkipCannotHideFailedEmptyFileCleanup(t *testing.T) {
 	// When SQL would permit skipping the input, then storage failure still stops capture.
 	err = c.Append(testRecord(42))
 	require.ErrorIs(t, err, errDisk)
-	require.False(t, errors.Is(err, avro.ErrInvalidRecord))
+	require.NotErrorIs(t, err, avro.ErrInvalidRecord)
 	require.ErrorIs(t, c.Flush(), errDisk)
 }
 

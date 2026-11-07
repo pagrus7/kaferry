@@ -159,7 +159,7 @@ func TestCommitterPreservesEachPartitionResultAlongsideRequestFailure(t *testing
 			require.ErrorIs(t, results[1], kerr.RebalanceInProgress)
 			require.ErrorIs(t, results[1], core.ErrRecoverable)
 			require.ErrorIs(t, results[2], kerr.TopicAuthorizationFailed)
-			require.False(t, errors.Is(results[2], core.ErrRecoverable))
+			require.NotErrorIs(t, results[2], core.ErrRecoverable)
 			require.NotContains(t, results, int32(3))
 			require.NotContains(t, results, int32(99))
 		})

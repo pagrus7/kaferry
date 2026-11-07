@@ -3,7 +3,6 @@ package avro
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"io"
 	"math"
 	"testing"
@@ -148,7 +147,7 @@ func TestInvalidFileIdentityAndInitialOffset(t *testing.T) {
 		bad.Offset = offset
 		err = w.Append(bad)
 		require.ErrorContains(t, err, "first source offset", "initial offset %d", offset)
-		require.False(t, errors.Is(err, ErrInvalidRecord), "metadata mistakes cannot be skipped")
+		require.NotErrorIs(t, err, ErrInvalidRecord, "metadata mistakes cannot be skipped")
 		require.Zero(t, w.Count())
 	}
 	// Then the expected first record can still be appended after a rejection.
