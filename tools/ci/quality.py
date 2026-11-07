@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Produce statement coverage and production-Go maintainability reports."""
+"""Report coverage, production-Go complexity and Go/Python duplication."""
 
 import json
 import os
@@ -83,7 +83,8 @@ def maintainability(directory):
     return {"base": base or None, "files": len(production_files(Path.cwd())),
             "functions": len(current), "max_complexity": max(r["complexity"] for r in current),
             "hotspots": sorted(current, key=lambda r: (-r["complexity"], r["file"], r["function"]))[:10],
-            "duplication": duplicates["statistics"]["total"]}
+            "duplication": duplicates["statistics"]["total"],
+            "new_clones": [clone for clone in duplicates["duplicates"] if clone["isNew"]]}
 
 
 def markdown(directory):
@@ -102,17 +103,26 @@ def markdown(directory):
     if report.exists():
         r = json.loads(report.read_text())
         d = r["duplication"]
-        rows += ["## Maintainability", "", f"Production Go only: {r['files']} files, {r['functions']} functions; "
+        rows += ["## Maintainability", "", f"Production Go complexity: {r['files']} files, {r['functions']} functions; "
                  f"maximum cyclomatic complexity **{r['max_complexity']}**.", "",
-                 f"Exact clones ≥100 tokens and ≥10 lines: **{d['clones']}**, "
-                 f"{d['percentage']:.2f}% duplicated lines. New clones: {d.get('newClones', '—')}.", ""]
+                 f"Go and Python under `src/` and `tools/`, including tests: {d['sources']} files scanned. "
+                 f"Normalized clones ≥50 tokens and ≥5 lines: **{d['clones']}**, "
+                 f"{d['percentage']:.2f}% duplicated lines. New clones: **{d['newClones']}**. "
+                 "Comments, identifier names and literal values are ignored.", ""]
         if r["base"]:
-            rows.append(f"Compared with `{r['base']}` using the same tools and production paths.")
+            rows.append(f"Compared with `{r['base']}` using the same tools and scan settings.")
+        if r["new_clones"]:
+            rows += ["", "New duplication must be removed or explicitly reviewed and suppressed before merging.", "",
+                     "| New clone | Matching location | Tokens |", "| --- | --- | ---: |"]
+            for clone in r["new_clones"]:
+                first, second = clone["firstFile"], clone["secondFile"]
+                rows.append(f"| `{os.path.relpath(first['name'])}:{first['start']}-{first['end']}` | "
+                            f"`{os.path.relpath(second['name'])}:{second['start']}-{second['end']}` | {clone['tokens']} |")
         rows += ["", "| Function | Location | Complexity | Change |", "| --- | --- | ---: | ---: |"]
         for h in r["hotspots"]:
             change = f"{h['change']:+d}" if h["change"] is not None else "—"
             rows.append(f"| {h['package']}.{h['function']} | {h['file']}:{h['line']} | {h['complexity']} | {change} |")
-        rows += ["", "These are review signals, not correctness scores or arbitrary merge thresholds.", ""]
+        rows += ["", "New duplication fails CI; existing clones and complexity scores remain review signals.", ""]
     return ["", *rows] if rows else []
 
 
