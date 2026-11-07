@@ -124,6 +124,7 @@ def main():
         version, revision = candidate(args.directory)
     record = {"version": version, "revision": revision}
     (args.directory / "release.json").write_text(json.dumps(record, indent=2) + "\n")
+    shutil.copy2(Path(__file__).parent / "demo/demo.sh", args.directory / "demo.sh")
     print(json.dumps(record))
 
 
