@@ -1,6 +1,6 @@
 # Qualification lab
 
-Run the same scripts from a terminal, GitHub Actions or a local scheduler. No agent, chat session or hosted automation is required. [Component tests](components.md#test-targets) remain the fast development entrypoints; this lab owns disposable broker setup, teardown and qualification evidence.
+Run the same scripts from a terminal, GitHub Actions or a local scheduler. No agent, chat session or hosted automation is required. [Component tests](../../CONTRIBUTING.md#test-targets) remain the fast development entrypoints; this lab owns disposable broker setup, teardown and qualification evidence.
 
 ## Prepare
 
@@ -117,7 +117,7 @@ For paired performance, use the existing standalone runner with two source revis
 sh tools/qualification/performance_run.sh origin/main HEAD --pairs 6 --archives
 ```
 
-The wrapper tears down its disposable brokers after success, failure or interruption. Compare measurements on the same quiet machine; shared-runner throughput has no regression gate. [Performance interpretation](components.md#paired-performance).
+The wrapper tears down its disposable brokers after success, failure or interruption. Compare measurements on the same quiet machine; shared-runner throughput has no regression gate. [Performance interpretation](../../CONTRIBUTING.md#paired-performance).
 
 If Docker itself is unavailable, cleanup can fail. The receipt preserves both suite and cleanup errors. After restoring Docker, remove only these lab projects:
 
@@ -178,26 +178,22 @@ CI continues to run one fault cycle; it does not launch the two-hour recovery su
 | Manually before release: `resources`, `capture` and `auth` | Check archive storage cuts, continuous capture, authentication and replicated failover separately |
 | Manually for a release candidate: `endurance` for 24 hours | Keep one copier alive through sustained input and recoverable destination stalls |
 
-Use the exact candidate executable for CLI qualification and retain its digest in each
-manifest. Component tests compile the checkout. A recovery pass cannot substitute for
-an endurance pass; a shorter rehearsal cannot establish 24-hour uptime. Broker-version
-compatibility remains the separate matrix above. Broader failure combinations and
-longer runs should follow changes to the relevant adapters or lifecycle behavior.
+Use the exact candidate executable for CLI qualification; component tests compile the checkout. Recovery, endurance and broker compatibility establish different properties. Add failure combinations or longer runs when the relevant adapters or lifecycle behavior change.
 
 ## Endurance on a persistent host
 
-Keep a process alive continuously for the duration being claimed. Separate short runs do not add up to continuous uptime. The runner accepts publishing durations from one minute through seven days, adds a five-minute consume-only period and derives the Go test timeout from both periods plus cleanup time.
+Only one uninterrupted process establishes continuous uptime. Shorter runs are rehearsals and cannot be added together. The workload table defines durations; the runner derives the test timeout from publishing, drain and cleanup time.
 
-Prerequisites: Python 3.11+, Go, Docker and Compose, a host that stays awake, and exclusive use of the selected disposable brokers. `endurance` owns the separate `kaferry-endurance` project on localhost ports 39192 and 40192; other plain-broker suites use `kaferry-compat` on 39092 and 40092. The runner starts and removes its project and pauses its destination. Do not run another job against that project while it is active. Other host workloads can affect measurements.
+Complete [preparation](#prepare) and keep the host awake. `endurance` owns and cleans up the `kaferry-endurance` brokers; do not share them with another job. Other host workloads can affect measurements.
 
 ```sh
 make build
 python3 -m tools.qualification.qualify run endurance --output build-results/endurance-24h
-# Optional short rehearsal; this does not qualify 24 hours of uptime.
+# Optional short rehearsal.
 python3 -m tools.qualification.qualify run endurance --duration 1m --output build-results/endurance-rehearsal
 ```
 
-The dedicated `endurance` suite uses the following fixed application workload. It stays out of PR, nightly and weekly matrices; their short `soak` and `capture` settings remain available. Use a fresh output directory for each run. The runner preserves evidence on failure and removes its disposable brokers in cleanup. Interrupt with Ctrl-C; an interrupted run cannot qualify. A fresh run starts fresh topics and progress rather than resuming an interrupted qualification.
+`endurance` stays outside PR, nightly and weekly matrices. Use a fresh output directory; each run starts fresh topics and progress. Ctrl-C interrupts the run and preserves failure evidence, but cannot produce a qualifying result.
 
 | Setting | Purpose and acceptance |
 | --- | --- |
@@ -210,13 +206,13 @@ The dedicated `endurance` suite uses the following fixed application workload. I
 | Shutdown and bounded work | SIGINT must exit successfully within 30 seconds after the drain. Final summary counts must match input, with at most 1,024 uncommitted records and 128 MiB. This run does not restart the process or inject source failure. |
 | Memory and measurement | Sample CLI RSS once per second: peak at most 512 MiB, final median growth at most 32 MiB over the warm median. Endurance checks growth both just before publishing ends and after drain. Warm median uses samples 11–30; final medians use the last 20 samples. |
 
-The rate checks make producer/verifier backpressure visible. The fixture uses nonblocking producer admission (rejection fails the run), a 2,048-record producer buffer and up to 512 receipts per verifier poll. Outstanding input and unresolved verification/digest history have an 8,192-ID bound; hitting a gate cannot reset the clock or reduce the target. Rate/debt failures invalidate load even when all records eventually reconcile. The last scheduled batch may be submitted during the five-second boundary grace; no additional input is scheduled then. A slow verifier can invalidate the harness; that failure alone does not establish a Kaferry throughput limit.
+The rate checks make producer/verifier backpressure visible. Producer admission is nonblocking (rejection fails), with a 2,048-record buffer and up to 512 receipts per verifier poll. Reaching a resource gate cannot reset the clock or reduce the target. Rate/debt failures invalidate load even when all records eventually reconcile. No additional input is scheduled during the boundary grace. A slow verifier can invalidate the harness; that failure alone does not establish a Kaferry throughput limit.
 
 `manifest.json` records the workload, exact binary, images, duration and result. `capacity.json` records preflight space. The metrics file's `endurance` object records targets, submissions/acknowledgements at the publishing boundary and after grace, minimum window ratio, gate iterations, maximum scheduling debt, stall recoveries, loaded final RSS, and wall time spent submitting, verifying and sampling. Existing metrics retain CLI CPU seconds, sampled lag, RSS and final reconciliation. CPU and operation times are descriptive, with no hardware-independent CPU threshold. Sampling time includes admin queries and RSS collection; verifier time includes polling waits and byte/hash work. These times measure harness occupancy, not the overhead relative to an uninstrumented run. Rate gates reject a run that instrumentation underloads; profiling and an instrumentation A/B comparison remain separate work.
 
-Endurance disables topic age/size retention until reconciliation. Preflight reserves three times the record count times 5,376 bytes, plus 4 GiB on **each** broker data filesystem: two full maximum-size copies with 50% overhead, with no compression credit and allowance for a shared Docker disk. The 24-hour default schedules 17,856,000 records and requires about 272 GiB free there. Evidence needs at least 1 GiB or 8 KiB per publishing second, whichever is greater. These are planning allowances, not guarantees against other disk users; monitor host/Docker capacity during the run. The runner does not prune active records. Record-ID overflow is rejected before intake.
+Endurance disables topic age/size retention until reconciliation. Preflight reserves three times the record count times 5,376 bytes, plus 4 GiB on **each** broker data filesystem: two full maximum-size copies with 50% overhead, with no compression credit and allowance for a shared Docker disk. The 24-hour default schedules 17,856,000 records and requires about 272 GiB free there. Evidence needs at least 1 GiB or 8 KiB per publishing second, whichever is greater. These are planning allowances, not guarantees against other disk users; monitor host/Docker capacity during the run. The runner does not prune active records.
 
-This is application endurance under the stated local topology and load. It is neither a saturation benchmark nor replicated-cluster resilience evidence. Use `load` for bounded throughput comparisons and `auth` for replicated leader-failure scenarios; neither substitutes for long continuous uptime. A passing rehearsal, an underloaded run or several short runs cannot support a multi-day production claim. Claims exclude multiple Kaferry processes, replication/ISR behavior, network partitions, authentication overhead and arbitrary payload/key distributions. Match a real deployment with separately measured workloads before generalizing these results.
+Results cover only the stated topology and achieved load. They exclude multiple Kaferry processes, replication/ISR behavior, network partitions, authentication overhead and arbitrary payload/key distributions. Use `load` for throughput comparisons and `auth` for replicated leader failure; measure the actual deployment before generalizing.
 
 Archive capture and the smaller Kafka soak remain available:
 
@@ -225,11 +221,11 @@ python3 -m tools.qualification.qualify run soak --duration 24h --rate 50
 python3 -m tools.qualification.qualify run capture --duration 72h --rate 50
 ```
 
-`soak` and `endurance` verify topic output as it arrives and pauses the separate disposable destination once per minute during publishing. All three modes keep the same copy process alive for five more minutes after publishing stops. After shutdown, Kafka modes consume through the destination's final offsets; `capture` scans all completed archive files. Replay/file-to-file load tests are finite jobs; their repeated execution is not reported as continuous streaming uptime.
+`soak` and `endurance` verify topic output live and pause the destination once per minute during publishing. Like endurance, `soak` and `capture` add a five-minute drain. After shutdown, Kafka modes consume through the destination’s final offsets; capture scans completed archive files. Replay/file-to-file load tests remain finite jobs.
 
-Metrics and JSONL samples record submitted input, broker-acknowledged publications, total and unique received records, verified records, pending IDs, duplicates, corruption, unexpected IDs and reordering. Final missing counts are available only after all publications are acknowledged and the final output scan completes; incomplete evidence reports `missing: null`. Failure reports preserve observed counters. Verification stops with partial totals if unresolved ID history exceeds 8,192 entries. Rates include the consume-only period and reconciliation.
+Metrics and JSONL samples record submitted input, broker-acknowledged publications, total and unique received records, verified records, pending IDs, duplicates, corruption, unexpected IDs and reordering. Final missing counts are available only after all publications are acknowledged and the final output scan completes; incomplete evidence reports `missing: null`. Failure reports preserve observed counters. Outstanding input and unresolved verification/digest history are bounded at 8,192 IDs; exceeding the bound stops verification with partial totals. Rates include the consume-only period and reconciliation.
 
-Both Kafka and archive verifiers compare complete key/value bytes, ordered headers (including duplicate names and null versus empty values) and timestamps against the fixture. Archive verification also compares source cluster, topic ID, partition and offset. `delivery.integrity` adds SHA-256 evidence from actual submissions and first unique receipts, retaining the byte comparisons. Its `sha256-canonical-records-v1` encoding length-prefixes key/value bytes and ordered header names/values, distinguishes null from empty bytes and includes the header count. Each source partition hashes record fingerprints in logical-ID order; a final SHA-256 combines all source-partition digests in partition order. This permits different arrival orders between destination partitions. Only unresolved receipt digests are buffered, with the same 8,192-ID limit. Metrics and GitHub summaries retain both hashes, hashed counts and pending gaps; `matched` is null until final reconciliation. The digest covers key/value/headers; timestamps, provenance, missing records, duplicates and reordering have separate checks. Archive hashes are completed by the scan after shutdown; their live JSONL snapshots remain unresolved.
+Both Kafka and archive verifiers compare complete key/value bytes, ordered headers (including duplicate names and null versus empty values) and timestamps against the fixture. Archive verification also compares source cluster, topic ID, partition and offset. `delivery.integrity` adds SHA-256 evidence from actual submissions and first unique receipts, retaining the byte comparisons. Its `sha256-canonical-records-v1` encoding length-prefixes key/value bytes and ordered header names/values, distinguishes null from empty bytes and includes the header count. Each source partition hashes record fingerprints in logical-ID order; a final SHA-256 combines all source-partition digests in partition order. This permits different arrival orders between destination partitions. Only unresolved receipt digests are buffered. Metrics and GitHub summaries retain both hashes, hashed counts and pending gaps; `matched` is null until final reconciliation. The digest covers key/value/headers; timestamps, provenance, missing records, duplicates and reordering have separate checks. Archive hashes are completed by the scan after shutdown; their live JSONL snapshots remain unresolved.
 
 For Kafka output, destination lag is acknowledged source records minus unique IDs received by the verifier, bounded below by zero. Destination consumer lag is the sum of destination end offsets minus the verifier's next consumed offsets. JSONL samples retain instantaneous lags; metrics retain sampled peaks and, after reconciliation, final values. Consumer-offset sampling pauses while the destination fixture is paused; record-lag sampling continues. Offset distance is a backlog measure, not an independently verified record count. Archive output has no live destination-lag measurement.
 
@@ -237,7 +233,7 @@ Kafka endurance also records `delivery.observed`: source acknowledgements and fi
 
 `p95_latency_seconds`, `p99_latency_seconds` and `p999_latency_seconds` report the nearest-rank 95th, 99th and 99.9th percentiles over every timed first receipt. A fixed 432 KiB histogram rounds percentile durations upward by less than 0.1%, capped at the exact maximum; it never samples or drops timings. No receipts gives null percentiles. Small populations can put p99.9 at the maximum. The histogram covers nonnegative 64-bit nanosecond durations, and its size does not grow with uptime.
 
-The verifier releases contiguous record IDs and bounds outstanding streaming input; RSS monitoring retains fixed warm/final windows and a peak. JSONL samples go to disk. Checks cover record fidelity, saved progress, worker work caps, a 512 MiB sampled RSS ceiling and at most 32 MiB final-median RSS growth after warm-up. These measurements do not include Go heap or goroutine profiles, and sampling can miss short peaks.
+The verifier releases contiguous record IDs; JSONL samples go to disk. All streaming modes enforce the table’s RSS ceiling and final-median growth limit; endurance also checks growth before drain. RSS monitoring retains fixed windows and a peak, without heap or goroutine profiles; sampling can miss short peaks.
 
 Start at a moderate rate: 50 records/second with this fixture's roughly 3 KiB average payload is about 40 GB of raw input over 72 hours, before Kafka replicas, destination output and archives. Payloads compress heavily by default. Set `KAFERRY_ARCHIVE_PAYLOAD=random` for deterministic high-entropy values. Bound the test duration/rate to available disk; the script does not prune active records or archives during verification. Source retention must exceed the maximum test backlog or interruption. Record-ID overflow is rejected before intake.
 

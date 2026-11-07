@@ -1,6 +1,6 @@
 # Kaferry statement grammar
 
-Syntax reference. See [copy behavior](decisions.md) for completion and restart rules.
+Syntax reference. See [usage](../usage.md) for complete workflows and [settings](../reference.md#endpoint-with-properties) for defaults and behavior.
 
 ## Lexical rules
 
@@ -56,39 +56,26 @@ copy_option = "WORKER_STOP_AFTER_RECORDS" "=" integer
 
 Planning or startup enforces:
 
-- Both endpoint `WITH` clauses and final `OPTIONS` are optional; if present, each must contain a setting. Omitted `GROUP` means `ONE_OFF`: generate and log a fresh group for each run. Explicit group names must be nonblank. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name. Settings, inline connection aliases and a connection's properties cannot repeat.
+- Both endpoint `WITH` clauses and final `OPTIONS` are optional; if present, each must contain a setting. Explicit group names must be nonblank. Quoted `GROUP = 'ONE_OFF'` is an ordinary group name. Settings, inline connection aliases and a connection's properties cannot repeat.
 - Archive rotation uses positive bytes (case-insensitive binary k/m/g suffixes) and positive intervals; see [settings and defaults](../reference.md#archive-sink). `ARCHIVE 'directory'` names a filesystem directory containing a Kaferry archive.
-- Source `WITH` precedes `WHERE`. Timestamp bounds supply the starting rule and cannot be combined with explicit `START`; see [Kafka start positions](decisions.md#kafka-start-positions). Archive sources take no `START`. `MAX_STALENESS` and `MAX_OUT_OF_ORDER` belong to source `WITH`; record-error policies and worker stops belong to final `OPTIONS`.
+- Source `WITH` precedes `WHERE`. Timestamp bounds supply the starting rule and cannot be combined with explicit `START`; see [Kafka source settings](../reference.md#kafka-source). Archive sources take no `START`. `MAX_STALENESS` and `MAX_OUT_OF_ORDER` belong to source `WITH`; record-error policies and worker stops belong to final `OPTIONS`.
 - `ON_ERROR` cannot be combined with any specific error policy.
 - `WORKER_STOP_AFTER_RECORDS` is from 1 to 9,007,199,254,740,992; it caps accepted writes per worker per invocation, not records read or a shared group total.
-- `PARTITIONING` requires a topic destination. See [Kafka output](decisions.md#kafka-output) for routing and destination layout requirements, and [settings](../reference.md#kafka-sink) for its default.
+- `PARTITIONING` requires a topic destination. See [Kafka sink settings](../reference.md#kafka-sink) for routing and destination requirements.
 - Intervals use nonnegative integers; `DAY` is 86,400 seconds. Both timestamp completion settings require an upper timestamp bound and reject an explicit offset end. `MAX_STALENESS` requires Kafka input. `OFF` disables the corresponding rule; zero is allowed. [Endpoint settings and defaults](../reference.md#endpoint-with-properties).
 - Offset literals are nonnegative signed 64-bit integers. `BETWEEN lo AND hi` includes both ends and is equivalent to `>= lo AND <= hi`. Comparisons normalize to an inclusive lower and exclusive upper bound; empty ranges and overflowing adjustments fail. Each grouped branch requires `PARTITION IN` or `PARTITION BETWEEN` and an upper offset bound; selectors must be disjoint. Unlisted partitions are excluded. Shared timestamp predicates follow the branches. Ungrouped timestamp `OR` is unsupported.
 - Kafka explicit numeric starts/ends must be within retained positions at initialization. `LATEST` freezes the readable committed end on first assignment; resume reuses it. A timestamp-derived start beyond that end becomes an empty snapshot. File offsets refer to original source offsets, not replay cursors; `LATEST` means the pinned selection's EOF.
 - `ON_REJECTED_TIMESTAMP` requires a topic destination; `ON_MISSING_TIMESTAMP` requires timestamp bounds in `WHERE`.
-- An ungrouped filter may contain one partition predicate; each grouped branch requires its own. Use `PARTITION [NOT] IN (...)` or `PARTITION [NOT] BETWEEN lo AND hi`; combine an ungrouped predicate with timestamp bounds using `AND` in either order. IDs are integers from 0 to 2147483647; lists are nonempty, sorted and deduplicated. `BETWEEN` includes every ID from lo through hi, with at most 65,536 IDs across all partition `BETWEEN` predicates in one statement. Every named ID must exist in source metadata at startup, including exclusions; archives use completed-file headers. `IN` and `BETWEEN` select those IDs; `NOT IN` and `NOT BETWEEN` select all others. Kafka discovers additions while workers run; archives pin matching completed files once and keep that selection on resume.
+- An ungrouped filter may contain one partition predicate; each grouped branch requires its own. Use `PARTITION [NOT] IN (...)` or `PARTITION [NOT] BETWEEN lo AND hi`; combine an ungrouped predicate with timestamp bounds using `AND` in either order. IDs are integers from 0 to 2147483647; lists are nonempty, sorted and deduplicated. `BETWEEN` includes every ID from lo through hi, with at most 65,536 IDs across all partition `BETWEEN` predicates in one statement. Every named ID must exist in source metadata at startup, including exclusions; archives use completed-file headers. [Selection examples](../usage.md#copy-selected-partitions).
 - At most one lower and one upper bound. Timestamps are RFC 3339 with `Z` or an explicit offset and at most millisecond precision. The normalized `[lo, hi)` must be non-empty.
 - At startup, reject a destination that is the same archive directory (including path aliases) or the same Kafka cluster ID and topic as the source.
 - A topic without `@alias` uses the connection `default`, which must exist.
 
 ## Valid examples
 
+For [backlogs](../usage.md#copy-the-current-backlog-and-stop), [record limits](../usage.md#try-a-small-copy-first), [partition offsets](../usage.md#use-different-offsets-per-partition), [following](../usage.md#keep-copying-new-records) and [capture/replay](../usage.md#archive-your-own-topic), use the usage examples.
+
 Aliases not defined inline need TOML profiles; `ENV` variables must be set. TLS connections need a trusted broker CA; set `ssl.ca.location` if system roots do not include it.
-
-Minimal topic copy: start a fresh group from earliest retained records, then follow. Rerunning copies them again; use a named `GROUP` to resume or share work:
-
-```sql
-INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM TOPIC 'orders@prod';
-```
-
-Select source partitions, then follow; replace `IN` with `NOT IN` to copy every other partition, including later additions:
-
-```sql
-INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-repair')
-WHERE PARTITION IN (0, 2);
-```
 
 Archive partition selection uses the original Kafka IDs in file headers; it applies across all source topics/clusters represented in the directory:
 
@@ -96,13 +83,6 @@ Archive partition selection uses the original Kafka IDs in file headers; it appl
 INSERT INTO ARCHIVE '/data/repair'
 SELECT * FROM ARCHIVE '/data/orders' WITH (GROUP = 'archive-repair')
 WHERE PARTITION NOT IN (1, 3);
-```
-
-Minimal archive replay: copy the current completed files and exit:
-
-```sql
-INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM ARCHIVE '/data/orders';
 ```
 
 Topic→topic, fixed window, inline PLAIN over TLS connection:
@@ -119,13 +99,6 @@ INSERT INTO TOPIC 'orders@dr'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-dr-2026-10-01')
 WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-02T00:00:00Z';
-```
-
-Topic→archive, follow from the earliest retained record, default connection:
-
-```sql
-INSERT INTO ARCHIVE '/data/audit'
-SELECT * FROM TOPIC 'audit' WITH (GROUP = 'audit-archive');
 ```
 
 Archive→topic, last seven days, skipping timestamps known to be outside the destination's accepted bounds:
@@ -146,7 +119,7 @@ WHERE RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z'
                            AND TIMESTAMP '2026-10-01T09:30:00Z';
 ```
 
-Topic→topic, relative window with staleness. Saved progress keeps the resolved `NOW()` window for restarts; workers starting together can resolve different windows ([time window](decisions.md#time-window)):
+Topic→topic, relative window with staleness. Saved progress keeps the resolved `NOW()` window for restarts; workers starting together can resolve different windows:
 
 ```sql
 INSERT INTO TOPIC 'clicks@analytics'
@@ -156,17 +129,7 @@ WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR
 OPTIONS (ON_ERROR = SKIP);
 ```
 
-Topic→topic, stop each worker after accepting 100 records for writing:
-
-```sql
-INSERT INTO TOPIC 'orders@staging'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-sample', START = EARLIEST)
-OPTIONS (WORKER_STOP_AFTER_RECORDS = 100);
-```
-
-For `RECORD_OFFSET < LATEST`, see [copy the current backlog and stop](../usage.md#copy-the-current-backlog-and-stop).
-
-Use a shorter known disorder bound while allowing ten minutes for arrivals:
+Use a shorter known disorder bound while allowing ten minutes for arrivals. Either rule can stop reading; later matching records can be missed if its assumption fails ([allowance guidance](../usage.md#allow-late-arrivals)):
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
@@ -177,7 +140,7 @@ WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR
   AND RECORD_TIMESTAMP < NOW();
 ```
 
-Follow an ordered replay until timestamp progress establishes completion:
+Disable wall-clock stopping and stop at the first timestamp beyond the upper bound. Use this only when later offsets cannot contain earlier matching timestamps:
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
@@ -188,16 +151,7 @@ WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-22T09:00:00Z'
   AND RECORD_TIMESTAMP < TIMESTAMP '2026-10-22T10:00:00Z';
 ```
 
-Select a different range for each source partition:
-
-```sql
-INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-offset-repair')
-WHERE (PARTITION BETWEEN 0 AND 1 AND RECORD_OFFSET BETWEEN 100 AND 499)
-   OR (PARTITION IN (2) AND RECORD_OFFSET >= 900 AND RECORD_OFFSET < LATEST);
-```
-
-File replay can use the same timestamp-disorder assumption explicitly. Without it, the complete pinned selection is examined:
+File replay can use a timestamp-disorder allowance per original source partition; matching records beyond that allowance can be missed. Without it, the complete pinned selection is examined:
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'

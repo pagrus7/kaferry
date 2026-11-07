@@ -58,9 +58,9 @@ docker rm -fv kaferry-kafka-demo
 
 ## Copy between Kafka topics
 
-Install `kaferry` on `PATH` ([installation](install.md)). Create both topics first; topic settings, ACLs and consumer-group offsets are not copied. These examples keep original partition numbers, so the destination needs every selected source partition ID; add `WITH (PARTITIONING = KEY)` after the destination topic to route by key instead ([routing](design/decisions.md#kafka-output)).
+Install `kaferry` on `PATH` ([installation](install.md)). Create both topics first; topic settings, ACLs and consumer-group offsets are not copied. These examples keep original partition numbers, so the destination needs every selected source partition ID; add `WITH (PARTITIONING = KEY)` after the destination topic to route by key instead ([routing](reference.md#kafka-sink)).
 
-Replace the addresses in **`connections.toml`**; add [authentication](#connections) and the required [permissions](#permissions). Kaferry copies raw bytes: ensure their formats and Schema Registry IDs work at the destination. Destination broker settings can replace timestamps or delete old records soon after copying; see [Kafka output](design/decisions.md#kafka-output) and [client limits](design/client-compatibility.md#kafka-input-timestamps).
+Replace the addresses in **`connections.toml`**; add [authentication](#connections) and the required [permissions](#permissions). Kaferry copies raw bytes: ensure their formats and Schema Registry IDs work at the destination. Destination broker settings can replace timestamps or delete old records soon after copying; see [Kafka output](reference.md#kafka-sink) and [client limits](design/client-compatibility.md#kafka-input-timestamps).
 
 ```toml
 [connections.prod]
@@ -101,7 +101,7 @@ WHERE RECORD_OFFSET < LATEST
 OPTIONS (WORKER_STOP_AFTER_RECORDS = 100);
 ```
 
-Each invocation accepts at most 100 records for writing in this process, or stops sooner at the saved ends. A saved `worker_record_cap` stop means the allowance was reached; rerun without `OPTIONS` to continue to those same ends, or keep it for another allowance of 100. [Counting rules](design/decisions.md#worker-record-stop).
+Each invocation accepts at most 100 records for writing in this process, or stops sooner at the saved ends. A saved `worker_record_cap` stop means the allowance was reached; rerun without `OPTIONS` to continue to those same ends, or keep it for another allowance of 100. Filtered records, synchronous SKIP rejections and queue-full retries do not count; this is a per-process allowance, not a shared group limit.
 
 ### Copy an offset range
 
@@ -123,7 +123,7 @@ WHERE PARTITION BETWEEN 0 AND 2
   AND RECORD_OFFSET < LATEST;
 ```
 
-Copies source partitions 0, 1 and 2 to their saved readable ends; all three IDs must exist. Use `IN (0, 2)` for only those two IDs, or `NOT BETWEEN 0 AND 2` for every other partition, including eligible additions while the worker runs. [Partition selection](design/decisions.md#source-partitions).
+Copies source partitions 0, 1 and 2 to their saved readable ends; all three IDs must exist. Use `IN (0, 2)` for only those two IDs, or `NOT BETWEEN 0 AND 2` for every other partition, including eligible additions while the worker runs. Exited workers do not discover new partitions.
 
 ### Use different offsets per partition
 
@@ -134,7 +134,7 @@ WHERE (PARTITION IN (0) AND RECORD_OFFSET BETWEEN 100 AND 199)
    OR (PARTITION IN (2) AND RECORD_OFFSET >= 900 AND RECORD_OFFSET < LATEST);
 ```
 
-Copies offsets 100–199 from partition 0 and offsets from 900 up to the saved readable end of partition 2. Each branch needs its own partition selection and upper offset bound; selections must not overlap, and unlisted partitions are excluded. The same [available-position rules](design/decisions.md#offset-ends) apply to numeric bounds.
+Copies offsets 100–199 from partition 0 and offsets from 900 up to the saved readable end of partition 2. Each branch needs its own partition selection and upper offset bound; selections must not overlap, and unlisted partitions are excluded. Numeric starts and exclusive ends must be within retained positions when the copy starts, as in the [single-partition example](#copy-an-offset-range).
 
 ## Copy records in a time range
 
@@ -169,7 +169,7 @@ Use this when records for the range are still arriving, or to finish an old rang
 - `MAX_STALENESS`: once Kaferry's clock passes 10:05, it captures each partition's current end, including unfinished transactions, saves it and reads up to it. Records appended beyond that saved end are excluded; if the deadline is already past, capture happens at startup.
 - `MAX_OUT_OF_ORDER`: reading a record stamped strictly after 10:05 stops reading that partition, even before reaching its saved end. A later record stamped 09:59 can be missed, even if already present.
 
-Increase the arrival-delay or disorder allowance to match your input, or disable the corresponding rule with `OFF`. Either rule can finish a partition independently, so increasing one does not protect against the other stopping early; neither setting limits total run time. [Exact rules and assumptions](design/decisions.md#completion) · [Relative windows with `NOW()`](design/grammar.md#valid-examples).
+Increase the arrival-delay or disorder allowance to match your input, or disable the corresponding rule with `OFF`. Either rule can finish a partition independently, so increasing one does not protect against the other stopping early; neither setting limits total run time. Consumer clock lead also counts against the arrival-delay allowance. [Relative windows with `NOW()`](design/grammar.md#valid-examples).
 
 ## Keep copying new records
 
@@ -188,67 +188,45 @@ Copies the retained backlog, then follows new records until you press Ctrl+C. Ad
 docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
 ```
 
-```text
-{"time":"2026-10-25T22:39:06.595190641Z","level":"INFO","msg":"partition assigned","partition":0,"position":0,"window":{"lower":null,"upper":null}}
-{"time":"2026-10-25T22:39:06.602132061Z","level":"INFO","msg":"copy summary","submitted":3,"confirmed":3,"filtered":0,"skipped":0,"timestamp_stops":0,"tip_stops":0,"peak_uncommitted_records":3,"peak_uncommitted_bytes":534}
+The image bundles [copy.sql](../examples/archive-demo/copy.sql), its configuration and three sample records in Avro files. With a fresh `kaferry-demo` volume, it copies `input` to `output` and saves progress for group `archive-demo`. The JSON `copy summary` on stderr includes these fields (others omitted):
+
+```json
+{"msg":"copy summary","submitted":3,"confirmed":3}
 ```
 
-This output is from a fresh `kaferry-demo` volume. If you ran the README example, continue with the status command below.
-
-The image includes [copy.sql](../examples/archive-demo/copy.sql), its configuration and three sample Kafka records stored in Avro files. The command copies these records from `input` to `output` and saves progress for the named group `archive-demo`. A checkpoint records replay progress in a file. Docker keeps it with the input and output in the `kaferry-demo` volume after the container exits.
+Docker retains input, output and the checkpoint recording replay progress in the volume after the container exits. If you ran the README example, continue here:
 
 ```sh
 docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest status -c tutorial.toml -f copy.sql
 ```
 
+The status begins with this excerpt:
+
 ```text
 Status: complete
 Group: "archive-demo"
 Reason: file selection completed
-  Source: ARCHIVE "input"
-  Destination: ARCHIVE "output"
-
-Saved progress
-  Replay: input records 3; file selection completed at 3
-  Snapshot: 1 completed files, 1498 encoded bytes.
-
-Status                    | Meaning
---------------------------|--------
-unknown                   | No saved progress, or incompatible progress or group membership.
-running                   | Kafka group activity or a membership change was observed.
-incomplete                | At least one selected partition has no saved stop.
-limit_reached             | All selected partitions stopped; at least one reached a worker record cap.
-complete_within_staleness | Source processing finished under the configured timestamp assumptions.
-complete                  | Source processing finished for the selected finite scope.
-
-Timestamp completion depends on enabled MAX_STALENESS (arrival delay and clock lead) and MAX_OUT_OF_ORDER (timestamp disorder) assumptions.
-Completion permits filtered or skipped records, does not guarantee exactly-once writes and does not establish that destination data still exists.
-Archive completion applies to this group’s fixed file selection. A new group selects current completed files.
-Activity: not checked for files.
 ```
 
-This reads the group's saved progress from the volume.
+This reports saved source progress, not a comparison with destination contents. Keep output and checkpoints together; saved completion cannot recreate deleted output. [Status meanings](reference.md#saved-status).
 
 ```sh
 docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
 ```
 
-```text
-{"time":"2026-10-25T22:39:07.066648988Z","level":"INFO","msg":"partition assigned","partition":0,"position":3,"window":{"lower":null,"upper":null}}
-{"time":"2026-10-25T22:39:07.066686447Z","level":"INFO","msg":"copy summary","submitted":0,"confirmed":0,"filtered":0,"skipped":0,"timestamp_stops":0,"tip_stops":0,"peak_uncommitted_records":0,"peak_uncommitted_bytes":0}
+The same group resumes from its saved position; the summary excerpt is:
+
+```json
+{"msg":"copy summary","submitted":0,"confirmed":0}
 ```
 
-This resumes the same group from its saved position. The output remains in the volume across containers.
+To delete the demo's input, output and checkpoints, run:
 
 ```sh
 docker volume rm kaferry-demo
 ```
 
-```text
-kaferry-demo
-```
-
-This deletes the demo's input, output and checkpoints. Running the first command again starts a fresh copy. [Copy between Kafka topics](#copy-between-kafka-topics) · [Run your own files in a container](#containers).
+The first command then starts a fresh copy. [Copy between Kafka topics](#copy-between-kafka-topics) · [Run your own files in a container](#containers).
 
 ### First copy without Kafka
 
@@ -404,13 +382,13 @@ kaferry status -c connections.toml -f copy.sql --json
 
 ## Resume or start over
 
-Rerun the same query with the same named `GROUP`, endpoints and checkpoint directory. Saved time windows and offset ends are reused; changing filters, completion allowances or routing needs a new group ([identity rules](design/decisions.md#identity)). For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
+Rerun the same query with the same named `GROUP`, endpoints and checkpoint directory. Saved time windows and offset ends are reused; changing filters, completion allowances or routing needs a new group. For `GROUP = ONE_OFF`, resume with the logged group name quoted as `GROUP`.
 
 Keep existing output and saved progress. Kafka stores progress in source consumer-group offsets; archive replay uses checkpoint files. Expired offsets or missing checkpoints can start a fresh copy; crashes and Kafka rebalances can repeat or reorder writes. Keep selected completed archive files unchanged and retain lock files until replay completes. [Archive recovery and moving replay](#archive-procedures).
 
 ### Recover after destination topic recreation
 
-A recreated topic has a new ID (UUID), even with the same name. Saved progress is tied to the destination UUID read at startup, so it cannot resume against the replacement. Running workers may fail after writing records to the replacement ([Kafka output](design/decisions.md#kafka-output)).
+A recreated topic has a new ID (UUID), even with the same name. Saved progress is tied to the destination UUID read at startup, so it cannot resume against the replacement. Running workers may fail after writing records to the replacement ([Kafka output](reference.md#kafka-sink)).
 
 Stop every worker for the old group and disable automatic restarts. Then save status for the unchanged query and group:
 
@@ -495,14 +473,14 @@ Keep the SQL, named group, configuration, `explain` output, stderr logs and `sta
 | Symptom | Evidence and interpretation | Next action and consequence |
 | --- | --- | --- |
 | Running, but destination does not grow | Read stderr `progress` events and `explain`: the worker may be following, have no assignment, filter records, or resume past available input. `run` writes no stdout. | Check source availability, selected partitions, saved start positions and filter counts. Correct the input or query; use a new group for a changed filter, which starts an independent copy. |
-| Copy fails on a record | Read the error and `copy summary`. Only identified synchronous validation failures support SKIP; delivery and storage failures stop the copy. | Fix the cause and resume the same group. Use SKIP only when deliberately dropping that rejected record; async broker failures cannot be skipped. [Policies](design/decisions.md#errors). |
+| Copy fails on a record | Read the error and `copy summary`. Only identified synchronous validation failures support SKIP; delivery and storage failures stop the copy. | Fix the cause and resume the same group. Use SKIP only when deliberately dropping that rejected record; async broker failures cannot be skipped. [Policies](reference.md#record-error-policies). |
 | Rerun copies records again | Compare the logged group and saved progress. An unnamed run, missing checkpoint, expired offsets, or writes after the last save can repeat data. | Restore the intended progress and destination together, or resume the same named group. Previously repeated output remains and may need downstream handling. |
 | Replay omits recent capture output | Compare its fixed selection with completed files; private or later-published files are outside that selection. | Follow [capture completion](#capture-is-still-running). A new group can replay older files again. |
 | Status is `limit_reached` | A worker record cap stopped source processing. | Rerun the same job for another allowance. |
 
 ## Errors
 
-Errors stop the copy. `ON_ERROR = SKIP` drops identified records rejected before sending; broker rejections cannot be skipped. Counts appear in `copy summary`. [Policies](design/decisions.md#errors) · [SQL errors](design/grammar.md#invalid-examples).
+Errors stop the copy. `ON_ERROR = SKIP` drops identified records rejected before sending; broker rejections cannot be skipped. Counts appear in `copy summary`. [Policies](reference.md#record-error-policies) · [SQL errors](design/grammar.md#invalid-examples).
 
 ## Workers
 

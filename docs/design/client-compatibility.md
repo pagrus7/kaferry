@@ -15,7 +15,7 @@ Kafka-client and deployment constraints. See [copy examples](../usage.md#copy-be
 
 Test other brokers, authorizers and workloads before relying on them. Fixtures use plaintext internal broker/controller listeners; encrypted internal traffic is untested.
 
-[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) and [extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) retain results for 30 days. [Test commands](components.md#test-targets).
+[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) and [extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) retain results for 30 days. [Test commands](../../CONTRIBUTING.md#test-targets).
 
 ## Permissions
 

@@ -4,7 +4,7 @@ Choose a release binary, Homebrew, a source build or a container. After installa
 
 ## Release binaries
 
-Download the archive for your OS and CPU from [Releases](https://github.com/pagrus7/kaferry/releases/latest). Verify its entry in `SHA256SUMS`, extract it, and put `kaferry` on `PATH`. Keep `LICENSE` and `THIRD_PARTY_NOTICES.txt` with a redistributed binary. [Provenance verification](design/components.md#release-evidence). When supplied, `qualification.md` records the release’s tested environments and scenarios; passing tests do not cover every deployment.
+Download the archive for your OS and CPU from [Releases](https://github.com/pagrus7/kaferry/releases/latest). Verify its entry in `SHA256SUMS`, extract it, and put `kaferry` on `PATH`. Keep `LICENSE` and `THIRD_PARTY_NOTICES.txt` with a redistributed binary. [Version and verification](#version-and-verification). When supplied, `qualification.md` records the release’s tested environments and scenarios; passing tests do not cover every deployment.
 
 ## Homebrew
 
@@ -40,3 +40,11 @@ gh attestation verify oci://ghcr.io/pagrus7/kaferry@sha256:DIGEST \
 Use a registry login if needed. The image also carries SBOM/provenance records for inspection; attestations establish build origin, not application correctness. `ghcr.io/pagrus7/kaferry:latest` follows the current stable release after its image passes testing and attestation. Version tags and digests identify fixed images.
 
 [Run with mounted files and persistent checkpoints](usage.md#containers).
+
+## Version and verification
+
+[Release procedure](releases/README.md#build-and-validation) defines archive contents, build targets, licensing and validation gates. `--version` reports the build version, commit, Go and franz-go version.
+
+Linker values take precedence over embedded Go build information. Otherwise, the CLI and metrics use the embedded module version, including pseudo-versions and dirty markers; an absent or `(devel)` version reports `dev`. Commit information comes from embedded VCS metadata, with `-dirty` for a modified checkout, or reports `unknown` when unavailable. Version reporting does not query Git or the network.
+
+For downloads with attestation bundles, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document/v2.3`. Attestations establish build origin. Downloads without these bundles can be checked against `SHA256SUMS` for file integrity.

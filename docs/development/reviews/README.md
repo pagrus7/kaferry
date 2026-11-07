@@ -10,6 +10,10 @@ Standard changes require independent docs, tests and simplicity reviewers. Forma
 
 Run documentation validation and final-head CI in either case. Review sections use `Passed`, `Pending` or `Failed: reason`; ready PRs require `Passed`. For an entirely formatting-only PR, both Tests and Simplicity instead use `Not required: formatting only`, with Docs `Passed`. CI checks the declaration and file scope, not whether reviewers ran or meaning was preserved. Dependabot retains its generated description, with the same review requirements.
 
+## PR descriptions
+
+Keep human descriptions within 2,000 characters, including comments, with each template section once. Summarize changes; `Validation` lists only checks beyond CI, or `None`. Use the review statuses above and omit CI results and successful review details. Dependabot keeps its generated description.
+
 ## Run a review
 
 The coordinator follows these steps; reviewers follow the contract below.
@@ -58,3 +62,45 @@ Record the full changed-gap list, decisions and evidence. For each gap, trace ca
 - Review only: do not edit repository files, run tests or PR/downloaded code, spawn agents or make remote writes. Read-only commands are allowed. The tests reviewer may run only the trusted collector and write/inspect CI evidence in the ignored cache above. Blocked access leaves review pending; do not change permissions or rerun CI.
 - Use individual Git commands; never use `--output`, `--no-index` or external diff helpers.
 - Report at most five actionable findings with severity, file/line, evidence and a concrete correction. No findings is valid. State scope and limits, then COMPLETE or INCOMPLETE; denied necessary access is not approval. Do not claim checks you did not run.
+
+## Client setup
+
+Use independent reviewers in the active coding client with its subscription login.
+
+Fetch the intended base from the repository root before starting:
+
+```sh
+git fetch origin main
+```
+
+Follow the [reviewer contract](#reviewer-contract). The client needs GitHub read access and cache-write permission for evidence collection. Calls count against the active client's subscription limits.
+
+**Codex:** use its ChatGPT login (`codex login`). The [native agent definitions](../../../.codex/agents) use your Codex model settings. [Codex agents](https://learn.chatgpt.com/docs/agent-configuration/subagents).
+
+```sh
+codex login status
+```
+
+After confirming ChatGPT login, from the repository root:
+
+```sh
+codex exec 'Follow docs/development/reviews/README.md against origin/main.'
+```
+
+The command uses your configured [permissions](https://learn.chatgpt.com/docs/sandboxing); forced read-only mode can block evidence downloads. For an interactive review, ask your existing Codex session to follow `docs/development/reviews/README.md` for your base.
+
+**Claude Code:** use subscription login (`claude auth login --claudeai`). Remove API credentials so they do not override it. [Authentication](https://code.claude.com/docs/en/authentication).
+
+```sh
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+claude auth status
+```
+
+Continue only if the auth method is `claude.ai`:
+
+```sh
+CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 \
+  claude -p '/review-local'
+```
+
+The command waits for the required reports. In an existing Claude Code session, use `/review-local [base]`. The [agent settings](../../../.claude/agents) select Opus 5.5 with high effort; your account needs access to that model. The [command adapter](../../../.claude/skills/review-local/SKILL.md) loads the shared workflow.
