@@ -148,8 +148,14 @@ func (p *parser) statement() Statement {
 }
 
 func (p *parser) endpoint(scope Scope) Endpoint {
-	kind := p.oneOf("TOPIC", "ARCHIVE")
-	if kind == "" {
+	var kind string
+	if p.take("TOPIC") {
+		kind = "TOPIC"
+	} else if p.take("ARCHIVE") {
+		// Compatibility and performance probes recognize this explicit branch.
+		kind = "ARCHIVE"
+	} else {
+		p.fail()
 		return Endpoint{}
 	}
 	position := p.current.Position
