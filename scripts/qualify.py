@@ -274,6 +274,7 @@ class RunSpec:
 
 
 def resolve_run(args, receipt, fixture):
+    args = argparse.Namespace(**dict(vars(args), binary=str(Path(args.binary).resolve())))
     project = 'kaferry-endurance' if args.suite == 'endurance' else 'kaferry-compat'
     source_port, destination_port = (39192, 40192) if args.suite == 'endurance' else (39092, 40092)
     if fixture is not None:
@@ -371,7 +372,7 @@ def verify_run(args, spec, receipt):
 
 def run_suite(args, *, fixture=None, cancelled=None):
     args = argparse.Namespace(**dict(vars(args), output=args.output.resolve(),
-        binary=str(Path(args.binary).resolve()), destination=args.source if args.suite == 'auth' else args.destination))
+        destination=args.source if args.suite == 'auth' else args.destination))
     args.output.mkdir(parents=True, exist_ok=False)
     receipt = {'schema': 1, 'id': f'{args.suite}-{args.source}-{args.destination}', 'suite': args.suite,
                'source_version': args.source, 'destination_version': args.destination,

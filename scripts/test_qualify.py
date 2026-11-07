@@ -345,6 +345,23 @@ class MatrixTest(unittest.TestCase):
             self.assertEqual('original suite failure', receipt['suite_error'])
             self.assertEqual('logs', receipt['cleanup_errors'][0]['phase'])
 
+    def test_binary_resolution_failure_retains_failure_evidence(self):
+        # Given an endurance candidate path that cannot resolve.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root / 'loop'; binary.symlink_to(binary.name)
+            args = argparse.Namespace(suite='endurance', source='3.9.2', destination='3.9.2',
+                output=root / 'evidence', binary=str(binary), config=None, duration=60, rate=200)
+            with patch('qualify.capture', return_value='fixture'), patch('qualify.logged') as execute:
+                # When resolution fails, then retain the failed receipt and publication without starting fixtures.
+                with self.assertRaises((OSError, RuntimeError)): run_suite(args)
+            execute.assert_not_called()
+            receipt = json.loads((args.output / 'manifest.json').read_text())
+            self.assertEqual('failed', receipt['status'])
+            self.assertIn('finished_at', receipt)
+            published = json.loads((args.output / 'publication/endurance-results.json').read_text())
+            self.assertEqual('failed', published['manifest']['status'])
+
     def test_teardown_failure_rejects_success_and_preserves_suite_failure(self):
         for suite_failure in (False, True):
             with self.subTest(suite_failure=suite_failure), tempfile.TemporaryDirectory() as temporary:
