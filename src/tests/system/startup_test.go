@@ -35,14 +35,11 @@ func TestConsumerConfigurationFailureDoesNotCreateArchiveOrBlockRetry(t *testing
 
 			// Then the output was never created and the corrected query can succeed.
 			require.Equal(t, 2, first.code, "configuration exit=%d: %s", first.code, first.detail)
-			if _, err := os.Stat(path); !os.IsNotExist(err) {
-				t.Fatal("invalid source configuration created an archive", err)
-			}
+			_, err := os.Stat(path)
+			require.ErrorIs(t, err, os.ErrNotExist, "invalid source configuration created an archive")
 			corrected := loggedWorker(ctx, query(""), "")
 			require.Zero(t, corrected.code, "corrected query blocked: %d %s", corrected.code, corrected.detail)
-			if records := archiveRecords(t, path); len(records) != 0 {
-				t.Fatal("empty source produced records", records)
-			}
+			require.Empty(t, archiveRecords(t, path), "empty source produced records")
 		})
 	}
 }
