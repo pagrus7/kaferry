@@ -2,9 +2,9 @@ name: endurance-results
 on:
   push:
     branches: [main]
-    paths: ['scripts/endurance_site.py', 'web/endurance/**', '.github/workflows/endurance-results.yml']
+    paths: ['tools/docs/endurance_site.py', 'docs/site/endurance/**', '.github/workflows/endurance-results.yml']
   pull_request:
-    paths: ['scripts/endurance_site.py', 'scripts/test_endurance_site.py', 'web/endurance/**', '.github/workflows/endurance-results.yml']
+    paths: ['tools/docs/endurance_site.py', 'tools/docs/test_endurance_site.py', 'docs/site/endurance/**', '.github/workflows/endurance-results.yml']
   workflow_dispatch:
   schedule:
     - cron: '23 * * * *'
@@ -23,7 +23,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-        run: python3 scripts/endurance_site.py --repository "$REPOSITORY" --output .cache/endurance-site
+        run: python3 -m tools.docs.endurance_site --repository "$REPOSITORY" --output .cache/endurance-site
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
           path: .cache/endurance-site

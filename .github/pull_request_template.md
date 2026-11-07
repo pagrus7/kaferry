@@ -1,4 +1,4 @@
-<!-- Maximum 2,000 characters. Review statuses: see review/README.md. -->
+<!-- Maximum 2,000 characters. Review statuses: see docs/development/reviews/README.md. -->
 
 ## Changes
 

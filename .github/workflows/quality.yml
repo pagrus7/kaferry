@@ -37,18 +37,18 @@ jobs:
           echo '216bae5de2b30c57f893286585c7a348e8af7cd36810949831f569d29f495a3b  .cache/quality-tools/jscpd.tar.gz' | sha256sum --check
           tar -xzf .cache/quality-tools/jscpd.tar.gz -C .cache/quality-tools
       - name: Script tests
-        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+        run: python3 -m unittest discover -s tools -t . -p 'test_*.py'
       - name: Staticcheck
-        run: python3 scripts/ci.py staticcheck staticcheck ./...
+        run: python3 -m tools.ci.ci staticcheck staticcheck ./...
       - name: Maintainability reports
         if: success() || failure()
         run: |
-          .cache/quality-tools/jscpd cmd internal --format go --ignore '**/*_test.go' --min-tokens 100 --min-lines 10 --reporters json,sarif --output build-results/duplication --fail-on-empty --baseline-from-ref "${QUALITY_BASE_SHA:-HEAD}" --no-tips
-          python3 scripts/quality.py maintainability
+          .cache/quality-tools/jscpd src/cmd src/internal --format go --ignore '**/*_test.go' --min-tokens 100 --min-lines 10 --reporters json,sarif --output build-results/duplication --fail-on-empty --baseline-from-ref "${QUALITY_BASE_SHA:-HEAD}" --no-tips
+          python3 -m tools.ci.quality maintainability
       - name: Go vulnerability gate
         id: vulnerabilities
         if: success() || failure()
-        run: python3 scripts/ci.py govulncheck govulncheck ./...
+        run: python3 -m tools.ci.ci govulncheck govulncheck ./...
       - name: Go vulnerability annotations
         if: success() || failure()
         run: govulncheck -format sarif ./... > build-results/govulncheck.sarif
@@ -59,7 +59,7 @@ jobs:
           sarif_file: build-results/govulncheck.sarif
           category: govulncheck-go
       - if: always()
-        run: python3 scripts/ci.py summary
+        run: python3 -m tools.ci.ci summary
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

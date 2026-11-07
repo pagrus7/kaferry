@@ -29,7 +29,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           WEEKLY: ${{ github.event.schedule == '17 9 * * 1' }}
-        run: python3 scripts/scheduled.py qualification
+        run: python3 -m tools.ci.scheduled qualification
   qualification:
     needs: plan
     if: needs.plan.outputs.run == 'true'

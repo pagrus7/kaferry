@@ -43,7 +43,7 @@
       "-tags=integration,load",
       "-run",
       "^TestStreamingSoak",
-      "./tests/compat"
+      "./src/tests/system"
     ],
     "expected_tests": [
       "TestStreamingSoakFidelityCommitLagMemoryAndShutdown"

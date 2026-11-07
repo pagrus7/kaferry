@@ -23,30 +23,30 @@ jobs:
       - name: Check current-behavior wording
         run: |
           wording_status=0
-          git grep -nEi '(since|as of|through|until|prior to|starting (in|with)|introduced in)[[:space:]]+v[0-9]+\.[0-9]+|first[[:space:]]+observed[[:space:]]+(on|in)[[:space:]]+[0-9]{4}' -- README.md docs design cmd internal ':!design/debates' || wording_status=$?
+          git grep -nEi '(since|as of|through|until|prior to|starting (in|with)|introduced in)[[:space:]]+v[0-9]+\.[0-9]+|first[[:space:]]+observed[[:space:]]+(on|in)[[:space:]]+[0-9]{4}' -- README.md docs src/cmd src/internal ':!docs/design/debates' ':!docs/releases' || wording_status=$?
           if [ "$wording_status" -ne 1 ]; then
             echo 'Living docs, comments and diagnostics must describe current behavior; keep release and investigation history in release notes, commits or PRs.'
             exit 1
           fi
       - name: Documentation links and shell examples
-        run: python3 scripts/docs.py
+        run: python3 -m tools.docs.docs
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.3'
           cache: true
-      - run: test -z "$(gofmt -l cmd internal tests)"
-      - run: python3 scripts/ci.py vet go vet ./...
-      - run: python3 scripts/ci.py unit go test -count=1 -json -race -coverpkg=./... -coverprofile=build-results/coverage.out ./...
+      - run: test -z "$(gofmt -l src)"
+      - run: python3 -m tools.ci.ci vet go vet ./...
+      - run: python3 -m tools.ci.ci unit go test -count=1 -json -race -coverpkg=./... -coverprofile=build-results/coverage.out ./...
         env:
           CGO_ENABLED: "1"
       - name: Coverage reports
         run: |
-          python3 scripts/quality.py coverage
+          python3 -m tools.ci.quality coverage
           go tool cover -html=build-results/coverage.out -o=build-results/coverage.html
       - name: Compile broker fixtures without CGO
         env:
           CGO_ENABLED: "0"
-        run: go test -run '^$' -tags=integration,load,fault,qualification,migration ./tests/compat
+        run: go test -run '^$' -tags=integration,load,fault,qualification,migration ./src/tests/system
       - run: make build
         env:
           CGO_ENABLED: "0"
@@ -55,9 +55,9 @@ jobs:
       - name: Validate release license notices
         env:
           CGO_ENABLED: "0"
-        run: python3 scripts/notices.py bin/kaferry bin/THIRD_PARTY_NOTICES.txt
+        run: python3 -m tools.release.notices bin/kaferry bin/THIRD_PARTY_NOTICES.txt
       - name: Verify source installation
-        run: python3 scripts/ci.py source-install python3 scripts/install_smoke.py
+        run: python3 -m tools.ci.ci source-install python3 -m tools.release.install_smoke
       - name: Publish Go coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
@@ -68,7 +68,7 @@ jobs:
           version: v11.3.1
           fail_ci_if_error: true
       - if: always()
-        run: python3 scripts/ci.py summary
+        run: python3 -m tools.ci.ci summary
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -92,12 +92,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: true
-      - run: python3 scripts/ci.py broker make broker
-      - run: python3 scripts/ci.py integration go test -count=1 -json -race -tags=integration -coverpkg=./... -coverprofile=build-results/coverage.out ./...
+      - run: python3 -m tools.ci.ci broker make broker
+      - run: python3 -m tools.ci.ci integration go test -count=1 -json -race -tags=integration -coverpkg=./... -coverprofile=build-results/coverage.out ./...
         env:
           CGO_ENABLED: "1"
           KAFERRY_QUICKSTART: "1"
-      - run: python3 scripts/ci.py verify-tests integration 'TestKafkaQuickStart'
+      - run: python3 -m tools.ci.ci verify-tests integration 'TestKafkaQuickStart'
       - name: Check progress and archives against the PR base
         if: github.event_name == 'pull_request'
         env:
@@ -106,8 +106,10 @@ jobs:
         run: |
           mkdir -p .cache/previous-version
           git archive "$BASE_SHA" | tar -x -C .cache/previous-version
+          previous_source=.
+          if [ -d .cache/previous-version/src/cmd/kaferry ]; then previous_source=src; fi
           progress_format_status=0
-          grep -Fq 'const prefix = "kaferry:4;"' .cache/previous-version/internal/commitmeta/codec.go || progress_format_status=$?
+          grep -Fq 'const prefix = "kaferry:4;"' ".cache/previous-version/$previous_source/internal/commitmeta/codec.go" || progress_format_status=$?
           if [ "$progress_format_status" -eq 0 ]; then
             echo 'Skipping cross-version resume: kaferry:4 progress is unsupported.'
             exit 0
@@ -115,26 +117,26 @@ jobs:
             exit "$progress_format_status"
           fi
           previous_binary="$PWD/build-results/kaferry-previous"
-          (cd .cache/previous-version && CGO_ENABLED=0 go build -trimpath -o "$previous_binary" ./cmd/kaferry)
+          (cd .cache/previous-version && CGO_ENABLED=0 go build -trimpath -o "$previous_binary" "./$previous_source/cmd/kaferry")
           CGO_ENABLED=0 make build
           export KAFERRY_PREVIOUS_BINARY="$previous_binary"
-          if [ ! -f .cache/previous-version/internal/sql/options.go ]; then
+          if [ ! -f ".cache/previous-version/$previous_source/internal/sql/options.go" ]; then
             export KAFERRY_LEGACY_SQL_BINARY="$previous_binary"
           fi
           archive_syntax_status=0
-          grep -Fq 'p.take("ARCHIVE")' .cache/previous-version/internal/sql/parser.go || archive_syntax_status=$?
+          grep -Fq 'p.take("ARCHIVE")' ".cache/previous-version/$previous_source/internal/sql/parser.go" || archive_syntax_status=$?
           if [ "$archive_syntax_status" -eq 1 ]; then
             export KAFERRY_FILE_SQL_BINARIES="$previous_binary"
           elif [ "$archive_syntax_status" -ne 0 ]; then
             exit "$archive_syntax_status"
           fi
           export KAFERRY_TEST_BINARY="$PWD/bin/kaferry"
-          python3 scripts/ci.py migration go test -count=1 -race -tags=integration,migration -run TestPreviousBinary -v ./tests/compat
+          python3 -m tools.ci.ci migration go test -count=1 -race -tags=integration,migration -run TestPreviousBinary -v ./src/tests/system
       - name: Capture bounded load measurements
-        run: python3 scripts/ci.py load make load
+        run: python3 -m tools.ci.ci load make load
       - name: Coverage reports
         run: |
-          python3 scripts/quality.py coverage
+          python3 -m tools.ci.quality coverage
           go tool cover -html=build-results/coverage.out -o=build-results/coverage.html
       - name: Publish Go coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
@@ -148,10 +150,10 @@ jobs:
       - if: always()
         run: |
           mkdir -p build-results
-          docker compose -p kaferry-compat --profile cross-cluster logs --no-color > build-results/brokers.log
+          docker compose -f src/tests/compose.yaml -p kaferry-compat --profile cross-cluster logs --no-color > build-results/brokers.log
           make broker-down
       - if: always()
-        run: python3 scripts/ci.py summary
+        run: python3 -m tools.ci.ci summary
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

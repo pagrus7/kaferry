@@ -1,7 +1,7 @@
 .cache/
 bin/
 coverage.out
-design/debates/
+docs/design/debates/
 build-results/
 __pycache__/
 /release/

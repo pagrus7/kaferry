@@ -6,4 +6,4 @@ model: claude-opus-5-5
 effort: high
 ---
 
-Read `review/README.md` (Reviewer contract) and `review/docs.md`, then review the supplied scope. Do not run the coordinating workflow.
+Read `docs/development/reviews/README.md` (Reviewer contract) and `docs/development/reviews/docs.md`, then review the supplied scope. Do not run the coordinating workflow.
