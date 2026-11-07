@@ -8,19 +8,10 @@ import subprocess
 
 
 PROSE = {'README.md', 'CONTRIBUTING.md', 'AGENTS.md', 'CLAUDE.md'}
-# These system tests have tags that exclude them from both PR matrix Go suites.
-OTHER_SYSTEM_SUITES = {
-    'src/tests/system/churn_test.go',
-    'src/tests/system/container_test.go',
-    'src/tests/system/crash_test.go',
-    'src/tests/system/fault_test.go',
-    'src/tests/system/migration_test.go',
-    'src/tests/system/recovery_test.go',
-}
 
 
 def unrelated(path):
-    if path in PROSE or path in OTHER_SYSTEM_SUITES:
+    if path in PROSE:
         return True
     if path.startswith('docs/') and path.endswith('.md'):
         return True
@@ -31,6 +22,9 @@ def unrelated(path):
     if path.startswith('.codex/agents/') and path.endswith('.toml'):
         return True
     if path.startswith(('src/cmd/', 'src/internal/')) and path.endswith('_test.go'):
+        return True
+    # Compatibility imports regular system Go files, but never its test files.
+    if path.startswith('src/tests/system/') and path.endswith('_test.go'):
         return True
     if path.startswith('tools/') and Path(path).name.startswith('test_') and path.endswith('.py'):
         return True

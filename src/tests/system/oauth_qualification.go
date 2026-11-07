@@ -77,7 +77,7 @@ func oauthTokenEndpoint(t *testing.T, cfg map[string]string, expiresIn int, issu
 	cfg["sasl.oauthbearer.client.id"], cfg["sasl.oauthbearer.client.secret"] = "copier-client", "private-oauth-secret"
 }
 
-func TestSaslTlsOAuthTokenFile(t *testing.T) {
+func RunSaslTlsOAuthTokenFile(t *testing.T) {
 	// Given a broker that validates signatures, issuer, audience and expiration.
 	_, producer, src, dst, group := secureFixture(t)
 	key := fixtureOAuthKey(t, 1)
@@ -127,7 +127,7 @@ func TestSaslTlsOAuthTokenFile(t *testing.T) {
 	}
 }
 
-func TestSaslTlsOAuthRenewalAndKeyRotation(t *testing.T) {
+func RunSaslTlsOAuthRenewalAndKeyRotation(t *testing.T) {
 	// Given a live copy, short-lived signed tokens and a broker's HTTP JWKS cache.
 	a, producer, src, dst, group := secureFixture(t)
 	keys := [2]*rsa.PrivateKey{fixtureOAuthKey(t, 1), fixtureOAuthKey(t, 2)}
@@ -164,8 +164,8 @@ func TestSaslTlsOAuthRenewalAndKeyRotation(t *testing.T) {
 	require.Equal(t, "after", string(read(t, reader).Value))
 }
 
-func TestMutualTlsCopy(t *testing.T) { testTLSCopy(t, true) }
-func TestServerTlsCopy(t *testing.T) { testTLSCopy(t, false) }
+func RunMutualTlsCopy(t *testing.T) { testTLSCopy(t, true) }
+func RunServerTlsCopy(t *testing.T) { testTLSCopy(t, false) }
 
 func testTLSCopy(t *testing.T, mutual bool) {
 	t.Helper()

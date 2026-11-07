@@ -13,7 +13,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func TestSaslTlsExternalAuthentication(t *testing.T) {
+func RunSaslTlsExternalAuthentication(t *testing.T) {
 	for _, mechanism := range []string{"OAUTHBEARER", "GSSAPI"} {
 		t.Run(mechanism, func(t *testing.T) {
 			// Given a record and a restricted OAuth or Kerberos principal in the disposable Kafka cluster.

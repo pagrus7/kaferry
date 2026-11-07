@@ -6,7 +6,8 @@ on:
       - 'tools/qualification/qualify.py'
       - 'tools/qualification/test_qualify.py'
       - 'src/tests/system/recovery*'
-      - 'src/tests/system/soak_test.go'
+      - 'src/tests/system/soak.go'
+      - 'src/tests/compatibility/soak_test.go'
       - 'src/tests/system/fault_test.go'
       - '.github/workflows/parallel-lab.yml'
 permissions:

@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -18,15 +17,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
-
-func broker(t *testing.T) string {
-	t.Helper()
-	value := os.Getenv("KAFKA_TEST_BROKERS")
-	if value == "" {
-		t.Skip("set KAFKA_TEST_BROKERS to a disposable broker")
-	}
-	return value
-}
 
 func TestTopicToTopicSlice(t *testing.T) {
 	// Given
