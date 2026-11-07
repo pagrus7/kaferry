@@ -20,7 +20,7 @@ import (
 
 const soakDrainDuration = 5 * time.Minute
 
-func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
+func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	// Given
 	report := newLoadReport(t, "soak")
 	sourcePartitions, destinationPartitions := 4, 5

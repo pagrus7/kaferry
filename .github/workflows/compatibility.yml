@@ -33,9 +33,15 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       tier: ${{ steps.matrix.outputs.tier }}
-      run: ${{ steps.schedule.outputs.run }}
+      run: ${{ steps.scope.outputs.run == 'false' && 'false' || steps.schedule.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Select PR compatibility scope
+        id: scope
+        if: github.event_name == 'pull_request'
+        run: python3 -m tools.ci.compatibility_scope
       - id: matrix
         env:
           TIER: ${{ inputs.tier || (github.event_name == 'pull_request' && 'pr') || (github.event.schedule == '43 11 * * 1' && 'full') || 'nightly' }}
@@ -44,6 +50,7 @@ jobs:
           echo "tier=$TIER" >> "$GITHUB_OUTPUT"
       - name: Choose matrix or reuse recent executions
         id: schedule
+        if: steps.scope.outputs.run != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}

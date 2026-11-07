@@ -46,7 +46,7 @@ jobs:
       - name: Compile broker fixtures without CGO
         env:
           CGO_ENABLED: "0"
-        run: go test -run '^$' -tags=integration,load,fault,qualification,migration ./src/tests/system
+        run: go test -run '^$' -tags=integration,load,fault,qualification,migration ./src/tests/system ./src/tests/compatibility
       - run: make build
         env:
           CGO_ENABLED: "0"

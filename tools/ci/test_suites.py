@@ -27,7 +27,8 @@ class SuitesTest(unittest.TestCase):
                 # When selecting the suite, then tags, selectors and caller budgets survive.
                 command, expected = suite_command(args, {'GO': '/custom/go'})
                 self.assertEqual(['/custom/go', 'test', '-count=1', '-json', '-timeout='+timeout,
-                                  '-tags='+tags, '-run', pattern, './src/tests/system'], command)
+                                  '-tags='+tags, '-run', pattern,
+                                  './src/tests/compatibility' if name == 'soak' else './src/tests/system'], command)
                 self.assertTrue(expected)
         command, _ = suite_command(argparse.Namespace(suite='integration'), {})
         self.assertEqual(['go', 'test', '-count=1', '-json', '-race', '-timeout=20m',
@@ -67,4 +68,4 @@ class SuitesTest(unittest.TestCase):
                                     env=dict(os.environ, SUITE_ARGS=str(output)), capture_output=True, text=True)
             self.assertEqual(17, result.returncode, result.stderr)
             self.assertEqual(['test', '-count=1', '-json', '-timeout=40m', '-tags=integration,load',
-                              '-run', '^TestStreamingSoak', './src/tests/system'], json.loads(output.read_text()))
+                              '-run', '^TestStreamingSoak', './src/tests/compatibility'], json.loads(output.read_text()))
