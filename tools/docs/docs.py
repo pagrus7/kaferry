@@ -59,7 +59,8 @@ def check(path):
     links = re.findall(r'\]\(([^\s)]+)(?:\s+"[^"]*")?\)', prose)
     links.extend(re.findall(r'^ {0,3}\[[^\]\n]+\]:[ \t]*(<[^>\n]+>|\S+)', prose, re.M))
     images = ImageLinks()
-    images.feed(prose)
+    # HTML inside Markdown code spans is literal, including spans containing backticks.
+    images.feed(re.sub(r'(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)', '', prose, flags=re.S))
     for link in links + images.links:
         url = urlsplit(link.strip('<>'))
         if url.scheme or url.netloc:

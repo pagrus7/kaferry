@@ -51,6 +51,8 @@ class DocsTest(unittest.TestCase):
             doc.write_text('<picture><img src="logo&amp;dark.svg" alt="Logo"></picture>\n'
                            '<img src="https://example.invalid/logo.svg">\n'
                            '<!-- <img src="missing.svg"> -->\n'
+                           'Use `<img src="missing.svg">` as an example.\n'
+                           'Or ``<img src="missing.svg" alt="a ` tick">``.\n'
                            '```html\n<img src="missing.svg">\n```\n')
             # When checked, then real local images pass and literal/comment examples are ignored.
             check(doc)
