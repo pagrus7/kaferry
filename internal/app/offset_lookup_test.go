@@ -43,7 +43,7 @@ func TestFxOffsetLookupCanBeReplacedIndependently(t *testing.T) {
 	require.NoError(t, app.Err())
 	// When resolving a timestamp start, then every lookup uses the injected component and explicit timestamp parameter.
 	p := plan.Plan{Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 1234}}}
-	got, err := factory.New(nil, nil, p, "fp", "topic").Locate(t.Context(), []int32{0}, nil, nil)
+	got, err := factory.New(nil, nil, p, "fp", "topic").Locate(t.Context(), []int32{0}, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, 7, got.Assignments[0].Cursor.Position)
 	require.Equal(t, []string{"earliest", "replicated"}, fake.calls)

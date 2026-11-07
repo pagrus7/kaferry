@@ -17,7 +17,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 | Component | Package | Responsibility | Dependency boundary |
 | --- | --- | --- | --- |
 | SQL parser | [sql](../internal/sql) | Tokenize/parse; report input positions | `sql.Parser` |
-| Configuration | [config](../internal/config) | Read TOML and defaults | `config.Reader`, `FileReader` |
+| Configuration | [config](../internal/config) | Read TOML and defaults; decode worker durations | `config.Reader`, `FileReader` |
 | Planner | [plan](../internal/plan) | Validate, merge connections, compile time bounds and resolve environment values | [Builder, Environment and Plan](../internal/plan/types.go) |
 | Command | [app](../internal/app) | Order planning stages; classify failures | Parser, Reader, Builder, Engine |
 | Engine | [app](../internal/app) | Validate endpoints/progress; acquire and close query resources | KafkaFactory, FileFactory, RunnerFactory |
@@ -82,7 +82,7 @@ Most tests exercise pure functions or individual components with handwritten moc
 
 ### Test targets
 
-Run from the repository root. [Makefile](../Makefile) defines these targets; Kafka fixtures need Docker and Compose.
+Run from the repository root with Python 3 available. [Makefile](../Makefile) defines these targets; [suite definitions](../scripts/suites.py) share Go test selection and required execution evidence with CI and standalone qualification. Kafka fixtures need Docker and Compose.
 
 | Command | Scope / prerequisite | CI owner |
 | --- | --- | --- |

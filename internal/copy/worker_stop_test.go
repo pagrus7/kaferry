@@ -274,7 +274,7 @@ func TestWorkerStopMakesTopicSignalsAndUnassignedExitBounded(t *testing.T) {
 			// Given a limited topic with no new records.
 			r, source, _, _, clock := fixture(t)
 			r.plan.Source.Kind, r.plan.WorkerStopAfterRecords = "TOPIC", 1
-			r.limits.IdleExit = "20ms"
+			r.limits.IdleExit.Duration = 20 * time.Millisecond
 			ctx := t.Context()
 			if !assigned {
 				source.assignments = nil

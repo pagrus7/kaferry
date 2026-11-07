@@ -20,7 +20,7 @@ func TestUnassignedTimeoutHasDistinctOutcomeBeforeAndAfterIntake(t *testing.T) {
 			upper, stamp := clock.Now().Add(time.Hour).UnixMilli(), clock.Now().UnixMilli()
 			r.plan.Source.Kind = "TOPIC"
 			r.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
-			r.limits.IdleExit = "1s"
+			r.limits.IdleExit.Duration = 1 * time.Second
 			var logs bytes.Buffer
 			r.log = slog.New(slog.NewJSONHandler(&logs, nil))
 			source.assignments = nil
@@ -76,7 +76,7 @@ func TestAssignmentBeforeIdleDeadlineCompletesNormally(t *testing.T) {
 	r.plan.Source.Kind = "TOPIC"
 	r.plan.MaxOutOfOrderMS = new(int64(0))
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
-	r.limits.IdleExit = "1s"
+	r.limits.IdleExit.Duration = 1 * time.Second
 	source.assignments = nil
 	started := clock.Now()
 	assigned := false
@@ -113,7 +113,7 @@ func TestDelayedHandoffDistinguishesPartitionCompletionFromIdleExit(t *testing.T
 		runner.plan.Source.Kind = "TOPIC"
 		runner.plan.MaxOutOfOrderMS = new(int64(0))
 		runner.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
-		runner.limits.IdleExit = "1s"
+		runner.limits.IdleExit.Duration = 1 * time.Second
 	}
 	if err := a.Assign([]Assignment{
 		{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}},

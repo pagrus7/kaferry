@@ -35,7 +35,7 @@ func TestOffsetEndResolutionAndResume(t *testing.T) {
 			}
 			positioner := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(backend, times, p, "fp", "id")
 			// When initializing, then use exclusive ends and reuse a shared LATEST sample.
-			located, err := positioner.Locate(t.Context(), []int32{1}, nil, nil)
+			located, err := positioner.Locate(t.Context(), []int32{1}, nil)
 			require.NoError(t, err)
 			a := located.Assignments[0]
 			require.Equal(t, tc.wantStart, a.Cursor.Position)
@@ -51,7 +51,7 @@ func TestOffsetEndResolutionAndResume(t *testing.T) {
 			// When reassigned after growth, then reuse the saved boundary and completion.
 			backend.high, backend.stable = 2000, 1900
 			saved := Progress{Fingerprint: "fp", TopicID: "id", End: a.Cursor.End}
-			located, err = positioner.Locate(t.Context(), []int32{1}, map[int32]int64{1: a.Cursor.Position}, map[int32]Progress{1: saved})
+			located, err = positioner.Locate(t.Context(), []int32{1}, map[int32]SavedProgress{1: {Position: a.Cursor.Position, Progress: saved}})
 			require.NoError(t, err)
 			require.Equal(t, tc.wantEnd, *located.Assignments[0].Cursor.End)
 			require.Equal(t, tc.calls, readableCalls(backend.calls))
@@ -64,7 +64,7 @@ func TestRequestedOffsetRangesRejectUnavailablePositions(t *testing.T) {
 		// Given an explicit bound outside the retained snapshot, when initializing, then fail instead of silently clamping it.
 		b := &countingOffsets{low: 100, high: 1000, stable: 900}
 		p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC"}, Start: "EARLIEST", Offsets: &r}
-		_, err := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(b, &countingTimes{}, p, "fp", "id").Locate(t.Context(), []int32{1}, nil, nil)
+		_, err := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(b, &countingTimes{}, p, "fp", "id").Locate(t.Context(), []int32{1}, nil)
 		require.ErrorContains(t, err, "outside retained positions")
 	}
 }
@@ -85,7 +85,7 @@ func TestLatestBoundaryLookupFailureDoesNotProduceAnAssignment(t *testing.T) {
 	backend := &failedStableOffsets{countingOffsets: countingOffsets{low: 0, high: 10}, err: failure}
 	p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC"}, Start: "EARLIEST", Offsets: &plan.OffsetRange{Latest: true}}
 	// When resolving the snapshot, then propagate the error without usable initial progress.
-	got, err := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(backend, &countingTimes{}, p, "fp", "id").Locate(t.Context(), []int32{0}, nil, nil)
+	got, err := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(backend, &countingTimes{}, p, "fp", "id").Locate(t.Context(), []int32{0}, nil)
 	require.ErrorIs(t, err, failure)
 	require.Nil(t, got.Assignments)
 }
@@ -107,7 +107,7 @@ func TestOffsetResumeRejectsMissingOrChangedFixedEnds(t *testing.T) {
 			p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC"}, Start: "EARLIEST", Offsets: tc.r}
 			saved := map[int32]Progress{1: {Fingerprint: "fp", TopicID: "id", End: tc.end}}
 			// When resuming, then reject it instead of silently capturing a later end.
-			got, err := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(backend, &countingTimes{}, p, "fp", "id").Locate(t.Context(), []int32{1}, map[int32]int64{1: 200}, saved)
+			got, err := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(backend, &countingTimes{}, p, "fp", "id").Locate(t.Context(), []int32{1}, map[int32]SavedProgress{1: {Position: 200, Progress: saved[1]}})
 			require.ErrorContains(t, err, tc.hint)
 			var conflict *Conflict
 			require.ErrorAs(t, err, &conflict)

@@ -73,30 +73,27 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 			s, p, f, _ := fixture()
 			source := f.connections["input"]
 			for _, id := range []int32{0, 1} {
-				source.positions[id] = int64(id)
-				source.metadata[id] = kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: int64(id)}, End: new(int64(id))}
+				source.saved[id] = kafkaport.SavedProgress{Position: int64(id), Progress: kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: int64(id)}, End: new(int64(id))}}
 			}
 			switch tc.name {
 			case "worker threshold", "active after worker stop", "partial worker stops", "mixed stops":
-				source.metadata[0].Stop.Reason = "worker_record_cap"
+				source.saved[0].Stop.Reason = "worker_record_cap"
 				if tc.name == "mixed stops" {
-					source.metadata[1].Stop.Reason = "timestamp"
+					source.saved[1].Stop.Reason = "timestamp"
 				} else if tc.name == "partial worker stops" {
-					source.metadata[1] = kafkaport.Progress{}
+					source.saved[1] = kafkaport.SavedProgress{Position: 1}
 				} else {
-					source.metadata[1].Stop.Reason = "worker_record_cap"
+					source.saved[1].Stop.Reason = "worker_record_cap"
 				}
 				if tc.name == "active after worker stop" {
 					source.memberships = []kafkaport.Membership{{Idle: false}}
 				}
 			case "no progress":
-				clear(source.positions)
-				clear(source.metadata)
+				clear(source.saved)
 			case "partial progress":
-				delete(source.positions, 1)
-				delete(source.metadata, 1)
+				delete(source.saved, 1)
 			case "no stop":
-				source.metadata[1] = kafkaport.Progress{}
+				source.saved[1] = kafkaport.SavedProgress{Position: 1}
 			case "active":
 				source.memberships = []kafkaport.Membership{{Idle: true}, {Idle: false}}
 			case "changed empty group state":
@@ -144,10 +141,9 @@ func TestStatusExposesIncompatibleProgressAndActivity(t *testing.T) {
 			service, p, factory, _ := fixture()
 			p.Partitions = &plan.PartitionFilter{IDs: []int32{0}}
 			source := factory.connections["input"]
-			source.positions = map[int32]int64{0: 3, 1: 7}
-			source.metadata = map[int32]kafkaport.Progress{
-				0: {Fingerprint: "old-a", End: new(int64(3)), Stop: &core.Stop{Reason: "tip", At: 3}},
-				1: {Fingerprint: "old-b", End: new(int64(7)), Stop: &core.Stop{Reason: "tip", At: 7}},
+			source.saved = map[int32]kafkaport.SavedProgress{
+				0: {Position: 3, Progress: kafkaport.Progress{Fingerprint: "old-a", End: new(int64(3)), Stop: &core.Stop{Reason: "tip", At: 3}}},
+				1: {Position: 7, Progress: kafkaport.Progress{Fingerprint: "old-b", End: new(int64(7)), Stop: &core.Stop{Reason: "tip", At: 7}}},
 			}
 			source.fail, source.failure = "saved", &kafkaport.Conflict{Err: &plan.FingerprintMismatch{}}
 			if activity != "idle" {
@@ -164,7 +160,7 @@ func TestStatusExposesIncompatibleProgressAndActivity(t *testing.T) {
 			require.Equal(t, new(int64(7)), report.Partitions[1].Position)
 			require.Equal(t, "old-a", report.Partitions[0].Fingerprint)
 			require.Equal(t, "old-b", report.Partitions[1].Fingerprint)
-			require.Equal(t, source.metadata[1].Stop, report.Partitions[1].Stop)
+			require.Equal(t, source.saved[1].Stop, report.Partitions[1].Stop)
 			require.Equal(t, 2, source.membershipReads)
 			require.Contains(t, report.Reason, "saved positions are for inspection")
 			if activity == "foreign" {
@@ -226,8 +222,7 @@ func TestStatusRejectsStaleStopsAfterFinalObservationFailure(t *testing.T) {
 			service, p, factory, _ := fixture()
 			source, destination := factory.connections["input"], factory.connections["output"]
 			for _, id := range source.info.Partitions {
-				source.positions[id] = int64(id)
-				source.metadata[id] = kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: int64(id)}}
+				source.saved[id] = kafkaport.SavedProgress{Position: int64(id), Progress: kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: int64(id)}}}
 			}
 			source.afterSaved = func() {
 				switch failure {

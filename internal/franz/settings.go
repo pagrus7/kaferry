@@ -215,7 +215,7 @@ func (s settings) bounded(limits config.Worker) (settings, error) {
 		s.fetchQueueBytes = limits.ByteCap
 	}
 	if s.delivery == 0 {
-		s.delivery, _ = time.ParseDuration(limits.DeliveryTimeout)
+		s.delivery = limits.DeliveryTimeout.Duration
 	}
 	return s, nil
 }

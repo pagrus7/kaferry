@@ -16,6 +16,12 @@ func conflict(format string, args ...any) error { return &Conflict{Err: fmt.Erro
 
 type Progress = commitmeta.Progress
 
+// SavedProgress keeps a committed position with its validated metadata.
+type SavedProgress struct {
+	Position int64
+	Progress
+}
+
 // DecodeProgress validates persisted data against the current source,
 // independently of the query being inspected.
 func DecodeProgress(codec commitmeta.Codec, metadata *string, topicID string) (Progress, error) {

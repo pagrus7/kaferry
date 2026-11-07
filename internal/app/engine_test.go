@@ -28,7 +28,7 @@ type engineFixture struct {
 	source         *engineSource
 	store          core.ProgressStore
 	groups         []string
-	saved          map[int32]kafkaport.Progress
+	saved          map[int32]kafkaport.SavedProgress
 	onStage        func(string)
 	partitions     map[string][]int32
 	partitionReads []string
@@ -103,7 +103,7 @@ func (c *engineConnection) ValidatePartitions(context.Context, []int32) error { 
 func (c *engineConnection) CheckMembers(context.Context, string, string) error {
 	return c.fixture.stage("members")
 }
-func (c *engineConnection) ReadProgress(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafkaport.Progress, error) {
+func (c *engineConnection) ReadProgress(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafkaport.SavedProgress, error) {
 	return c.fixture.saved, c.fixture.stage("progress")
 }
 func (c *engineConnection) Source(_ context.Context, _ plan.Plan, _ string, _ config.Worker, routing kafkaport.PartitionValidator) (core.Source, core.ProgressStore, error) {

@@ -54,7 +54,7 @@ func TestEmptyAssignmentNeedsNoOffsetRequests(t *testing.T) {
 	offsets := &countingOffsets{}
 	p := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(offsets, &countingTimes{}, plan.Plan{}, "fp", "id")
 	// When locating the empty assignment, then it needs no broker requests.
-	got, err := p.Locate(t.Context(), nil, nil, nil)
+	got, err := p.Locate(t.Context(), nil, nil)
 	if err != nil || len(got.Assignments) != 0 || len(offsets.calls) != 0 {
 		t.Fatal(got, err, offsets.calls)
 	}
@@ -66,17 +66,17 @@ func TestPositioningStartRulesAndCommittedPositions(t *testing.T) {
 		name   string
 		start  string
 		window plan.WindowSpec
-		saved  map[int32]int64
+		saved  map[int32]SavedProgress
 		want   int64
 		times  int
 		fails  bool
 	}{
 		{name: "fresh earliest", start: "EARLIEST", want: 100},
 		{name: "fresh latest uses stable end", start: "LATEST", want: 900},
-		{name: "existing commit overrides latest", start: "LATEST", saved: map[int32]int64{1: 700}, want: 700},
-		{name: "expired commit remaps to retained start", start: "LATEST", saved: map[int32]int64{1: 50}, want: 100},
-		{name: "commit above log end fails", start: "EARLIEST", saved: map[int32]int64{1: 1001}, fails: true},
-		{name: "new partition in existing group starts earliest", start: "LATEST", saved: map[int32]int64{0: 700}, want: 100},
+		{name: "existing commit overrides latest", start: "LATEST", saved: map[int32]SavedProgress{1: {Position: 700}}, want: 700},
+		{name: "expired commit remaps to retained start", start: "LATEST", saved: map[int32]SavedProgress{1: {Position: 50}}, want: 100},
+		{name: "commit above log end fails", start: "EARLIEST", saved: map[int32]SavedProgress{1: {Position: 1001}}, fails: true},
+		{name: "new partition in existing group starts earliest", start: "LATEST", saved: map[int32]SavedProgress{0: {Position: 700}}, want: 100},
 		{name: "positive lower uses timestamp lookup", window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: lower}}, want: 500, times: 1},
 		{name: "zero lower starts earliest", window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: zero}}, want: 100},
 		{name: "negative lower starts earliest", window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: negative}}, want: 100},
@@ -91,7 +91,7 @@ func TestPositioningStartRulesAndCommittedPositions(t *testing.T) {
 			positioner := NewPositionerFactory(&fixedClock{now: time.Unix(100, 0)}, quietLogger(), NewOffsetLookupFactory()).New(offsets, times, p, "fp", "topic-id")
 
 			// When a partition is assigned through the positioner interface.
-			got, err := positioner.Locate(t.Context(), []int32{1}, scenario.saved, map[int32]Progress{})
+			got, err := positioner.Locate(t.Context(), []int32{1}, scenario.saved)
 
 			// Then the start rule is applied only in the absence of usable commits.
 			if scenario.fails {
@@ -118,8 +118,7 @@ func TestPositioningBatchesBrokerRequests(t *testing.T) {
 	times := &countingTimes{}
 	positioner := NewPositionerFactory(clock, quietLogger(), NewOffsetLookupFactory()).New(offsets, times, plan.Plan{Source: plan.Endpoint{Name: topic}, Window: spec}, "fp", "topic-id")
 	savedLower := 5 * hour
-	saved := map[int32]int64{}
-	metadata := map[int32]Progress{}
+	saved := map[int32]SavedProgress{}
 	parts := make([]int32, 200)
 	for n := range parts {
 		id := int32(n)
@@ -129,13 +128,12 @@ func TestPositioningBatchesBrokerRequests(t *testing.T) {
 			if n >= 175 {
 				stored = 700
 			}
-			saved[id] = stored
-			metadata[id] = Progress{Window: &plan.Window{Lower: &savedLower}}
+			saved[id] = SavedProgress{Position: stored, Progress: Progress{Window: &plan.Window{Lower: &savedLower}}}
 		}
 	}
 
 	// When
-	positioned, err := positioner.Locate(t.Context(), parts, saved, metadata)
+	positioned, err := positioner.Locate(t.Context(), parts, saved)
 
 	// Then
 	require.NoError(t, err)
@@ -204,7 +202,7 @@ func TestPositioningDoesNotFallbackAfterLookupFailure(t *testing.T) {
 			}
 			positioner := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(offsets, times, p, "fp", "id")
 			// When locating the assignment.
-			got, err := positioner.Locate(t.Context(), []int32{1}, nil, nil)
+			got, err := positioner.Locate(t.Context(), []int32{1}, nil)
 			// Then no usable position or initial progress escapes via a fallback.
 			if err == nil || got.Assignments != nil || got.Progress != nil {
 				t.Fatal(got, err)

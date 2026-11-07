@@ -77,12 +77,12 @@ func TestGapProofRejectsUnsafeResponses(t *testing.T) {
 
 func TestStaleFetchAfterGapProofIsDiscarded(t *testing.T) {
 	// Given a verified gap through 10 and a stale record fetched before compaction.
-	source := &Source{positions: map[int32]int64{0: 10}}
+	source := &Source{partitions: map[int32]*sourcePartition{0: {position: 10}}}
 	// When that record arrives after the proof, or after its partition is revoked.
 	for _, partition := range []int32{0, 1} {
 		event, err := source.deliver(&kgo.Record{Partition: partition, Offset: 3, Value: []byte("stale")})
 		// Then it creates no input/EOF and leaves current progress unchanged.
-		if err != nil || event.Input != nil || event.EOF != nil || source.positions[0] != 10 {
+		if err != nil || event.Input != nil || event.EOF != nil || source.partitions[0].position != 10 {
 			t.Fatal("stale fetch changed progress", event, err)
 		}
 	}
@@ -107,10 +107,10 @@ func sourceWithGaps(t *testing.T, count int32) (*Source, *stubGapReader) {
 	t.Helper()
 	source, _ := sourceFixture(t)
 	source.lastTip = time.Time{}
-	source.positions = make(map[int32]int64)
+	source.partitions = make(map[int32]*sourcePartition)
 	stable := make(map[int32]int64)
 	for id := int32(0); id < count; id++ {
-		source.positions[id] = 0
+		source.partitions[id] = &sourcePartition{}
 		stable[id] = 10
 	}
 	source.inspector = &sourceMetadataMock{stable: stable}
@@ -126,8 +126,8 @@ func TestIntermediateGapDoesNotSignalTip(t *testing.T) {
 	// When a bounded gap is proven before the actual tip.
 	require.NoError(t, source.pollTips(t.Context()))
 	// Then progress advances locally without telling the core it reached the tip.
-	if source.positions[0] != 5 || len(source.readyEOF) != 0 {
-		t.Fatal("intermediate gap looked like EOF", source.positions, source.readyEOF)
+	if source.partitions[0].position != 5 || len(source.readyEOF) != 0 {
+		t.Fatal("intermediate gap looked like EOF", source.partitions, source.readyEOF)
 	}
 	// When a later proof reaches the sampled stable end.
 	proof.next = 10
@@ -154,14 +154,14 @@ func TestGapProbesRotateAndExcludePausedOrHeldPartitions(t *testing.T) {
 		t.Fatal("probe starvation or false EOF", proof.calls, source.readyEOF)
 	}
 	// Given one paused partition and another with a held record.
-	source.paused = map[int32]bool{1: true}
-	source.held = map[int32]*kgo.Record{2: {Partition: 2, Offset: 0}}
+	source.partitions[1].paused = true
+	source.partitions[2].held = &kgo.Record{Partition: 2, Offset: 0}
 	proof.calls = nil
 	// When polling tips again.
 	require.NoError(t, source.pollTips(t.Context()))
 	// Then neither partition is probed or advanced.
-	if len(proof.calls) != 1 || proof.calls[0] != 0 || source.positions[1] != 0 || source.positions[2] != 0 {
-		t.Fatal("paused or held record was bypassed", proof.calls, source.positions)
+	if len(proof.calls) != 1 || proof.calls[0] != 0 || source.partitions[1].position != 0 || source.partitions[2].position != 0 {
+		t.Fatal("paused or held record was bypassed", proof.calls, source.partitions)
 	}
 }
 
@@ -203,8 +203,8 @@ func TestGapProbeErrorsRetryOnlyWhenRecoverable(t *testing.T) {
 			// When polling after a probe failure.
 			event, err := source.Poll(0)
 			// Then only temporary failures permit another poll, and no failure advances progress.
-			if (err != nil) != scenario.stops || event.Input != nil || event.EOF != nil || source.positions[0] != 0 || len(proof.calls) != 1 {
-				t.Fatal("wrong probe error handling", event, err, source.positions, proof.calls)
+			if (err != nil) != scenario.stops || event.Input != nil || event.EOF != nil || source.partitions[0].position != 0 || len(proof.calls) != 1 {
+				t.Fatal("wrong probe error handling", event, err, source.partitions, proof.calls)
 			}
 		})
 	}

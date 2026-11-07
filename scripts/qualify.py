@@ -22,6 +22,7 @@ import uuid
 import venv
 
 from ci import capture, verify_tests
+from suites import command as go_suite, EXPECTED
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGES = json.loads((ROOT / 'tests/qualification/matrix.json').read_text())
@@ -146,22 +147,15 @@ def suite_command(args, env):
             env['KAFERRY_SOAK_DEST_STALL_CONTAINER'] = env.get('KAFKA_FAULT_DEST_CONTAINER', 'kaferry-endurance-kafka-dr-1' if args.suite == 'endurance' else 'kaferry-compat-kafka-dr-1')
         else:
             env.pop('KAFERRY_SOAK_DEST_STALL_CONTAINER', None)
-        return prefix + [f'-timeout={args.duration + SOAK_DRAIN_SECONDS + 300}s', '-tags=integration,load', '-run',
-                         '^TestStreamingSoak', './tests/compat'], ['TestStreamingSoakFidelityCommitLagMemoryAndShutdown']
+        return go_suite('soak', go=prefix[0], timeout=f'{args.duration + SOAK_DRAIN_SECONDS + 300}s'), EXPECTED['soak']
     if args.suite == 'recovery':
         if args.duration > 86400:
             raise ValueError('recovery duration must not exceed 24h')
         env['KAFERRY_RECOVERY_DURATION'] = f'{args.duration}s'
-        return prefix + [f'-timeout={args.duration+600}s', '-tags=integration,fault', '-run',
-                         '^TestRecoveryBlockedOutput$', './tests/compat'], ['TestRecoveryBlockedOutput']
+        return go_suite('recovery', go=prefix[0], timeout=f'{args.duration+600}s'), EXPECTED['recovery']
     if args.suite == 'auth':
         env['KAFERRY_AUTH_IMAGE'] = IMAGES[args.source]
-        return ['sh', 'tests/qualification/run.sh'], [
-            'TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight', 'TestSaslTlsScramMechanisms/SCRAM-SHA-256',
-            'TestSaslTlsScramMechanisms/SCRAM-SHA-512', 'TestSaslTlsExternalAuthentication/OAUTHBEARER',
-            'TestSaslTlsExternalAuthentication/GSSAPI', 'TestSaslTlsOAuthTokenFile',
-            'TestSaslTlsOAuthRenewalAndKeyRotation', 'TestMutualTlsCopy', 'TestServerTlsCopy',
-            'TestReplicatedClusterLeaderFailurePreservesCopy']
+        return ['sh', 'tests/qualification/run.sh'], EXPECTED['qualification']
     if args.suite == 'migration':
         if not args.previous_binary or not args.previous_binary.is_file():
             raise ValueError('migration requires --previous-binary naming a supported release executable')
@@ -170,7 +164,7 @@ def suite_command(args, env):
         name = 'TestPreviousBinaryRejectsUnsupportedCaptureState' if args.state_contract == 'reject' else 'TestPreviousBinaryProgressAndArchiveCompatibility'
         return prefix + ['-timeout=10m', '-tags=integration,migration', '-run', '^' + name + '$', './tests/compat'], [name]
     if args.suite == 'integration':
-        return prefix + ['-race', '-timeout=20m', '-tags=integration', './tests/compat'], ['TestAllFileDirectionsAndResume', 'TestTopicToTopicSlice']
+        return go_suite('integration', go=prefix[0], timeout='20m'), EXPECTED['integration']
     if args.suite == 'resources':
         return prefix + ['-race', './internal/copy', './internal/archive/capture', './internal/checkpoint', './internal/archiveio'], [
             'TestCheckpointReplacementFailuresPreserveAtomicPublication',
@@ -179,13 +173,7 @@ def suite_command(args, env):
         return prefix + ['-race', '-run', '^TestProgressLifecycleModel$', './internal/copy'], ['TestProgressLifecycleModel']
     if args.suite in ('fuzz', 'benchmark', 'smoke'):
         return ['make', args.suite], []
-    if args.suite == 'load':
-        return prefix + ['-timeout=20m', '-tags=integration,load', '-run', '^TestLoad',
-                         './tests/compat'], ['TestLoadBoundedKafkaCopy/default']
-    return prefix + ['-timeout=10m', '-tags=integration,fault', '-run',
-                     '^TestBlockingCommit|^TestRebalanceChurn|^TestCrashResume|^TestRecoveryBlockedOutput', './tests/compat'], [
-        'TestBlockingCommitAcrossBrokerOutage', 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits',
-        'TestCrashResumeReconcilesRetainedRecords', 'TestRecoveryBlockedOutput']
+    return go_suite(args.suite, go=prefix[0], timeout='20m' if args.suite == 'load' else '10m'), EXPECTED[args.suite]
 
 
 def endurance_capacity(seconds, output, compose, env):

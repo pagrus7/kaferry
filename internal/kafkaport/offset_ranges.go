@@ -6,7 +6,7 @@ import (
 	core "github.com/pagrus7/kaferry/internal/copy"
 )
 
-func (p *positioner) resolveOffsetRanges(ctx context.Context, assignments []core.Assignment, saved map[int32]int64, ends map[int32]int64) error {
+func (p *positioner) resolveOffsetRanges(ctx context.Context, assignments []core.Assignment, saved map[int32]SavedProgress, ends map[int32]int64) error {
 	if p.plan.Offsets == nil && len(p.plan.PartitionOffsets) == 0 {
 		return nil
 	}

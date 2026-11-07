@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"time"
 
 	"github.com/pagrus7/kaferry/internal/config"
 	copy "github.com/pagrus7/kaferry/internal/copy"
@@ -69,7 +68,7 @@ func (c *command) prepare(statement, configPath string, stop Shutdown) (plan.Pla
 	if err != nil {
 		return plan.Plan{}, config.Config{}, &copy.Exit{Err: err, Code: 2}
 	}
-	budget, _ := time.ParseDuration(cfg.Worker.ShutdownTimeout)
+	budget := cfg.Worker.ShutdownTimeout.Duration
 	stop.Configure(budget)
 	stop.Stage("planning query")
 	p, err := c.planner.Build(ast, cfg.Connections)

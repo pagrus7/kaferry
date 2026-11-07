@@ -15,14 +15,14 @@ func (s *Source) pollTips(ctx context.Context) error {
 		return err
 	}
 	var gaps []int32
-	for id, position := range s.positions {
+	for id, p := range s.partitions {
 		end := ends[id]
-		if s.paused[id] {
+		if p.paused {
 			continue
 		}
-		if position >= end {
-			s.readyEOF = append(s.readyEOF, core.Cursor{Partition: id, Position: position})
-		} else if s.held[id] == nil {
+		if p.position >= end {
+			s.readyEOF = append(s.readyEOF, core.Cursor{Partition: id, Position: p.position})
+		} else if p.held == nil {
 			gaps = append(gaps, id)
 		}
 	}
@@ -34,11 +34,11 @@ func (s *Source) pollTips(ctx context.Context) error {
 	index := sort.Search(len(gaps), func(i int) bool { return gaps[i] > s.lastGap }) % len(gaps)
 	id := gaps[index]
 	s.lastGap = id
-	next, err := s.gaps.Next(ctx, id, s.positions[id])
+	next, err := s.gaps.Next(ctx, id, s.partitions[id].position)
 	if err != nil {
 		return err
 	}
-	s.positions[id] = next
+	s.partitions[id].position = next
 	end, _ := ends[id]
 	if next >= end {
 		s.readyEOF = append(s.readyEOF, core.Cursor{Partition: id, Position: next})
@@ -47,14 +47,14 @@ func (s *Source) pollTips(ctx context.Context) error {
 }
 
 func (s *Source) ownedIDs() []int32 {
-	ids := make([]int32, 0, len(s.positions))
-	for id := range s.positions {
+	ids := make([]int32, 0, len(s.partitions))
+	for id := range s.partitions {
 		ids = append(ids, id)
 	}
 	return ids
 }
 func (s *Source) checkTips() error {
-	if len(s.positions) == 0 || time.Since(s.lastTip) < time.Second {
+	if len(s.partitions) == 0 || time.Since(s.lastTip) < time.Second {
 		return nil
 	}
 	s.lastTip = time.Now()

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -40,7 +41,7 @@ func TestConfiguration(t *testing.T) {
 	require.Equal(t, "prod:9092", c.Connections["prod"]["bootstrap.servers"])
 	require.EqualValues(t, 100, c.Worker.PartitionRecordCap)
 	require.Equal(t, int64(16<<20), c.Worker.PartitionByteCap)
-	require.Equal(t, "5s", c.Worker.IdleExit)
+	require.Equal(t, 5*time.Second, c.Worker.IdleExit.Duration)
 	require.EqualValues(t, 8192, c.Worker.ArchiveBlockMaxBytes)
 	require.NotNil(t, c.Worker.CheckpointDir)
 	require.Equal(t, filepath.Join("/home/test", ".kaferry", "checkpoints"), *c.Worker.CheckpointDir)
@@ -92,14 +93,34 @@ func TestDeliveryTimeoutFitsNativeMillisecondRange(t *testing.T) {
 	} {
 		t.Run(scenario.value, func(t *testing.T) {
 			// Given a worker duration at a native producer boundary.
-			worker := Defaults("home").Worker
-			worker.DeliveryTimeout = scenario.value
+			input := "[worker]\ndelivery_timeout=" + fmt.Sprintf("%q", scenario.value)
 
 			// When validating worker tuning.
-			err := worker.Validate()
+			_, err := NewLoader(&readerMock{data: []byte(input)}, "home").Load("config.toml")
 
 			// Then positive sub-millisecond and overflowing deadlines fail.
 			require.Equal(t, scenario.valid, (err == nil))
+		})
+	}
+}
+
+func TestWorkerDurationsDecodeBeforeUse(t *testing.T) {
+	// Given string durations in every worker setting, including a disabled progress log.
+	input := "[worker]\ndelivery_timeout='1.5s'\nshutdown_timeout='2m'\nidle_exit='250ms'\ntip_wait='1h'\nprogress_interval='0'\n"
+	// When loading configuration, then runtime settings are already typed.
+	cfg, err := NewLoader(&readerMock{data: []byte(input)}, "home").Load("config.toml")
+	require.NoError(t, err)
+	require.Equal(t, 1500*time.Millisecond, cfg.Worker.DeliveryTimeout.Duration)
+	require.Equal(t, 2*time.Minute, cfg.Worker.ShutdownTimeout.Duration)
+	require.Equal(t, 250*time.Millisecond, cfg.Worker.IdleExit.Duration)
+	require.Equal(t, time.Hour, cfg.Worker.TipWait.Duration)
+	require.Zero(t, cfg.Worker.ProgressInterval.Duration)
+	// Given malformed, overflowing or non-string values, when loading, then reject without echoing input.
+	for _, value := range []string{"'secret-duration'", "'999999999999999999h'", "123", "true", "{Duration=1}"} {
+		t.Run(value, func(t *testing.T) {
+			_, err := NewLoader(&readerMock{data: []byte("[worker]\nidle_exit=" + value)}, "home").Load("config.toml")
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), "secret-duration")
 		})
 	}
 }
@@ -149,7 +170,9 @@ func TestObservabilityDefaultsAndOverrides(t *testing.T) {
 			require.Equal(t, tc.valid, (err == nil))
 			if tc.valid {
 				require.Equal(t, tc.enabled, cfg.Metrics.Enabled)
-				require.Equal(t, tc.interval, cfg.Worker.ProgressInterval)
+				want, err := time.ParseDuration(tc.interval)
+				require.NoError(t, err)
+				require.Equal(t, want, cfg.Worker.ProgressInterval.Duration)
 			}
 		})
 	}

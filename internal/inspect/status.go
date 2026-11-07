@@ -138,7 +138,7 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 	if err != nil {
 		return err
 	}
-	saved, metadata, progressErr := c.Saved(ctx, p.Group, r.Fingerprint, p.Window, p.MaxStalenessMS)
+	saved, progressErr := c.Saved(ctx, p.Group, r.Fingerprint, p.Window, p.MaxStalenessMS)
 	var mismatch *plan.FingerprintMismatch
 	if progressErr != nil && !errors.As(progressErr, &mismatch) {
 		return progressErr
@@ -165,12 +165,12 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 	}
 	for _, id := range selected {
 		row := SavedPartition{ID: id}
-		if position, ok := saved[id]; ok {
-			row.Position = &position
-			row.Stop = metadata[id].Stop
-			row.End = metadata[id].End
-			row.Window = metadata[id].Window
-			row.Fingerprint = metadata[id].Fingerprint
+		if progress, ok := saved[id]; ok {
+			row.Position = &progress.Position
+			row.Stop = progress.Stop
+			row.End = progress.End
+			row.Window = progress.Window
+			row.Fingerprint = progress.Fingerprint
 		}
 		r.Partitions = append(r.Partitions, row)
 	}
