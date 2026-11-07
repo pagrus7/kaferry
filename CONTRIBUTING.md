@@ -24,4 +24,4 @@ make fast
 
 Run Python tools as modules, for example `python3 -m tools.docs.docs`. Their tests live beside them; run all with `python3 -m unittest discover -s tools -t .`.
 
-[Component boundaries](docs/design/components.md) · [Review process](docs/development/reviews/README.md) · [Release procedure](docs/releases/README.md).
+[Component boundaries](docs/design/components.md) · [Review process](docs/development/reviews/README.md) · [Release procedure](docs/releases/README.md) · [Publishing endurance results](docs/endurance-results.md).
