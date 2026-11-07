@@ -1,0 +1,13 @@
+{
+  "path": ["src", "tools"],
+  "format": ["go", "python"],
+  "minTokens": 50,
+  "minLines": 5,
+  "mode": "weak",
+  "ignoreIdentifiers": true,
+  "ignoreLiterals": true,
+  "failOnEmpty": true,
+  "absolute": true,
+  "reporters": ["json", "sarif"],
+  "output": "build-results/duplication"
+}
