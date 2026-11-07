@@ -35,7 +35,7 @@ def decide(event):
         return True, [], 'empty diff; run matrix'
     relevant = [path for path in paths if not unrelated(path)]
     return bool(relevant), paths, ('relevant paths: ' + ', '.join(relevant) if relevant
-                                  else 'only unrelated prose and tests changed')
+                                  else 'only unrelated documentation, reviewer configuration or tests changed')
 
 
 def main():
