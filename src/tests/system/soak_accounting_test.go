@@ -81,9 +81,10 @@ func TestLoadArchiveAccountingReleasesEachPartitionHistory(t *testing.T) {
 	for partition := 0; partition < 4; partition++ {
 		for id := partition; id < stream.published; id += 4 {
 			// When ordered IDs are observed, then another partition cannot retain their history.
-			_, unique := stream.receive(t, archiveLoadRecord(id).Value)
+			record := streamFixtureRecord(id, stream.stamp)
+			_, unique := stream.receive(t, record.Key, record.Value, record.Headers)
 			require.True(t, unique)
-			require.Empty(t, stream.seen)
+			require.Empty(t, stream.receipts.pending)
 		}
 	}
 	require.Equal(t, stream.published, stream.unique)

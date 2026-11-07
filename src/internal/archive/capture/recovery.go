@@ -89,11 +89,11 @@ func validatePrefix(f DataFile, boundary Boundary, completed bool, codec *avro.C
 	if reader.Identity != boundary.Identity {
 		return errors.New("acknowledged archive identity changed")
 	}
-	stats, err := reader.Scan()
+	count, err := reader.Scan()
 	if err != nil {
 		return err
 	}
-	if stats.Records != boundary.Records {
+	if count != boundary.Records {
 		return errors.New("acknowledged archive record count changed")
 	}
 	return nil

@@ -40,26 +40,9 @@ func waitRecoveryProgress(t *testing.T, process *cliProcess, submitted, confirme
 
 func pauseRecoveryBroker(t *testing.T, container string) func() {
 	t.Helper()
-	require.NotEmpty(t, container, "recovery requires an owned fault container")
-	data, err := exec.Command("docker", "inspect", "--format", `{{index .Config.Labels "com.docker.compose.project"}}`, container).Output()
-	require.NoError(t, err)
-	project := os.Getenv("KAFERRY_FIXTURE_PROJECT")
-	if project == "" {
-		project = "kaferry-compat"
-	}
-	require.Equal(t, project, strings.TrimSpace(string(data)), "fault target must belong to this run")
-	data, err = exec.Command("docker", "pause", container).CombinedOutput()
-	require.NoError(t, err, "%s", data)
-	paused := true
-	recover := func() {
-		if paused {
-			data, err := exec.Command("docker", "unpause", container).CombinedOutput()
-			require.NoError(t, err, "%s", data)
-			paused = false
-		}
-	}
-	t.Cleanup(recover)
-	return recover
+	broker := ownBroker(t, container, fixtureProject("kaferry-compat"), "")
+	require.NoError(t, broker.pause(t))
+	return func() { require.NoError(t, broker.recover()) }
 }
 
 func TestRecoveryBlockedOutput(t *testing.T) {

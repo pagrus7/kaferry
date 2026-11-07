@@ -66,9 +66,9 @@ func BenchmarkDecode(b *testing.B) {
 			for range b.N {
 				r, err := c.Open(bytes.NewReader(data), int64(len(data)))
 				require.NoError(b, err)
-				stats, err := r.Scan()
+				count, err := r.Scan()
 				require.NoError(b, err)
-				require.EqualValues(b, len(values), stats.Records)
+				require.EqualValues(b, len(values), count)
 			}
 			b.ReportMetric(float64(len(values))*float64(b.N)/b.Elapsed().Seconds(), "records/s")
 		})

@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,9 +24,9 @@ type integrityEvidence struct {
 	Matched          *bool  `json:"matched"`
 }
 
-// streamIntegrity hashes actual submissions and unique receipts in logical-ID
-// order within each source partition. Only out-of-order receipt digests wait.
-type streamIntegrity struct {
+// receiptLedger rejects duplicate IDs and hashes submissions and first receipts
+// in source-partition order. Only receipts beyond a gap retain their digests.
+type receiptLedger struct {
 	submitted, received           []hash.Hash
 	submittedCount, receivedCount int
 	next                          []int
@@ -33,12 +34,8 @@ type streamIntegrity struct {
 	maxPending                    int
 }
 
-func newStreamIntegrity() *streamIntegrity {
-	return newPartitionedStreamIntegrity(4)
-}
-
-func newPartitionedStreamIntegrity(partitions int) *streamIntegrity {
-	s := &streamIntegrity{maxPending: 8192, next: make([]int, partitions), submitted: make([]hash.Hash, partitions), received: make([]hash.Hash, partitions), pending: make(map[int][sha256.Size]byte)}
+func newReceiptLedger(partitions int) *receiptLedger {
+	s := &receiptLedger{maxPending: 8192, next: make([]int, partitions), submitted: make([]hash.Hash, partitions), received: make([]hash.Hash, partitions), pending: make(map[int][sha256.Size]byte)}
 	for partition := range partitions {
 		s.next[partition] = partition
 		s.submitted[partition], s.received[partition] = sha256.New(), sha256.New()
@@ -70,17 +67,20 @@ func recordFingerprint(key, value []byte, headers []kgo.RecordHeader) [sha256.Si
 	return [sha256.Size]byte(h.Sum(nil))
 }
 
-func (s *streamIntegrity) submit(id int, record *kgo.Record) {
+func (s *receiptLedger) submit(id int, record *kgo.Record) {
 	digest := recordFingerprint(record.Key, record.Value, record.Headers)
 	s.submitted[id%len(s.next)].Write(digest[:])
 	s.submittedCount++
 }
 
-func (s *streamIntegrity) receive(t *testing.T, id int, key, value []byte, headers []kgo.RecordHeader) {
+func (s *receiptLedger) receive(t *testing.T, id int, key, value []byte, headers []kgo.RecordHeader) bool {
 	t.Helper()
+	partition := id % len(s.next)
+	if _, exists := s.pending[id]; exists || id < s.next[partition] {
+		return false
+	}
 	s.pending[id] = recordFingerprint(key, value, headers)
 	s.receivedCount++
-	partition := id % len(s.next)
 	for {
 		digest, exists := s.pending[s.next[partition]]
 		if !exists {
@@ -90,10 +90,13 @@ func (s *streamIntegrity) receive(t *testing.T, id int, key, value []byte, heade
 		delete(s.pending, s.next[partition])
 		s.next[partition] += len(s.next)
 	}
-	require.LessOrEqual(t, len(s.pending), s.maxPending, "integrity gaps exceeded the bounded ID window; fingerprints are partial")
+	require.LessOrEqual(t, len(s.pending), s.maxPending, "verification gaps exceeded the bounded ID window; totals and fingerprints are partial")
+	return true
 }
 
-func (s *streamIntegrity) snapshot(complete bool, submitted, received int) integrityEvidence {
+func (s *receiptLedger) contiguous() int { return slices.Min(s.next) }
+
+func (s *receiptLedger) snapshot(complete bool, submitted, received int) integrityEvidence {
 	root := func(partitions []hash.Hash) string {
 		h := sha256.New()
 		h.Write([]byte("kaferry-stream-v1\x00"))
