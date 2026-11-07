@@ -1,8 +1,8 @@
 # Kaferry
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/kaferry-logo-dark.svg">
-  <img src="assets/kaferry-logo.svg" alt="Kaferry logo: a ferry carrying record blocks" width="400">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/kaferry-logo-dark.svg">
+  <img src="docs/assets/kaferry-logo.svg" alt="Kaferry logo: a ferry carrying record blocks" width="400">
 </picture>
 
 A lightweight command-line tool for copying Kafka records between topics and files using SQL-like statements.
@@ -105,4 +105,4 @@ With a fresh `kaferry-demo` volume, this copies the three bundled sample records
 
 **Documentation:** [Index](docs/README.md) · [Settings and results](docs/reference.md).
 
-**Project:** [Tests and contributing](design/components.md) · [Security](SECURITY.md) · [MIT license](LICENSE); dependencies retain their licenses.
+**Project:** [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [MIT license](LICENSE); dependencies retain their licenses.

@@ -20,7 +20,7 @@ jobs:
         with:
           fetch-depth: 0
       - id: scope
-        run: python3 scripts/risk.py
+        run: python3 -m tools.ci.risk
   suites:
     needs: select
     if: needs.select.outputs.run == 'true'

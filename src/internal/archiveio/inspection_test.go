@@ -1,0 +1,191 @@
+package archiveio
+
+import (
+	"io"
+	"log/slog"
+	"math"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/pagrus7/kaferry/src/internal/archive/avro"
+	"github.com/pagrus7/kaferry/src/internal/archive/replay"
+	"github.com/pagrus7/kaferry/src/internal/checkpoint"
+	"github.com/pagrus7/kaferry/src/internal/config"
+	core "github.com/pagrus7/kaferry/src/internal/copy"
+	"github.com/pagrus7/kaferry/src/internal/plan"
+	"github.com/stretchr/testify/require"
+)
+
+func TestInspectionRejectsRegularFileDestinationWithoutChangingIt(t *testing.T) {
+	// Given a regular file where an archive directory is required.
+	path := filepath.Join(t.TempDir(), "output")
+	original := []byte("keep this file")
+	require.NoError(t, os.WriteFile(path, original, 0600))
+	// When inspecting, then report the conflict without overwriting the file.
+	_, err := NewInspector(core.RealClock{}).Destination(path)
+	var conflict *Conflict
+	require.ErrorAs(t, err, &conflict)
+	require.Equal(t, 2, conflict.ExitCode())
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, original, data)
+}
+
+func TestInspectionRejectsChangedSavedWindowWithoutWriting(t *testing.T) {
+	// Given a checksummed checkpoint with the query's identity but an altered literal bound.
+	directory := t.TempDir()
+	limits := config.Defaults("").Worker
+	limits.CheckpointDir = &directory
+	p := plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: filepath.Join(t.TempDir(), "output")}, Group: "g", Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 10}}}
+	fp, err := p.Fingerprint("", "", "")
+	require.NoError(t, err)
+	lower := int64(11)
+	state := replay.State{Version: 1, Group: p.Group, Fingerprint: fp, Window: plan.Window{Lower: &lower}, Complete: true, Files: []replay.Progress{}}
+	encoded, err := checkpoint.Encode(state, 64<<20)
+	require.NoError(t, err)
+	path := checkpoint.Path(directory, p.Group)
+	require.NoError(t, os.WriteFile(path, encoded, 0600))
+	// When inspecting, then reject the conflicting window without changing progress or creating a lock.
+	_, err = NewInspector(core.RealClock{}).Source(p, fp, limits)
+	require.ErrorContains(t, err, "stored literal time bound differs")
+	var conflict *Conflict
+	require.ErrorAs(t, err, &conflict)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, encoded, data)
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "read-only inspection must not create a lock")
+}
+
+func TestSavedExcludedFileIsRejectedBeforeInspectionOrReplayReads(t *testing.T) {
+	// Given a valid checksummed checkpoint whose identity matches but files violate its partition predicate.
+	directory := t.TempDir()
+	limits := config.Defaults("").Worker
+	limits.CheckpointDir = &directory
+	p := plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: filepath.Join(t.TempDir(), "output")}, Group: "g", Partitions: &plan.PartitionFilter{IDs: []int32{0}}}
+	fp, err := p.Fingerprint("", "", "")
+	require.NoError(t, err)
+	file := replay.File{Identity: avro.Identity{Version: 1, WriterID: strings.Repeat("1", 32), FileID: strings.Repeat("2", 32), Source: avro.Source{Cluster: "cluster", Topic: "orders", TopicID: avro.TopicID{1}, Partition: 5}, FirstOffset: 0, BlockLimit: 8 << 20}, Size: 200, Start: 100, SHA256: strings.Repeat("0", 64)}
+	state := replay.State{Version: 1, Group: p.Group, Fingerprint: fp, Files: []replay.Progress{{File: file, Next: replay.Position{Block: 100, Previous: -1}}}}
+	encoded, err := checkpoint.Encode(state, 64<<20)
+	require.NoError(t, err)
+	path := checkpoint.Path(directory, p.Group)
+	require.NoError(t, os.WriteFile(path, encoded, 0600))
+	// When inspecting or executing, then reject the selection before trying to open its nonexistent data file.
+	_, err = NewInspector(core.RealClock{}).Source(p, fp, limits)
+	require.ErrorContains(t, err, "excluded original partition")
+	factory := NewFactory(core.RealClock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, err = factory.OpenSource(p, fp, limits, 0)
+	require.ErrorContains(t, err, "excluded original partition")
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, encoded, after)
+}
+
+func TestInspectionRejectsRelativeDisorderOverflowWithoutWriting(t *testing.T) {
+	for _, saved := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fresh", true: "saved"}[saved], func(t *testing.T) {
+			// Given a valid relative expression whose resolved upper plus disorder exceeds milliseconds.
+			directory := t.TempDir()
+			limits := config.Defaults("").Worker
+			limits.CheckpointDir = &directory
+			p := plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: t.TempDir()}, Destination: plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: filepath.Join(t.TempDir(), "output")}, Group: "g", Window: plan.WindowSpec{Upper: &plan.Expression{Now: true, AdjustmentMS: math.MaxInt64 - 807}}, MaxOutOfOrderMS: new(int64(1000))}
+			fp, err := p.Fingerprint("", "", "")
+			require.NoError(t, err)
+			if saved {
+				state := replay.State{Version: 1, Group: p.Group, Fingerprint: fp, Window: plan.Window{Upper: new(int64(math.MaxInt64 - 807))}, Complete: true, Files: []replay.Progress{}}
+				encoded, err := checkpoint.Encode(state, 64<<20)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(checkpoint.Path(directory, p.Group), encoded, 0600))
+			}
+			before, err := os.ReadDir(directory)
+			require.NoError(t, err)
+			// When inspecting, then reject before returning a text/JSON report or changing checkpoint state.
+			_, err = NewInspector(&clockMock{}).Source(p, fp, limits)
+			require.ErrorContains(t, err, "overflows milliseconds")
+			after, err := os.ReadDir(directory)
+			require.NoError(t, err)
+			require.Len(t, after, len(before))
+			// Execution rejects the same resolved threshold before saving initial progress.
+			_, err = NewFactory(&clockMock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil))).OpenSource(p, fp, limits, 0)
+			require.ErrorContains(t, err, "overflows milliseconds")
+			if !saved {
+				_, err = os.Stat(checkpoint.Path(directory, p.Group))
+				require.True(t, os.IsNotExist(err))
+			}
+
+		})
+	}
+}
+
+func TestInspectionPreservesIncompatibleReplayProgressAfterSourceValidation(t *testing.T) {
+	for _, count := range []int{1, 2} {
+		t.Run(map[int]string{1: "partial", 2: "complete"}[count], func(t *testing.T) {
+			// Given a real archive and a checkpoint bound to the original destination.
+			directory, input := t.TempDir(), t.TempDir()
+			limits := config.Defaults("").Worker
+			limits.CheckpointDir = &directory
+			factory := NewFactory(core.RealClock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			endpoint := plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: input}
+			output, err := factory.OpenOutput(endpoint, limits)
+			require.NoError(t, err)
+			for n := range 2 {
+				record := core.Record{Source: &core.Provenance{Cluster: "cluster", Topic: "orders", TopicID: [16]byte{1}, Partition: 3, Offset: int64(n)}, Value: []byte("record"), TimestampType: "unknown"}
+				require.NoError(t, output.Submit(record, core.Token{}))
+			}
+			require.NoError(t, output.Finish())
+			output.Close()
+			p := plan.Plan{Source: endpoint, Destination: plan.Endpoint{Kind: "TOPIC", Name: "output"}, Group: "g"}
+			fp, err := p.Fingerprint("", "destination", "original")
+			require.NoError(t, err)
+			source, err := factory.OpenSource(p, fp, limits, 0)
+			require.NoError(t, err)
+			require.NoError(t, source.Start(&lifecycleMock{}, nil))
+			for range count {
+				event, err := source.Poll(0)
+				require.NoError(t, err)
+				require.NotNil(t, event.Input)
+				_, err = source.Save(t.Context(), []core.Cursor{{Position: event.Input.Next}})
+				require.NoError(t, err)
+			}
+			require.NoError(t, source.Close())
+			path := checkpoint.Path(directory, p.Group)
+			before, err := os.ReadFile(path)
+			require.NoError(t, err)
+
+			// When a different query inspects the source-safe checkpoint, including its excluded original partition.
+			p.Partitions = &plan.PartitionFilter{IDs: []int32{0}}
+			p.Window.Lower = &plan.Expression{LiteralMS: 10}
+			current, err := p.Fingerprint("", "destination", "replacement")
+			require.NoError(t, err)
+			info, err := NewInspector(core.RealClock{}).Source(p, current, limits)
+			// Then diagnostics preserve the saved identity and position without applying the incompatible query or writing.
+			var mismatch *plan.FingerprintMismatch
+			require.ErrorAs(t, err, &mismatch)
+			require.True(t, info.Saved)
+			require.EqualValues(t, count, info.Position)
+			require.Equal(t, fp, info.Fingerprint)
+			require.Equal(t, []int32{3}, info.Partitions)
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+			if count == 1 {
+				// An incompatible fingerprint must not hide a missing unfinished input.
+				entries, err := os.ReadDir(input)
+				require.NoError(t, err)
+				for _, entry := range entries {
+					if strings.HasSuffix(entry.Name(), ".avro") {
+						require.NoError(t, os.Remove(filepath.Join(input, entry.Name())))
+					}
+				}
+				info, err = NewInspector(core.RealClock{}).Source(p, current, limits)
+				require.Error(t, err)
+				require.NotErrorAs(t, err, &mismatch)
+				require.False(t, info.Saved)
+			}
+		})
+	}
+}

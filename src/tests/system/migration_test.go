@@ -1,0 +1,262 @@
+//go:build integration && migration
+
+package compat
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/pagrus7/kaferry/src/internal/archive/replay"
+	"github.com/pelletier/go-toml/v2"
+	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kgo"
+)
+
+// Supply binaries built from the previous and candidate revisions.
+func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
+	previous := os.Getenv("KAFERRY_PREVIOUS_BINARY")
+	require.NotEmpty(t, previous, "set KAFERRY_PREVIOUS_BINARY for migration checks")
+	candidate := testBinary(t)
+	for _, direction := range []struct{ name, first, second string }{
+		{"previous to candidate", previous, candidate}, {"candidate to previous", candidate, previous},
+	} {
+		t.Run(direction.name, func(t *testing.T) {
+			// Given two records and binaries that share the Kafka and Avro progress contracts.
+			admin := admin(t)
+			source := topic(t, admin, 1)
+			producer := producer(t)
+			stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+			for i := range 2 {
+				publish(t, producer, &kgo.Record{Topic: source, Partition: 0, Key: []byte{0, byte(i)}, Value: []byte{}, Headers: []kgo.RecordHeader{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, Timestamp: stamp})
+			}
+			archive := filepath.Join(t.TempDir(), "archive")
+			clone := filepath.Join(t.TempDir(), "clone")
+			config := configuration(t, "max_frame_bytes=8192")
+			group := source + "-migration"
+			sql := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s') ", archive, source, group)
+			limited := func(query string) string {
+				return query + " OPTIONS(WORKER_STOP_AFTER_RECORDS=1)"
+			}
+			runMigrationBinary(t, direction.first, limited(sql), config)
+			first := archiveRecords(t, archive)
+			require.Len(t, first, 1)
+			require.Equal(t, []byte{0, 0}, first[0].Key)
+			require.NotNil(t, first[0].Value, "empty value must remain distinct from null")
+			progress := committedPartitions(t, admin, group, source, 1)[0]
+			require.Equal(t, int64(1), progress.At)
+			require.True(t, strings.HasPrefix(progress.Metadata, "kaferry:2;"))
+
+			// When the other binary resumes, then it copies only the remaining record.
+			runMigrationBinary(t, direction.second, limited(sql), config)
+			complete := archiveRecords(t, archive)
+			require.Len(t, complete, 2)
+			require.Equal(t, first[0], complete[0])
+			require.Equal(t, []byte{0, 1}, complete[1].Key)
+			require.Equal(t, int64(2), committedPartitions(t, admin, group, source, 1)[0].At)
+
+			// Given a partially replayed archive with a saved record cursor.
+			cloneSQL := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='file-migration') ", clone, archive)
+			runMigrationBinary(t, direction.first, limited(cloneSQL), config)
+			require.Equal(t, complete[:1], archiveRecords(t, clone))
+			state := migrationCheckpoint(t, config, "file-migration")
+			require.Equal(t, 1, state.Version)
+			require.Equal(t, int64(1), state.Position)
+			require.False(t, state.Complete)
+
+			// When the other binary resumes, then it keeps the selection and produces no duplicates.
+			runMigrationBinary(t, direction.second, cloneSQL, config)
+			require.Equal(t, complete, archiveRecords(t, clone))
+			state = migrationCheckpoint(t, config, "file-migration")
+			require.Equal(t, int64(2), state.Position)
+			require.True(t, state.Complete)
+
+			// Given independently known unsupported commit prefixes, reject them before changing output.
+			supported := progress.Metadata
+			for _, unsupported := range []string{"kaferry:1", "kaferry:4"} {
+				progress.Metadata = strings.Replace(supported, "kaferry:2;", unsupported+";", 1)
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+				result, err := admin.CommitOffsets(ctx, group, kadm.Offsets{source: {0: progress}})
+				cancel()
+				require.NoError(t, err)
+				require.NoError(t, result.Error())
+				require.Len(t, result[source], 1)
+				runMigrationExpect(t, candidate, sql, config, 2, "unsupported version of commit metadata")
+				require.Equal(t, complete, archiveRecords(t, archive))
+			}
+
+			// When a fresh group reads the archive, then it sees the same full records.
+			fresh := filepath.Join(t.TempDir(), "read")
+			query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='archive-read') ", fresh, archive)
+			runMigrationBinary(t, direction.second, query, config)
+			require.Equal(t, complete, archiveRecords(t, fresh))
+		})
+	}
+}
+func runMigrationBinary(t *testing.T, binary, statement, config string) {
+	t.Helper()
+	runMigrationExpect(t, binary, statement, config, 0)
+}
+func runMigrationExpect(t *testing.T, binary, statement, config string, want int, diagnostic ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	process := startCLI(t, ctx, binary, "", "run", "-e", statement, "-c", config)
+	err := process.wait()
+	code := 0
+	if err != nil {
+		if e, ok := err.(*exec.ExitError); ok {
+			code = e.ExitCode()
+		} else {
+			t.Fatal(err)
+		}
+	}
+	require.Equal(t, want, code, "migration: %s", process.logs())
+	for _, pattern := range diagnostic {
+		if pattern != "" {
+			require.Regexp(t, pattern, process.logs())
+		}
+	}
+}
+
+func migrationCheckpoint(t *testing.T, configuration, group string) *replay.State {
+	t.Helper()
+	data, err := os.ReadFile(configuration)
+	require.NoError(t, err)
+	var config struct {
+		Worker struct {
+			CheckpointDir string `toml:"checkpoint_dir"`
+		}
+	}
+	require.NoError(t, toml.Unmarshal(data, &config))
+	state, err := replay.ReadCheckpoint(config.Worker.CheckpointDir, group, replay.NativeGroupFiles{})
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	return state
+}
+
+func TestPreviousBinaryRejectsChangedCapturedEndQuery(t *testing.T) {
+	// Given a candidate bounded copy with a saved captured end.
+	previous := os.Getenv("KAFERRY_PREVIOUS_BINARY")
+	require.NotEmpty(t, previous)
+	a := admin(t)
+	source := topic(t, a, 1)
+	p := producer(t)
+	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	publish(t, p, &kgo.Record{Topic: source, Partition: 0, Value: []byte("bounded"), Timestamp: stamp})
+	out := filepath.Join(t.TempDir(), "archive")
+	group := source + "-bounded"
+	config := configuration(t)
+	statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s'", out, source, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
+	runMigrationBinary(t, testBinary(t), statement, config)
+	progress := committedPartitions(t, a, group, source, 1)[0]
+	require.True(t, strings.HasPrefix(progress.Metadata, "kaferry:3;"))
+	before := archiveRecords(t, out)
+
+	// When the other binary reads those commits with a changed query, then it rejects the format or query identity before writing.
+	oldSQL := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s')", out, source, group)
+	runMigrationExpect(t, previous, oldSQL, config, 2, "unsupported version of commit metadata|query fingerprint mismatch")
+	require.Equal(t, before, archiveRecords(t, out))
+}
+
+func TestPreviousBinaryRejectsUnsupportedCaptureState(t *testing.T) {
+	if os.Getenv("KAFERRY_PREVIOUS_STATE") != "reject" {
+		t.Skip("select the explicit reject contract for an incompatible released binary")
+	}
+	// Given an archive readable by both binaries and writer state made by the old binary.
+	previous := os.Getenv("KAFERRY_PREVIOUS_BINARY")
+	require.NotEmpty(t, previous)
+	input, output, fresh := filepath.Join(t.TempDir(), "input"), filepath.Join(t.TempDir(), "output"), filepath.Join(t.TempDir(), "fresh")
+	seedArchive(t, input, 2)
+	config := configuration(t)
+	query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='unsupported-release')", output, input)
+	runMigrationBinary(t, previous, query+" OPTIONS(WORKER_STOP_AFTER_RECORDS=1)", config)
+	before := archiveRecords(t, output)
+	require.Len(t, before, 1)
+	// When the candidate opens the old writer state, then recovery fails without changing records.
+	runMigrationExpect(t, testBinary(t), query, config, 1, "recover archive writer.*state JSON is not canonical")
+	require.Equal(t, before, archiveRecords(t, output))
+	// A fresh group can still read the completed Avro records from the old release.
+	runMigrationBinary(t, testBinary(t), fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='fresh-release')", fresh, output), config)
+	require.Equal(t, before, archiveRecords(t, fresh))
+}
+
+func TestPreviousBinaryDestinationProgressCompatibility(t *testing.T) {
+	previous := os.Getenv("KAFERRY_PREVIOUS_BINARY")
+	require.NotEmpty(t, previous)
+	candidate := testBinary(t)
+	for _, kind := range []string{"TOPIC", "ARCHIVE"} {
+		for _, direction := range []struct{ name, first, second string }{
+			{"previous to candidate", previous, candidate}, {"candidate to previous", candidate, previous},
+		} {
+			t.Run(kind+"/"+direction.name, func(t *testing.T) {
+				// Given two source records and binaries that may bind Kafka destination identity differently.
+				a := admin(t)
+				destination := topic(t, a, 1)
+				source := ""
+				if kind == "TOPIC" {
+					source = topic(t, a, 1)
+					p := producer(t)
+					for n := range 2 {
+						publish(t, p, &kgo.Record{Topic: source, Value: []byte(fmt.Sprint(n))})
+					}
+				} else {
+					source = filepath.Join(t.TempDir(), "input")
+					seedArchive(t, source, 2)
+				}
+				config := configuration(t)
+				group := destination + "-migration"
+				query := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM %s '%s' WITH(GROUP='%s')", destination, kind, source, group)
+				fingerprint := func(binary string) string {
+					ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+					defer cancel()
+					process := startCLI(t, ctx, binary, "", "explain", "-e", query, "-c", config, "--json")
+					require.NoError(t, process.wait(), process.logs())
+					var report struct {
+						Fingerprint string `json:"fingerprint"`
+					}
+					require.NoError(t, json.Unmarshal([]byte(process.logs()), &report))
+					require.NotEmpty(t, report.Fingerprint)
+					return report.Fingerprint
+				}
+				// Compatibility is defined by the declared fingerprints, including after both binaries support UUID binding.
+				compatible := fingerprint(direction.first) == fingerprint(direction.second)
+				limited := query + " OPTIONS(WORKER_STOP_AFTER_RECORDS=1)"
+				runMigrationBinary(t, direction.first, limited, config)
+				require.EqualValues(t, 1, topicRecordCount(t, a, destination, 1))
+				if kind == "TOPIC" {
+					waitMembers(t, a, group, 0, 0, nil)
+				}
+				var beforeOffsets []kadm.Offset
+				var beforeReplay *replay.State
+				if kind == "TOPIC" {
+					beforeOffsets = committedPartitions(t, a, group, source, 1)
+				} else {
+					beforeReplay = migrationCheckpoint(t, config, group)
+				}
+
+				// When the other binary resumes, then different identities reject before output or progress changes.
+				if !compatible {
+					runMigrationExpect(t, direction.second, limited, config, 2, "query (fingerprint|identity) mismatch")
+					require.EqualValues(t, 1, topicRecordCount(t, a, destination, 1))
+					if kind == "TOPIC" {
+						require.Equal(t, beforeOffsets, committedPartitions(t, a, group, source, 1))
+					} else {
+						require.Equal(t, beforeReplay, migrationCheckpoint(t, config, group))
+					}
+				} else {
+					// Matching destination bindings preserve cross-version continuation without duplicates.
+					runMigrationBinary(t, direction.second, limited, config)
+					require.EqualValues(t, 2, topicRecordCount(t, a, destination, 1))
+				}
+			})
+		}
+	}
+}

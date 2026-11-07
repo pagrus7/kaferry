@@ -59,28 +59,28 @@ jobs:
       - name: Build source binary
         if: inputs.artifact == '' && matrix.suite != 'fuzz' && matrix.suite != 'benchmark'
         run: |
-          python3 scripts/ci.py build make build
+          python3 -m tools.ci.ci build make build
           echo "KAFERRY_TEST_BINARY=$PWD/bin/kaferry" >> "$GITHUB_ENV"
       - name: Start plain Kafka fixtures
         if: contains(fromJSON('["integration","load","soak","fault"]'), matrix.suite)
-        run: python3 scripts/ci.py broker make broker
+        run: python3 -m tools.ci.ci broker make broker
       - name: Run suite
-        run: python3 scripts/suites.py ci "$SUITE"
+        run: python3 -m tools.ci.suites ci "$SUITE"
       - name: Previous successful measurements
         if: always() && inputs.history
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/history.py "$SUITE"
+        run: python3 -m tools.ci.history "$SUITE"
       - name: Reject source rebuilds in archive tests
         if: always() && inputs.artifact != ''
         run: test ! -e bin/kaferry
       - if: always() && contains(fromJSON('["integration","load","soak","fault"]'), matrix.suite)
         run: |
           mkdir -p build-results
-          docker compose -p kaferry-compat --profile cross-cluster logs --no-color > build-results/brokers.log
+          docker compose -f src/tests/compose.yaml -p kaferry-compat --profile cross-cluster logs --no-color > build-results/brokers.log
           make broker-down
       - if: always()
-        run: python3 scripts/ci.py summary
+        run: python3 -m tools.ci.ci summary
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

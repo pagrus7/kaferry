@@ -4,12 +4,10 @@ on:
     paths:
       - '.github/workflows/containers.yml'
       - '.github/workflows/release.yml'
-      - 'packaging/container/**'
-      - 'scripts/container_*'
-      - 'scripts/test_container_*'
-      - 'tests/compat/container_test.go'
+      - 'tools/release/**'
+      - 'src/tests/system/container_test.go'
       - 'examples/archive-demo/**'
-      - 'scripts/package_examples/**'
+      - 'src/cmd/package-examples/**'
       - 'go.mod'
       - 'go.sum'
   workflow_dispatch:
@@ -57,9 +55,9 @@ jobs:
           PR: ${{ github.event_name == 'pull_request' }}
         run: |
           if [ "$PR" = true ]; then
-            python3 scripts/container_artifacts.py candidate .cache/container-context
+            python3 -m tools.release.container_artifacts candidate .cache/container-context
           else
-            python3 scripts/container_artifacts.py release .cache/container-context --tag "$TAG"
+            python3 -m tools.release.container_artifacts release .cache/container-context --tag "$TAG"
           fi
       - id: inputs
         name: Read validated release identity
@@ -77,7 +75,7 @@ jobs:
           REVISION: ${{ steps.inputs.outputs.revision }}
         run: |
           docker buildx build --platform linux/amd64,linux/arm64 \
-            --file packaging/container/Dockerfile \
+            --file tools/release/container/Dockerfile \
             --build-arg "VERSION=$VERSION" --build-arg "REVISION=$REVISION" \
             --sbom=true --provenance=mode=max \
             --output type=oci,dest=.cache/kaferry.oci.tar .cache/container-context
@@ -119,7 +117,7 @@ jobs:
       - name: Verify packaged bytes and file-copy fidelity
         env:
           ARCH: ${{ matrix.arch }}
-        run: python3 scripts/container_smoke.py kaferry:ci .cache/container-context "$ARCH"
+        run: python3 -m tools.release.container_smoke kaferry:ci .cache/container-context "$ARCH"
       - name: Verify immutable OCI publishing against a disposable registry
         if: matrix.arch == 'amd64'
         run: |
@@ -127,10 +125,10 @@ jobs:
           docker run --detach --name kaferry-image-registry --publish 127.0.0.1:5000:5000 \
             registry:3@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2
           curl --fail --retry 10 --retry-all-errors --retry-delay 1 --max-time 3 http://localhost:5000/v2/
-          first=$(python3 scripts/container_publish.py .cache/kaferry.oci.tar localhost:5000/kaferry:test)
-          second=$(python3 scripts/container_publish.py .cache/kaferry.oci.tar localhost:5000/kaferry:test)
+          first=$(python3 -m tools.release.container_publish .cache/kaferry.oci.tar localhost:5000/kaferry:test)
+          second=$(python3 -m tools.release.container_publish .cache/kaferry.oci.tar localhost:5000/kaferry:test)
           test "$first" = "$second"
-          latest=$(python3 scripts/container_publish.py .cache/kaferry.oci.tar localhost:5000/kaferry:latest)
+          latest=$(python3 -m tools.release.container_publish .cache/kaferry.oci.tar localhost:5000/kaferry:latest)
           test "$latest" = "$first"
           printf '%s\n' "$first" | grep -Eq '^sha256:[a-f0-9]{64}$'
       - run: make broker
@@ -139,8 +137,8 @@ jobs:
           KAFERRY_TEST_IMAGE: kaferry:ci
           KAFKA_TEST_BROKERS: 127.0.0.1:39092
         run: |
-          python3 scripts/ci.py container-resume go test -count=1 -json -timeout=3m -tags=integration,container -run '^TestContainerShutdownAndResume$' ./tests/compat
-          python3 scripts/ci.py verify-tests container-resume TestContainerShutdownAndResume
+          python3 -m tools.ci.ci container-resume go test -count=1 -json -timeout=3m -tags=integration,container -run '^TestContainerShutdownAndResume$' ./src/tests/system
+          python3 -m tools.ci.ci verify-tests container-resume TestContainerShutdownAndResume
       - if: always()
         run: |
           make broker-down
@@ -174,7 +172,7 @@ jobs:
         env:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
-          digest=$(python3 scripts/container_publish.py .cache/kaferry.oci.tar "ghcr.io/pagrus7/kaferry:$VERSION")
+          digest=$(python3 -m tools.release.container_publish .cache/kaferry.oci.tar "ghcr.io/pagrus7/kaferry:$VERSION")
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - name: Attest the published image index
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -189,5 +187,5 @@ jobs:
         run: |
           current=$(gh api repos/pagrus7/kaferry/releases/latest --jq .tag_name)
           if [ "$VERSION" = "$current" ]; then
-            python3 scripts/container_publish.py .cache/kaferry.oci.tar ghcr.io/pagrus7/kaferry:latest
+            python3 -m tools.release.container_publish .cache/kaferry.oci.tar ghcr.io/pagrus7/kaferry:latest
           fi

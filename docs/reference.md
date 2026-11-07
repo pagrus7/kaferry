@@ -1,6 +1,6 @@
 # Settings and results reference
 
-Exact settings, inspection output, exit codes and metrics. For operating steps, see [usage](usage.md); for delivery and restart rules, see [copy behavior](../design/decisions.md).
+Exact settings, inspection output, exit codes and metrics. For operating steps, see [usage](usage.md); for delivery and restart rules, see [copy behavior](design/decisions.md).
 
 ## Inspection
 
@@ -56,7 +56,7 @@ Profiles can be shared by sources and destinations. Supported connection keys ar
 
 ### Endpoint WITH properties
 
-Source properties follow `FROM`; sink properties follow `INSERT INTO`. Unknown or inapplicable properties fail. Final `OPTIONS` contains worker stops and record-error policies. [Syntax and examples](../design/grammar.md).
+Source properties follow `FROM`; sink properties follow `INSERT INTO`. Unknown or inapplicable properties fail. Final `OPTIONS` contains worker stops and record-error policies. [Syntax and examples](design/grammar.md).
 
 #### Kafka source
 
@@ -67,7 +67,7 @@ Source properties follow `FROM`; sink properties follow `INSERT INTO`. Unknown o
 | `MAX_STALENESS` | `INTERVAL '5' MINUTE` with a timestamp upper bound | Capture replicated ends after the interval end plus this allowance; `OFF` disables wall-clock capture |
 | `MAX_OUT_OF_ORDER` | `OFF` | Allowance before timestamp progress can finish a partition; `OFF` disables timestamp stopping |
 
-Both allowances require an upper timestamp bound and reject an explicit offset end. Either enabled rule can establish completion. Raising only one allowance does not protect against an invalid assumption used by the other. Both `OFF` means following filtered records until another stop or a signal. Neither allowance limits total run time. [Completion guarantees](../design/decisions.md#completion).
+Both allowances require an upper timestamp bound and reject an explicit offset end. Either enabled rule can establish completion. Raising only one allowance does not protect against an invalid assumption used by the other. Both `OFF` means following filtered records until another stop or a signal. Neither allowance limits total run time. [Completion guarantees](design/decisions.md#completion).
 
 #### Archive source
 
@@ -76,7 +76,7 @@ Both allowances require an upper timestamp bound and reject an explicit offset e
 | `GROUP` | `ONE_OFF` | Checkpoint containing the pinned completed-file selection and physical replay cursors |
 | `MAX_OUT_OF_ORDER` | `OFF` | Optional timestamp-disorder allowance per original source identity and partition; requires an upper timestamp bound and rejects an explicit offset end |
 
-`START` and `MAX_STALENESS` are Kafka-only. New files do not expand a saved selection. Timestamp and original-offset criteria filter archived records; filesystem modification times and byte positions are not record criteria. [File replay](../design/archive.md#replay-and-progress).
+`START` and `MAX_STALENESS` are Kafka-only. New files do not expand a saved selection. Timestamp and original-offset criteria filter archived records; filesystem modification times and byte positions are not record criteria. [File replay](design/archive.md#replay-and-progress).
 
 #### Kafka sink
 
@@ -91,7 +91,7 @@ Both allowances require an upper timestamp bound and reject an explicit offset e
 | `ROTATE_AFTER_SIZE` | `1g` | Compressed container size target; case-insensitive binary k/m/g suffixes, or plain integer bytes |
 | `ROTATE_AFTER_AGE` | `INTERVAL '1' HOUR` | Elapsed file age before rotation |
 
-[Rotation and publication](../design/archive.md#rotation).
+[Rotation and publication](design/archive.md#rotation).
 
 ### Worker settings
 
@@ -116,7 +116,7 @@ Caps must be positive; `max_frame_bytes` is at most 4,294,967,295. Durations are
 
 Replay can cache eight decoded blocks of up to 64 MiB each (512 MiB of raw block data at the defaults), independently of the worker work cap. Decoding, records and client buffers add memory; these settings do not cap total process memory. Lowering `archive_replay_blocks` reduces the cache count. Lowering `max_frame_bytes` can reject archives whose headers declare a larger block limit, even if their actual blocks are small.
 
-Caps include delivered records whose source progress is not yet saved. [Delivery and progress](../design/decisions.md#delivery-and-progress).
+Caps include delivered records whose source progress is not yet saved. [Delivery and progress](design/decisions.md#delivery-and-progress).
 
 ### Connection properties
 

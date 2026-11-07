@@ -3,11 +3,11 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'scripts/qualify.py'
-      - 'scripts/test_qualify.py'
-      - 'tests/compat/recovery*'
-      - 'tests/compat/soak_test.go'
-      - 'tests/compat/fault_test.go'
+      - 'tools/qualification/qualify.py'
+      - 'tools/qualification/test_qualify.py'
+      - 'src/tests/system/recovery*'
+      - 'src/tests/system/soak_test.go'
+      - 'src/tests/system/fault_test.go'
       - '.github/workflows/parallel-lab.yml'
 permissions:
   contents: read
@@ -24,7 +24,7 @@ jobs:
       - name: Build candidate
         run: make build
       - name: Run independent workloads together
-        run: python3 scripts/qualify.py parallel --duration 1m --companion-duration 1m --output build-results/parallel
+        run: python3 -m tools.qualification.qualify parallel --duration 1m --companion-duration 1m --output build-results/parallel
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
