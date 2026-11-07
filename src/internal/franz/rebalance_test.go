@@ -90,3 +90,26 @@ func TestBridgeCancellationReleasesCallbacksWithoutACorePoll(t *testing.T) {
 		t.Fatal("callback did not cancel")
 	}
 }
+
+func TestBridgeCancellationAfterEventDeliveryReleasesCallback(t *testing.T) {
+	// Given a callback event already delivered to the core, but not yet answered.
+	b := newRebalanceBridge("input")
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan lifecycleAnswer, 1)
+	go func() { done <- b.notify(ctx, lifecycleEvent{}) }()
+	select {
+	case <-b.events:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("callback event was not delivered")
+	}
+
+	// When shutdown cancels the bridge, then the callback does not wait for a core answer.
+	cancel()
+	select {
+	case result := <-done:
+		require.ErrorIs(t, result.err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("delivered callback did not cancel")
+	}
+}

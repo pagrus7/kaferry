@@ -2,6 +2,7 @@ package franz
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -273,4 +274,49 @@ func TestExplicitKeyRoutingMatchesKafkaHashVectors(t *testing.T) {
 		}
 	}
 	require.Equal(t, map[string]int{"21": 2, "foobar": 2, "abc": 2}, seen)
+}
+
+type rejectingConsumerClients struct {
+	Clients
+	client *kgo.Client
+}
+
+func (c *rejectingConsumerClients) Consumer(options ...kgo.Opt) (ConsumerClient, error) {
+	var err error
+	c.client, err = kgo.NewClient(options...)
+	if err != nil {
+		return nil, err
+	}
+	return nil, errors.New("injected consumer failure")
+}
+
+func TestConsumerConstructionFailureCancelsClientAndBridge(t *testing.T) {
+	// Given a valid source whose consumer constructor fails after options are assembled.
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"))
+	t.Cleanup(cluster.Close)
+	p := componentPlan(t, cluster)
+	factory, connection := componentConnection(t, p)
+	rejecting := &rejectingConsumerClients{Clients: NewClients()}
+	factory.clients = rejecting
+
+	// When source construction fails, then both the client and callback bridge are cancelled.
+	_, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker, nil)
+	if rejecting.client != nil {
+		t.Cleanup(rejecting.client.CloseAllowingRebalance)
+	}
+	require.ErrorContains(t, err, "invalid Kafka consumer configuration")
+	require.NotNil(t, rejecting.client)
+	clientCtx := rejecting.client.OptValue(kgo.WithContext).(context.Context)
+	require.ErrorIs(t, clientCtx.Err(), context.Canceled)
+	assigned := rejecting.client.OptValue(kgo.OnPartitionsAssigned).(func(context.Context, *kgo.Client, map[string][]int32))
+	done := make(chan struct{})
+	go func() {
+		assigned(t.Context(), rejecting.client, map[string][]int32{"input": {0}})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("failed consumer left its bridge callback blocked")
+	}
 }

@@ -88,11 +88,7 @@ func (p *Planner) connections(inline []sql.Connection, profiles Profiles) (Profi
 		if !validAlias(alias) {
 			return nil, fmt.Errorf("configuration: connection aliases must start with an ASCII letter or underscore and contain only ASCII letters, digits and underscores")
 		}
-		copy := maps.Clone(properties)
-		if copy == nil {
-			copy = make(map[string]string)
-		}
-		connections[alias] = copy
+		connections[alias] = maps.Clone(properties)
 	}
 	seen := make(map[string]sql.Position)
 	for _, connection := range inline {
