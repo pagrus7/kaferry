@@ -144,9 +144,7 @@ func TestCorePositioningPrecedesClientOffsetAdjustment(t *testing.T) {
 	}
 	text := saved["input"][0].Metadata
 	progress, err := kafkaport.DecodeProgress(commitmeta.NewCodec(), &text, input.(*Source).topicID)
-	if err != nil {
-		t.Fatal("wire metadata changed", err)
-	}
+	require.NoError(t, err, "wire metadata changed")
 	require.Equal(t, "fp", progress.Fingerprint)
 }
 
@@ -188,11 +186,12 @@ func TestProductionAdaptersPreserveRawRecordsAndZeroNegativeTimestamps(t *testin
 		got = append(got, fetch.Records()...)
 	}
 	// Then nil/empty bytes, duplicate/raw header names, and timestamps survive unchanged.
-	require.Equal(t, len(want), len(got), "missing copied records")
+	require.Len(t, got, len(want), "missing copied records")
 	for n, record := range got {
-		if !reflect.DeepEqual(record.Key, want[n].Key) || !reflect.DeepEqual(record.Value, want[n].Value) || !reflect.DeepEqual(record.Headers, want[n].Headers) || record.Timestamp.UnixMilli() != want[n].Timestamp.UnixMilli() {
-			t.Fatal("record changed", n, record)
-		}
+		require.Equal(t, want[n].Key, record.Key, "record %d key", n)
+		require.Equal(t, want[n].Value, record.Value, "record %d value", n)
+		require.Equal(t, want[n].Headers, record.Headers, "record %d headers", n)
+		require.Equal(t, want[n].Timestamp.UnixMilli(), record.Timestamp.UnixMilli(), "record %d timestamp", n)
 	}
 }
 
