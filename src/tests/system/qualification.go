@@ -307,4 +307,7 @@ func RunReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	progressReader := kadm.NewClient(secureClient(t, secureProperties(t, "admin", "fixture-admin-secret")))
 	progress := committedPartitions(t, progressReader, group, src, 1)
 	require.Equal(t, int64(64), progress[0].At, "failover shutdown did not save confirmed progress")
+	// Restore full replication before another security test creates its topics.
+	require.NoError(t, owned.recover())
+	waitSecureFixture(t, a, src, dst, group)
 }
