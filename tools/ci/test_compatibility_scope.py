@@ -1,6 +1,9 @@
 """Tests for the PR compatibility matrix's fail-closed path decision."""
 
+from contextlib import chdir
+from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -41,6 +44,34 @@ class CompatibilityScopeTests(unittest.TestCase):
             self.assertTrue(scope.decide({})[0])
         with patch.object(scope, 'changed_paths', side_effect=subprocess.CalledProcessError(1, 'git')):
             self.assertTrue(scope.decide({})[0])
+
+    def test_real_git_diff_skips_unrelated_system_test_only(self):
+        with tempfile.TemporaryDirectory() as directory, chdir(directory):
+            def git(*args):
+                return subprocess.check_output(['git', *args], text=True).strip()
+
+            def commit(message, *extra):
+                git('-c', 'user.name=CI scope test', '-c', 'user.email=scope@example.invalid',
+                    '-c', 'commit.gpgsign=false',
+                    'commit', *extra, '-qm', message)
+
+            git('init', '-q')
+            commit('base', '--allow-empty')
+            base = git('rev-parse', 'HEAD')
+            test = Path('src/tests/system/fault_test.go')
+            test.parent.mkdir(parents=True)
+            test.write_text('package compat\n')
+            git('add', '--', str(test))
+            commit('unrelated system test')
+            event = {'pull_request': {'base': {'sha': base}, 'head': {'sha': git('rev-parse', 'HEAD')}}}
+            self.assertEqual((False, [str(test)]), scope.decide(event)[:2])
+
+            helper = Path('src/tests/system/soak.go')
+            helper.write_text('package compat\n')
+            git('add', '--', str(helper))
+            commit('compatibility helper')
+            event['pull_request']['head']['sha'] = git('rev-parse', 'HEAD')
+            self.assertTrue(scope.decide(event)[0])
 
 
 if __name__ == '__main__':
