@@ -18,10 +18,10 @@ func TestScanAndOffsetOrder(t *testing.T) {
 	data := write(t, c, records(), 1)
 	r, err := c.Open(bytes.NewReader(data), int64(len(data)))
 	require.NoError(t, err)
-	// When every block is scanned, then every record is counted regardless of its timestamp.
-	count, err := r.Scan()
+	// When every block is scanned, then statistics retain exact signed ranges and missing counts.
+	stats, err := r.Scan()
 	require.NoError(t, err)
-	require.EqualValues(t, 4, count)
+	require.Equal(t, Statistics{Records: 4, MinOffset: 42, MaxOffset: 42, MinTimestamp: new(int64(math.MinInt64)), MaxTimestamp: new(int64(math.MaxInt64)), MissingTimestamps: 1}, stats)
 	// Given a backward offset crossing a complete-block boundary.
 	broken := records()[:3]
 	broken[1].Offset = 43

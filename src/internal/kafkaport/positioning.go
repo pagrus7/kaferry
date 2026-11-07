@@ -192,9 +192,17 @@ func (p *positioner) resolveTimes(ctx context.Context, assignments []copy.Assign
 	if len(p.lookups) == 0 {
 		return nil
 	}
-	found, err := p.lookup.AtOrAfterTimestamp(ctx, p.lookups)
+	queries := make([]TimestampOffsetQuery, 0, len(p.lookups))
+	for id, stamp := range p.lookups {
+		queries = append(queries, TimestampOffsetQuery{Partition: id, TimestampMS: stamp})
+	}
+	matches, err := p.lookup.AtOrAfterTimestamp(ctx, queries)
 	if err != nil {
 		return err
+	}
+	found := make(map[int32]TimestampOffsetMatch, len(matches))
+	for _, m := range matches {
+		found[m.Partition] = m
 	}
 	for n, assignment := range assignments {
 		id := assignment.Cursor.Partition

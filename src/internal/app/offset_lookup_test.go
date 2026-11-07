@@ -12,7 +12,7 @@ import (
 
 type replacementLookup struct {
 	calls   []string
-	queries map[int32]int64
+	queries []kafkaport.TimestampOffsetQuery
 }
 
 func (r *replacementLookup) New(kafkaport.OffsetReader, kafkaport.TimeReader) kafkaport.OffsetLookup {
@@ -30,9 +30,9 @@ func (r *replacementLookup) ReadableEnd(context.Context, []int32) (map[int32]int
 	r.calls = append(r.calls, "readable")
 	return map[int32]int64{0: 9}, nil
 }
-func (r *replacementLookup) AtOrAfterTimestamp(_ context.Context, q map[int32]int64) (map[int32]kafkaport.TimestampOffsetMatch, error) {
+func (r *replacementLookup) AtOrAfterTimestamp(_ context.Context, q []kafkaport.TimestampOffsetQuery) ([]kafkaport.TimestampOffsetMatch, error) {
 	r.queries = q
-	return map[int32]kafkaport.TimestampOffsetMatch{0: {Offset: 7, Found: true}}, nil
+	return []kafkaport.TimestampOffsetMatch{{Partition: 0, Offset: 7, Found: true}}, nil
 }
 func TestFxOffsetLookupCanBeReplacedIndependently(t *testing.T) {
 	// Given a replacement lookup factory, without a real broker backend.
@@ -47,5 +47,5 @@ func TestFxOffsetLookupCanBeReplacedIndependently(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 7, got.Assignments[0].Cursor.Position)
 	require.Equal(t, []string{"earliest", "replicated"}, fake.calls)
-	require.Equal(t, map[int32]int64{0: 1234}, fake.queries)
+	require.Equal(t, []kafkaport.TimestampOffsetQuery{{Partition: 0, TimestampMS: 1234}}, fake.queries)
 }
