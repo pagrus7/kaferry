@@ -41,8 +41,7 @@ func TestCommitMetadataUsesTheCapturedProgress(t *testing.T) {
 	require.Equal(t, new(int64(42)), got.End)
 	// When group ownership is lost, then no generationless commit can escape.
 	req.Generation = -1
-	var recoverable *core.Recoverable
-	require.ErrorAs(t, hook(req), &recoverable)
+	require.ErrorIs(t, hook(req), core.ErrRecoverable)
 }
 func TestCommitterPreservesPartitionErrorsAndRejectsUnownedPositions(t *testing.T) {
 	// Given an independently mocked group client and owned progress.
@@ -50,8 +49,7 @@ func TestCommitterPreservesPartitionErrorsAndRejectsUnownedPositions(t *testing.
 	c := &Committer{codec: commitmeta.NewCodec(), client: client, topic: "input", group: "group", metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: "id"}}}
 	// When the group changes, then a retryable request error remains distinguishable for revoke handling.
 	_, err := c.Save(t.Context(), []core.Cursor{{Partition: 0, Position: 2}})
-	var recoverable *core.Recoverable
-	if !errors.As(err, &recoverable) || !errors.Is(err, kerr.RebalanceInProgress) {
+	if !errors.Is(err, core.ErrRecoverable) || !errors.Is(err, kerr.RebalanceInProgress) {
 		t.Fatal("commit error lost", err)
 	}
 	// When asked to save a lost partition or invalid position, then the client is never called.
@@ -80,8 +78,7 @@ func TestCommitterClassifiesUnreachableCoordinatorAndSecurityFailures(t *testing
 			results, err := c.Save(t.Context(), []core.Cursor{{Partition: 0, Position: 2}})
 			// Then only the unavailable coordinator is recoverable; nothing is confirmed.
 			require.ErrorIs(t, err, scenario.failure)
-			var retry *core.Recoverable
-			require.Equal(t, scenario.retry, errors.As(err, &retry), "commit failure classification")
+			require.Equal(t, scenario.retry, errors.Is(err, core.ErrRecoverable), "commit failure classification")
 			require.Empty(t, results)
 		})
 	}
@@ -154,17 +151,15 @@ func TestCommitterPreservesEachPartitionResultAlongsideRequestFailure(t *testing
 			results, err := committer.Save(t.Context(), cursors)
 			require.ErrorIs(t, err, requestError)
 			if requestError != nil {
-				var retry *core.Recoverable
-				require.ErrorAs(t, err, &retry)
+				require.ErrorIs(t, err, core.ErrRecoverable)
 			}
 			require.Len(t, results, 3)
 			require.Contains(t, results, int32(0))
 			require.NoError(t, results[0])
 			require.ErrorIs(t, results[1], kerr.RebalanceInProgress)
-			var retry *core.Recoverable
-			require.ErrorAs(t, results[1], &retry)
+			require.ErrorIs(t, results[1], core.ErrRecoverable)
 			require.ErrorIs(t, results[2], kerr.TopicAuthorizationFailed)
-			require.False(t, errors.As(results[2], &retry))
+			require.False(t, errors.Is(results[2], core.ErrRecoverable))
 			require.NotContains(t, results, int32(3))
 			require.NotContains(t, results, int32(99))
 		})

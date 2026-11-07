@@ -25,7 +25,7 @@ func TestBlockingCommitAcrossBrokerOutage(t *testing.T) {
 	name = topic(t, admin, 1)
 	source, store := probeSourceProgress(t, name, name+"-fault")
 	ownership := &probeOwnership{owned: make(map[int32]bool)}
-	require.NoError(t, source.Start(ownership, nil))
+	require.NoError(t, source.Start(t.Context(), ownership, nil))
 	pollOwnership(t, []*adapter.Source{source}, func() bool { return len(ownership.owned) == 1 })
 	require.NoError(t, container.pause(t))
 	deadline, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)

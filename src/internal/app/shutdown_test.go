@@ -132,7 +132,7 @@ func TestShutdownDeadlineCoversFinalErrorPrinting(t *testing.T) {
 
 type failedStartupSource struct{ core.Source }
 
-func (failedStartupSource) Start(core.Lifecycle, core.Observer) error {
+func (failedStartupSource) Start(context.Context, core.Lifecycle, core.Observer) error {
 	return errors.New("checkpoint write failed")
 }
 

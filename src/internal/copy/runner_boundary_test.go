@@ -22,13 +22,13 @@ func TestRunnerIgnoresLateInputAndEOFAfterStopOrRevocation(t *testing.T) {
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}, {Cursor: Cursor{Partition: 1, Position: 0}}}))
 	trigger := incoming(0, 5, 1)
 	trigger.Record.TimestampMS = &stamp
-	require.NoError(t, r.input(trigger))
+	require.NoError(t, r.input(context.Background(), trigger))
 	require.NoError(t, r.Revoke([]int32{1}, true))
 	beforeRecords, beforeBytes := r.tracker.Total()
 
 	// When queued records and EOFs arrive for either partition after completion.
 	for _, id := range []int32{0, 1} {
-		require.NoError(t, r.input(incoming(id, 6, 100)))
+		require.NoError(t, r.input(context.Background(), incoming(id, 6, 100)))
 		require.NoError(t, r.eof(Cursor{Partition: id, Position: 99}))
 	}
 	if records, size := r.tracker.Total(); records != beforeRecords || size != beforeBytes {
@@ -46,8 +46,8 @@ func TestRunnerRejectsNewInputWhileSubmissionIsPending(t *testing.T) {
 	// Given a full destination queue holding an unsubmitted record.
 	r, source, sink, store, clock := fixture(t)
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
-	sink.submit = func(Record, Token) error { return &Busy{} }
-	require.NoError(t, r.input(incoming(0, 0, 10)))
+	sink.submit = func(Record, Token) error { return ErrBusy }
+	require.NoError(t, r.input(context.Background(), incoming(0, 0, 10)))
 	r.flow.lastCommit = clock.Now()
 	require.NoError(t, r.pause())
 	require.True(t, source.paused[0], "pending submission pauses intake below capacity")
@@ -56,7 +56,7 @@ func TestRunnerRejectsNewInputWhileSubmissionIsPending(t *testing.T) {
 	beforeRecords, beforeBytes := r.tracker.Total()
 
 	// When a source violates pause and returns a second record.
-	err := r.input(incoming(0, 1, 20))
+	err := r.input(context.Background(), incoming(0, 1, 20))
 
 	// Then the first submission is retained, neither record is saved or published,
 	// and the rejected record does not enter the uncommitted-work budget.
@@ -70,7 +70,7 @@ func TestDrainFlushFailureCommitsOnlyConfirmedPrefix(t *testing.T) {
 	r, source, sink, store, _ := fixture(t)
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 	for _, position := range []int64{0, 1} {
-		require.NoError(t, r.input(incoming(0, position, 1)))
+		require.NoError(t, r.input(context.Background(), incoming(0, position, 1)))
 	}
 	sink.reports <- Delivery{Token: sink.writes[0]}
 	require.NoError(t, r.deliveries())
@@ -78,7 +78,7 @@ func TestDrainFlushFailureCommitsOnlyConfirmedPrefix(t *testing.T) {
 	sink.flush = func() error { return failure }
 
 	// When shutdown stops intake and the destination fails its flush.
-	err := r.drain()
+	err := r.drain(context.Background())
 
 	// Then the failure is reported and only the already-confirmed prefix is saved.
 	if !errors.Is(err, failure) || !source.paused[0] || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1}}}) || r.tracker.Saved(0) != 1 {
@@ -118,7 +118,7 @@ func TestDrainTimeoutReportsWriteAndFinalSaveFailures(t *testing.T) {
 	r, _, sink, store, clock := fixture(t)
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 	for i := range 3 {
-		require.NoError(t, r.input(incoming(0, int64(i), 1)))
+		require.NoError(t, r.input(context.Background(), incoming(0, int64(i), 1)))
 	}
 	writeErr, saveErr := errors.New("write failed"), errors.New("final save failed")
 	sink.reports <- Delivery{Token: sink.writes[0]}
@@ -126,7 +126,7 @@ func TestDrainTimeoutReportsWriteAndFinalSaveFailures(t *testing.T) {
 	store.fail = map[int32]error{0: saveErr}
 	started := clock.Now()
 	// When the ten-second drain expires and saving the confirmed prefix also fails.
-	err := r.exit(r.drain())
+	err := r.exit(r.drain(context.Background()))
 	// Then the runtime exit retains all causes and does not claim the prefix was saved.
 	var exit *Exit
 	if !errors.Is(err, writeErr) || !errors.Is(err, saveErr) || !errors.As(err, &exit) || exit.Code != 1 || !strings.Contains(err.Error(), "outstanding writes") || clock.Now().Sub(started) != 10*time.Second || r.tracker.Saved(0) != 0 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1}}}) {

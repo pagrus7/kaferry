@@ -77,10 +77,10 @@ func (w *Writer) Append(record Record) error {
 		return ErrRotationRequired
 	}
 	if len(record.Headers) > w.codec.maxHeaders {
-		return &InvalidRecord{Err: errors.New("record exceeds header count limit")}
+		return InvalidRecordError(errors.New("record exceeds header count limit"))
 	}
 	if recordBytes(record) > w.codec.limit {
-		return &InvalidRecord{Err: errors.New("record exceeds Avro block limit")}
+		return InvalidRecordError(errors.New("record exceeds Avro block limit"))
 	}
 	// Finish encoding before changing the container; format-limit rejections leave valid pending data intact.
 	if w.datum == nil {
@@ -96,7 +96,7 @@ func (w *Writer) Append(record Record) error {
 	data := w.datum.Buffer()
 	if int64(len(data)) > w.codec.limit {
 		w.datum = nil
-		return &InvalidRecord{Err: errors.New("record exceeds Avro block limit")}
+		return InvalidRecordError(errors.New("record exceeds Avro block limit"))
 	}
 	if int64(len(w.pending))+int64(len(data)) > min(BlockTarget, w.codec.limit) {
 		if err := w.Flush(); err != nil {

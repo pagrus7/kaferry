@@ -15,7 +15,7 @@ func bridgeClient(t *testing.T, b *rebalanceBridge) *kgo.Client {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	c, err := kgo.NewClient(append(b.options(), kgo.WithContext(ctx), kgo.ConsumerGroup("group"))...)
+	c, err := kgo.NewClient(append(b.options(t.Context()), kgo.WithContext(ctx), kgo.ConsumerGroup("group"))...)
 	require.NoError(t, err)
 	t.Cleanup(c.CloseAllowingRebalance)
 	return c
@@ -24,7 +24,7 @@ func TestBridgeTransfersAssignmentAndLostCallbacksToTheCore(t *testing.T) {
 	// Given a group callback bridge and no resolved starts.
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	b := newRebalanceBridge(ctx, "input")
+	b := newRebalanceBridge("input")
 	c := bridgeClient(t, b)
 	adjust := c.OptValue(kgo.AdjustFetchOffsetsFn).(func(context.Context, map[string]map[int32]kgo.Offset) (map[string]map[int32]kgo.Offset, error))
 	if _, err := adjust(ctx, map[string]map[int32]kgo.Offset{"input": {0: kgo.NewOffset().AtStart()}}); err == nil {
@@ -78,9 +78,9 @@ func TestBridgeTransfersAssignmentAndLostCallbacksToTheCore(t *testing.T) {
 func TestBridgeCancellationReleasesCallbacksWithoutACorePoll(t *testing.T) {
 	// Given a callback waiting while the core is draining instead of polling.
 	ctx, cancel := context.WithCancel(t.Context())
-	b := newRebalanceBridge(ctx, "input")
+	b := newRebalanceBridge("input")
 	done := make(chan lifecycleAnswer, 1)
-	go func() { done <- b.notify(lifecycleEvent{}) }()
+	go func() { done <- b.notify(ctx, lifecycleEvent{}) }()
 	// When Source.Close cancels the bridge, then it does not need a callback from another worker.
 	cancel()
 	select {

@@ -1,6 +1,7 @@
 package copy
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -20,11 +21,11 @@ func TestStopSavedOnlyAfterEarlierWritesResolve(t *testing.T) {
 			first := incoming(0, 0, 1)
 			stamp := int64(1)
 			first.Record.TimestampMS = &stamp
-			require.NoError(t, r.input(first))
+			require.NoError(t, r.input(context.Background(), first))
 			trigger := incoming(0, 1, 1)
 			future := int64(101)
 			trigger.Record.TimestampMS = &future
-			require.NoError(t, r.input(trigger))
+			require.NoError(t, r.input(context.Background(), trigger))
 			if err := r.commit(r.ids()); err != nil || len(store.saves) != 0 {
 				t.Fatal("unconfirmed stop saved", err, store.saves)
 			}

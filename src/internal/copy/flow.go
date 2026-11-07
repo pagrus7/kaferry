@@ -1,6 +1,7 @@
 package copy
 
 import (
+	"context"
 	"time"
 
 	"github.com/pagrus7/kaferry/src/internal/config"
@@ -112,12 +113,12 @@ func (f *flow) takeDeferred(work workCounts, limits config.Worker) *deferredInpu
 	return event
 }
 
-func (r *Runner) admitDeferred() error {
+func (r *Runner) admitDeferred(ctx context.Context) error {
 	event := r.flow.takeDeferred(r.tracker, r.limits)
 	if event == nil {
 		return nil
 	}
-	if err := r.input(event.input); err != nil {
+	if err := r.input(ctx, event.input); err != nil {
 		return err
 	}
 	if event.eof != nil {

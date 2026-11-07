@@ -74,15 +74,14 @@ func TestCaptureStopsAfterBackendFailure(t *testing.T) {
 func TestSkipCannotHideFailedEmptyFileCleanup(t *testing.T) {
 	// Given a rejected first record whose empty private file cannot be removed.
 	store := &memorySegments{files: make(map[string]Segment), errors: map[string]error{
-		"append": &avro.InvalidRecord{Err: errors.New("too large")}, "publish": errDisk,
+		"append": avro.InvalidRecordError(errors.New("too large")), "publish": errDisk,
 	}}
 	c, err := New(store, &testClock{}, Policy{})
 	require.NoError(t, err)
 	// When SQL would permit skipping the input, then storage failure still stops capture.
 	err = c.Append(testRecord(42))
 	require.ErrorIs(t, err, errDisk)
-	var skippable *avro.InvalidRecord
-	require.False(t, errors.As(err, &skippable))
+	require.False(t, errors.Is(err, avro.ErrInvalidRecord))
 	require.ErrorIs(t, c.Flush(), errDisk)
 }
 

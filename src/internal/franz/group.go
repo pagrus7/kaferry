@@ -188,7 +188,7 @@ func (i *Inspector) decodeSaved(parts map[int32]kmsg.OffsetFetchResponseTopicPar
 		}
 	}
 	if mismatch {
-		return saved, &kafkaport.Conflict{Err: &plan.FingerprintMismatch{}}
+		return saved, &kafkaport.Conflict{Err: plan.ErrFingerprintMismatch}
 	}
 	return saved, nil
 }

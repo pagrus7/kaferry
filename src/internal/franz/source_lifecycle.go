@@ -8,7 +8,7 @@ import (
 	core "github.com/pagrus7/kaferry/src/internal/copy"
 )
 
-func (s *Source) lifecycle(event lifecycleEvent) error {
+func (s *Source) lifecycle(ctx context.Context, event lifecycleEvent) error {
 	if event.revoke {
 		err := s.life.Revoke(event.ids, event.lost)
 		for _, id := range event.ids {
@@ -19,7 +19,7 @@ func (s *Source) lifecycle(event lifecycleEvent) error {
 		event.answer <- lifecycleAnswer{err: err}
 		return err
 	}
-	ctx, cancel := context.WithTimeout(s.query, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	for _, id := range event.ids {
 		if !s.plan.Partitions.Matches(id) {

@@ -160,11 +160,11 @@ func (c *connection) Source(query context.Context, p plan.Plan, fp string, limit
 	if err != nil {
 		return nil, nil, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	clientCtx, clientCancel := context.WithCancel(context.Background())
-	bridge := newRebalanceBridge(ctx, p.Source.Name)
+	bridgeCtx, bridgeCancel := context.WithCancel(context.Background())
+	bridge := newRebalanceBridge(p.Source.Name)
 	options = append(options, settings.consumerOptions()...)
-	options = append(options, bridge.options()...)
+	options = append(options, bridge.options(bridgeCtx)...)
 	clientID := "kaferry-" + p.Group
 	if settings.clientID != "" {
 		clientID += "-" + settings.clientID
@@ -172,12 +172,12 @@ func (c *connection) Source(query context.Context, p plan.Plan, fp string, limit
 	options = append(options, kgo.WithContext(clientCtx), kgo.ClientID(clientID), kgo.ConsumerGroup(p.Group), kgo.DisableAutoCommit(), kgo.ConsumeResetOffset(kgo.NoResetOffset()), kgo.FetchIsolationLevel(kgo.ReadCommitted()), kgo.FetchMaxWait(500*time.Millisecond), kgo.KeepControlRecords(), kgo.BlockRebalanceOnPoll(), kgo.Balancers(sourceBalancer(p, fp)))
 	client, err := c.factory.clients.Consumer(options...)
 	if err != nil {
-		cancel()
+		bridgeCancel()
 		clientCancel()
 		return nil, nil, conflict("invalid Kafka consumer configuration")
 	}
 	store := &Committer{codec: c.factory.codec, client: client, topic: p.Source.Name, group: p.Group, topicID: c.inspector.topicID, metadata: make(map[int32]kafkaport.Progress)}
-	source := &Source{routing: routing, client: client, lookup: c.factory.lookups.New(c.inspector, c.inspector), inspector: c.inspector, positioning: c.factory.positioning, store: store, bridge: bridge, plan: p, fingerprint: fp, topicID: topicID(c.inspector.topicID), clusterID: c.inspector.clusterID, originalTopicID: c.inspector.topicID, query: query, ctx: ctx, cancel: cancel, clientCancel: clientCancel, partitions: make(map[int32]*sourcePartition), log: c.factory.log}
+	source := &Source{routing: routing, client: client, lookup: c.factory.lookups.New(c.inspector, c.inspector), inspector: c.inspector, positioning: c.factory.positioning, store: store, bridge: bridge, plan: p, fingerprint: fp, topicID: topicID(c.inspector.topicID), clusterID: c.inspector.clusterID, originalTopicID: c.inspector.topicID, bridgeCancel: bridgeCancel, clientCancel: clientCancel, partitions: make(map[int32]*sourcePartition), log: c.factory.log}
 	source.gaps = &fetchGap{client: c.inspector.client, topic: p.Source.Name, topicID: source.topicID}
 	return source, store, nil
 }
@@ -207,5 +207,5 @@ func (c *connection) Sink(query context.Context, limits config.Worker) (core.Sin
 		cancel()
 		return nil, conflict("invalid Kafka producer configuration")
 	}
-	return &Sink{preserve: c.endpoint.PreservesPartitions(), client: client, topic: c.endpoint.Name, settings: settings, configuration: configuration, inspector: c.inspector, clock: c.factory.clock, log: c.factory.log, reports: make(chan core.Delivery, limits.RecordCap+int(settings.queueRecords)+1), ctx: ctx, cancel: cancel, partitionCount: len(c.inspector.parts), lastMetadata: c.factory.clock.Now()}, nil
+	return &Sink{preserve: c.endpoint.PreservesPartitions(), client: client, topic: c.endpoint.Name, settings: settings, configuration: configuration, inspector: c.inspector, clock: c.factory.clock, log: c.factory.log, reports: make(chan core.Delivery, limits.RecordCap+int(settings.queueRecords)+1), cancel: cancel, partitionCount: len(c.inspector.parts), lastMetadata: c.factory.clock.Now()}, nil
 }

@@ -19,32 +19,31 @@ type recordPoller interface {
 }
 type fetchPump struct {
 	client  recordPoller
-	ctx     context.Context
 	fetched chan fetchResult
 	done    chan struct{}
 }
 
-func newFetchPump(ctx context.Context, client recordPoller) *fetchPump {
-	return &fetchPump{client: client, ctx: ctx, fetched: make(chan fetchResult), done: make(chan struct{})}
+func newFetchPump(client recordPoller) *fetchPump {
+	return &fetchPump{client: client, fetched: make(chan fetchResult), done: make(chan struct{})}
 }
-func (p *fetchPump) run() {
+func (p *fetchPump) run(ctx context.Context) {
 	defer close(p.done)
 	defer p.client.AllowRebalance()
 	for {
 		p.client.AllowRebalance()
-		fetch := p.client.PollRecords(p.ctx, 1)
-		if p.ctx.Err() != nil {
+		fetch := p.client.PollRecords(ctx, 1)
+		if ctx.Err() != nil {
 			return
 		}
 		result := fetchResult{records: fetch.Records(), err: fetchFailure(fetch), done: make(chan struct{})}
 		select {
 		case p.fetched <- result:
-		case <-p.ctx.Done():
+		case <-ctx.Done():
 			return
 		}
 		select {
 		case <-result.done:
-		case <-p.ctx.Done():
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -53,8 +52,7 @@ func (p *fetchPump) run() {
 func fetchFailure(fetches kgo.Fetches) error {
 	var retry error
 	for _, failure := range fetches.Errors() {
-		var recoverable *core.Recoverable
-		if !errors.As(transientFailure(failure.Err), &recoverable) {
+		if !errors.Is(transientFailure(failure.Err), core.ErrRecoverable) {
 			return failure.Err
 		}
 		if retry == nil {

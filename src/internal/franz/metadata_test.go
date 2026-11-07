@@ -217,8 +217,7 @@ func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
 					t.Fatal(saved, err)
 				}
 			} else if scenario == "fingerprint" {
-				var mismatch *plan.FingerprintMismatch
-				require.ErrorAs(t, err, &mismatch)
+				require.ErrorIs(t, err, plan.ErrFingerprintMismatch)
 				require.Equal(t, int64(42), saved[0].Position)
 				require.Equal(t, progress, saved[0].Progress)
 			} else if err == nil || len(saved) > 0 {
@@ -257,8 +256,7 @@ func TestFingerprintConflictCannotHideUnsafeSourceProgress(t *testing.T) {
 			// Then only source-safe fingerprint conflicts expose diagnostic positions.
 			require.Error(t, err)
 			if scenario == "mixed identities" {
-				var mismatch *plan.FingerprintMismatch
-				require.ErrorAs(t, err, &mismatch)
+				require.ErrorIs(t, err, plan.ErrFingerprintMismatch)
 				require.Len(t, saved, 2)
 				require.EqualValues(t, 3, saved[0].Position)
 				require.EqualValues(t, 7, saved[2].Position)

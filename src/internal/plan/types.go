@@ -21,8 +21,10 @@ type Properties struct{ values map[string]string }
 
 func (p Properties) Get(name string) string { return p.values[name] }
 func (p Properties) Values() map[string]string {
-	values := make(map[string]string, len(p.values))
-	maps.Copy(values, p.values)
+	values := maps.Clone(p.values)
+	if values == nil {
+		values = make(map[string]string)
+	}
 	return values
 }
 

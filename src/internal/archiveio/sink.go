@@ -1,6 +1,7 @@
 package archiveio
 
 import (
+	"context"
 	"errors"
 
 	"github.com/pagrus7/kaferry/src/internal/archive/avro"
@@ -25,7 +26,7 @@ func NewSink(capture Capture, capacity int) *Sink {
 	return &Sink{capture: capture, reports: make(chan core.Delivery, capacity+1)}
 }
 
-func (s *Sink) Submit(record core.Record, token core.Token) error {
+func (s *Sink) Submit(_ context.Context, record core.Record, token core.Token) error {
 	if s.failed != nil {
 		return s.failed
 	}
@@ -34,8 +35,7 @@ func (s *Sink) Submit(record core.Record, token core.Token) error {
 		return err
 	}
 	if err = s.capture.Append(r); err != nil {
-		var invalid *avro.InvalidRecord
-		if errors.As(err, &invalid) {
+		if errors.Is(err, avro.ErrInvalidRecord) {
 			return &core.RecordError{Class: "validation", Err: err}
 		}
 		s.failed = err
@@ -44,7 +44,7 @@ func (s *Sink) Submit(record core.Record, token core.Token) error {
 	s.pending = append(s.pending, token)
 	return nil
 }
-func (s *Sink) Flush() error {
+func (s *Sink) Flush(context.Context) error {
 	if s.failed != nil {
 		return s.failed
 	}

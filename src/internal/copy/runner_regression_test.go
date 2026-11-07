@@ -61,7 +61,7 @@ func TestQueueFullDeadlinePreservesConfirmedProgress(t *testing.T) {
 			return nil
 		}
 		attempts++
-		return &Busy{}
+		return ErrBusy
 	}
 	started := clock.Now()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -95,17 +95,17 @@ func TestRevokeDiscardsHeldWorkBeforeReassignment(t *testing.T) {
 				r, _, sink, _, _ := fixture(t)
 				require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 				if held == "queue-full submission" {
-					sink.submit = func(Record, Token) error { return &Busy{} }
+					sink.submit = func(Record, Token) error { return ErrBusy }
 				} else {
 					r.limits.RecordCap = 1
 				}
-				require.NoError(t, r.input(incoming(0, 0, 1)))
+				require.NoError(t, r.input(context.Background(), incoming(0, 0, 1)))
 				var old Token
 				if r.pending != nil {
 					old = r.pending.token
 				} else {
 					old = sink.writes[0]
-					require.NoError(t, r.accept(Event{Input: ptrInput(incoming(0, 1, 1)), EOF: &Cursor{Partition: 0, Position: 2}}))
+					require.NoError(t, r.accept(context.Background(), Event{Input: ptrInput(incoming(0, 1, 1)), EOF: &Cursor{Partition: 0, Position: 2}}))
 					if r.flow.deferred == nil || r.flow.deferred.eof == nil {
 						t.Fatal("fixture did not hold input and EOF")
 					}
@@ -116,13 +116,13 @@ func TestRevokeDiscardsHeldWorkBeforeReassignment(t *testing.T) {
 				require.NoError(t, r.Revoke([]int32{0}, lost))
 				require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
 				sink.submit = nil
-				require.NoError(t, r.advance())
+				require.NoError(t, r.advance(context.Background()))
 
 				// Then held work and EOF cannot leak into the new assignment.
 				if r.pending != nil || r.flow.deferred != nil || len(sink.writes) != before || r.partitions[0].stop != nil {
 					t.Fatal("revoked work survived reassignment")
 				}
-				require.NoError(t, r.input(incoming(0, 0, 1)))
+				require.NoError(t, r.input(context.Background(), incoming(0, 0, 1)))
 				if len(sink.writes) != before+1 || sink.writes[before].Generation == old.Generation {
 					t.Fatal("replay did not receive a fresh generation")
 				}
@@ -138,12 +138,12 @@ func TestRevokePreservesHeldWorkForRemainingPartition(t *testing.T) {
 	r, _, sink, _, _ := fixture(t)
 	r.limits.RecordCap = 1
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}, {Cursor: Cursor{Partition: 1, Position: 0}}}))
-	require.NoError(t, r.input(incoming(0, 0, 1)))
-	require.NoError(t, r.accept(Event{Input: ptrInput(incoming(1, 0, 1)), EOF: &Cursor{Partition: 1, Position: 1}}))
+	require.NoError(t, r.input(context.Background(), incoming(0, 0, 1)))
+	require.NoError(t, r.accept(context.Background(), Event{Input: ptrInput(incoming(1, 0, 1)), EOF: &Cursor{Partition: 1, Position: 1}}))
 
 	// When only the partition using the cap loses ownership.
 	require.NoError(t, r.Revoke([]int32{0}, true))
-	require.NoError(t, r.advance())
+	require.NoError(t, r.advance(context.Background()))
 
 	// Then the remaining partition's held record and EOF are processed normally.
 	if len(sink.writes) != 2 || sink.writes[1].Partition != 1 || r.partitions[1].stop == nil || r.partitions[1].position != 1 {
@@ -178,15 +178,15 @@ func TestFullCapFlushesAndCommitsBeforePeriodicDeadline(t *testing.T) {
 			}
 			// When filling the configured budget, then earlier records cause no disk flush or commit.
 			for i := range 4 {
-				require.NoError(t, r.input(incoming(0, int64(i), 1)))
+				require.NoError(t, r.input(context.Background(), incoming(0, int64(i), 1)))
 				if i < 3 {
-					require.NoError(t, r.checkpoint())
+					require.NoError(t, r.checkpoint(context.Background()))
 					require.Zero(t, flushes)
 					require.Empty(t, store.saves)
 				}
 			}
 			// Then reaching the cap flushes before committing the confirmed prefix and frees the budget.
-			require.NoError(t, r.checkpoint())
+			require.NoError(t, r.checkpoint(context.Background()))
 			require.Equal(t, 1, flushes)
 			require.Equal(t, [][]Cursor{{{Partition: 0, Position: 4}}}, store.saves)
 			records, bytes := r.tracker.Total()

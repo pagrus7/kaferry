@@ -1,6 +1,7 @@
 package archiveio
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -28,8 +29,8 @@ func TestFactoryOwnsReplayCheckpointAndRejectsUnsafePaths(t *testing.T) {
 	sink, err := factory.OpenOutput(seed.Destination, limits)
 	require.NoError(t, err)
 	record := core.Record{Source: &core.Provenance{Cluster: "cluster", TopicID: [16]byte{1}, Topic: "orders"}, TimestampType: "unknown"}
-	require.NoError(t, sink.Submit(record, core.Token{}))
-	require.NoError(t, sink.Flush())
+	require.NoError(t, sink.Submit(context.Background(), record, core.Token{}))
+	require.NoError(t, sink.Flush(context.Background()))
 	require.NoError(t, sink.Finish())
 	sink.Close()
 	// When one process owns a replay group, then another process cannot acquire it.

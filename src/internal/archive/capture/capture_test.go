@@ -173,8 +173,7 @@ func TestSkippedFirstRecordDoesNotPinFirstOffset(t *testing.T) {
 	c, _ := newCapture(t, root, Policy{})
 	bad := testRecord(42)
 	bad.Value = make([]byte, 8<<20)
-	var invalid *avro.InvalidRecord
-	require.ErrorAs(t, c.Append(bad), &invalid)
+	require.ErrorIs(t, c.Append(bad), avro.ErrInvalidRecord)
 	// When SQL permits skipping it, then the next record starts a fresh nonempty file.
 	want := testRecord(43)
 	require.NoError(t, c.Append(want))
