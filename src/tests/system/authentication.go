@@ -13,14 +13,16 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+var externalAuthMechanisms = [...]string{"OAUTHBEARER", "GSSAPI"}
+
 func RunSaslTlsExternalAuthentication(t *testing.T) {
-	for _, mechanism := range []string{"OAUTHBEARER", "GSSAPI"} {
+	for _, mechanism := range externalAuthMechanisms {
 		t.Run(mechanism, func(t *testing.T) {
 			// Given a record and a restricted OAuth or Kerberos principal in the disposable Kafka cluster.
+			cfg := secureProperties(t, "copier", "fixture-copy-secret")
 			_, producer, src, dst, group := secureFixture(t)
 			stamp := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
 			publish(t, producer, &kgo.Record{Topic: src, Value: []byte(mechanism), Timestamp: stamp})
-			cfg := secureProperties(t, "copier", "fixture-copy-secret")
 			delete(cfg, "sasl.username")
 			delete(cfg, "sasl.password")
 			cfg["sasl.mechanism"] = mechanism

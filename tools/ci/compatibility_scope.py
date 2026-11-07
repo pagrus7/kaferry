@@ -3,8 +3,9 @@
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
+
+from tools.ci.pr_diff import changed_paths
 
 
 PROSE = {'README.md', 'CONTRIBUTING.md', 'AGENTS.md', 'CLAUDE.md'}
@@ -13,32 +14,16 @@ PROSE = {'README.md', 'CONTRIBUTING.md', 'AGENTS.md', 'CLAUDE.md'}
 def unrelated(path):
     if path in PROSE:
         return True
-    if path.startswith('docs/') and path.endswith('.md'):
-        return True
-    if path.startswith('.claude/agents/') and path.endswith('.md'):
-        return True
-    if path.startswith('.claude/skills/') and path.endswith('/SKILL.md'):
-        return True
-    if path.startswith('.codex/agents/') and path.endswith('.toml'):
-        return True
-    if path.startswith(('src/cmd/', 'src/internal/')) and path.endswith('_test.go'):
-        return True
+    suffixes = (('docs/', '.md'), ('.claude/agents/', '.md'),
+                ('.claude/skills/', '/SKILL.md'), ('.codex/agents/', '.toml'),
+                ('src/cmd/', '_test.go'), ('src/internal/', '_test.go'),
+                ('src/tests/system/', '_test.go'))
     # Compatibility imports regular system Go files, but never its test files.
-    if path.startswith('src/tests/system/') and path.endswith('_test.go'):
+    if any(path.startswith(prefix) and path.endswith(suffix) for prefix, suffix in suffixes):
         return True
     if path.startswith('tools/') and Path(path).name.startswith('test_') and path.endswith('.py'):
         return True
     return False
-
-
-def changed_paths(event):
-    pr = event['pull_request']
-    base, head = pr['base']['sha'], pr['head']['sha']
-    if not all(re.fullmatch('[a-f0-9]{40}', sha) for sha in (base, head)):
-        raise ValueError('expected full base and head commit SHAs')
-    output = subprocess.check_output(['git', 'diff', '--no-renames', '--name-only', '-z',
-                                      f'{base}...{head}', '--'])
-    return [os.fsdecode(path) for path in output.split(b'\0') if path]
 
 
 def decide(event):

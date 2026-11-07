@@ -24,7 +24,7 @@ class CompatibilityScopeTests(unittest.TestCase):
         for path in ('src/internal/copy/flow.go', 'src/internal/archive/avro/schema.json',
                      'src/tests/system/soak.go', 'src/tests/system/fixtures.go',
                      'src/tests/system/qualification.go', 'src/tests/compatibility/soak_test.go',
-                     'src/tests/compatibility/auth_test.go', 'src/tests/qualification/matrix.json',
+                     'src/tests/compatibility/sasl_test.go', 'src/tests/qualification/matrix.json',
                      'tools/qualification/qualify.py', 'tools/ci/scheduled.py',
                      '.github/workflows/compatibility.yml', 'go.mod', 'go.sum', 'Makefile'):
             with self.subTest(path=path), patch.object(scope, 'changed_paths', return_value=[path]):
@@ -41,13 +41,6 @@ class CompatibilityScopeTests(unittest.TestCase):
             self.assertTrue(scope.decide({})[0])
         with patch.object(scope, 'changed_paths', side_effect=subprocess.CalledProcessError(1, 'git')):
             self.assertTrue(scope.decide({})[0])
-
-    def test_git_diff_reads_complete_nul_delimited_paths(self):
-        base, head = 'a' * 40, 'b' * 40
-        event = {'pull_request': {'base': {'sha': base}, 'head': {'sha': head}}}
-        with patch.object(scope.subprocess, 'check_output', return_value=b'docs/usage.md\0src/internal/copy/flow.go\0') as read:
-            self.assertEqual(['docs/usage.md', 'src/internal/copy/flow.go'], scope.changed_paths(event))
-        read.assert_called_once_with(['git', 'diff', '--no-renames', '--name-only', '-z', f'{base}...{head}', '--'])
 
 
 if __name__ == '__main__':

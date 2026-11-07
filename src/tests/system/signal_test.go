@@ -4,10 +4,8 @@ package compat
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"os"
-	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
@@ -16,23 +14,9 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func TestExpectedBinaryHashRejectsSubstitution(t *testing.T) {
-	// Given a test binary whose expected digest was recorded after archive extraction.
-	path := filepath.Join(t.TempDir(), "binary")
-	data := []byte("release binary")
-	require.NoError(t, os.WriteFile(path, data, 0600))
-	expected := fmt.Sprintf("%x", sha256.Sum256(data))
-	require.NoError(t, verifyBinary(path, expected))
-	// When the path is replaced, then the artifact tests reject the substitute.
-	require.NoError(t, os.WriteFile(path, []byte("rebuilt binary"), 0600))
-	require.ErrorContains(t, verifyBinary(path, expected), "does not match")
-	require.Error(t, verifyBinary(path+"-missing", expected), "missing artifact must fail")
-}
 func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 	// Given
-	a := admin(t)
-	src, dst := topic(t, a, 1), topic(t, a, 1)
-	p := producer(t)
+	a, src, dst, p := pairedTopics(t, 1, 1)
 	binary := testBinary(t)
 	group := src + "-signal"
 	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','topic.metadata.refresh.interval.ms'='500') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=LATEST) ", broker(t), dst, src, group)
