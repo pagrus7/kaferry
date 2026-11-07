@@ -44,6 +44,7 @@ func TestStalenessCapturesWhileBehindAndWaitsOnlyAtReadableTip(t *testing.T) {
 }
 
 func TestStalenessReadsBeforeDeadlineAndKeepsExplicitTimestampShortcutAfterCapture(t *testing.T) {
+	ctx := t.Context()
 	// Given a future deadline and an in-range record.
 	r, source, sink, store, clock := fixture(t)
 	r.plan.Source.Kind = "TOPIC"
@@ -58,8 +59,8 @@ func TestStalenessReadsBeforeDeadlineAndKeepsExplicitTimestampShortcutAfterCaptu
 	record.Record.TimestampMS = new(upper - 1)
 
 	// When consuming before the deadline, then write immediately without capture.
-	require.NoError(t, r.tips(context.Background()))
-	require.NoError(t, r.input(context.Background(), record))
+	require.NoError(t, r.tips(ctx))
+	require.NoError(t, r.input(ctx, record))
 	require.Len(t, sink.writes, 1)
 	require.Zero(t, query.calls)
 	sink.reports <- Delivery{Token: sink.writes[0]}
@@ -67,20 +68,21 @@ func TestStalenessReadsBeforeDeadlineAndKeepsExplicitTimestampShortcutAfterCaptu
 
 	// When the deadline passes while newer source offsets remain.
 	clock.Sleep(62 * time.Second)
-	require.NoError(t, r.tips(context.Background()))
+	require.NoError(t, r.tips(ctx))
 	record = incoming(0, 1, 2)
 	record.Record.TimestampMS = new(upper + 1001)
-	require.NoError(t, r.input(context.Background(), record))
+	require.NoError(t, r.input(ctx, record))
+	require.Len(t, sink.writes, 1)
 	require.NoError(t, r.commit(r.ids()))
 
 	// Then the timestamp trigger still stops before the saved end.
-	require.Len(t, sink.writes, 1)
 	require.Equal(t, &Stop{Reason: "timestamp", At: 1}, r.partitions[0].stop)
 	require.Equal(t, int64(10), *store.saves[len(store.saves)-1][0].End)
 	require.Equal(t, int64(1), store.saves[len(store.saves)-1][0].Position)
 }
 
 func TestStalenessResumeKeepsEndAndCompletedStops(t *testing.T) {
+	ctx := t.Context()
 	for _, reason := range []string{"", "timestamp", "tip"} {
 		t.Run(reason, func(t *testing.T) {
 			// Given restored progress, a saved end, and a source that has grown.
@@ -101,7 +103,7 @@ func TestStalenessResumeKeepsEndAndCompletedStops(t *testing.T) {
 
 			// When evaluating after a backward clock adjustment, then reuse saved state.
 			clock.now = clock.now.Add(-24 * time.Hour)
-			require.NoError(t, r.tips(context.Background()))
+			require.NoError(t, r.tips(ctx))
 			require.Zero(t, query.calls)
 			if reason != "" {
 				require.True(t, r.readyToExit())
@@ -111,7 +113,7 @@ func TestStalenessResumeKeepsEndAndCompletedStops(t *testing.T) {
 
 			// When EOF proves a gap beyond the saved end, then save exactly that end.
 			require.NoError(t, r.eof(Cursor{Position: 50}))
-			require.NoError(t, r.tips(context.Background()))
+			require.NoError(t, r.tips(ctx))
 			require.NoError(t, r.commit(r.ids()))
 			require.Equal(t, [][]Cursor{{{Position: 3, End: new(int64(3)), Stop: &Stop{Reason: "tip", At: 3}}}}, store.saves)
 		})

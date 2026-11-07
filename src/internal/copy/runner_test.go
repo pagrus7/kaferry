@@ -454,8 +454,11 @@ func (s *cancellingWatermark) HighWatermark(context.Context, int32) (int64, erro
 	return 0, s.err
 }
 func TestSignalDuringWatermarkQueryReportsInterruptionAndPreservesOtherErrors(t *testing.T) {
-	for _, unrelated := range []bool{false, true} {
-		t.Run(map[bool]string{false: "cancelled query", true: "broker failure"}[unrelated], func(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		unrelated bool
+	}{{"cancelled query", false}, {"broker failure", true}} {
+		t.Run(tc.name, func(t *testing.T) {
 			// Given a bounded copy that reaches the topic tip and samples its ending offset.
 			r, source, _, _, _ := fixture(t)
 			r.plan.Source.Kind = "TOPIC"
@@ -466,13 +469,13 @@ func TestSignalDuringWatermarkQueryReportsInterruptionAndPreservesOtherErrors(t 
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			failure := error(context.Canceled)
-			if unrelated {
+			if tc.unrelated {
 				failure = errors.New("topic authorization failed")
 			}
 			r.source = &cancellingWatermark{testSource: source, cancel: cancel, err: failure}
 			// When a signal arrives during the query, then cancellation follows the ordinary interrupted-copy path.
 			err := r.Run(ctx)
-			if err == nil || unrelated && !errors.Is(err, failure) || !unrelated && !strings.Contains(err.Error(), "bounded copy interrupted before completion") {
+			if err == nil || tc.unrelated && !errors.Is(err, failure) || !tc.unrelated && !strings.Contains(err.Error(), "bounded copy interrupted before completion") {
 				t.Fatal("unclear interruption or hidden broker failure", err)
 			}
 		})
@@ -486,17 +489,18 @@ func (s *cancellingPoll) Poll(context.Context, time.Duration) (Event, error) {
 }
 
 func TestSignalDuringPollDoesNotTurnCancellationIntoCopyFailure(t *testing.T) {
-	for _, unrelated := range []bool{false, true} {
-		t.Run(map[bool]string{false: "cancellation", true: "unrelated failure"}[unrelated], func(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{{"cancellation", context.Canceled}, {"unrelated failure", errors.New("topic authorization failed")}} {
+		t.Run(tc.name, func(t *testing.T) {
 			// Given a following Kafka copy cancelled during a poll or assignment request.
+			ctx, cancel := context.WithCancel(t.Context())
 			r, source, sink, store, _ := fixture(t)
 			r.plan.Source.Kind = "TOPIC"
-			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			failure := error(context.Canceled)
-			if unrelated {
-				failure = errors.New("topic authorization failed")
-			}
+			failure := tc.err
+			unrelated := !errors.Is(failure, context.Canceled)
 			r.source = &cancellingPoll{testSource: source, cancel: cancel, err: failure}
 			// When the signal and poll result arrive together.
 			err := r.Run(ctx)

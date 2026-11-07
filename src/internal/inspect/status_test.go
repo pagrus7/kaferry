@@ -183,9 +183,9 @@ func TestStatusExposesIncompatibleArchiveCursor(t *testing.T) {
 	// When checking status, then the cursor remains inspectable without claiming completion or compatibility.
 	report, err := service.Status(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
 	require.NoError(t, err)
+	require.Len(t, report.Partitions, 1)
 	require.Equal(t, "unknown", report.Verdict)
 	require.Equal(t, 5, report.ExitCode())
-	require.Len(t, report.Partitions, 1)
 	require.Equal(t, new(int64(7)), report.Partitions[0].Position)
 	require.Equal(t, "old", report.Partitions[0].Fingerprint)
 	require.Equal(t, files.source.Stop, report.Partitions[0].Stop)

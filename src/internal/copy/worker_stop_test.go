@@ -72,16 +72,17 @@ func TestWorkerStopCountsAcrossProgressSaves(t *testing.T) {
 }
 
 func TestWorkerStopPreservesSourceStopsAndMarksIdleOwnedPartitions(t *testing.T) {
+	ctx := t.Context()
 	// Given a completed partition, an untouched owned partition and one writable partition.
 	r, source, sink, store, _ := fixture(t)
 	r.plan.Source.Kind, r.plan.WorkerStopAfterRecords = "TOPIC", 1
-	require.NoError(t, source.Start(context.Background(), r, nil))
+	require.NoError(t, source.Start(ctx, r, nil))
 	r.partitions[0].stop = &Stop{Reason: "tip", At: 0}
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 1}}, {Cursor: Cursor{Partition: 2}}}))
-	require.NoError(t, r.input(context.Background(), incoming(2, 0, 1)))
+	require.NoError(t, r.input(ctx, incoming(2, 0, 1)))
 	acknowledgeWritesOnFlush(sink)
 	// When reaching the worker threshold.
-	done, err := r.step(t.Context())
+	done, err := r.step(ctx)
 	// Then preserve source completion and save the worker reason even at an unchanged offset.
 	require.NoError(t, err)
 	require.True(t, done)
