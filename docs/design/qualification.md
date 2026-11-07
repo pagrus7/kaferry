@@ -1,6 +1,6 @@
 # Qualification lab
 
-Run the same scripts from a terminal, GitHub Actions or a local scheduler. No agent, chat session or hosted automation is required. [Component tests](../../CONTRIBUTING.md#test-targets) remain the fast development entrypoints; this lab owns disposable broker setup, teardown and qualification evidence.
+Run the same scripts from a terminal, GitHub Actions or a local scheduler. [Component tests](../../CONTRIBUTING.md#test-targets) remain the fast development entrypoints; this lab owns disposable broker setup, teardown and qualification evidence.
 
 ## Prepare
 
