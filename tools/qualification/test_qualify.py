@@ -2,7 +2,7 @@
 
 import argparse
 import hashlib
-from contextlib import contextmanager
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -21,6 +21,14 @@ from tools.qualification.broker_probe import logical, reconcile, records
 
 
 class MatrixTest(unittest.TestCase):
+    def suite_args(self, directory, suite, **options):
+        binary = directory / 'candidate'
+        binary.write_bytes(b'fixture')
+        settings = dict(suite=suite, source='3.9.2', destination='3.9.2',
+                        output=directory / 'evidence', binary=str(binary), config=None, duration=60)
+        settings.update(options)
+        return argparse.Namespace(**settings)
+
     def test_profiles_cover_directed_pairs_without_duplicates(self):
         for tier, count in [('pr', 6), ('nightly', 7), ('full', 31)]:
             cases = plan(tier)
@@ -128,11 +136,9 @@ class MatrixTest(unittest.TestCase):
         # Given a child admitted by the coordinator with its own project and ports.
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            binary = root/'candidate'; binary.write_bytes(b'candidate')
-            args = argparse.Namespace(suite='recovery', source='3.9.2', destination='3.9.2',
-                output=root/'evidence', binary=str(binary), config=None, duration=60, rate=50)
+            args = self.suite_args(root, 'recovery', rate=50)
             fixture = dict(project='kaferry-lab-test-2', ports=[45292, 45293], reserved_bytes=1000,
-                           binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest())
+                           binary_sha256=hashlib.sha256(Path(args.binary).read_bytes()).hexdigest())
             calls = []
             def command(command, output, label, env, **kwargs):
                 calls.append((command, label, env.copy()))
@@ -224,18 +230,14 @@ class MatrixTest(unittest.TestCase):
                 self.assertTrue((output / 'capacity.json').is_file(), 'failed preflight must retain evidence')
 
     def test_endurance_cleanup_owns_only_its_isolated_project(self):
-        @contextmanager
-        def unlocked(): yield
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            binary = directory / 'kaferry'; binary.write_bytes(b'fixture')
-            args = argparse.Namespace(suite='endurance', source='3.9.2', destination='3.9.2',
-                output=directory / 'evidence', binary=str(binary), config=None, duration=1800, rate=200)
+            args = self.suite_args(directory, 'endurance', duration=1800, rate=200)
             calls = []
             def command(command, output, label, env, **kwargs):
                 calls.append((command, label, env.copy()))
                 if label == 'suite': raise KeyboardInterrupt()
-            with patch('tools.qualification.qualify.lab_lock', unlocked), patch('tools.qualification.qualify.capture', return_value='fixture'), \
+            with patch('tools.qualification.qualify.lab_lock', nullcontext), patch('tools.qualification.qualify.capture', return_value='fixture'), \
                  patch('tools.qualification.qualify.endurance_capacity', return_value={}), patch('tools.qualification.qualify.logged', side_effect=command), \
                  patch('tools.qualification.qualify.subprocess.run') as diagnostics:
                 with self.assertRaises(KeyboardInterrupt): run_suite(args)
@@ -258,14 +260,10 @@ class MatrixTest(unittest.TestCase):
 
     def test_report_error_does_not_replace_the_original_interruption(self):
         # Given an interrupted endurance run whose report directory cannot be written.
-        @contextmanager
-        def unlocked(): yield
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            binary = directory / 'kaferry'; binary.write_bytes(b'fixture')
-            args = argparse.Namespace(suite='endurance', source='3.9.2', destination='3.9.2',
-                output=directory / 'evidence', binary=str(binary), config=None, duration=60, rate=200)
-            with patch('tools.qualification.qualify.lab_lock', unlocked), patch('tools.qualification.qualify.capture', return_value='fixture'), \
+            args = self.suite_args(directory, 'endurance', rate=200)
+            with patch('tools.qualification.qualify.lab_lock', nullcontext), patch('tools.qualification.qualify.capture', return_value='fixture'), \
                  patch('tools.qualification.qualify.logged', side_effect=KeyboardInterrupt()), \
                  patch('tools.qualification.qualify.subprocess.run'), patch('tools.qualification.endurance_results.prepare', side_effect=OSError('disk full')):
                 # When finalization fails too, then the original interruption and receipt survive.
@@ -299,51 +297,31 @@ class MatrixTest(unittest.TestCase):
                     self.assertEqual('passed' if problem is None else 'incomplete',
                                      json.loads((directory / 'qualification.json').read_text())['status'])
 
-    def test_interruption_records_failure_and_cleans_up_brokers(self):
-        @contextmanager
-        def unlocked():
-            yield
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            binary = directory / 'kaferry'; binary.write_bytes(b'executable fixture')
-            args = argparse.Namespace(suite='broker', source='3.9.2', destination='4.4.0',
-                                      output=directory / 'evidence', binary=str(binary), config=None, duration=60)
-            calls = []
-            def command(command, output, label, env, **kwargs):
-                calls.append(label)
-                if label == 'suite':
-                    raise KeyboardInterrupt()
-            with patch('tools.qualification.qualify.lab_lock', unlocked), patch('tools.qualification.qualify.capture', return_value='fixture'), \
-                 patch('tools.qualification.qualify.logged', side_effect=command), patch('tools.qualification.qualify.subprocess.run'):
-                with self.assertRaises(KeyboardInterrupt):
-                    run_suite(args)
-            self.assertEqual(['brokers-up', 'suite', 'brokers-down'], calls)
-            receipt = json.loads((args.output / 'manifest.json').read_text())
-            self.assertEqual('interrupted', receipt['status'])
-            self.assertEqual(64, len(receipt['binary_sha256']))
-
-    def test_log_timeout_still_tears_down_and_preserves_original_failure(self):
-        @contextmanager
-        def unlocked(): yield
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            binary = directory / 'kaferry'; binary.write_bytes(b'fixture')
-            args = argparse.Namespace(suite='broker', source='3.9.2', destination='4.4.0',
-                output=directory / 'evidence', binary=str(binary), config=None, duration=60)
-            calls = []
-            def command(command, output, label, env, **kwargs):
-                calls.append(label)
-                if label == 'suite': raise RuntimeError('original suite failure')
-            with patch('tools.qualification.qualify.lab_lock', unlocked), patch('tools.qualification.qualify.capture', return_value='fixture'), \
-                 patch('tools.qualification.qualify.logged', side_effect=command), \
-                 patch('tools.qualification.qualify.subprocess.run', side_effect=subprocess.TimeoutExpired('docker logs', 30)):
-                with self.assertRaisesRegex(RuntimeError, 'original suite failure'):
-                    run_suite(args)
-            self.assertEqual(['brokers-up', 'suite', 'brokers-down'], calls)
-            receipt = json.loads((args.output / 'manifest.json').read_text())
-            self.assertEqual('failed', receipt['status'])
-            self.assertEqual('original suite failure', receipt['suite_error'])
-            self.assertEqual('logs', receipt['cleanup_errors'][0]['phase'])
+    def test_suite_failure_survives_cleanup_and_records_binary_identity(self):
+        for failure, log_error, status in [
+                (KeyboardInterrupt(), None, 'interrupted'),
+                (RuntimeError('original suite failure'), subprocess.TimeoutExpired('docker logs', 30), 'failed')]:
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as temporary:
+                # Given a broker suite that fails, with diagnostics that may also time out.
+                args = self.suite_args(Path(temporary), 'broker', destination='4.4.0')
+                calls = []
+                def command(command, output, label, env, **kwargs):
+                    calls.append(label)
+                    if label == 'suite': raise failure
+                with patch('tools.qualification.qualify.lab_lock', nullcontext), patch('tools.qualification.qualify.capture', return_value='fixture'), \
+                     patch('tools.qualification.qualify.logged', side_effect=command), \
+                     patch('tools.qualification.qualify.subprocess.run', side_effect=log_error):
+                    # When cleanup runs, then it preserves the original exception and evidence.
+                    with self.assertRaises(type(failure)) as raised:
+                        run_suite(args)
+                self.assertIs(failure, raised.exception)
+                self.assertEqual(['brokers-up', 'suite', 'brokers-down'], calls)
+                receipt = json.loads((args.output / 'manifest.json').read_text())
+                self.assertEqual(status, receipt['status'])
+                self.assertEqual(64, len(receipt['binary_sha256']))
+                if log_error is not None:
+                    self.assertEqual('original suite failure', receipt['suite_error'])
+                    self.assertEqual('logs', receipt['cleanup_errors'][0]['phase'])
 
     def test_binary_resolution_failure_retains_failure_evidence(self):
         # Given an endurance candidate path that cannot resolve.

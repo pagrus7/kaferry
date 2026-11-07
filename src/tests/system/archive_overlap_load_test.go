@@ -4,13 +4,12 @@ package compat
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/pagrus7/kaferry/src/internal/archive/avro"
-	"github.com/pagrus7/kaferry/src/internal/archive/replay"
+	core "github.com/pagrus7/kaferry/src/internal/copy"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,29 +44,12 @@ func TestLoadArchiveOverlap(t *testing.T) {
 			report.ArchiveSourceFiles = 16
 			report.ArchiveReplayBlocks = blocks
 			// Then every duplicate source offset survives, with its distinct original value.
-			catalog := replay.NewCatalog(out, codec, replay.NativeFiles{})
-			selection, err := catalog.Select(nil)
-			require.NoError(t, err)
-			pool, err := replay.NewPool(catalog, replay.Limits{Blocks: 32})
-			require.NoError(t, err)
-			defer pool.Close()
-			progress := make([]replay.Progress, len(selection.Files))
-			for i, f := range selection.Files {
-				progress[i] = replay.Progress{File: f, Next: replay.Position{Block: f.Start, Previous: -1}}
-			}
-			reader, err := replay.NewReader(progress, pool)
-			require.NoError(t, err)
 			seen := make(map[string]bool, 16000)
-			for {
-				entry, err := reader.Next()
-				if err == io.EOF {
-					break
-				}
-				require.NoError(t, err)
-				value := string(entry.Record.Value)
+			scanArchive(t, out, func(record core.Record) {
+				value := string(record.Value)
 				require.False(t, seen[value])
 				seen[value] = true
-			}
+			})
 			require.Len(t, seen, 16000)
 			t.Logf("cache=%d records/s=%.0f elapsed=%.3fs cpu=%.3fs RSS=%.1fMiB", blocks, report.RecordsPerSecond, report.ElapsedSeconds, report.ChildCPUSeconds, float64(report.SampledPeakRSSBytes)/(1<<20))
 		})

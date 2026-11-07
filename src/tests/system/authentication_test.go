@@ -4,13 +4,8 @@ package compat
 
 import (
 	"context"
-	"encoding/json"
-	"encoding/pem"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -36,25 +31,9 @@ func TestSaslTlsExternalAuthentication(t *testing.T) {
 				cfg["sasl.kerberos.config"] = os.Getenv("KAFERRY_QUAL_KRB_CONFIG")
 			} else {
 				key := fixtureOAuthKey(t, 1)
-				issuer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					user, password, ok := r.BasicAuth()
-					if !ok || user != "copier-client" || password != "private-oauth-secret" {
-						w.WriteHeader(http.StatusUnauthorized)
-						return
-					}
-					token, err := signedFixtureToken(key, 1, "https://kaferry.test", "kaferry-qualification", time.Now().Add(time.Hour))
-					if err != nil {
-						w.WriteHeader(http.StatusInternalServerError)
-						return
-					}
-					w.Header().Set("Content-Type", "application/json")
-					_ = json.NewEncoder(w).Encode(map[string]any{"access_token": token, "token_type": "Bearer", "expires_in": 3600})
-				}))
-				defer issuer.Close()
-				ca := filepath.Join(t.TempDir(), "issuer.pem")
-				require.NoError(t, os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.Certificate().Raw}), 0600))
-				cfg["sasl.oauthbearer.token.endpoint.url"], cfg["sasl.oauthbearer.ssl.ca.location"] = issuer.URL, ca
-				cfg["sasl.oauthbearer.client.id"], cfg["sasl.oauthbearer.client.secret"] = "copier-client", "private-oauth-secret"
+				oauthTokenEndpoint(t, cfg, 3600, func() (string, error) {
+					return signedFixtureToken(key, 1, "https://kaferry.test", "kaferry-qualification", time.Now().Add(time.Hour))
+				})
 			}
 			statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s') OPTIONS(WORKER_STOP_AFTER_RECORDS=1)", dst, src, group)
 			// When separate CLI invocations copy and resume with that authentication method.

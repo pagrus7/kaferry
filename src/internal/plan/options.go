@@ -85,31 +85,25 @@ func (p *Plan) groupOption(option sql.Option) error {
 }
 
 func (p *Plan) stalenessOption(option sql.Option) error {
-	if option.Name == "MAX_OUT_OF_ORDER" {
-		if p.Window.Upper == nil {
-			return sql.At(option.Position, fmt.Errorf("MAX_OUT_OF_ORDER requires an upper timestamp bound in WHERE"))
-		}
-		if p.HasOffsetEnd() {
-			return sql.At(option.Position, fmt.Errorf("MAX_OUT_OF_ORDER cannot be combined with an explicit offset end"))
-		}
-		value, err := allowance(option)
-		if err == nil {
-			p.MaxOutOfOrderMS = &value
-		}
-		return err
-	}
-	if p.Source.Kind != "TOPIC" {
+	if option.Name == "MAX_STALENESS" && p.Source.Kind != "TOPIC" {
 		return sql.At(option.Position, fmt.Errorf("MAX_STALENESS requires a topic source; remove MAX_STALENESS for ARCHIVE sources"))
 	}
 	if p.Window.Upper == nil {
-		return sql.At(option.Position, fmt.Errorf("MAX_STALENESS requires an upper timestamp bound in WHERE"))
+		return sql.At(option.Position, fmt.Errorf("%s requires an upper timestamp bound in WHERE", option.Name))
 	}
 	if p.HasOffsetEnd() {
-		return sql.At(option.Position, fmt.Errorf("MAX_STALENESS cannot be combined with an explicit offset end"))
+		return sql.At(option.Position, fmt.Errorf("%s cannot be combined with an explicit offset end", option.Name))
 	}
-	var err error
-	p.MaxStalenessMS, err = allowance(option)
-	return err
+	value, err := allowance(option)
+	if err != nil {
+		return err
+	}
+	if option.Name == "MAX_OUT_OF_ORDER" {
+		p.MaxOutOfOrderMS = &value
+	} else {
+		p.MaxStalenessMS = value
+	}
+	return nil
 }
 
 func (p *Plan) policyOption(option sql.Option) error {

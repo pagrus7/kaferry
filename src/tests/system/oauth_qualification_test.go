@@ -54,6 +54,29 @@ func oauthProperties(t *testing.T) map[string]string {
 	return cfg
 }
 
+func oauthTokenEndpoint(t *testing.T, cfg map[string]string, expiresIn int, issue func() (string, error)) {
+	t.Helper()
+	issuer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, password, ok := r.BasicAuth()
+		if !ok || user != "copier-client" || password != "private-oauth-secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		token, err := issue()
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": token, "token_type": "Bearer", "expires_in": expiresIn})
+	}))
+	t.Cleanup(issuer.Close)
+	ca := filepath.Join(t.TempDir(), "issuer.pem")
+	require.NoError(t, os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.Certificate().Raw}), 0600))
+	cfg["sasl.oauthbearer.token.endpoint.url"], cfg["sasl.oauthbearer.ssl.ca.location"] = issuer.URL, ca
+	cfg["sasl.oauthbearer.client.id"], cfg["sasl.oauthbearer.client.secret"] = "copier-client", "private-oauth-secret"
+}
+
 func TestSaslTlsOAuthTokenFile(t *testing.T) {
 	// Given a broker that validates signatures, issuer, audience and expiration.
 	_, producer, src, dst, group := secureFixture(t)
@@ -110,31 +133,15 @@ func TestSaslTlsOAuthRenewalAndKeyRotation(t *testing.T) {
 	keys := [2]*rsa.PrivateKey{fixtureOAuthKey(t, 1), fixtureOAuthKey(t, 2)}
 	var rotated atomic.Bool
 	var renewed atomic.Int64
-	issuer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, password, ok := r.BasicAuth()
-		if !ok || user != "copier-client" || password != "private-oauth-secret" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
+	cfg := oauthProperties(t)
+	oauthTokenEndpoint(t, cfg, 20, func() (string, error) {
 		identity := 1
 		if rotated.Load() {
 			identity = 2
 			renewed.Add(1)
 		}
-		token, err := signedFixtureToken(keys[identity-1], identity, "https://kaferry.test", "kaferry-qualification", time.Now().Add(20*time.Second))
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": token, "token_type": "Bearer", "expires_in": 20})
-	}))
-	defer issuer.Close()
-	ca := filepath.Join(t.TempDir(), "issuer.pem")
-	require.NoError(t, os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.Certificate().Raw}), 0600))
-	cfg := oauthProperties(t)
-	cfg["sasl.oauthbearer.token.endpoint.url"], cfg["sasl.oauthbearer.ssl.ca.location"] = issuer.URL, ca
-	cfg["sasl.oauthbearer.client.id"], cfg["sasl.oauthbearer.client.secret"] = "copier-client", "private-oauth-secret"
+		return signedFixtureToken(keys[identity-1], identity, "https://kaferry.test", "kaferry-qualification", time.Now().Add(20*time.Second))
+	})
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	publish(t, producer, &kgo.Record{Topic: src, Value: []byte("before"), Timestamp: time.Now().Truncate(time.Millisecond)})
