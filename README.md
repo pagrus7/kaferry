@@ -120,6 +120,4 @@ Use broker addresses reachable from the container. For archive replay, create `c
 
 **Documentation:** [Index](docs/README.md) · [Settings and results](docs/reference.md).
 
-**[Endurance test results](https://pagrus7.github.io/kaferry/)** — published runs, measurements and evidence.
-
 **Project:** [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [MIT license](LICENSE); dependencies retain their licenses.

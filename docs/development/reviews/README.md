@@ -8,7 +8,7 @@ Initial reviewers receive scope and evidence without suspected findings or prefe
 
 Standard changes require independent docs, tests and simplicity reviewers. Formatting-only changes need one docs reviewer to confirm that meaning, examples, commands, settings, numbers and link targets are unchanged. Eligible files are `README.md` and Markdown under `docs/`, excluding `docs/design/` and `docs/development/`; policy files, code or inline-code edits and changed behavior claims require standard review. Uncertain cases use standard review.
 
-Run documentation validation and final-head CI in either case. Review sections use `Passed`, `Pending` or `Failed: reason`; ready PRs require `Passed`. For an entirely formatting-only PR, both Tests and Simplicity instead use `Not required: formatting only`, with Docs `Passed`. CI checks the declaration and file scope, not whether reviewers ran or meaning was preserved. Dependabot retains its generated description, with the same review requirements.
+Run documentation validation and final-head CI in either case. Review sections use `Passed`, `Pending` or `Failed: reason`; ready PRs require `Passed`. For an entirely formatting-only PR, both Tests and Simplicity instead use `Not required: formatting only`, with Docs `Passed`. Dependabot retains its generated description, with the same review requirements.
 
 ## Run a review
 

@@ -133,13 +133,6 @@ def publish(package, release, repository):
         uploads.append(str(checksums))
         subprocess.run(['gh', 'release', 'upload', release, '--repo', repository, *uploads], check=True)
     print(f'Published evidence: https://github.com/{repository}/releases/tag/{release}')
-    refresh = ['gh', 'workflow', 'run', 'endurance-results.yml', '--ref', 'main', '--repo', repository]
-    try:
-        subprocess.run(refresh, check=True)
-    except subprocess.CalledProcessError as error:
-        raise ValueError('Evidence is uploaded, but the results page refresh could not start. '
-                         'Retry the refresh only: ' + ' '.join(refresh)) from error
-    print('Results page refresh requested; the endurance-results workflow reports deployment status.')
 
 
 def main(argv=None):

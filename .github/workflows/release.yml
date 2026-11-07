@@ -231,16 +231,10 @@ jobs:
         env:
           SOURCE_SHA: ${{ github.sha }}
         run: python3 -m tools.ci.ci release-summary .cache/release-evidence "release/kaferry-$RELEASE_TAG-linux-amd64.tar.gz" "$SOURCE_SHA" "$RELEASE_TAG" release/qualification.md
-      - name: Retain measurements and render the latest-release front page
+      - name: Retain release measurements
         env:
           SOURCE_SHA: ${{ github.sha }}
         run: python3 -m tools.release.release_results .cache/release-evidence "release/kaferry-$RELEASE_TAG-linux-amd64.tar.gz" release/compatibility.json "$SOURCE_SHA" "$RELEASE_TAG" release
-      - name: Render the README image
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes librsvg2-bin
-          rsvg-convert --output=release/release-results.png release/release-results.svg
-          (cd release && sha256sum release-results.png >> release-results.SHA256SUMS)
       - name: Checksums
         run: |
           python3 - <<'PY'

@@ -1,12 +1,12 @@
 # Release results
 
-The [release-results image](https://github.com/pagrus7/kaferry/releases/latest/download/release-results.png) follows the latest stable release. Its version and source identify the measured executable. See [the full report](https://github.com/pagrus7/kaferry/releases/latest/download/release-results.md); [JSON data](https://github.com/pagrus7/kaferry/releases/latest/download/release-results.json) retains all load/soak measurements and their environments. Reports are release assets, so their availability does not depend on Actions artifact retention. Image caches may retain an earlier image; check the displayed version.
+The [latest release report](https://github.com/pagrus7/kaferry/releases/latest/download/release-results.md) identifies the measured executable by version and source. [JSON data](https://github.com/pagrus7/kaferry/releases/latest/download/release-results.json) retains all load/soak measurements and their environments. Reports are release assets, so their availability does not depend on Actions artifact retention.
 
 The Kafka matrix covers source/destination broker pairs, authentication fixtures and capture endurance. Its case durations describe qualification runs. [Full compatibility evidence](https://github.com/pagrus7/kaferry/releases/latest/download/compatibility.json) records source and binary identities; [qualification](https://github.com/pagrus7/kaferry/releases/latest/download/qualification.md) describes the other exercised scenarios and limits.
 
 ## Throughput measurements
 
-The image shows five Linux AMD64 load checks: Kafka copying with key and preserved routing, capture, replay and archive file copying. The report names each input count. Timing starts when SQL input is released and ends when the process exits. These short checks exercise correctness and bounded resources on shared CI runners; their rates do not establish deployment capacity or a change against another release.
+The report shows five Linux AMD64 load checks: Kafka copying with key and preserved routing, capture, replay and archive file copying, with each input count. Timing starts when SQL input is released and ends when the process exits. These short checks exercise correctness and bounded resources on shared CI runners; their rates do not establish deployment capacity or a change against another release.
 
 The 30-minute soak uses paced input and deliberate destination stalls. Its rate describes that workload; memory, lag, shutdown and work-cap measurements are in the JSON. Detailed logs and sample streams remain in the release workflow's `qualification-*` artifacts for 30 days. Individual `matrix-*` artifacts retain their logs and reconciliation data for 14 days.
 

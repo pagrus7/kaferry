@@ -147,8 +147,6 @@ PRs also run quality/security checks and [additional integrity suites](../../.gi
 
 Use targeted package tests during local edits; full local suites are optional when CI will repeat them. Keep real-Kafka tests for broker behavior; move tests only after comparing executed names and the combined coverage on the same revision.
 
-`python3 -m tools.ci.ci_latency` reports recent CI wall time (including queues, excluding local reviews and PR description updates) and runner minutes. Percentiles need 20 complete heads without reruns or cancellations; both are counted separately. A six-minute PR p95 is a target, not a gate. Track reruns, escaped regressions and local review time when investigating delays; tighten checks around actual failures before adding broad suites.
-
 After retargeting a PR to a different base branch, push a new commit so CI compares the new base and head.
 
 ### Quality indicators
