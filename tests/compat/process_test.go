@@ -3,13 +3,13 @@
 package compat
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -23,7 +23,7 @@ type cliProcess struct {
 	command *exec.Cmd
 	stdin   io.WriteCloser
 	done    chan struct{}
-	output  bytes.Buffer
+	output  string
 	err     error
 }
 
@@ -73,8 +73,12 @@ func launchCLI(t *testing.T, ctx context.Context, binary string, args ...string)
 
 func (p *cliProcess) start(t *testing.T) {
 	t.Helper()
-	p.command.Stderr = &p.output
-	p.command.Stdout = &p.output
+	p.output = filepath.Join(t.TempDir(), "cli.log")
+	log, err := os.Create(p.output)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, log.Close()) })
+	p.command.Stderr = log
+	p.command.Stdout = log
 	require.NoError(t, p.command.Start())
 	go func() { p.err = p.command.Wait(); close(p.done) }()
 	t.Cleanup(func() {
@@ -83,7 +87,7 @@ func (p *cliProcess) start(t *testing.T) {
 		}
 		_ = p.wait()
 		if t.Failed() {
-			t.Logf("copy process output: %s", p.output.String())
+			t.Logf("copy process output: %s", p.logs())
 		}
 	})
 }
@@ -107,7 +111,14 @@ func (p *cliProcess) finished() bool {
 func (p *cliProcess) wait() error                   { <-p.done; return p.err }
 func (p *cliProcess) signal(signal os.Signal) error { return p.command.Process.Signal(signal) }
 func (p *cliProcess) pid() int                      { return p.command.Process.Pid }
-func (p *cliProcess) logs() string                  { _ = p.wait(); return p.output.String() }
+func (p *cliProcess) logs() string {
+	_ = p.wait()
+	data, err := os.ReadFile(p.output)
+	if err != nil {
+		return err.Error()
+	}
+	return string(data)
+}
 func (p *cliProcess) cpu() time.Duration {
 	_ = p.wait()
 	return p.command.ProcessState.UserTime() + p.command.ProcessState.SystemTime()

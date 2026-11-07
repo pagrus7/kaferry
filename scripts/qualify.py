@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 IMAGES = json.loads((ROOT / 'tests/qualification/matrix.json').read_text())
 VERSIONS = list(IMAGES)
 RELEASES = json.loads((ROOT / 'tests/qualification/releases.json').read_text())
-SUITES = ('broker', 'auth', 'fault', 'load', 'soak', 'capture', 'endurance', 'migration',
+SUITES = ('broker', 'auth', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'migration',
           'model', 'resources', 'integration', 'fuzz', 'benchmark', 'smoke', 'cloud')
 STOP_GRACE = 5
 SOAK_DRAIN_SECONDS = 300
@@ -117,6 +117,8 @@ def lab_lock():
 
 
 def suite_command(args, env):
+    if args.suite != 'recovery':
+        env.pop('KAFERRY_RECOVERY_DURATION', None)
     prefix = [env.get('GO', 'go'), 'test', '-count=1', '-json']
     if args.suite in ('broker', 'cloud'):
         python = str(VENV / 'bin/python') if VENV.exists() else sys.executable
@@ -138,6 +140,12 @@ def suite_command(args, env):
             env.pop('KAFERRY_SOAK_DEST_STALL_CONTAINER', None)
         return prefix + [f'-timeout={args.duration + SOAK_DRAIN_SECONDS + 300}s', '-tags=integration,load', '-run',
                          '^TestStreamingSoak', './tests/compat'], ['TestStreamingSoakFidelityCommitLagMemoryAndShutdown']
+    if args.suite == 'recovery':
+        if args.duration > 86400:
+            raise ValueError('recovery duration must not exceed 24h')
+        env['KAFERRY_RECOVERY_DURATION'] = f'{args.duration}s'
+        return prefix + [f'-timeout={args.duration+600}s', '-tags=integration,fault', '-run',
+                         '^TestRecoveryBlockedOutput$', './tests/compat'], ['TestRecoveryBlockedOutput']
     if args.suite == 'auth':
         env['KAFERRY_AUTH_IMAGE'] = IMAGES[args.source]
         return ['sh', 'tests/qualification/run.sh'], [
@@ -167,9 +175,9 @@ def suite_command(args, env):
         return prefix + ['-timeout=20m', '-tags=integration,load', '-run', '^TestLoad',
                          './tests/compat'], ['TestLoadBoundedKafkaCopy/default']
     return prefix + ['-timeout=10m', '-tags=integration,fault', '-run',
-                     '^TestBlockingCommit|^TestRebalanceChurn|^TestCrashResume', './tests/compat'], [
+                     '^TestBlockingCommit|^TestRebalanceChurn|^TestCrashResume|^TestRecoveryBlockedOutput', './tests/compat'], [
         'TestBlockingCommitAcrossBrokerOutage', 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits',
-        'TestCrashResumeReconcilesRetainedRecords']
+        'TestCrashResumeReconcilesRetainedRecords', 'TestRecoveryBlockedOutput']
 
 
 def endurance_capacity(seconds, output, compose, env):
@@ -206,7 +214,7 @@ def run_suite(args):
                'started_at': datetime.now(timezone.utc).isoformat(), 'status': 'running',
                'go': capture([os.environ.get('GO', 'go'), 'version']),
                'execution': 'checkout component tests' if args.suite in ('model', 'resources', 'fuzz', 'benchmark') else 'CLI scenarios with checkout fixture tests',
-               'requested_seconds': args.duration if args.suite in STREAMING_SUITES else None}
+               'requested_seconds': args.duration if args.suite in (*STREAMING_SUITES, 'recovery') else None}
     if args.suite in STREAMING_SUITES:
         receipt['drain_seconds'] = SOAK_DRAIN_SECONDS
     if args.suite == 'endurance':
@@ -220,10 +228,10 @@ def run_suite(args):
     source_port, destination_port = (39192, 40192) if args.suite == 'endurance' else (39092, 40092)
     env = dict(os.environ, KAFERRY_SOURCE_PORT=str(source_port), KAFERRY_DESTINATION_PORT=str(destination_port), KAFERRY_REPORT_DIR=str(args.output), KAFERRY_TEST_OUTPUT='-json',
                KAFKA_TEST_BROKERS=f'127.0.0.1:{source_port}', KAFKA_TEST_DEST_BROKERS=f'127.0.0.1:{destination_port}',
-               KAFKA_FAULT_CONTAINER='kaferry-compat-kafka-1', CGO_ENABLED='1')
+               KAFKA_FAULT_CONTAINER=project+'-kafka-1', KAFKA_FAULT_DEST_CONTAINER=project+'-kafka-dr-1', KAFERRY_FIXTURE_PROJECT=project, CGO_ENABLED='1')
     write_json(args.output / 'manifest.json', receipt)
     compose = ['docker', 'compose', '-p', project, '--profile', 'cross-cluster']
-    fixtures = args.suite in ('broker', 'fault', 'load', 'soak', 'capture', 'endurance', 'integration') or (args.suite == 'migration' and args.state_contract == 'resume')
+    fixtures = args.suite in ('broker', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration') or (args.suite == 'migration' and args.state_contract == 'resume')
     try:
         args.binary = str(Path(args.binary).resolve())
         if not Path(args.binary).is_file():
@@ -253,7 +261,7 @@ def run_suite(args):
                 if args.suite == 'endurance':
                     receipt['capacity'] = endurance_capacity(args.duration, args.output, compose, env)
                     write_json(args.output / 'manifest.json', receipt)
-                logged(command, args.output, 'suite', env, timeout=args.duration + SOAK_DRAIN_SECONDS + 300 if args.suite in STREAMING_SUITES else 1800)
+                logged(command, args.output, 'suite', env, timeout=args.duration + SOAK_DRAIN_SECONDS + 300 if args.suite in (*STREAMING_SUITES, 'recovery') else 1800)
                 if expected:
                     verify_tests((args.output / 'suite.log').read_text(), expected)
                 if args.suite == 'benchmark':
@@ -419,7 +427,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.action in ('run', 'matrix', 'releases'):
         endurance = getattr(args, 'suite', None) == 'endurance'
-        args.duration = args.duration if args.duration is not None else (86400 if endurance else 120)
+        args.duration = args.duration if args.duration is not None else (86400 if endurance else 7200 if getattr(args, 'suite', None) == 'recovery' else 120)
         args.rate = args.rate if args.rate is not None else (200 if endurance else 50)
     os.chdir(ROOT)
     if args.action == 'setup':

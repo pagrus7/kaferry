@@ -85,7 +85,7 @@ jobs:
               ;;
             fault)
               python3 scripts/ci.py fault make fault KAFERRY_TEST_OUTPUT=-json
-              python3 scripts/ci.py verify-tests fault 'TestBlockingCommitAcrossBrokerOutage' 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits' 'TestCrashResumeReconcilesRetainedRecords'
+              python3 scripts/ci.py verify-tests fault 'TestBlockingCommitAcrossBrokerOutage' 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits' 'TestCrashResumeReconcilesRetainedRecords' 'TestRecoveryBlockedOutput'
               ;;
             fuzz|benchmark) python3 scripts/ci.py "$SUITE" make "$SUITE" ;;
             *) echo 'Unknown extended test suite' >&2; exit 1 ;;

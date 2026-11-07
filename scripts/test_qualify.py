@@ -26,6 +26,22 @@ class MatrixTest(unittest.TestCase):
             self.assertEqual(count, len({c['id'] for c in cases}))
         self.assertIn(('4.4.0', '3.9.2'), {(c['source'], c['destination']) for c in plan('pr')})
 
+    def test_recovery_runs_bounded_repetitions_separately_from_uptime(self):
+        # Given a standalone recovery request, its default is two hours.
+        with patch('qualify.run_suite') as run:
+            main(['run', 'recovery'])
+        args = run.call_args.args[0]
+        self.assertEqual(7200, args.duration)
+        env = {}
+        # When selecting tests, then allow a final bounded cycle and require execution.
+        command, required = suite_command(args, env)
+        self.assertIn('-timeout=7800s', command)
+        self.assertEqual('7200s', env['KAFERRY_RECOVERY_DURATION'])
+        self.assertEqual(['TestRecoveryBlockedOutput'], required)
+        args.duration = 86401
+        with self.assertRaisesRegex(ValueError, '24h'):
+            suite_command(args, {})
+
     def test_host_lock_is_shared_across_checkouts(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
