@@ -79,11 +79,17 @@ jobs:
             --build-arg "VERSION=$VERSION" --build-arg "REVISION=$REVISION" \
             --sbom=true --provenance=mode=max \
             --output type=oci,dest=.cache/kaferry.oci.tar .cache/container-context
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            --file tools/release/demo/Dockerfile \
+            --build-arg "VERSION=$VERSION" --build-arg "REVISION=$REVISION" \
+            --sbom=true --provenance=mode=max \
+            --output type=oci,dest=.cache/kaferry-demo.oci.tar .cache/container-context
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: container-inputs
           path: |
             .cache/kaferry.oci.tar
+            .cache/kaferry-demo.oci.tar
             .cache/container-context/
           include-hidden-files: true
           retention-days: 7
@@ -113,11 +119,17 @@ jobs:
       - name: Load the native platform without rebuilding
         env:
           ARCH: ${{ matrix.arch }}
-        run: skopeo copy --override-arch "$ARCH" oci-archive:.cache/kaferry.oci.tar docker-daemon:kaferry:ci
+        run: |
+          skopeo copy --override-arch "$ARCH" oci-archive:.cache/kaferry.oci.tar docker-daemon:kaferry:ci
+          skopeo copy --override-arch "$ARCH" oci-archive:.cache/kaferry-demo.oci.tar docker-daemon:kaferry-demo:ci
       - name: Verify packaged bytes and file-copy fidelity
         env:
           ARCH: ${{ matrix.arch }}
         run: python3 -m tools.release.container_smoke kaferry:ci .cache/container-context "$ARCH"
+      - name: Verify the disposable Kafka demo and failure handling
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: python3 -m tools.release.container_smoke kaferry-demo:ci .cache/container-context "$ARCH" --demo
       - name: Verify immutable OCI publishing against a disposable registry
         if: matrix.arch == 'amd64'
         run: |
@@ -174,11 +186,19 @@ jobs:
         run: |
           digest=$(python3 -m tools.release.container_publish .cache/kaferry.oci.tar "ghcr.io/pagrus7/kaferry:$VERSION")
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          demo_digest=$(python3 -m tools.release.container_publish .cache/kaferry-demo.oci.tar "ghcr.io/pagrus7/kaferry-demo:$VERSION")
+          echo "demo_digest=$demo_digest" >> "$GITHUB_OUTPUT"
       - name: Attest the published image index
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ghcr.io/pagrus7/kaferry
           subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      - name: Attest the published demo image index
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/pagrus7/kaferry-demo
+          subject-digest: ${{ steps.push.outputs.demo_digest }}
           push-to-registry: true
       - name: Update the latest stable image alias
         env:
@@ -188,4 +208,5 @@ jobs:
           current=$(gh api repos/pagrus7/kaferry/releases/latest --jq .tag_name)
           if [ "$VERSION" = "$current" ]; then
             python3 -m tools.release.container_publish .cache/kaferry.oci.tar ghcr.io/pagrus7/kaferry:latest
+            python3 -m tools.release.container_publish .cache/kaferry-demo.oci.tar ghcr.io/pagrus7/kaferry-demo:latest
           fi

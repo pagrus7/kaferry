@@ -25,9 +25,11 @@ From a checkout, run `make build`. From the repository root, invoke `./bin/kafer
 
 ## Container images
 
-[Try the bundled Docker demo](usage.md#first-copy-with-docker) without installing Kaferry or setting up Kafka.
+[Try the disposable Kafka demo](../README.md#docker-quick-start) without installing Kaferry or preparing files. `ghcr.io/pagrus7/kaferry-demo` includes Apache Kafka and the release's Kaferry binary, runs as Kafka's non-root `appuser`, and verifies a three-record topic-to-topic copy. Its broker listens only on container loopback. The demo has a three-minute deadline plus up to ten seconds for forced shutdown; it requires more download space and memory than the CLI image. Ctrl+C cancels the demo. With `--rm`, the container and its data are removed after exit; Docker retains the image cache.
 
-Images package the tested Linux release binaries without recompiling them. The container workflow downloads the published archives, verifies SHA-256 checksums and archive provenance against the exact release tag, commit and release workflow, and retains `LICENSE` and `THIRD_PARTY_NOTICES.txt` in `/usr/share/doc/kaferry`. A digest-pinned Distroless base supplies CA certificates and its own package files. The image runs as UID/GID 65532, with `HOME=/tmp` and `/work` as its working directory; bind mounts need suitable ownership or an explicit `--user`.
+Both images support Linux AMD64/ARM64 and package tested release binaries without recompiling them. The container workflow downloads the published archives, verifies SHA-256 checksums and archive provenance against the exact release tag, commit and release workflow, and retains `LICENSE` and `THIRD_PARTY_NOTICES.txt` in `/usr/share/doc/kaferry`.
+
+Use `ghcr.io/pagrus7/kaferry` for your own jobs. Its digest-pinned Distroless base supplies CA certificates and its own package files. This CLI image runs as UID/GID 65532, with `HOME=/tmp` and `/work` as its working directory; bind mounts need suitable ownership or an explicit `--user`. It also includes the [archive tutorial](usage.md#first-copy-with-docker).
 
 Verify a published digest with GitHub CLI:
 
@@ -37,6 +39,6 @@ gh attestation verify oci://ghcr.io/pagrus7/kaferry@sha256:DIGEST \
   --signer-workflow pagrus7/kaferry/.github/workflows/containers.yml
 ```
 
-Use a registry login if needed. The image also carries SBOM/provenance records for inspection; attestations establish build origin, not application correctness. `ghcr.io/pagrus7/kaferry:latest` follows the current stable release after its image passes testing and attestation. Version tags and digests identify fixed images.
+For the demo image, replace `kaferry` with `kaferry-demo` in the image reference. Use a registry login if needed. Both images carry SBOM/provenance records for inspection; attestations establish build origin, not application correctness. Their `latest` tags follow the current stable release after testing and attestation. Version tags and digests identify fixed images.
 
 [Run with mounted files and persistent checkpoints](usage.md#containers).

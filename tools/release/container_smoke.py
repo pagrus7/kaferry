@@ -7,6 +7,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import tempfile
+import time
 import uuid
 
 
@@ -38,15 +39,67 @@ def check_tutorial(image):
         subprocess.run(["docker", "volume", "rm", volume], check=True, stdout=subprocess.DEVNULL)
 
 
+def check_demo(image):
+    # Given the published demo entrypoint with no host files, ports or external network.
+    def run(arguments=()):
+        name = "kaferry-demo-" + uuid.uuid4().hex
+        try:
+            return subprocess.run(["docker", "run", "--rm", "--network=none", "--name", name, *arguments, image],
+                                  text=True, capture_output=True, timeout=210)
+        finally:
+            subprocess.run(["docker", "rm", "--force", "--volumes", name],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    for _ in range(2):
+        # When each fresh container completes, then verify the copy and independently read records.
+        result = run()
+        if result.returncode:
+            raise ValueError(f"demo failed: {result}")
+        summaries = [json.loads(line) for line in result.stderr.splitlines() if line.startswith('{')]
+        summaries = [entry for entry in summaries if entry.get("msg") == "copy summary"]
+        if len(summaries) != 1 or summaries[0]["confirmed"] != 3 or summaries[0]["submitted"] != 3:
+            raise ValueError(f"demo did not copy three fresh records: {result.stderr}")
+        if "order-1\norder-2\norder-3\n" not in result.stdout or "Demo passed:" not in result.stdout:
+            raise ValueError(f"demo did not verify its output: {result.stdout}")
+        print(result.stdout, end="")
+    # Given a consumer returning corrupted output, a successful copy alone must not pass the demo.
+    with tempfile.TemporaryDirectory() as name:
+        consumer = Path(name) / "consumer.sh"
+        consumer.write_text("#!/bin/sh\nprintf 'order-1\\norder-2\\nWRONG\\n'\n")
+        consumer.chmod(0o755)
+        result = run(["--mount", f"type=bind,src={consumer},dst=/opt/kafka/bin/kafka-console-consumer.sh,readonly"])
+        if result.returncode != 1 or "WRONG" not in result.stdout or "Demo passed:" in result.stdout:
+            raise ValueError(f"demo accepted corrupted destination output: {result}")
+    # Given a running broker, cancellation must stop the container promptly with a failed result.
+    container = subprocess.check_output(["docker", "run", "--detach", "--network=none", image], text=True).strip()
+    try:
+        deadline = time.monotonic() + 120
+        while True:
+            logs = subprocess.check_output(["docker", "logs", container], stderr=subprocess.STDOUT, text=True)
+            if "Creating orders" in logs:
+                break
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"demo never reached broker readiness: {logs}")
+            time.sleep(0.2)
+        subprocess.run(["docker", "stop", "--time", "15", container], check=True, timeout=20, stdout=subprocess.DEVNULL)
+        code = subprocess.check_output(["docker", "inspect", "--format", "{{.State.ExitCode}}", container], text=True).strip()
+        if code != "143":
+            raise ValueError(f"demo cancellation returned {code}, expected 143")
+    finally:
+        subprocess.run(["docker", "rm", "--force", "--volumes", container], check=True, stdout=subprocess.DEVNULL)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image")
     parser.add_argument("context", type=Path)
     parser.add_argument("architecture", choices=("amd64", "arm64"))
+    parser.add_argument("--demo", action="store_true")
     args = parser.parse_args()
     record = json.loads((args.context / "release.json").read_text())
     config = json.loads(subprocess.check_output(["docker", "image", "inspect", args.image], text=True))[0]
-    if config["Config"]["User"] != "65532:65532" or config["Architecture"] != args.architecture:
+    user = "appuser" if args.demo else "65532:65532"
+    if config["Config"]["User"] != user or config["Architecture"] != args.architecture:
         raise ValueError("image architecture/non-root identity differs from the expected target")
     container = subprocess.check_output(["docker", "create", args.image], text=True).strip()
     try:
@@ -62,11 +115,15 @@ def main():
             if not ca.stat().st_size:
                 raise ValueError("container is missing its CA certificate bundle")
     finally:
-        subprocess.run(["docker", "rm", container], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(["docker", "rm", "--volumes", container], check=True, stdout=subprocess.DEVNULL)
     output = subprocess.check_output(["docker", "run", "--rm", "--read-only", "--cap-drop=ALL",
-                                      "--security-opt=no-new-privileges", args.image, "--version"], text=True)
+                                      "--security-opt=no-new-privileges", "--entrypoint", "/usr/local/bin/kaferry", args.image, "--version"], text=True)
     if not output.startswith(f"kaferry {record['version']} (commit {record['revision']}; "):
         raise ValueError(f"unexpected container version: {output!r}")
+    if args.demo:
+        check_demo(args.image)
+        print("Demo identity, fresh runs, output verification and cancellation verified")
+        return
     check_tutorial(args.image)
     root = Path.cwd().resolve()
     wrapper = root / ".cache/container-kaferry"
