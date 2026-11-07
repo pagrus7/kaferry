@@ -115,7 +115,7 @@ func TestInspectionRejectsRelativeDisorderOverflowWithoutWriting(t *testing.T) {
 			require.ErrorContains(t, err, "overflows milliseconds")
 			if !saved {
 				_, err = os.Stat(checkpoint.Path(directory, p.Group))
-				require.True(t, os.IsNotExist(err))
+				require.ErrorIs(t, err, os.ErrNotExist)
 			}
 
 		})

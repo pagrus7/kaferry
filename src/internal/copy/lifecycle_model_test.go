@@ -112,7 +112,7 @@ func checkLifecycle(t *testing.T, actions []byte) {
 			require.Equal(t, Cursor{Partition: int32(id), Position: want}, tracker.Confirmed(int32(id)), "step %d", step)
 			require.Equal(t, state.saved, tracker.Saved(int32(id)))
 			records, actualBytes := tracker.Work(int32(id))
-			require.Equal(t, len(state.work), records)
+			require.Len(t, state.work, records)
 			require.Equal(t, bytes, actualBytes)
 			require.Equal(t, resolved, tracker.Resolved(int32(id)))
 			totalRecords += records
