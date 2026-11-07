@@ -11,27 +11,6 @@ A lightweight command-line tool for copying Kafka records between topics and fil
 [![Go coverage](https://codecov.io/gh/pagrus7/kaferry/branch/main/graph/badge.svg?flag=go)](https://codecov.io/gh/pagrus7/kaferry)
 [![Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml/badge.svg?branch=main)](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml)
 
-## Docker quick start
-
-Start Docker to try the bundled archive demo. No Kafka cluster or local Kaferry installation is needed.
-
-```sh
-docker run --rm \
-  --mount source=kaferry-demo,target=/demo \
-  --workdir /demo \
-  ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
-```
-
-With a fresh `kaferry-demo` volume, this copies three bundled sample records into `output` and saves progress. The `copy summary` on stderr includes these fields:
-
-```json
-{"msg":"copy summary","submitted":3,"confirmed":3}
-```
-
-The files remain after the container exits. Running the same command again resumes the same group and reports `submitted: 0` and `confirmed: 0`.
-
-[Inspect results and reset the demo](docs/usage.md#first-copy-with-docker) · [Run without Docker](docs/usage.md#first-copy-without-kafka) · [Try Kafka locally](docs/usage.md#local-kafka-playground).
-
 ## Examples
 
 Prepare your [Kafka connections and destination topics](docs/usage.md#copy-between-kafka-topics). Save one statement as `copy.sql` and run:
@@ -100,6 +79,27 @@ CGO_ENABLED=0 go install github.com/pagrus7/kaferry/cmd/kaferry@latest
 ```
 
 [Prebuilt binaries](https://github.com/pagrus7/kaferry/releases/latest) · [Installation details](docs/install.md).
+
+## Docker quick start
+
+Start Docker to try the bundled archive demo. No Kafka cluster or local Kaferry installation is needed.
+
+```sh
+docker run --rm \
+  --mount source=kaferry-demo,target=/demo \
+  --workdir /demo \
+  ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
+```
+
+With a fresh `kaferry-demo` volume, this copies three bundled sample records into `output` and saves progress. The `copy summary` on stderr includes these fields:
+
+```json
+{"msg":"copy summary","submitted":3,"confirmed":3}
+```
+
+The files remain after the container exits. Running the same command again resumes the same group and reports `submitted: 0` and `confirmed: 0`.
+
+[Inspect results and reset the demo](docs/usage.md#first-copy-with-docker) · [Run without Docker](docs/usage.md#first-copy-without-kafka) · [Try Kafka locally](docs/usage.md#local-kafka-playground).
 
 ## Choosing a tool
 
