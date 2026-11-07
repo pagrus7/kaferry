@@ -123,7 +123,7 @@ If Docker itself is unavailable, cleanup can fail. The receipt preserves both su
 
 ```sh
 docker compose -f src/tests/compose.yaml -p kaferry-compat --profile cross-cluster down -v --remove-orphans
-docker compose -p kaferry-endurance --profile cross-cluster down -v --remove-orphans
+docker compose -f src/tests/compose.yaml -p kaferry-endurance --profile cross-cluster down -v --remove-orphans
 KAFERRY_QUAL_CERT_DIR=/tmp docker compose -p kaferry-qualification -f src/tests/qualification/compose.yaml down -v --remove-orphans
 ```
 
@@ -135,7 +135,7 @@ clean up the endurance job below, then repeat with the `recovery/manifest.json` 
 
 ```sh
 project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixture_project"])' build-results/parallel-24h/endurance/manifest.json)
-docker compose -p "$project" --profile cross-cluster down -v --remove-orphans
+docker compose -f src/tests/compose.yaml -p "$project" --profile cross-cluster down -v --remove-orphans
 ```
 
 ## Recovery and endurance coverage

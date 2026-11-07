@@ -81,7 +81,7 @@
       <h2 id="scope-heading">What these runs establish</h2>
       <p>The application endurance profile uses one Kaferry process, key routing, high entropy payloads and separate single-broker source and destination clusters with replication factor 1. It measures the stated workload, rather than saturation capacity or replicated-cluster resilience. Rehearsals shorter than 24 hours do not establish 24 hours of continuous uptime.</p>
       <p>Delivery time includes producer queueing, copying and verifier delay, from test submission to first unique receipt. Memory is sampled and can miss short peaks. Missing measurements remain unavailable; incomplete runs never establish successful reconciliation.</p>
-      <p><a href="https://github.com/{{repository}}/blob/main/design/qualification.md#endurance-on-a-persistent-host">Workload, measurement definitions and run instructions</a></p>
+      <p><a href="https://github.com/{{repository}}/blob/main/docs/design/qualification.md#endurance-on-a-persistent-host">Workload, measurement definitions and run instructions</a></p>
     </section>
   </main>
   <footer>Source: public release assets from <a href="https://github.com/{{repository}}/releases">{{repository}}</a>. No per-run Markdown or result data is committed to build this page.</footer>
