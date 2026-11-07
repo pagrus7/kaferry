@@ -11,8 +11,6 @@ A lightweight command-line tool for copying Kafka records between topics and fil
 [![Go coverage](https://codecov.io/gh/pagrus7/kaferry/branch/main/graph/badge.svg?flag=go)](https://codecov.io/gh/pagrus7/kaferry)
 [![Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml/badge.svg?branch=main)](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml)
 
-**[Endurance test results](https://pagrus7.github.io/kaferry/)** — published runs, measurements and evidence, updated automatically from run JSON. [How results are published](docs/endurance-results.md).
-
 ## Examples
 
 Prepare your [Kafka connections and destination topics](docs/usage.md#copy-between-kafka-topics). Save one statement as `copy.sql` and run:
@@ -84,6 +82,8 @@ CGO_ENABLED=0 go install github.com/pagrus7/kaferry/cmd/kaferry@latest
 
 ## Docker quick start
 
+Start Docker to try the bundled archive demo. No Kafka cluster or local Kaferry installation is needed.
+
 ```sh
 docker run --rm \
   --mount source=kaferry-demo,target=/demo \
@@ -91,9 +91,15 @@ docker run --rm \
   ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
 ```
 
-With a fresh `kaferry-demo` volume, this copies the three bundled sample records into `output` and saves progress. The files remain after the container exits.
+With a fresh `kaferry-demo` volume, this copies three bundled sample records into `output` and saves progress. The `copy summary` on stderr includes these fields:
 
-[Example output, inspection, rerun and reset](docs/usage.md#first-copy-with-docker) · [Run without Docker](docs/usage.md#first-copy-without-kafka) · [Try Kafka locally](docs/usage.md#local-kafka-playground).
+```json
+{"msg":"copy summary","submitted":3,"confirmed":3}
+```
+
+The files remain after the container exits. Running the same command again resumes the same group and reports `submitted: 0` and `confirmed: 0`.
+
+[Inspect results and reset the demo](docs/usage.md#first-copy-with-docker) · [Run without Docker](docs/usage.md#first-copy-without-kafka) · [Try Kafka locally](docs/usage.md#local-kafka-playground).
 
 ## Choosing a tool
 
@@ -104,5 +110,7 @@ With a fresh `kaferry-demo` volume, this copies the three bundled sample records
 | kcat | Inspect records and cluster metadata, or produce and consume records through shell pipelines. |
 
 **Documentation:** [Index](docs/README.md) · [Settings and results](docs/reference.md).
+
+**[Endurance test results](https://pagrus7.github.io/kaferry/)** — published runs, measurements and evidence.
 
 **Project:** [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [MIT license](LICENSE); dependencies retain their licenses.
