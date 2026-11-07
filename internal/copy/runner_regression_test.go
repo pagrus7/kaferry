@@ -51,7 +51,7 @@ func TestFatalDeliveryFailsDespiteSkipPolicies(t *testing.T) {
 func TestQueueFullDeadlinePreservesConfirmedProgress(t *testing.T) {
 	// Given a producer that confirms one record and remains full for the next.
 	r, source, sink, store, clock := fixture(t)
-	r.limits.DeliveryTimeout = "60ms"
+	r.limits.DeliveryTimeout.Duration = 60 * time.Millisecond
 	first, blocked, unread := incoming(0, 0, 1), incoming(0, 1, 1), incoming(0, 2, 1)
 	source.events = []Event{{Input: &first}, {Input: &blocked}, {Input: &unread}}
 	attempts := 0

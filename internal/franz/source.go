@@ -16,8 +16,15 @@ import (
 type sourceMetadata interface {
 	kafkaport.OffsetReader
 	kafkaport.TimeReader
-	Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]int64, map[int32]kafkaport.Progress, error)
+	Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafkaport.SavedProgress, error)
 }
+type sourcePartition struct {
+	position  int64
+	paused    bool
+	held      *kgo.Record
+	retention *kafkaport.RetentionCheck
+}
+
 type Source struct {
 	client               ConsumerClient
 	routing              kafkaport.PartitionValidator
@@ -35,10 +42,7 @@ type Source struct {
 	cancel, clientCancel context.CancelFunc
 	life                 core.Lifecycle
 	observer             core.Observer
-	positions            map[int32]int64
-	paused               map[int32]bool
-	held                 map[int32]*kgo.Record
-	retention            map[int32]kafkaport.RetentionCheck
+	partitions           map[int32]*sourcePartition
 	readyEOF             []core.Cursor
 	gaps                 gapReader
 	lastGap              int32
@@ -82,13 +86,14 @@ func (s *Source) poll(timeout time.Duration) (core.Event, error) {
 	for len(s.readyEOF) > 0 {
 		cursor := s.readyEOF[0]
 		s.readyEOF = s.readyEOF[1:]
-		if position, owned := s.positions[cursor.Partition]; owned && !s.paused[cursor.Partition] && position == cursor.Position {
+		if p := s.partitions[cursor.Partition]; p != nil && !p.paused && p.position == cursor.Position {
 			return core.Event{EOF: &cursor}, nil
 		}
 	}
-	for id, record := range s.held {
-		if !s.paused[id] {
-			delete(s.held, id)
+	for _, p := range s.partitions {
+		if p.held != nil && !p.paused {
+			record := p.held
+			p.held = nil
 			return s.deliver(record)
 		}
 	}
@@ -110,11 +115,11 @@ func (s *Source) poll(timeout time.Duration) (core.Event, error) {
 			return core.Event{}, nil
 		}
 		record := fetched.records[0]
-		if s.paused[record.Partition] {
-			if s.held[record.Partition] != nil {
+		if p := s.partitions[record.Partition]; p != nil && p.paused {
+			if p.held != nil {
 				return core.Event{}, fmt.Errorf("multiple held records for paused partition")
 			}
-			s.held[record.Partition] = record
+			p.held = record
 			return core.Event{}, nil
 		}
 		return s.deliver(record)
@@ -127,11 +132,11 @@ func (s *Source) poll(timeout time.Duration) (core.Event, error) {
 	}
 }
 func (s *Source) deliver(r *kgo.Record) (core.Event, error) {
-	position, owned := s.positions[r.Partition]
-	if !owned || r.Offset < position {
+	p := s.partitions[r.Partition]
+	if p == nil || r.Offset < p.position {
 		return core.Event{}, nil
 	}
-	s.positions[r.Partition] = r.Offset + 1
+	p.position = r.Offset + 1
 	cursor := core.Cursor{Partition: r.Partition, Position: r.Offset}
 	if r.Attrs.IsControl() {
 		cursor.Position++
@@ -153,17 +158,18 @@ func (s *Source) deliver(r *kgo.Record) (core.Event, error) {
 	return core.Event{Input: &core.Input{Cursor: cursor, Next: r.Offset + 1, Record: record}}, nil
 }
 func (s *Source) checkRetention(id int32, stamp *int64) {
-	check, ok := s.retention[id]
-	if !ok {
+	p := s.partitions[id]
+	check := p.retention
+	if check == nil {
 		return
 	}
-	delete(s.retention, id)
+	p.retention = nil
 	if stamp != nil && *stamp > check.Lower {
 		s.log.Warn("requested time may precede retained data", "partition", id, "log_start", check.Low, "requested_timestamp", check.Lower, "first_timestamp", *stamp)
 	}
 }
 func (s *Source) Pause(id int32, paused bool) error {
-	s.paused[id] = paused
+	s.partitions[id].paused = paused
 	parts := map[string][]int32{s.plan.Source.Name: {id}}
 	if paused {
 		s.client.PauseFetchPartitions(parts)

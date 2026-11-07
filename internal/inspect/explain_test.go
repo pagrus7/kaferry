@@ -32,8 +32,7 @@ type topicMock struct {
 	observations    []string
 	membershipReads int
 	info            kafkaport.TopicDescription
-	positions       map[int32]int64
-	metadata        map[int32]kafkaport.Progress
+	saved           map[int32]kafkaport.SavedProgress
 	low, high       map[int32]int64
 	stable          map[int32]int64
 	times           func(map[int32]int64) map[int32]int64
@@ -70,13 +69,13 @@ func (m *topicMock) Membership(context.Context, string, string) (kafkaport.Membe
 	m.membershipReads++
 	return observation, m.err("members")
 }
-func (m *topicMock) Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {
+func (m *topicMock) Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafkaport.SavedProgress, error) {
 	m.groupReads++
 	m.observations = append(m.observations, "saved")
 	if m.afterSaved != nil {
 		m.afterSaved()
 	}
-	return m.positions, m.metadata, m.err("saved")
+	return m.saved, m.err("saved")
 }
 func (m *topicMock) Offsets(_ context.Context, _ []int32, kind kafkaport.OffsetKind, committed bool) (map[int32]int64, error) {
 	if err := m.err("offsets"); err != nil {
@@ -128,7 +127,7 @@ func (f *filesMock) Destination(string) (archiveio.ArchiveInspection, error) {
 func fixture() (*Service, plan.Plan, *factoryMock, *filesMock) {
 	p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC", Name: "input"}, Destination: plan.Endpoint{Kind: "TOPIC", Name: "output", Partitioning: plan.Key}, Group: "g", Policies: plan.Policies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}, Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 100}, Upper: &plan.Expression{LiteralMS: 1000}}, MaxStalenessMS: 20}
 	topic := func(name string) *topicMock {
-		return &topicMock{info: kafkaport.TopicDescription{ClusterID: "cluster", TopicID: name, Partitions: []int32{1, 0}, TimestampType: "CreateTime"}, positions: map[int32]int64{}, metadata: map[int32]kafkaport.Progress{}, low: map[int32]int64{0: 0, 1: 0}, high: map[int32]int64{0: 10, 1: 11}, stable: map[int32]int64{0: 9, 1: 10}, failure: errors.New("injected"), times: func(queries map[int32]int64) map[int32]int64 {
+		return &topicMock{info: kafkaport.TopicDescription{ClusterID: "cluster", TopicID: name, Partitions: []int32{1, 0}, TimestampType: "CreateTime"}, saved: map[int32]kafkaport.SavedProgress{}, low: map[int32]int64{0: 0, 1: 0}, high: map[int32]int64{0: 10, 1: 11}, stable: map[int32]int64{0: 9, 1: 10}, failure: errors.New("injected"), times: func(queries map[int32]int64) map[int32]int64 {
 			found := make(map[int32]int64)
 			for id := range queries {
 				found[id] = int64(id) + 2
@@ -153,7 +152,7 @@ func TestTopicPreviewUsesSavedPositionsAndOnlyRequiredStartLookups(t *testing.T)
 	// Given two partitions, one saved position, and different destination routing.
 	service, p, factory, _ := fixture()
 	source := factory.connections["input"]
-	source.positions[0], source.metadata[0] = 4, kafkaport.Progress{End: number(8)}
+	source.saved[0] = kafkaport.SavedProgress{Position: 4, Progress: kafkaport.Progress{End: number(8)}}
 	factory.connections["output"].info.Partitions = []int32{0, 1, 2}
 	factory.connections["output"].info.TimestampType = "LogAppendTime"
 	// When previewing through the real shared positioner with mocked metadata ports.
@@ -174,7 +173,7 @@ func TestTopicPreviewUsesSavedPositionsAndOnlyRequiredStartLookups(t *testing.T)
 	require.EqualValues(t, 100, source.queries[0][1])
 	require.EqualValues(t, 1, source.memberChecks)
 	require.EqualValues(t, 1, source.groupReads)
-	require.Equal(t, map[int32]int64{0: 4}, source.positions)
+	require.Equal(t, map[int32]kafkaport.SavedProgress{0: {Position: 4, Progress: kafkaport.Progress{End: number(8)}}}, source.saved)
 	require.EqualValues(t, 1, source.closed)
 	require.EqualValues(t, 1, factory.connections["output"].closed)
 	require.Contains(t, strings.Join(report.Warnings, " "), "LogAppendTime")
@@ -207,8 +206,7 @@ func TestRelativeWindowsPreserveSavedAndAdoptedBounds(t *testing.T) {
 	source := factory.connections["input"]
 	source.info.Partitions = []int32{2, 1, 0}
 	source.low[2], source.high[2] = 0, 12
-	source.positions = map[int32]int64{0: 4, 1: 5}
-	source.metadata = map[int32]kafkaport.Progress{0: {Window: &plan.Window{Lower: number(100), Upper: number(1000)}}, 1: {Window: &plan.Window{Lower: number(200), Upper: number(2000)}}}
+	source.saved = map[int32]kafkaport.SavedProgress{0: {Position: 4, Progress: kafkaport.Progress{Window: &plan.Window{Lower: number(100), Upper: number(1000)}}}, 1: {Position: 5, Progress: kafkaport.Progress{Window: &plan.Window{Lower: number(200), Upper: number(2000)}}}}
 	// When inspecting, then old partitions keep their windows and the new one adopts the lowest partition's window.
 	report := preview(t, service, p)
 	require.EqualValues(t, 2000, *report.Partitions[1].Window.Upper)
@@ -293,7 +291,7 @@ func TestInvalidSavedPositionsAndWindowOverflowFailBeforeLookup(t *testing.T) {
 			source := factory.connections["input"]
 			switch invalid {
 			case "past log end":
-				source.positions[0], source.metadata[0] = 100, kafkaport.Progress{}
+				source.saved[0] = kafkaport.SavedProgress{Position: 100}
 			case "overflow":
 				p.Window.Upper.LiteralMS = math.MaxInt64
 			case "missing lookup":
@@ -324,7 +322,8 @@ func TestExpiredPositionStartsAtLogStartWithOneWarning(t *testing.T) {
 	service, p, factory, _ := fixture()
 	p.Window, p.Start = plan.WindowSpec{}, "EARLIEST"
 	source := factory.connections["input"]
-	source.low[0], source.positions[0], source.metadata[0] = 3, 1, kafkaport.Progress{}
+	source.low[0] = 3
+	source.saved[0] = kafkaport.SavedProgress{Position: 1}
 	// When previewing, then show the actual resumed start and the skipped offset range.
 	report := preview(t, service, p)
 	require.EqualValues(t, 3, report.Partitions[0].Start)
@@ -348,7 +347,7 @@ func TestPreviewReportsNewPartitionFallbackAndEffectiveRecordPolicies(t *testing
 	p.Window, p.Start = plan.WindowSpec{}, "LATEST"
 	p.Policies.MissingTimestamp = "SKIP"
 	source := factory.connections["input"]
-	source.positions[0], source.metadata[0] = 4, kafkaport.Progress{}
+	source.saved[0] = kafkaport.SavedProgress{Position: 4}
 	// When inspecting, then new partitions start earliest and the actual policy is exposed.
 	report := preview(t, service, p)
 	require.Equal(t, "EARLIEST", report.StartRule)

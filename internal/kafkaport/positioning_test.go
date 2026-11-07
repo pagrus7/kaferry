@@ -20,19 +20,18 @@ func TestSavedMixedWindowSurvivesClockAdvanceAndAdoption(t *testing.T) {
 			// Given a mixed NOW/literal window whose fresh resolution is now empty.
 			hi, lo := int64(7200000), int64(3600000)
 			p := &positioner{plan: plan.Plan{Window: plan.WindowSpec{Lower: &plan.Expression{Now: true, AdjustmentMS: -3600000}, Upper: &plan.Expression{LiteralMS: hi}}}, log: quietLogger()}
-			saved, metadata := map[int32]int64{}, map[int32]Progress{}
+			saved := map[int32]SavedProgress{}
 			var adopted *plan.Window
 			window := plan.Window{Lower: &lo, Upper: &hi}
 			if origin == "saved" {
-				saved[0] = 42
-				metadata[0] = Progress{Window: &window}
+				saved[0] = SavedProgress{Position: 42, Progress: Progress{Window: &window}}
 			}
 			if origin == "adopted" {
 				adopted = &window
 			}
 
 			// When positioning after both the saved upper bound and its staleness.
-			got, _, position, err := p.window(0, saved, metadata, adopted, time.UnixMilli(14400000))
+			got, _, position, err := p.window(0, saved, adopted, time.UnixMilli(14400000))
 
 			// Then persisted windows remain authoritative; only fresh resolution fails.
 			if origin == "fresh" {
@@ -88,7 +87,7 @@ func TestPositioningBatchesTimeLookupsAndUsesCommittedEndForNoMatch(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// When resolving both starts through client-neutral mocked ports.
-	result, err := positioner.Locate(ctx, []int32{2, 0}, nil, nil)
+	result, err := positioner.Locate(ctx, []int32{2, 0}, nil)
 	// Then the unmatched partition starts at its stable end, and all calls retain the caller context.
 	require.NoError(t, err)
 	require.Len(t, result.Assignments, 2)
@@ -106,11 +105,11 @@ func TestReusedPositionerDoesNotRepeatAnEarlierEndLookup(t *testing.T) {
 	// Given a positioner that started one assignment at its stable end.
 	offsets := &offsetsStub{}
 	p := NewPositionerFactory(core.RealClock{}, quietLogger(), NewOffsetLookupFactory()).New(offsets, &timesStub{}, plan.Plan{Start: "LATEST"}, "fp", "topic-id")
-	if _, err := p.Locate(t.Context(), []int32{0}, nil, nil); err != nil {
+	if _, err := p.Locate(t.Context(), []int32{0}, nil); err != nil {
 		t.Fatal(err)
 	}
 	// When the next assignment resumes a different partition from its saved offset.
-	result, err := p.Locate(t.Context(), []int32{2}, map[int32]int64{2: 9}, nil)
+	result, err := p.Locate(t.Context(), []int32{2}, map[int32]SavedProgress{2: {Position: 9}})
 	// Then the old end lookup cannot replace the new partition's saved position.
 	if err != nil || len(result.Assignments) != 1 || result.Assignments[0].Cursor.Position != 9 || len(offsets.calls) != 5 {
 		t.Fatal("previous assignment affected resumed position", result, offsets.calls, err)
@@ -146,7 +145,7 @@ func TestPositioningRejectsIncompleteOrInvalidOffsetResults(t *testing.T) {
 				})
 				p := NewPositionerFactory(core.RealClock{}, quietLogger(), NewOffsetLookupFactory()).New(reader, &timesStub{}, plan.Plan{Start: "LATEST"}, "fp", "topic-id")
 				// When resolving the assignment, then it fails instead of silently starting at offset zero.
-				if _, err := p.Locate(t.Context(), []int32{0}, nil, nil); err == nil {
+				if _, err := p.Locate(t.Context(), []int32{0}, nil); err == nil {
 					t.Fatal("invalid offset result accepted")
 				}
 			})
@@ -164,15 +163,15 @@ func TestPositioningRestoresCapturedEndAndTerminalStops(t *testing.T) {
 			if reason == "tip" {
 				position = 60
 			}
-			metadata := map[int32]Progress{0: {End: new(int64(60)), Stop: &core.Stop{Reason: reason, At: position}}}
+			saved := map[int32]SavedProgress{0: {Position: position, Progress: Progress{End: new(int64(60)), Stop: &core.Stop{Reason: reason, At: position}}}}
 			// When reassigned, then keep the boundary and only clear an invocation record stop.
-			result, err := pos.Locate(t.Context(), []int32{0}, map[int32]int64{0: position}, metadata)
+			result, err := pos.Locate(t.Context(), []int32{0}, saved)
 			require.NoError(t, err)
 			require.Equal(t, int64(60), *result.Assignments[0].Cursor.End)
 			if reason == "worker_record_cap" {
 				require.Nil(t, result.Assignments[0].Cursor.Stop)
 			} else {
-				require.Equal(t, metadata[0].Stop, result.Assignments[0].Cursor.Stop)
+				require.Equal(t, saved[0].Stop, result.Assignments[0].Cursor.Stop)
 			}
 		})
 	}
@@ -180,7 +179,7 @@ func TestPositioningRestoresCapturedEndAndTerminalStops(t *testing.T) {
 		// Given a captured end outside current retained positions, when restoring, then fail closed.
 		p := plan.Plan{Window: plan.WindowSpec{Upper: &plan.Expression{LiteralMS: 1000}}}
 		pos := NewPositionerFactory(core.RealClock{}, quietLogger(), NewOffsetLookupFactory()).New(&offsetsStub{}, &timesStub{}, p, "fp", "topic-id")
-		_, err := pos.Locate(t.Context(), []int32{0}, map[int32]int64{0: 2}, map[int32]Progress{0: {End: &end}})
+		_, err := pos.Locate(t.Context(), []int32{0}, map[int32]SavedProgress{0: {Position: 2, Progress: Progress{End: &end}}})
 		require.ErrorContains(t, err, "captured end")
 	}
 }

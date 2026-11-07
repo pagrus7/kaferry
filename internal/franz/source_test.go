@@ -47,8 +47,7 @@ func (c *consumerMock) CommitOffsetsSync(_ context.Context, offsets map[string]m
 
 type sourceMetadataMock struct {
 	low, high, stable map[int32]int64
-	saved             map[int32]int64
-	progress          map[int32]kafkaport.Progress
+	saved             map[int32]kafkaport.SavedProgress
 	err               error
 	savedReads        int
 }
@@ -70,9 +69,9 @@ func (m *sourceMetadataMock) Offsets(_ context.Context, ids []int32, kind kafkap
 func (m *sourceMetadataMock) OffsetsForTimes(context.Context, map[int32]int64) (map[int32]int64, error) {
 	return map[int32]int64{0: 0}, m.err
 }
-func (m *sourceMetadataMock) Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {
+func (m *sourceMetadataMock) Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafkaport.SavedProgress, error) {
 	m.savedReads++
-	return m.saved, m.progress, m.err
+	return m.saved, m.err
 }
 
 type lifecycleMock struct {
@@ -98,7 +97,7 @@ func sourceFixture(t *testing.T) (*Source, *consumerMock) {
 	p := testPlan(t, nil)
 	store := &Committer{codec: commitmeta.NewCodec(), client: client, topic: "input", group: p.Group, metadata: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: "id"}}}
 	metadata := &sourceMetadataMock{}
-	s := &Source{lookup: kafkaport.NewOffsetLookupFactory().New(metadata, metadata), client: client, inspector: metadata, positioning: kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory()), store: store, bridge: newRebalanceBridge(ctx, "input"), pump: &fetchPump{fetched: make(chan fetchResult, 1)}, plan: p, fingerprint: "fp", topicID: "id", query: ctx, ctx: ctx, cancel: cancel, clientCancel: func() {}, life: &lifecycleMock{}, positions: map[int32]int64{0: 0}, paused: make(map[int32]bool), held: make(map[int32]*kgo.Record), retention: make(map[int32]kafkaport.RetentionCheck), log: quietLogger(), lastTip: time.Now()}
+	s := &Source{lookup: kafkaport.NewOffsetLookupFactory().New(metadata, metadata), client: client, inspector: metadata, positioning: kafkaport.NewPositionerFactory(core.RealClock{}, quietLogger(), kafkaport.NewOffsetLookupFactory()), store: store, bridge: newRebalanceBridge(ctx, "input"), pump: &fetchPump{fetched: make(chan fetchResult, 1)}, plan: p, fingerprint: "fp", topicID: "id", query: ctx, ctx: ctx, cancel: cancel, clientCancel: func() {}, life: &lifecycleMock{}, partitions: map[int32]*sourcePartition{0: {}}, log: quietLogger(), lastTip: time.Now()}
 	return s, client
 }
 func feed(s *Source, record *kgo.Record, err error) {
@@ -149,7 +148,7 @@ func TestSourcePreservesRecordBesideTransientFetchError(t *testing.T) {
 func TestSourceHoldsPausedRecordWhileOtherPartitionsContinue(t *testing.T) {
 	// Given a buffered record from a just-paused partition.
 	s, client := sourceFixture(t)
-	s.positions[2] = 0
+	s.partitions[2] = &sourcePartition{}
 	require.NoError(t, s.Pause(0, true))
 	feed(s, &kgo.Record{Partition: 0, Offset: 0, Value: []byte("held")}, nil)
 	if event, err := s.Poll(time.Second); err != nil || event.Input != nil {
@@ -171,17 +170,17 @@ func TestSourceRevokesOnlyNamedPartitionsAndTreatsLostSeparately(t *testing.T) {
 	// Given paused records in two owned partitions.
 	s, client := sourceFixture(t)
 	s.store.assign(2, kafkaport.Progress{Fingerprint: "fp", TopicID: "id"})
-	s.positions[2] = 8
-	s.paused[0] = true
-	s.paused[2] = true
-	s.held[0] = &kgo.Record{Partition: 0}
-	s.held[2] = &kgo.Record{Partition: 2}
+	s.partitions[2] = &sourcePartition{position: 8}
+	s.partitions[0].paused = true
+	s.partitions[2].paused = true
+	s.partitions[0].held = &kgo.Record{Partition: 0}
+	s.partitions[2].held = &kgo.Record{Partition: 2}
 	// When partition zero is lost, then only its generation's state is removed.
 	event := lifecycleEvent{ids: []int32{0}, revoke: true, lost: true, answer: make(chan lifecycleAnswer, 1)}
 	require.NoError(t, s.lifecycle(event))
 	life := s.life.(*lifecycleMock)
-	if !life.lost || !reflect.DeepEqual(life.revoked, []int32{0}) || len(s.positions) != 1 || s.positions[2] != 8 || s.held[0] != nil || s.held[2] == nil || !s.paused[2] {
-		t.Fatal("revocation crossed partition boundaries", s.positions, s.held, life)
+	if !life.lost || !reflect.DeepEqual(life.revoked, []int32{0}) || len(s.partitions) != 1 || s.partitions[2].position != 8 || s.partitions[0] != nil || s.partitions[2].held == nil || !s.partitions[2].paused {
+		t.Fatal("revocation crossed partition boundaries", s.partitions, life)
 	}
 	// When saving after revocation, the released partition is rejected before I/O.
 	_, err := s.store.Save(t.Context(), []core.Cursor{{Partition: 0, Position: 8}})
@@ -211,7 +210,7 @@ func TestSourceCommitsResolvedStartBeforeExposingAssignment(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given an assignment starting at saved offset seven and an independent commit response.
 			s, client := sourceFixture(t)
-			s.inspector = &sourceMetadataMock{low: map[int32]int64{0: 0}, high: map[int32]int64{0: 10}, saved: map[int32]int64{0: 7}, progress: map[int32]kafkaport.Progress{0: {Fingerprint: "fp", TopicID: "id"}}}
+			s.inspector = &sourceMetadataMock{low: map[int32]int64{0: 0}, high: map[int32]int64{0: 10}, saved: map[int32]kafkaport.SavedProgress{0: {Position: 7, Progress: kafkaport.Progress{Fingerprint: "fp", TopicID: "id"}}}}
 			client.commitErr, client.commitResponse = tc.requestError, tc.response
 			event := lifecycleEvent{ids: []int32{0}, answer: make(chan lifecycleAnswer, 1)}
 			// When the core resolves and saves its initial position.
@@ -240,10 +239,10 @@ func TestSourceCommitsResolvedStartBeforeExposingAssignment(t *testing.T) {
 func TestSourceDropsStaleRecordsAndRecognizesMissingTimestamps(t *testing.T) {
 	// Given a proven compaction gap ending at offset ten.
 	s, _ := sourceFixture(t)
-	s.positions[0] = 10
+	s.partitions[0].position = 10
 	// When an older fetch arrives, then it cannot reintroduce a record below the proof cursor.
 	event, err := s.deliver(&kgo.Record{Partition: 0, Offset: 3})
-	if err != nil || event.Input != nil || s.positions[0] != 10 {
+	if err != nil || event.Input != nil || s.partitions[0].position != 10 {
 		t.Fatal("stale record admitted", event, err)
 	}
 	// When Kafka's missing-timestamp sentinel arrives, then policy handling sees a missing timestamp.
@@ -284,7 +283,7 @@ func TestAssignmentRejectsNewMissingPartitionBeforeInitialCommit(t *testing.T) {
 	require.Nil(t, client.committed)
 	require.Zero(t, s.inspector.(*sourceMetadataMock).savedReads)
 	require.Empty(t, s.life.(*lifecycleMock).assignments)
-	require.NotContains(t, s.positions, int32(5))
+	require.NotContains(t, s.partitions, int32(5))
 }
 
 func TestEmptyAssignmentDoesNotInspectDestination(t *testing.T) {

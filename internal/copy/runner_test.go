@@ -354,7 +354,7 @@ func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 	hi := int64(1000)
 	r.plan.Source.Kind = "TOPIC"
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: hi}
-	r.limits.TipWait = "1s"
+	r.limits.TipWait.Duration = 1 * time.Second
 	_ = r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &hi}}})
 	s.high = 2
 	_ = r.eof(Cursor{Partition: 0, Position: 0})
@@ -380,7 +380,7 @@ func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 func TestIdleExitRequiresProcessedEmptyAssignment(t *testing.T) {
 	// Given a bounded worker that has never received an assignment.
 	r, _, _, _, c := fixture(t)
-	r.limits.IdleExit = "1s"
+	r.limits.IdleExit.Duration = 1 * time.Second
 	c.Sleep(time.Hour)
 
 	// When its idle deadline elapses before assignment.
@@ -512,7 +512,7 @@ func TestCapturedTipFinishesWithoutAnotherEOF(t *testing.T) {
 			stamp := int64(500)
 			r.plan.Source.Kind = "TOPIC"
 			r.plan.Window.Upper = &plan.Expression{LiteralMS: hi}
-			r.limits.TipWait = "1s"
+			r.limits.TipWait.Duration = 1 * time.Second
 			s.assignments[0].Window.Upper = &hi
 			first := incoming(0, 0, 1)
 			first.Record.TimestampMS = &stamp

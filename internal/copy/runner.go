@@ -48,7 +48,7 @@ type Runner struct {
 }
 
 func NewRunner(source Source, sink Sink, store ProgressStore, clock Clock, logger *slog.Logger, p plan.Plan, limits config.Worker, tracker ProgressTracker, stop StopObserver, observer Observer) *Runner {
-	interval, _ := time.ParseDuration(limits.ProgressInterval)
+	interval := limits.ProgressInterval.Duration
 	return &Runner{source: source, sink: sink, store: store, clock: clock, log: logger, plan: p, limits: limits, tracker: tracker, partitions: make(map[int32]*partition), stop: stop, observer: observer, progressInterval: interval}
 }
 func (r *Runner) Assign(assignments []Assignment) error {
@@ -136,7 +136,7 @@ func (r *Runner) step(ctx context.Context) (bool, error) {
 	if r.readyToExit() {
 		r.stop.Begin()
 		if len(r.partitions) == 0 {
-			r.log.Info("local idle exit", "idle_exit", r.limits.IdleExit, "exit_code", 3)
+			r.log.Info("local idle exit", "idle_exit", r.limits.IdleExit.String(), "exit_code", 3)
 			return true, &Exit{Err: fmt.Errorf("worker held no partitions for %s", r.limits.IdleExit), Code: 3}
 		}
 		return true, r.commit(r.ids())
@@ -298,7 +298,7 @@ func (r *Runner) submitPending() error {
 			s.busySince = r.clock.Now()
 			r.log.Warn("destination queue full; intake paused")
 		}
-		budget, _ := time.ParseDuration(r.limits.DeliveryTimeout)
+		budget := r.limits.DeliveryTimeout.Duration
 		if r.clock.Now().Sub(s.busySince) >= budget {
 			return fmt.Errorf("destination queue remained full for %s", budget)
 		}
@@ -377,7 +377,7 @@ func (r *Runner) eof(cursor Cursor) error {
 	return nil
 }
 func (r *Runner) tips() error {
-	wait, _ := time.ParseDuration(r.limits.TipWait)
+	wait := r.limits.TipWait.Duration
 	sampled := false // Interleave watermark queries with consumer polling.
 	for id, p := range r.partitions {
 		if p.stop != nil || r.plan.Source.Kind != "TOPIC" || p.high == nil && (p.window.Upper == nil || r.plan.MaxStalenessMS < 0) {

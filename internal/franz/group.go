@@ -90,9 +90,9 @@ func (i *Inspector) Membership(ctx context.Context, group, protocol string) (kaf
 	return kafkaport.Membership{State: g.State, Foreign: compatibleMembers(g, i.topic, protocol) != nil, Idle: len(g.Members) == 0 && (g.State == "Empty" || g.State == "Dead")}, nil
 }
 
-func (i *Inspector) Saved(parent context.Context, group, fp string, window plan.WindowSpec, staleness int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {
+func (i *Inspector) Saved(parent context.Context, group, fp string, window plan.WindowSpec, staleness int64) (map[int32]kafkaport.SavedProgress, error) {
 	if err := i.Refresh(parent); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	ctx, cancel := requestContext(parent)
 	defer cancel()
@@ -102,14 +102,14 @@ func (i *Inspector) Saved(parent context.Context, group, fp string, window plan.
 	req.Groups = []kmsg.OffsetFetchRequestGroup{{Group: group, MemberEpoch: -1, Topics: []kmsg.OffsetFetchRequestGroupTopic{{Topic: i.topic, TopicID: i.topicID, Partitions: i.parts}}}}
 	response, err := req.RequestWith(ctx, i.client)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	parts, err := i.offsetParts(response, group)
 	if errors.Is(err, kerr.GroupIDNotFound) {
-		return map[int32]int64{}, map[int32]kafkaport.Progress{}, nil
+		return map[int32]kafkaport.SavedProgress{}, nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	return i.decodeSaved(parts, fp, window, staleness)
 }
@@ -147,49 +147,48 @@ func (i *Inspector) offsetParts(r *kmsg.OffsetFetchResponse, group string) (map[
 	return result, nil
 }
 
-func (i *Inspector) decodeSaved(parts map[int32]kmsg.OffsetFetchResponseTopicPartition, fp string, window plan.WindowSpec, staleness int64) (map[int32]int64, map[int32]kafkaport.Progress, error) {
-	positions := make(map[int32]int64)
-	metadata := make(map[int32]kafkaport.Progress)
+func (i *Inspector) decodeSaved(parts map[int32]kmsg.OffsetFetchResponseTopicPartition, fp string, window plan.WindowSpec, staleness int64) (map[int32]kafkaport.SavedProgress, error) {
+	saved := make(map[int32]kafkaport.SavedProgress)
 	for _, id := range i.parts {
 		p, ok := parts[id]
 		if !ok {
-			return nil, nil, fmt.Errorf("missing committed result for partition %d", id)
+			return nil, fmt.Errorf("missing committed result for partition %d", id)
 		}
 		if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if p.Offset < 0 {
 			continue
 		}
 		progress, err := kafkaport.DecodeProgress(i.codec, p.Metadata, topicID(i.topicID))
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if progress.End != nil && p.Offset > *progress.End {
-			return nil, nil, conflict("committed offset exceeds captured end")
+			return nil, conflict("committed offset exceeds captured end")
 		}
 		if progress.Stop != nil && progress.Stop.At > p.Offset {
-			return nil, nil, conflict("stop exceeds committed offset")
+			return nil, conflict("stop exceeds committed offset")
 		}
-		positions[id], metadata[id] = p.Offset, progress
+		saved[id] = kafkaport.SavedProgress{Position: p.Offset, Progress: progress}
 	}
 	// Finish validating the source before exposing diagnostic positions. Every
 	// execution caller must stop on the fingerprint error; status can inspect it.
 	mismatch := false
-	for _, progress := range metadata {
+	for _, progress := range saved {
 		if progress.Fingerprint != fp {
 			mismatch = true
 			continue
 		}
 		if window.Relative() && progress.Window == nil {
-			return nil, nil, conflict("NOW() commit is missing its window")
+			return nil, conflict("NOW() commit is missing its window")
 		}
-		if err := kafkaport.ValidateWindow(progress, window, staleness); err != nil {
-			return nil, nil, err
+		if err := kafkaport.ValidateWindow(progress.Progress, window, staleness); err != nil {
+			return nil, err
 		}
 	}
 	if mismatch {
-		return positions, metadata, &kafkaport.Conflict{Err: &plan.FingerprintMismatch{}}
+		return saved, &kafkaport.Conflict{Err: &plan.FingerprintMismatch{}}
 	}
-	return positions, metadata, nil
+	return saved, nil
 }

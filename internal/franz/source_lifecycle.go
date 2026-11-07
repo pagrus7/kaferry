@@ -12,10 +12,7 @@ func (s *Source) lifecycle(event lifecycleEvent) error {
 	if event.revoke {
 		err := s.life.Revoke(event.ids, event.lost)
 		for _, id := range event.ids {
-			delete(s.positions, id)
-			delete(s.paused, id)
-			delete(s.held, id)
-			delete(s.retention, id)
+			delete(s.partitions, id)
 			s.store.revoke(id)
 			s.client.ResumeFetchPartitions(map[string][]int32{s.plan.Source.Name: {id}})
 		}
@@ -37,13 +34,13 @@ func (s *Source) lifecycle(event lifecycleEvent) error {
 			return err
 		}
 	}
-	saved, metadata, err := s.inspector.Saved(ctx, s.plan.Group, s.fingerprint, s.plan.Window, s.plan.MaxStalenessMS)
+	saved, err := s.inspector.Saved(ctx, s.plan.Group, s.fingerprint, s.plan.Window, s.plan.MaxStalenessMS)
 	if err != nil {
 		event.answer <- lifecycleAnswer{err: err}
 		return err
 	}
 	positioner := s.positioning.New(s.inspector, s.inspector, s.plan, s.fingerprint, s.topicID)
-	positioned, err := positioner.Locate(ctx, event.ids, saved, metadata)
+	positioned, err := positioner.Locate(ctx, event.ids, saved)
 	if err != nil {
 		event.answer <- lifecycleAnswer{err: err}
 		return err
@@ -51,11 +48,11 @@ func (s *Source) lifecycle(event lifecycleEvent) error {
 	cursors := make([]core.Cursor, len(positioned.Assignments))
 	for n, a := range positioned.Assignments {
 		id := a.Cursor.Partition
-		s.positions[id] = a.Cursor.Position
+		p := &sourcePartition{position: a.Cursor.Position}
+		s.partitions[id] = p
 		s.store.assign(id, positioned.Progress[id])
-		s.retention[id] = positioned.Retention[id]
-		if _, ok := positioned.Retention[id]; !ok {
-			delete(s.retention, id)
+		if check, ok := positioned.Retention[id]; ok {
+			p.retention = &check
 		}
 		cursors[n] = a.Cursor
 	}

@@ -50,7 +50,7 @@ func (r *Runner) readyToExit() bool {
 		return false
 	}
 	if len(r.partitions) == 0 {
-		idle, _ := time.ParseDuration(r.limits.IdleExit)
+		idle := r.limits.IdleExit.Duration
 		if r.bounded() && r.assignmentSeen && r.clock.Now().Sub(r.idleSince) >= idle {
 			return true
 		}

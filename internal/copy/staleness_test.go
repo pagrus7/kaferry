@@ -148,7 +148,7 @@ func TestStalenessProgressResetsAnExistingTipWait(t *testing.T) {
 			// Given a captured end and an already-running one-second blocked-tip wait.
 			r, source, sink, _, clock := fixture(t)
 			r.plan.Source.Kind = "TOPIC"
-			r.limits.TipWait = "1s"
+			r.limits.TipWait.Duration = 1 * time.Second
 			upper := clock.Now().Add(-time.Minute).UnixMilli()
 			query := &watermarkSource{testSource: source}
 			r.source = query

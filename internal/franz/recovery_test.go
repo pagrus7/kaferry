@@ -104,7 +104,7 @@ func TestAmbiguousDeliveryReplaysWithoutLosingProgress(t *testing.T) {
 	}
 	p := boundedComponentPlan(t, cluster)
 	limits := config.Defaults(t.TempDir()).Worker
-	limits.DeliveryTimeout = "200ms"
+	limits.DeliveryTimeout.Duration = 200 * time.Millisecond
 	limits.RecordCap = 1
 	gate.after.Store(2)
 
@@ -125,7 +125,7 @@ func TestAmbiguousDeliveryReplaysWithoutLosingProgress(t *testing.T) {
 	}
 	// When the destination recovers and the same query restarts.
 	gate.after.Store(0)
-	limits.DeliveryTimeout = "5s"
+	limits.DeliveryTimeout.Duration = 5 * time.Second
 	require.NoError(t, runComponentCopy(componentContext(t), p, limits))
 	// Then the record replays, producing the permitted duplicate and saving its next offset.
 	saved, err = admin.FetchOffsets(componentContext(t), p.Group)

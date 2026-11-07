@@ -17,8 +17,7 @@ func TestInspectionUsesSelectedPartitionsForPositioningRoutingAndStatus(t *testi
 	p.Destination.Partitioning = plan.Preserve
 	f.connections["output"].info.Partitions = []int32{0}
 	source := f.connections["input"]
-	source.positions[0] = 5
-	source.metadata[0] = kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: 5}}
+	source.saved[0] = kafkaport.SavedProgress{Position: 5, Progress: kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: 5}}}
 	// When inspecting, then excluded partitions need no destination ID, lookup or saved stop.
 	r := preview(t, s, p)
 	require.Len(t, r.Partitions, 1)

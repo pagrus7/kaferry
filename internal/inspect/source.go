@@ -48,13 +48,13 @@ func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafka
 			return &kafkaport.Conflict{Err: err}
 		}
 	}
-	saved, metadata := map[int32]int64{}, map[int32]kafkaport.Progress{}
+	saved := map[int32]kafkaport.SavedProgress{}
 	if !p.OneOff {
 		if err := connection.CheckMembers(ctx, p.Group, kafkaport.GroupProtocol(p, report.Fingerprint)); err != nil {
 			return err
 		}
 		var err error
-		saved, metadata, err = connection.Saved(ctx, p.Group, report.Fingerprint, p.Window, p.MaxStalenessMS)
+		saved, err = connection.Saved(ctx, p.Group, report.Fingerprint, p.Window, p.MaxStalenessMS)
 		if err != nil {
 			return err
 		}
@@ -76,12 +76,12 @@ func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafka
 		report.StartRule = "OFFSET"
 	}
 	report.Source.PartitionCount = len(topic.Partitions)
-	located, err := s.positioning.New(connection, connection, p, report.Fingerprint, topic.TopicID).Locate(ctx, selected, saved, metadata)
+	located, err := s.positioning.New(connection, connection, p, report.Fingerprint, topic.TopicID).Locate(ctx, selected, saved)
 	if err != nil {
 		return err
 	}
 	var warnings []string
-	report.Partitions, warnings = partitionRows(p, located, saved, metadata)
+	report.Partitions, warnings = partitionRows(p, located, saved)
 	report.Warnings = append(report.Warnings, warnings...)
 	for _, row := range report.Partitions {
 		if row.EndOrigin == "preview" {

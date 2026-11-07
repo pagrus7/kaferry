@@ -245,15 +245,15 @@ func TestSavedOffsetsDistinguishAbsentGroupsFromInspectionFailures(t *testing.T)
 			}}
 			inspector := &Inspector{codec: commitmeta.NewCodec(), client: client, topic: "input", log: quietLogger()}
 			// When loading progress before positioning a source.
-			positions, progress, err := inspector.Saved(t.Context(), "group", "fp", plan.WindowSpec{}, 0)
+			saved, err := inspector.Saved(t.Context(), "group", "fp", plan.WindowSpec{}, 0)
 			// Then unavailable or unauthorized progress cannot become a fresh start.
 			require.ErrorIs(t, err, tc.failure, "incorrect saved-offset outcome")
 			if tc.failure != nil || tc.code == kerr.GroupIDNotFound.Code {
-				if len(positions) != 0 || len(progress) != 0 {
-					t.Fatal("unexpected usable progress", positions, progress)
+				if len(saved) != 0 {
+					t.Fatal("unexpected usable progress", saved)
 				}
-			} else if !reflect.DeepEqual(positions, map[int32]int64{0: 42}) || len(progress) != 1 || encodeMetadata(progress[0]) != encoded {
-				t.Fatal("saved progress changed", positions, progress)
+			} else if len(saved) != 1 || saved[0].Position != 42 || encodeMetadata(saved[0].Progress) != encoded {
+				t.Fatal("saved progress changed", saved)
 			}
 		})
 	}
@@ -350,11 +350,10 @@ func TestSavedOffsetsRejectFailedMetadataWithoutChangingCachedIdentity(t *testin
 				response.Topics[0].Partitions[1].ErrorCode = kerr.NotLeaderForPartition.Code
 			}
 			// When saved progress refreshes the source metadata before requesting offsets.
-			positions, progress, err := inspector.Saved(t.Context(), "group", "fp", plan.WindowSpec{}, 0)
+			saved, err := inspector.Saved(t.Context(), "group", "fp", plan.WindowSpec{}, 0)
 			// Then failure preserves the cache and exposes no progress or offset-fetch request.
 			require.Error(t, err)
-			require.Nil(t, positions)
-			require.Nil(t, progress)
+			require.Nil(t, saved)
 			require.Equal(t, id, inspector.topicID)
 			require.Equal(t, "cluster", inspector.clusterID)
 			require.Equal(t, []int32{0, 2}, inspector.parts)

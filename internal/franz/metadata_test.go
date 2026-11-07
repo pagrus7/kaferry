@@ -158,17 +158,16 @@ func TestSavedProgressRequiresEveryPartitionAndExactMetadata(t *testing.T) {
 			}
 			i := &Inspector{codec: commitmeta.NewCodec(), topicID: id, parts: []int32{0, 2}}
 			// When decoding the assignment's saved starts, then only absent commits permit a fresh start.
-			positions, progress, err := i.decodeSaved(parts, "fp", plan.WindowSpec{}, 0)
+			saved, err := i.decodeSaved(parts, "fp", plan.WindowSpec{}, 0)
 			valid := mode == "valid" || mode == "absent"
 			require.Equal(t, valid, (err == nil), "invalid saved-position decision")
 			if mode == "nil metadata" {
 				var conflict *kafkaport.Conflict
 				require.ErrorAs(t, err, &conflict)
-				require.Nil(t, positions)
-				require.Nil(t, progress)
+				require.Nil(t, saved)
 			}
-			if mode == "valid" && (positions[0] != 42 || encodeMetadata(progress[0]) != metadata) {
-				t.Fatal("progress changed", positions, progress)
+			if mode == "valid" && (saved[0].Position != 42 || encodeMetadata(saved[0].Progress) != metadata) {
+				t.Fatal("progress changed", saved)
 			}
 		})
 	}
@@ -211,19 +210,19 @@ func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
 			text := encodeMetadata(progress)
 			inspector := &Inspector{codec: commitmeta.NewCodec(), topicID: id, parts: []int32{0}}
 			// When startup or assignment validates saved progress through their common path.
-			positions, metadata, err := inspector.decodeSaved(map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 42, Metadata: &text}}, "fp", spec, staleness)
+			saved, err := inspector.decodeSaved(map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 42, Metadata: &text}}, "fp", spec, staleness)
 			// Then only compatible progress can reach positioning.
 			if scenario == "valid" || scenario == "captured end without upper bound" {
-				if err != nil || positions[0] != 42 || len(metadata) != 1 {
-					t.Fatal(positions, metadata, err)
+				if err != nil || saved[0].Position != 42 || len(saved) != 1 {
+					t.Fatal(saved, err)
 				}
 			} else if scenario == "fingerprint" {
 				var mismatch *plan.FingerprintMismatch
 				require.ErrorAs(t, err, &mismatch)
-				require.Equal(t, int64(42), positions[0])
-				require.Equal(t, progress, metadata[0])
-			} else if err == nil || len(positions) > 0 || len(metadata) > 0 {
-				t.Fatal("invalid progress became usable", positions, metadata, err)
+				require.Equal(t, int64(42), saved[0].Position)
+				require.Equal(t, progress, saved[0].Progress)
+			} else if err == nil || len(saved) > 0 {
+				t.Fatal("invalid progress became usable", saved, err)
 			}
 		})
 	}
@@ -254,18 +253,19 @@ func TestFingerprintConflictCannotHideUnsafeSourceProgress(t *testing.T) {
 			parts := map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 3, Metadata: &first}, 2: {Offset: 7, Metadata: &encoded}}
 			inspector := &Inspector{codec: commitmeta.NewCodec(), topicID: id, parts: []int32{0, 2}}
 			// When validating all source partitions, not merely the first incompatible one.
-			positions, progress, err := inspector.decodeSaved(parts, "current", spec, 0)
+			saved, err := inspector.decodeSaved(parts, "current", spec, 0)
 			// Then only source-safe fingerprint conflicts expose diagnostic positions.
 			require.Error(t, err)
 			if scenario == "mixed identities" {
 				var mismatch *plan.FingerprintMismatch
 				require.ErrorAs(t, err, &mismatch)
-				require.Equal(t, map[int32]int64{0: 3, 2: 7}, positions)
-				require.Equal(t, "old", progress[0].Fingerprint)
-				require.Equal(t, "current", progress[2].Fingerprint)
+				require.Len(t, saved, 2)
+				require.EqualValues(t, 3, saved[0].Position)
+				require.EqualValues(t, 7, saved[2].Position)
+				require.Equal(t, "old", saved[0].Fingerprint)
+				require.Equal(t, "current", saved[2].Fingerprint)
 			} else {
-				require.Nil(t, positions)
-				require.Nil(t, progress)
+				require.Nil(t, saved)
 			}
 		})
 	}

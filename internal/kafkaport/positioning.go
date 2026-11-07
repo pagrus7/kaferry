@@ -31,7 +31,7 @@ type Positioning struct {
 	LogEnd      map[int32]int64
 }
 type AssignmentPositioner interface {
-	Locate(context.Context, []int32, map[int32]int64, map[int32]Progress) (Positioning, error)
+	Locate(context.Context, []int32, map[int32]SavedProgress) (Positioning, error)
 }
 type PositionerFactory interface {
 	New(OffsetReader, TimeReader, plan.Plan, string, string) AssignmentPositioner
@@ -49,7 +49,7 @@ func (f *positionerFactory) New(offsets OffsetReader, times TimeReader, p plan.P
 	return &positioner{lookup: f.lookups.New(offsets, times), plan: p, fingerprint: fingerprint, topicID: topicID, clock: f.clock, log: f.log}
 }
 
-func (p *positioner) Locate(ctx context.Context, parts []int32, saved map[int32]int64, metadata map[int32]Progress) (Positioning, error) {
+func (p *positioner) Locate(ctx context.Context, parts []int32, saved map[int32]SavedProgress) (Positioning, error) {
 	p.ends = nil
 	if len(parts) == 0 {
 		return Positioning{}, nil
@@ -58,12 +58,12 @@ func (p *positioner) Locate(ctx context.Context, parts []int32, saved map[int32]
 	if err := p.watermarks(ctx, ids); err != nil {
 		return Positioning{}, err
 	}
-	now, adopted := p.clock.Now(), adoptedWindow(metadata)
+	now, adopted := p.clock.Now(), adoptedWindow(saved)
 	assignments := make([]copy.Assignment, len(parts))
 	progress := make(map[int32]Progress, len(parts))
 	p.lookups = make(map[int32]int64)
 	for n, part := range parts {
-		window, stored, position, err := p.window(part, saved, metadata, adopted, now)
+		window, stored, position, err := p.window(part, saved, adopted, now)
 		if err != nil {
 			return Positioning{}, err
 		}
@@ -120,11 +120,11 @@ func (p *positioner) watermarks(ctx context.Context, ids []int32) error {
 	return nil
 }
 
-func adoptedWindow(metadata map[int32]Progress) *plan.Window {
+func adoptedWindow(saved map[int32]SavedProgress) *plan.Window {
 	var window *plan.Window
 	var lowest int32
 	first := true
-	for id, progress := range metadata {
+	for id, progress := range saved {
 		if first || id < lowest {
 			lowest, window, first = id, progress.Window, false
 		}
@@ -132,12 +132,12 @@ func adoptedWindow(metadata map[int32]Progress) *plan.Window {
 	return window
 }
 
-func (p *positioner) window(id int32, saved map[int32]int64, metadata map[int32]Progress, adopted *plan.Window, now time.Time) (plan.Window, Progress, int64, error) {
+func (p *positioner) window(id int32, saved map[int32]SavedProgress, adopted *plan.Window, now time.Time) (plan.Window, Progress, int64, error) {
 	var window plan.Window
 	progress := Progress{Fingerprint: p.fingerprint, TopicID: p.topicID}
 	position, origin := int64(-1), "resolved"
 	if stored, ok := saved[id]; ok {
-		position, progress, origin = stored, metadata[id], "saved"
+		position, progress, origin = stored.Position, stored.Progress, "saved"
 		if progress.Window != nil {
 			window = *progress.Window
 		}

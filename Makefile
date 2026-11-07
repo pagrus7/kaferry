@@ -45,13 +45,13 @@ broker:
 broker-down:
 	docker compose -p kaferry-compat --profile cross-cluster down
 integration:
-	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_TEST_DEST_BROKERS=$(KAFKA_TEST_DEST_BROKERS) CGO_ENABLED=1 $(GO) test -count=1 -race -tags=integration ./...
+	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_TEST_DEST_BROKERS=$(KAFKA_TEST_DEST_BROKERS) CGO_ENABLED=1 $(PYTHON) scripts/suites.py run integration --go=$(GO) --packages=./... --output=
 fault: $(TEST_BINARY_PREREQUISITE)
-	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_TEST_DEST_BROKERS=$(KAFKA_TEST_DEST_BROKERS) KAFKA_FAULT_CONTAINER=kaferry-compat-kafka-1 KAFKA_FAULT_DEST_CONTAINER=kaferry-compat-kafka-dr-1 $(GO) test -count=1 -tags=integration,fault -run 'TestBlockingCommit|TestRebalanceChurn|TestCrashResume|TestRecoveryBlockedOutput' $(KAFERRY_TEST_OUTPUT) ./tests/compat
+	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) KAFKA_TEST_DEST_BROKERS=$(KAFKA_TEST_DEST_BROKERS) KAFKA_FAULT_CONTAINER=kaferry-compat-kafka-1 KAFKA_FAULT_DEST_CONTAINER=kaferry-compat-kafka-dr-1 $(PYTHON) scripts/suites.py run fault --go=$(GO) --output=$(KAFERRY_TEST_OUTPUT)
 load: $(TEST_BINARY_PREREQUISITE)
-	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) $(GO) test -count=1 -tags=integration,load -run '^TestLoad' $(KAFERRY_TEST_OUTPUT) ./tests/compat
+	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) $(PYTHON) scripts/suites.py run load --go=$(GO) --output=$(KAFERRY_TEST_OUTPUT)
 soak: $(TEST_BINARY_PREREQUISITE)
-	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) $(GO) test -count=1 -timeout=$(SOAK_TEST_TIMEOUT) -tags=integration,load -run TestStreamingSoak $(KAFERRY_TEST_OUTPUT) ./tests/compat
+	KAFKA_TEST_BROKERS=$(KAFKA_TEST_BROKERS) $(PYTHON) scripts/suites.py run soak --go=$(GO) --output=$(KAFERRY_TEST_OUTPUT) --timeout=$(SOAK_TEST_TIMEOUT)
 qualification: $(TEST_BINARY_PREREQUISITE)
 	GO=$(GO) sh tests/qualification/run.sh
 fuzz:
