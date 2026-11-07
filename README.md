@@ -82,24 +82,33 @@ CGO_ENABLED=0 go install github.com/pagrus7/kaferry/cmd/kaferry@latest
 
 ## Docker quick start
 
-Start Docker to try the bundled archive demo. No Kafka cluster or local Kaferry installation is needed.
+**Try a Kafka copy.** Start Docker, then run:
 
 ```sh
-docker run --rm \
-  --mount source=kaferry-demo,target=/demo \
-  --workdir /demo \
-  ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
+docker run --rm ghcr.io/pagrus7/kaferry-demo:latest
 ```
 
-With a fresh `kaferry-demo` volume, this copies three bundled sample records into `output` and saves progress. The `copy summary` on stderr includes these fields:
+Docker downloads the demo image on first use. It starts a temporary Kafka broker, seeds three records in `orders`, prints and runs the SQL to copy them into `orders-copy`, then reads and verifies the destination:
 
-```json
-{"msg":"copy summary","submitted":3,"confirmed":3}
+```text
+order-1
+order-2
+order-3
+
+Demo passed: verified all 3 records in orders-copy.
 ```
 
-The files remain after the container exits. Running the same command again resumes the same group and reports `submitted: 0` and `confirmed: 0`.
+No local files, Kafka setup, credentials or host ports are needed. Each run starts fresh and exits after verification; `--rm` removes its container and data. The downloaded image stays cached. Failure or a three-minute timeout exits nonzero. [Image details](docs/install.md#container-images).
 
-[Inspect results and reset the demo](docs/usage.md#first-copy-with-docker) · [Run without Docker](docs/usage.md#first-copy-without-kafka) · [Try Kafka locally](docs/usage.md#local-kafka-playground).
+**Run your own SQL and configuration.** [Prepare your topics and connections](docs/usage.md#copy-between-kafka-topics), then run from the directory containing `connections.toml` and `copy.sql` (macOS/Linux):
+
+```sh
+docker run --rm --stop-timeout 35 --user "$(id -u):$(id -g)" \
+  --mount "type=bind,src=$PWD,dst=/work" ghcr.io/pagrus7/kaferry:latest \
+  run -c /work/connections.toml -f /work/copy.sql
+```
+
+Use broker addresses reachable from the container. For archive replay, create `checkpoints` locally and set `worker.checkpoint_dir = '/work/checkpoints'` in TOML; keep archive output under `/work` too. [Container paths and stopping](docs/usage.md#containers) · [Archive demo and resume](docs/usage.md#first-copy-with-docker).
 
 ## Choosing a tool
 
