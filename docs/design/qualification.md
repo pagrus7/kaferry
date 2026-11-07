@@ -253,9 +253,7 @@ To package an older run, or retry report generation into a new directory:
 python3 -m tools.qualification.endurance_results build-results/endurance-24h --output build-results/endurance-package
 ```
 
-The [endurance results page](https://pagrus7.github.io/kaferry/) is generated from published JSON and checksums. It shows the latest run, history, measurements, identity, workload limits and evidence links without per-run repository edits. Failed, interrupted and rehearsal runs retain their status. The runner never edits tracked documentation.
-
-To publish evidence and refresh the page, run against a verified release executable using `--binary` from the start. After reviewing the package, use an authenticated `gh` CLI with permission to upload release assets and dispatch workflows:
+To publish evidence, run against a verified release executable using `--binary` from the start. After reviewing the package, use an authenticated `gh` CLI with permission to upload release assets:
 
 ```sh
 python3 -m tools.qualification.endurance_results build-results/endurance-24h --publish vX.Y.Z
@@ -265,13 +263,7 @@ If you prepared a custom package directory, pass the same `--output` when publis
 
 The command downloads the selected release's platform archive and requires its executable SHA-256 to match the measured binary. It also checks the package checksums and requires a clean fixture checkout. Runs of a newer development executable cannot be published as an older release's evidence. `--repo OWNER/REPO` selects another repository. Failed runs with measured identity can be published and retain their failure status; preflight failures without metrics cannot be uploaded.
 
-Each upload uses platform/date-prefixed asset names and its own checksums; existing assets, tags and release notes remain unchanged. After uploading, the publisher dispatches `endurance-results.yml` on `main` in the selected repository. That workflow discovers stable-release JSON, verifies checksums and deploys the page; hourly discovery also picks up uploads from older runners. The page refresh is asynchronous. A refresh error after upload prints a command to retry only the refresh; do not repeat the upload. The [workflow](https://github.com/pagrus7/kaferry/actions/workflows/endurance-results.yml) reports deployment status. Invalid evidence fails the build and leaves the prior page deployed.
-
-Repositories selected with `--repo` need GitHub Pages enabled with the GitHub Actions build source and the `endurance-results.yml` workflow on `main`. To request a refresh independently of an upload:
-
-```sh
-gh workflow run endurance-results.yml --ref main --repo OWNER/REPO
-```
+Each upload uses platform/date-prefixed asset names and its own checksums; existing assets, tags and release notes remain unchanged. The command prints a link to the release containing the uploaded reports and evidence.
 
 Uploading is explicit; running qualification does not contact GitHub. The existing release-results generator covers release load/soak evidence and does not import this dedicated profile.
 

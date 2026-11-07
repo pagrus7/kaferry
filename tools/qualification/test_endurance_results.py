@@ -4,7 +4,6 @@ import hashlib
 import io
 import json
 from pathlib import Path
-import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -96,19 +95,9 @@ class PublicationTest(unittest.TestCase):
             publish(package, 'v0.12.0', 'pagrus7/kaferry')
             self.assertEqual(4, len(uploaded))
             self.assertTrue(all(name.startswith('endurance-linux-arm64-202611060400000000-') for name in uploaded))
-            self.assertNotIn('--clobber', run.call_args_list[1].args[0])
-            self.assertEqual(['gh', 'workflow', 'run', 'endurance-results.yml', '--ref', 'main',
-                              '--repo', 'pagrus7/kaferry'], run.call_args.args[0])
-            uploaded.clear()
-            # When refresh fails after upload, then retry guidance must not repeat the upload.
-            def failed_refresh(command, **kwargs):
-                if command[:2] == ['gh', 'workflow']:
-                    raise subprocess.CalledProcessError(1, command)
-                return gh(command, **kwargs)
-            with patch('tools.qualification.endurance_results.subprocess.run', side_effect=failed_refresh):
-                with self.assertRaisesRegex(ValueError, 'Evidence is uploaded.*Retry the refresh only: gh workflow run'):
-                    publish(package, 'v0.12.0', 'pagrus7/kaferry')
-            self.assertEqual(4, len(uploaded))
+            self.assertEqual(2, run.call_count)
+            self.assertEqual(['gh', 'release', 'upload'], run.call_args.args[0][:3])
+            self.assertNotIn('--clobber', run.call_args.args[0])
             uploaded.clear()
             self.binary = b'different release'
             with self.assertRaisesRegex(ValueError, 'does not match'):

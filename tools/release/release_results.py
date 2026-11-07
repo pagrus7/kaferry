@@ -1,8 +1,7 @@
-"""Retain release measurements and render the SVG source for the README image."""
+"""Retain release measurements as JSON and Markdown reports."""
 
 import argparse
 import hashlib
-from html import escape
 import json
 import math
 from pathlib import Path
@@ -99,58 +98,10 @@ def markdown(report):
     return '\n'.join(rows)
 
 
-def svg(report):
-    parts = ['<svg xmlns="http://www.w3.org/2000/svg" width="820" height="395" '
-             'viewBox="0 0 820 395" role="img" aria-labelledby="title desc">',
-             f'<title id="title">Kaferry {escape(report["version"])} release results</title>',
-             '<desc id="desc">Passing Kafka compatibility matrix and observed Linux AMD64 load throughput. '
-             'Shared-runner measurements; click through for inputs, scope and full data.</desc>',
-             '<rect width="820" height="395" rx="12" fill="#f6f8fa"/>',
-             '<g font-family="Arial, sans-serif" fill="#1f2937">']
-
-    def text(x, y, value, size=13, anchor='start'):
-        parts.append(f'<text x="{x}" y="{y}" font-size="{size}" text-anchor="{anchor}">'
-                     f'{escape(str(value))}</text>')
-
-    text(24, 33, f'Kaferry {report["version"]} · release results', 22)
-    text(24, 55, f'Linux AMD64 · source {report["source_commit"][:12]} · '
-         f'{len(report["compatibility"])}/{len(report["compatibility"])} compatibility cases passed')
-    text(24, 88, 'Kafka brokers: source → destination', 15)
-    brokers = [case for case in report['compatibility'] if case['suite'] == 'broker']
-    versions = sorted({case['source_version'] for case in brokers},
-                      key=lambda value: tuple(map(int, value.split('.'))))
-    for column, version in enumerate(versions):
-        text(124 + column * 57, 113, version, 11, 'middle')
-    for row, version in enumerate(versions):
-        text(80, 139 + row * 27, version, 12, 'end')
-        for column, destination in enumerate(versions):
-            case = next(case for case in brokers if case['source_version'] == version
-                        and case['destination_version'] == destination)
-            x, y = 98 + column * 57, 122 + row * 27
-            parts.append(f'<rect x="{x}" y="{y}" width="52" height="23" rx="4" fill="#d1fae5"/>')
-            text(x + 26, y + 16, case['status'], 10, 'middle')
-    auth = sum(case['suite'] == 'auth' for case in report['compatibility'])
-    text(24, 282, f'Authentication: {auth}/{auth} version cases passed')
-    text(24, 305, f'Capture endurance passed · soak {report["environments"]["soak"]["soak_duration"]} passed')
-    text(442, 88, 'Load throughput · records/s', 15)
-    selected = [next(item for item in report['measurements']
-                     if item['suite'] == 'load' and item['test'] == test) for test in LOAD_CASES]
-    for row, item in enumerate(selected):
-        text(442, 126 + row * 37, LOAD_CASES[item['test']])
-        text(795, 126 + row * 37, f'{item["records_per_second"]:,.0f}', 16, 'end')
-    counts = {item['records'] for item in selected}
-    scope = f'{next(iter(counts)):,} records per load case' if len(counts) == 1 else 'Mixed load record counts; see full data'
-    text(24, 341, scope + ' · one invocation per scenario')
-    text(24, 362, 'Timing: SQL input release through process exit · shared CI runners.')
-    text(24, 383, 'Click for measurement inputs, qualification scope and full data.')
-    parts += ['</g>', '</svg>']
-    return '\n'.join(parts) + '\n'
-
-
 def write_results(evidence, archive, matrix, commit, version, output):
     report = collect(evidence, archive, matrix, commit, version)
     contents = {'release-results.json': json.dumps(report, indent=2, sort_keys=True) + '\n',
-                'release-results.md': markdown(report), 'release-results.svg': svg(report)}
+                'release-results.md': markdown(report)}
     output.mkdir(parents=True, exist_ok=True)
     for name, content in contents.items():
         (output / name).write_text(content, encoding='utf-8')

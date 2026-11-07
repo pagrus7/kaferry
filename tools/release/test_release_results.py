@@ -1,4 +1,4 @@
-"""The front-page report must describe passing measurements of the release binary."""
+"""Release reports must describe passing measurements of the release binary."""
 
 import hashlib
 import io
@@ -7,7 +7,6 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
-import xml.etree.ElementTree as ET
 
 from tools.qualification.qualify import plan
 from tools.release.release_results import LOAD_CASES, SOAK, write_results
@@ -60,14 +59,6 @@ class ReleaseResultsTest(unittest.TestCase):
         self.assertEqual(len(report['measurements']), 6)
         soak = next(item for item in report['measurements'] if item['test'] == SOAK)
         self.assertEqual(soak['max_sampled_commit_lag'], 7)
-        image = ET.fromstring((output / 'release-results.svg').read_text())
-        text = ''.join(image.itertext())
-        self.assertIn('31/31', text)
-        self.assertIn('12,346', text)
-        self.assertIn('Kafka → Kafka (key)', text)
-        self.assertIn('soak 30m passed', text)
-        self.assertIn('3.9.2', text)
-        self.assertIn('4.4.0', text)
         markdown = (output / 'release-results.md').read_text()
         self.assertIn('shared CI runner', markdown)
         self.assertIn('paced input', markdown)

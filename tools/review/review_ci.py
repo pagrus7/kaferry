@@ -12,7 +12,7 @@ import time
 
 
 WORKFLOWS = {f'.github/workflows/{name}.yml' for name in
-             ('ci', 'quality', 'risk', 'pr-description', 'compatibility')}
+             ('ci', 'quality', 'risk', 'compatibility')}
 
 
 class Incomplete(ValueError):
@@ -43,7 +43,7 @@ def ci_state(observation, head):
                 candidate['base']['repo']['id'] == pr['base']['repo']['id'])
 
     runs = [run for run in runs if any(same_pr(candidate) for candidate in run['pull_requests'])]
-    # Description edits and reruns may leave several results for the same name.
+    # Reruns may leave several results for the same name.
     latest_runs, latest_checks = {}, {}
     for run in sorted(runs, key=lambda r: r['id']):
         latest_runs[run['path']] = run
