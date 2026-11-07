@@ -40,21 +40,19 @@ type streamRecords struct {
 	topic                  string
 	stamp                  time.Time
 	headers                []kgo.RecordHeader
-	seen                   map[int]bool
-	published, contiguous  int
+	published              int
 	order                  map[[2]int32]int
 	verified, acknowledged int
 	received, unique       int
 	duplicates, corrupted  int
 	unexpected, reordered  int
 	publishErrors          int
-	next                   []int
 	offsets                map[int32]int64
 	nonblocking            bool
 	keyRouting             kgo.TopicPartitioner
 	destinationPartitions  int
 	observer               *deliveryObserver
-	integrity              *streamIntegrity
+	receipts               *receiptLedger
 }
 
 type soakDelivery struct {
@@ -89,7 +87,7 @@ func (s *streamRecords) delivery(complete bool) soakDelivery {
 		observed := s.observer.snapshot()
 		r.Observed = &observed
 	}
-	r.Integrity = s.integrity.snapshot(r.ReconciliationComplete, s.published, s.unique)
+	r.Integrity = s.receipts.snapshot(r.ReconciliationComplete, s.published, s.unique)
 	return r
 }
 
@@ -101,28 +99,24 @@ func newStreamRecords(topic string, stamp time.Time) *streamRecords {
 // Bound both ID and digest history by the entire input, independent of arrival order.
 func newFiniteStreamRecords(topic string, stamp time.Time, count int) *streamRecords {
 	s := newStreamRecords(topic, stamp)
-	s.integrity.maxPending = count
+	s.receipts.maxPending = count
 	return s
 }
 
 func newPartitionedStreamRecords(topic string, stamp time.Time, partitions int) *streamRecords {
-	next := make([]int, partitions)
-	for i := range next {
-		next[i] = i
-	}
-	return &streamRecords{topic: topic, stamp: stamp, headers: []kgo.RecordHeader{{Key: "trace", Value: []byte{0, 255}}, {Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, seen: make(map[int]bool), order: make(map[[2]int32]int), next: next, offsets: make(map[int32]int64), integrity: newPartitionedStreamIntegrity(partitions)}
+	return &streamRecords{topic: topic, stamp: stamp, headers: []kgo.RecordHeader{{Key: "trace", Value: []byte{0, 255}}, {Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, order: make(map[[2]int32]int), offsets: make(map[int32]int64), receipts: newReceiptLedger(partitions)}
 }
 func (s *streamRecords) publish(t *testing.T, ctx context.Context, producer *kgo.Client, reports chan kgo.ProduceResult, count int) {
 	t.Helper()
 	for range count {
 		id := s.published
-		payload := archiveLoadRecordPartitions(id, len(s.next)).Value
+		payload := archiveLoadRecordPartitions(id, len(s.receipts.next)).Value
 		key := []byte(fmt.Sprintf("key-%d", id%257))
 		if id%7 == 0 {
 			key = nil
 		}
-		message := &kgo.Record{Topic: s.topic, Partition: int32(id % len(s.next)), Key: key, Value: payload, Timestamp: s.stamp, Headers: s.headers}
-		s.integrity.submit(id, message)
+		message := &kgo.Record{Topic: s.topic, Partition: int32(id % len(s.receipts.next)), Key: key, Value: payload, Timestamp: s.stamp, Headers: s.headers}
+		s.receipts.submit(id, message)
 		callback := deliveryReporter(ctx, reports)
 		if observer := s.observer; observer != nil {
 			observer.submit(id)
@@ -144,17 +138,16 @@ func (s *streamRecords) publish(t *testing.T, ctx context.Context, producer *kgo
 func (s *streamRecords) verify(t *testing.T, record *kgo.Record) {
 	t.Helper()
 	s.offsets[record.Partition] = max(s.offsets[record.Partition], record.Offset+1)
-	id, unique := s.receive(t, record.Value)
+	id, unique := s.receive(t, record.Key, record.Value, record.Headers)
 	if !unique {
 		return
 	}
-	s.integrity.receive(t, id, record.Key, record.Value, record.Headers)
 	key := []byte(fmt.Sprintf("key-%d", id%257))
 	if id%7 == 0 {
 		key = nil
 	}
 	if !reflect.DeepEqual(key, record.Key) || !record.Timestamp.Equal(s.stamp) ||
-		!reflect.DeepEqual(s.headers, record.Headers) || !reflect.DeepEqual(archiveLoadRecordPartitions(id, len(s.next)).Value, record.Value) {
+		!reflect.DeepEqual(s.headers, record.Headers) || !reflect.DeepEqual(archiveLoadRecordPartitions(id, len(s.receipts.next)).Value, record.Value) {
 		s.corrupted++
 		return
 	}
@@ -162,7 +155,7 @@ func (s *streamRecords) verify(t *testing.T, record *kgo.Record) {
 		s.corrupted++
 		return
 	}
-	pair := [2]int32{int32(id % len(s.next)), record.Partition}
+	pair := [2]int32{int32(id % len(s.receipts.next)), record.Partition}
 	if prior, exists := s.order[pair]; exists && id <= prior {
 		s.reordered++
 	}
@@ -172,16 +165,15 @@ func (s *streamRecords) verify(t *testing.T, record *kgo.Record) {
 
 func (s *streamRecords) verifyArchive(t *testing.T, record core.Record, identity *core.Provenance) {
 	t.Helper()
-	id, unique := s.receive(t, record.Value)
-	if !unique {
-		return
-	}
 	headers := make([]kgo.RecordHeader, len(record.Headers))
 	for i, header := range record.Headers {
 		headers[i] = kgo.RecordHeader{Key: header.Name, Value: header.Value}
 	}
-	s.integrity.receive(t, id, record.Key, record.Value, headers)
-	want := archiveLoadRecordPartitions(id, len(s.next))
+	id, unique := s.receive(t, record.Key, record.Value, headers)
+	if !unique {
+		return
+	}
+	want := archiveLoadRecordPartitions(id, len(s.receipts.next))
 	want.Source.Cluster, want.Source.Topic, want.Source.TopicID = identity.Cluster, identity.Topic, identity.TopicID
 	stamp := s.stamp.UnixMilli()
 	want.TimestampMS = &stamp
@@ -189,7 +181,7 @@ func (s *streamRecords) verifyArchive(t *testing.T, record core.Record, identity
 		s.corrupted++
 		return
 	}
-	pair := [2]int32{int32(id % len(s.next)), int32(id % len(s.next))}
+	pair := [2]int32{int32(id % len(s.receipts.next)), int32(id % len(s.receipts.next))}
 	if prior, exists := s.order[pair]; exists && id <= prior {
 		s.reordered++
 	}
@@ -197,7 +189,7 @@ func (s *streamRecords) verifyArchive(t *testing.T, record core.Record, identity
 	s.verified++
 }
 
-func (s *streamRecords) receive(t *testing.T, value []byte) (int, bool) {
+func (s *streamRecords) receive(t *testing.T, key, value []byte, headers []kgo.RecordHeader) (int, bool) {
 	t.Helper()
 	s.received++
 	if len(value) < 4 {
@@ -209,25 +201,15 @@ func (s *streamRecords) receive(t *testing.T, value []byte) (int, bool) {
 		s.unexpected++
 		return id, false
 	}
-	part := id % len(s.next)
-	if id < s.next[part] || s.seen[id] {
+	// Observe before digest work; the observer ignores duplicate receipts itself.
+	if s.observer != nil {
+		s.observer.receive(id)
+	}
+	if !s.receipts.receive(t, id, key, value, headers) {
 		s.duplicates++
 		return id, false
 	}
 	s.unique++
-	if s.observer != nil {
-		s.observer.receive(id)
-	}
-	s.seen[id] = true
-	for s.seen[s.next[part]] {
-		delete(s.seen, s.next[part])
-		s.next[part] += len(s.next)
-	}
-	s.contiguous = s.next[0]
-	for _, next := range s.next {
-		s.contiguous = min(s.contiguous, next)
-	}
-	require.LessOrEqual(t, len(s.seen), s.integrity.maxPending, "verification gaps exceeded the bounded ID window; totals are partial")
 	return id, true
 }
 func (s *streamRecords) drainReports(t *testing.T, reports <-chan kgo.ProduceResult) {
