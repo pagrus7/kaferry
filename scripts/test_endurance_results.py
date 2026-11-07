@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -86,7 +87,7 @@ class PublicationTest(unittest.TestCase):
                 with tarfile.open(target, 'w:gz') as archive:
                     info = tarfile.TarInfo('kaferry'); info.size = len(self.binary)
                     archive.addfile(info, io.BytesIO(self.binary))
-            else:
+            elif command[:3] == ['gh', 'release', 'upload']:
                 uploaded.extend(Path(path).name for path in command[command.index('--repo')+2:])
                 checksums = Path(command[-1]).read_text()
                 for path in command[command.index('--repo')+2:-1]:
@@ -95,7 +96,19 @@ class PublicationTest(unittest.TestCase):
             publish(package, 'v0.12.0', 'pagrus7/kaferry')
             self.assertEqual(4, len(uploaded))
             self.assertTrue(all(name.startswith('endurance-linux-arm64-202611060400000000-') for name in uploaded))
-            self.assertNotIn('--clobber', run.call_args.args[0])
+            self.assertNotIn('--clobber', run.call_args_list[1].args[0])
+            self.assertEqual(['gh', 'workflow', 'run', 'endurance-results.yml', '--ref', 'main',
+                              '--repo', 'pagrus7/kaferry'], run.call_args.args[0])
+            uploaded.clear()
+            # When refresh fails after upload, then retry guidance must not repeat the upload.
+            def failed_refresh(command, **kwargs):
+                if command[:2] == ['gh', 'workflow']:
+                    raise subprocess.CalledProcessError(1, command)
+                return gh(command, **kwargs)
+            with patch('endurance_results.subprocess.run', side_effect=failed_refresh):
+                with self.assertRaisesRegex(ValueError, 'Evidence is uploaded.*Retry the refresh only: gh workflow run'):
+                    publish(package, 'v0.12.0', 'pagrus7/kaferry')
+            self.assertEqual(4, len(uploaded))
             uploaded.clear()
             self.binary = b'different release'
             with self.assertRaisesRegex(ValueError, 'does not match'):

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kaferry · Endurance results</title>
+  <meta name="description" content="Kaferry endurance test results, rendered automatically from checksummed release JSON. Workloads, delivery, memory, latency and downloadable evidence.">
+  <link rel="icon" href="logo.svg" type="image/svg+xml">
+  <style>
+    :root { color-scheme: light; --ink:#182f3c; --muted:#52646c; --line:#d7dfdf; --paper:#f5f7f5; --blue:#165e7a; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.6 system-ui,sans-serif; }
+    a { color:var(--blue); text-underline-offset:3px; }
+    a:hover { color:#092f43; }
+    a:focus-visible, summary:focus-visible { outline:3px solid #c98020; outline-offset:4px; }
+    .wrap { max-width:1100px; margin:auto; padding:32px; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:24px; border-bottom:1px solid var(--line); padding-bottom:24px; }
+    header img { width:180px; height:auto; }
+    header nav { display:flex; gap:24px; }
+    .eyebrow { color:var(--blue); font-size:.8rem; letter-spacing:.14em; text-transform:uppercase; font-weight:700; }
+    .hero { padding:56px 0 28px; }
+    h1 { margin:8px 0; font-size:clamp(2.4rem,6vw,4.2rem); line-height:1.1; letter-spacing:-.05em; }
+    .lede { max-width:720px; color:var(--muted); font-size:1.1rem; }
+    .latest { background:var(--ink); color:white; border-radius:12px; padding:24px 28px; margin:28px 0 12px; }
+    .latest small { display:block; color:#b7d2db; letter-spacing:.1em; text-transform:uppercase; }
+    .latest strong { display:block; font-size:clamp(1.2rem,3vw,1.8rem); }
+    .highlights .measurements { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; margin-top:20px; }
+    .highlights .measurements div { display:block; border:0; padding:0; }
+    .highlights dt { color:#b7d2db; font-size:.8rem; }
+    .highlights dd { font-size:1.35rem; }
+    .updated, .date { font-size:.85rem; color:var(--muted); }
+    h2 { margin:40px 0 16px; font-size:1.5rem; }
+    h3 { margin:28px 0 12px; font-size:1rem; }
+    .history { overflow-x:auto; border:1px solid var(--line); background:white; border-radius:10px; }
+    table { border-collapse:collapse; width:100%; text-align:left; white-space:nowrap; }
+    th { color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.04em; }
+    th,td { padding:14px 20px; border-bottom:1px solid var(--line); }
+    tr:last-child td { border:0; }
+    .run { margin:16px 0; border:1px solid var(--line); border-radius:12px; background:white; scroll-margin-top:24px; }
+    summary { padding:22px 24px; cursor:pointer; font-size:1.15rem; font-weight:700; }
+    summary::marker { color:var(--blue); }
+    .badges { display:inline-flex; gap:8px; flex-wrap:wrap; margin-left:16px; vertical-align:middle; }
+    .status,.rehearsal { display:inline-block; font-size:.7rem; letter-spacing:.06em; padding:3px 10px; border-radius:20px; }
+    .passed { color:#21562e; background:#e1f0e3; }
+    .failed { color:#8a2525; background:#fbe6e3; }
+    .interrupted,.rehearsal { color:#77500c; background:#fff1ce; }
+    .run-body { padding:0 24px 24px; }
+    .notice:empty { display:none; }
+    .notice { border-left:3px solid #ce9c3e; padding:8px 16px; background:#fff9e9; }
+    .measurements { margin:0; }
+    .measurements div { display:grid; grid-template-columns:minmax(200px,1fr) minmax(0,1.4fr); gap:20px; border-top:1px solid #e9eeee; padding:11px 0; }
+    dt { color:var(--muted); }
+    dd { margin:0; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+    .downloads { display:flex; flex-wrap:wrap; gap:12px; margin-top:28px; }
+    .downloads a { border:1px solid var(--line); padding:7px 14px; border-radius:6px; text-decoration:none; font-size:.9rem; }
+    .limits { border-top:1px solid var(--line); margin:40px 0 16px; padding-top:16px; color:var(--muted); max-width:850px; }
+    footer { font-size:.85rem; color:var(--muted); padding:24px 0; }
+    @media(max-width:600px) { .wrap{padding:20px} header{align-items:flex-start} header img{width:130px} header nav{gap:12px;font-size:.85rem} .hero{padding-top:32px} .measurements div{grid-template-columns:1fr;gap:2px} .highlights .measurements{grid-template-columns:1fr;gap:12px} summary{padding:18px} .badges{display:flex;margin:8px 0 0} .run-body{padding:0 18px 18px} }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a href="https://github.com/{{repository}}"><img src="logo.svg" alt="Kaferry"></a>
+    <nav aria-label="Project"><a href="https://github.com/{{repository}}">GitHub</a><a href="https://github.com/{{repository}}/releases">Releases</a></nav>
+  </header>
+  <main>
+    <section class="hero">
+      <div class="eyebrow">Published test evidence</div>
+      <h1>Endurance, measured.</h1>
+      <p class="lede">Continuous runs. Verified records. Measured resources. These results are presented automatically from the checksummed JSON uploaded by each release endurance run.</p>
+      <div class="latest"><small>Latest published run</small><strong>{{headline}}</strong><div class="highlights">{{highlights}}</div></div>
+      <p class="updated">Last refreshed {{updated}}. Publication requests an immediate refresh; hourly discovery also picks up uploads from older runners.</p>
+    </section>
+    <section aria-labelledby="history-heading">
+      <h2 id="history-heading">Run history</h2>
+      <div class="history"><table><thead><tr><th>Release</th><th>Started (UTC)</th><th>Platform</th><th>Publishing requested</th><th>Result</th></tr></thead><tbody>{{history}}</tbody></table></div>
+    </section>
+    <section aria-labelledby="measurements-heading"><h2 id="measurements-heading">Measurements &amp; evidence</h2>{{runs}}</section>
+    <section class="limits" aria-labelledby="scope-heading">
+      <h2 id="scope-heading">What these runs establish</h2>
+      <p>The application endurance profile uses one Kaferry process, key routing, high entropy payloads and separate single-broker source and destination clusters with replication factor 1. It measures the stated workload, rather than saturation capacity or replicated-cluster resilience. Rehearsals shorter than 24 hours do not establish 24 hours of continuous uptime.</p>
+      <p>Delivery time includes producer queueing, copying and verifier delay, from test submission to first unique receipt. Memory is sampled and can miss short peaks. Missing measurements remain unavailable; incomplete runs never establish successful reconciliation.</p>
+      <p><a href="https://github.com/{{repository}}/blob/main/design/qualification.md#endurance-on-a-persistent-host">Workload, measurement definitions and run instructions</a></p>
+    </section>
+  </main>
+  <footer>Source: public release assets from <a href="https://github.com/{{repository}}/releases">{{repository}}</a>. No per-run Markdown or result data is committed to build this page.</footer>
+</div>
+</body>
+</html>

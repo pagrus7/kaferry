@@ -11,7 +11,7 @@ A lightweight command-line tool for copying Kafka records between topics and fil
 [![Go coverage](https://codecov.io/gh/pagrus7/kaferry/branch/main/graph/badge.svg?flag=go)](https://codecov.io/gh/pagrus7/kaferry)
 [![Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml/badge.svg?branch=main)](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml)
 
-**24-hour endurance test passed:** v0.12.0 copied and verified **17,856,000 records** on Linux ARM64 with no missing, duplicate or corrupted records in the measured workload. [Results, scope and evidence](docs/endurance-results.md).
+**[Endurance test results](https://pagrus7.github.io/kaferry/)** — published runs, measurements and evidence, updated automatically from run JSON. [How results are published](docs/endurance-results.md).
 
 ## Examples
 
