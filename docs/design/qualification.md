@@ -415,7 +415,7 @@ Endurance disables topic age/size retention until reconciliation. Default prefli
 
 This is application endurance under the recorded topology and load. The replicated variant requires all three replicas in sync and minimum ISR=2 before copying, with the same workload, process and gates as the default. It is neither a saturation benchmark nor evidence of resilience to broker failures or ISR loss. Use `load` for bounded throughput comparisons and `auth` for replicated leader-failure scenarios; neither substitutes for long continuous uptime. A passing rehearsal, an underloaded run or several short runs cannot support a multi-day uptime claim. Claims exclude multiple Kaferry processes, network partitions, ownership changes, authentication overhead and arbitrary payload/key distributions. `parallel` retains its default topology; the replicated variant runs separately. Match a real deployment with separately measured workloads before generalizing these results.
 
-Replicated endurance configures every proxy route enabled and retains only the existing one-second broker stalls. The separate smoke suite's cut/heal proof runs only under `run replicated`.
+Replicated endurance configures every proxy route enabled and retains only the existing one-second broker stalls. The separate cut/heal proxy proof runs under `run replicated` and `run fault-replicated`.
 
 Archive capture and the smaller Kafka soak remain available:
 
