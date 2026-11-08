@@ -17,6 +17,14 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+func proxyRoutes(cluster string, worker int) map[int32]string {
+	routes := make(map[int32]string)
+	for index, endpoint := range Endpoints(cluster, worker) {
+		routes[int32(index+1)] = endpoint
+	}
+	return routes
+}
+
 func TestReplicatedProxyRoutes(t *testing.T) {
 	// Given two replicated clusters with independent admin and worker routes.
 	metadata, err := NewMetadata()

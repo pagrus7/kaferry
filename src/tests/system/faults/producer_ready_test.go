@@ -20,14 +20,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-func proxyRoutes(cluster string, worker int) map[int32]string {
-	routes := make(map[int32]string)
-	for index, endpoint := range Endpoints(cluster, worker) {
-		routes[int32(index+1)] = endpoint
-	}
-	return routes
-}
-
 func prepareProxyProducer(ctx context.Context, client *kgo.Client, topic string, partition int32, routes map[int32]string, logf func(string, ...any)) error {
 	if err := ctx.Err(); err != nil {
 		return err
