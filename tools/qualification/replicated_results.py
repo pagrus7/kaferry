@@ -207,12 +207,13 @@ def copy_case(directory, id, identity):
         raise ValueError('replicated case exact lifetime cap claim differs from available measurements')
     if {(w['pid'], w['exit_code']) for w in workers} != {(w['pid'], w['exit_code']) for w in safety['writer_observations']}:
         raise ValueError('replicated fault worker measurements differ from independent exit observations')
-    return case, safety, safety_path
+    for reference in (safety['safety'], safety['bootstrap']):
+        reference['observations'] = (safety_path.parent/reference['observations']).resolve().relative_to(root.resolve()).as_posix()
+    return case, safety
 
 
 def broker_case(directory, id, identity):
-    root = Path(directory)
-    case, safety, safety_path = copy_case(directory, id, identity)
+    case, safety = copy_case(directory, id, identity)
     baseline, workers = case['baseline'], case['worker_measurements']
     events, windows = case['events'], safety['fault_events']
     rolling = id.startswith('broker/rolling-')
@@ -289,8 +290,6 @@ def broker_case(directory, id, identity):
                     raise ValueError('leader kill lacks a replacement leader before original broker healing')
         previous = recovered
     safety['broker_exposure'] = case
-    for reference in (safety['safety'], safety['bootstrap']):
-        reference['observations'] = (safety_path.parent/reference['observations']).resolve().relative_to(root.resolve()).as_posix()
     return safety
 
 
@@ -315,10 +314,11 @@ def backlog(state):
 
 
 def network_case(directory, id, identity):
-    root = Path(directory)
-    case, safety, safety_path = copy_case(directory, id, identity)
+    case, safety = copy_case(directory, id, identity)
     if not id.startswith('network/') or id not in REPLICATED_CASES:
         raise ValueError('unknown network fault exposure')
+    if case['exact_lifetime_work_caps_qualified'] is not True:
+        raise ValueError('network qualification requires exact lifetime work-cap evidence for every worker')
     events, windows, workers = case['events'], safety['fault_events'], case['worker_measurements']
     if len(events) != 1 or len(windows) != 1:
         raise ValueError('network case requires exactly one fault window')
@@ -403,8 +403,6 @@ def network_case(directory, id, identity):
     elif connection is not None:
         raise ValueError('network case contains an unexpected connection stimulus')
     safety['network_exposure'] = case
-    for reference in (safety['safety'], safety['bootstrap']):
-        reference['observations'] = (safety_path.parent/reference['observations']).resolve().relative_to(root.resolve()).as_posix()
     return safety
 
 

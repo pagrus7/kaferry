@@ -29,11 +29,6 @@ class SuitesTest(unittest.TestCase):
         for selected in ([], ['broker/not-implemented']):
             with self.assertRaises(ValueError):
                 suites.replicated_execution_seconds(selected)
-        for key in ('socket.timeout.ms', 'replica.lag.time.max.ms'):
-            changed = json.loads(json.dumps(catalog))
-            changed['broker/source-leader'].pop(key)
-            with patch('tools.ci.suites.json.loads', return_value=changed), self.assertRaises(ValueError):
-                suites.fault_timeout_catalog()
 
     def test_network_case_budgets_are_exact_and_do_not_extend_legacy_cases(self):
         # Given the five implemented worker network exposures, when selecting
@@ -47,11 +42,13 @@ class SuitesTest(unittest.TestCase):
         self.assertEqual(658, suites.replicated_execution_seconds(['network/latency','network/bandwidth']))
         self.assertEqual(1073, suites.fault_execution_seconds())
         self.assertEqual(240, suites.replicated_execution_seconds(['ownership/zombie-worker']))
-        for key in ('socket.timeout.ms','progress_save_timeout'):
-            changed = json.loads(json.dumps(catalog))
-            changed['network/latency'].pop(key)
-            with patch('tools.ci.suites.json.loads', return_value=changed), self.assertRaises(ValueError):
-                suites.fault_timeout_catalog()
+        for id, keys in [('broker/source-leader', ('socket.timeout.ms', 'replica.lag.time.max.ms')),
+                         ('network/latency', ('socket.timeout.ms', 'progress_save_timeout'))]:
+            for key in keys:
+                changed = json.loads(json.dumps(catalog))
+                changed[id].pop(key)
+                with patch('tools.ci.suites.json.loads', return_value=changed), self.assertRaises(ValueError):
+                    suites.fault_timeout_catalog()
         with self.assertRaises(ValueError):
             suites.replicated_execution_seconds(['network/latency']*2)
 

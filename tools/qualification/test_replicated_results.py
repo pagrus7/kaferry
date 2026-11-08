@@ -221,8 +221,8 @@ def network_proof(id):
                   injections=[dict(kind=primitive['kind'],target={k:v for k,v in fault.items() if k != 'heal'},at=19)])
     if outage:
         first = case['worker_measurements'][0]
-        first.update(exit_code=1,terminal_error='context deadline exceeded',stopped_at=stamp(88),reason='observed delivery failure')
-        second = dict(first,pid=124,exit_code=0,started_at=stamp(89),stopped_at=stamp(500),reason='completed')
+        second = dict(first,lifetime=2,pid=124,exit_code=0,started_at=stamp(89),stopped_at=stamp(500),reason='completed')
+        first.update(exit_code=1,terminal_error='context deadline exceeded',stopped_at=stamp(80),reason='observed delivery failure')
         case['worker_measurements'].append(second)
         case['restarts'] = 1
         safety['writer_observations'] = [dict(pid=123,exit_code=1),dict(pid=124,exit_code=0)]
@@ -236,26 +236,30 @@ def network_proof(id):
     return case, safety
 
 
+def validate_proof(id, case, safety, validator, artifacts=None):
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        family, name = id.split('/')
+        directory = root/(family+'-'+name)
+        directory.mkdir()
+        write_lifecycles(directory,case)
+        if artifacts:
+            artifacts(directory,case)
+        path = root/'fault-oracle/fresh/case/observations/case.json'
+        path.parent.mkdir(parents=True)
+        path.write_text('{}')
+        case['safety_case']['sha256'] = checksum(path.read_bytes())
+        (directory/('replicated-'+family+'.json')).write_text(json.dumps(case))
+        with patch('tools.qualification.replicated_results.validate_case', return_value=safety):
+            return validator(root, id, {key:safety[key] for key in ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')})
+
+
 class ReplicatedResultsTest(unittest.TestCase):
     def validate(self, id, change=None, artifacts=None):
         case, safety = proof(id)
         if change:
             change(case, safety)
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            directory = root/('broker-'+id.split('/')[1])
-            directory.mkdir()
-            write_lifecycles(directory,case)
-            if artifacts:
-                artifacts(directory,case)
-            (directory/'replicated-broker.json').write_text(json.dumps(case))
-            path = root/'fault-oracle/fresh/case/observations/case.json'
-            path.parent.mkdir(parents=True)
-            path.write_text('{}')
-            case['safety_case']['sha256'] = checksum(path.read_bytes())
-            (directory/'replicated-broker.json').write_text(json.dumps(case))
-            with patch('tools.qualification.replicated_results.validate_case', return_value=safety):
-                return broker_case(root, id, {key:safety[key] for key in ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')})
+        return validate_proof(id, case, safety, broker_case, artifacts)
 
     def test_each_broker_exposure_requires_its_actual_observations(self):
         # Given passing independent safety proof, when exposure is complete,
@@ -537,15 +541,7 @@ class NetworkResultsTest(unittest.TestCase):
         id = 'network/'+name
         case, safety = network_proof(id)
         if change: change(case,safety)
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            directory = root/('network-'+name)
-            directory.mkdir()
-            (directory/'replicated-network.json').write_text(json.dumps(case))
-            path = root/'fault-oracle/fresh/case/observations/case.json'
-            with patch('tools.qualification.replicated_results.observation_path',return_value=path), \
-                 patch('tools.qualification.replicated_results.validate_case',return_value=safety):
-                return network_case(root,id,{key:safety[key] for key in ('source_commit','binary_sha256','binary_platform','execution_platform')})
+        return validate_proof(id, case, safety, network_case)
 
     def test_each_network_case_requires_its_specific_actual_exposure(self):
         # Given independently validated safety/reconciliation, when every actual
@@ -595,6 +591,24 @@ class NetworkResultsTest(unittest.TestCase):
                 validate.assert_called_once_with(root,selected[0],{})
             with self.assertRaises(ValueError):
                 collect(root,['network/bandwidth'],{},'fresh')
+
+    def test_network_cut_requires_exact_lifetime_peaks_for_both_forced_copy_phases(self):
+        # Given a destination network cut with passing independent safety,
+        # when its receipt substitutes sampled work for exact lifetime peaks,
+        # then neither literal forced-copy diagnostic can qualify it.
+        for terminal, phase in FORCED_COPY_PHASES.items():
+            def sampled(case, safety):
+                worker = case['worker_measurements'][0]
+                fault = case['events'][0]['fault']
+                worker.update(terminal_error=terminal,unavailable_highwater_phase=phase,lifetime_highwater_available=False,
+                              copy_summary=None,peak_uncommitted_records=None,peak_uncommitted_bytes=None,cap_measurement_scope=SAMPLED_SCOPE,
+                              failure_context=dict(window=0,role=fault['role'],kind='cut',start=fault['start'],heal=fault['heal'],
+                                                   observed_exit_at=worker['stopped_at'],before=case['baseline'],transport='plaintext'))
+                case['exact_lifetime_work_caps_qualified'] = False
+            with self.subTest(phase=phase), self.assertRaises(ValueError):
+                self.validate('destination-outage',sampled)
+        with self.assertRaises(ValueError):
+            self.validate('latency',lambda c,s:c.update(exact_lifetime_work_caps_qualified=False))
 
 
 if __name__ == '__main__':

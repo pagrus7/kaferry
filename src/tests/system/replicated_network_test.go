@@ -74,12 +74,18 @@ func (s *brokerCopy) networkSpan(before brokerObservation, duration time.Duratio
 	}
 }
 
-func (s *brokerCopy) networkInject(role faults.Role, fault faults.Fault) (*faults.Injection, int) {
+func (s *brokerCopy) networkInject(role faults.Role, fault faults.Fault, before brokerObservation) (*faults.Injection, int) {
+	require.True(s.t, brokerHealthyCopy(before))
+	process := s.workers[len(s.workers)-1]
+	require.False(s.t, process.finished())
+	require.NotNil(s.t, before.Worker)
+	require.Equal(s.t, s.lifetime(process), before.Worker.Lifetime)
 	window := s.oracle.begin(s.t, fault.Kind, role, false, s.timeouts,
 		"healthy measured copying, saved prefixes on all 24 partitions and independently acknowledged steady input")
 	injection, err := s.lab.Inject(s.ctx, role, fault)
 	s.retainNetworkInjection(injection, fmt.Sprintf("fault-%d", window))
 	require.NoError(s.t, err)
+	s.active, s.activeWindow, s.beforeFault = injection, window, before
 	s.oracle.injected(s.t, window, fault.Kind, injection.Event, "owned worker-only proxy operation completed on resolved targets")
 	return injection, window
 }
@@ -126,7 +132,7 @@ func replicatedNetworkFault(t *testing.T, name string) {
 	// When the fault resolves the current worker destinations or current leader,
 	// retain the original targets and the state immediately after injection.
 	exited := observeReplicatedExit(s.workers[0])
-	injection, window := s.networkInject(role, fault)
+	injection, window := s.networkInject(role, fault, healthy.After)
 	injected := s.wait("independent state after worker route injection", false, func(_ context.Context, _ brokerObservation) bool { return true })
 	affected, unaffected := make([]int, 0, replicatedPartitions), make([]int, 0, replicatedPartitions)
 	for partition, part := range injected.Topology["destination"] {
