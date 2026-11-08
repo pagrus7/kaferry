@@ -6,7 +6,9 @@ The Kafka matrix covers source/destination broker pairs, authentication fixtures
 
 ## Throughput measurements
 
-The report shows five Linux AMD64 load checks: Kafka copying with key and preserved routing, capture, replay and archive file copying, with each input count. Timing starts when SQL input is released and ends when the process exits. These short checks exercise correctness and bounded resources on shared CI runners; their rates do not establish deployment capacity or a change against another release.
+The report retains Linux AMD64 Kafka copying with key and preserved routing, capture, replay, archive file copying and the [load workload profiles](design/qualification.md#load-workload-profiles), with each input count. Timing starts when SQL input is released and ends when the process exits. These short checks exercise correctness and bounded resources on shared CI runners; their rates do not establish deployment capacity or a change against another release.
+
+Each JSON measurement records its versioned `workload.name` and payload, key, header, seed and source-compression parameters. Profile measurements also retain the record counts observed in source batches for each codec. Receipts with workload metadata require complete identities, all profile cases and matching observed compression. Receipts without these fields remain usable for supplemental reports, labeled `workload.name: not recorded`; they establish no profile coverage. Compare rates only when the workload and its parameters match.
 
 The 30-minute soak uses paced input and deliberate destination stalls. Its rate describes that workload; memory, lag, shutdown and work-cap measurements are in the JSON. Detailed logs and sample streams remain in the release workflow's `qualification-*` artifacts for 30 days. Individual `matrix-*` artifacts retain their logs and reconciliation data for 14 days.
 

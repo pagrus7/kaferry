@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 
 from tools.qualification.qualify import verify_release
+from tools.ci.suites import LOAD_PROFILES
 
 
 LOAD_CASES = {
@@ -17,6 +18,7 @@ LOAD_CASES = {
     'TestLoadArchiveCopy/replay': 'Archive → Kafka',
     'TestLoadArchiveCopy/file': 'Archive → archive',
 }
+LOAD_CASES.update({'TestLoadBoundedKafkaCopy/' + name: 'Kafka → Kafka (' + name + ')' for name in LOAD_PROFILES})
 SOAK = 'TestStreamingSoakFidelityCommitLagMemoryAndShutdown'
 
 
@@ -29,6 +31,7 @@ def collect(evidence, archive, matrix, commit, version):
         raise ValueError('a passing full compatibility matrix is required')
     digest = document['cases'][0]['binary_sha256']
     environments, measurements, seen = {}, [], set()
+    recorded_workloads, unrecorded_workloads = set(), set()
     for suite in ('load', 'soak'):
         directory = evidence / f'qualification-{suite}'
         env = json.loads((directory / f'{suite}.environment.json').read_text())
@@ -49,12 +52,30 @@ def collect(evidence, archive, matrix, commit, version):
             seen.add(key)
             if item['binary_sha256'] != digest or not item['passed'] or item['skipped']:
                 raise ValueError(f'{item["test"]}: measurement did not pass for this binary')
+            workload = item.get('workload')
+            if workload is None:
+                unrecorded_workloads.add(key)
+                workload = {'name': 'not recorded'}
+                item['workload'] = workload
+            else:
+                recorded_workloads.add(key)
+            if not isinstance(workload, dict) or not isinstance(workload.get('name'), str) or not workload['name']:
+                raise ValueError(f'{item["test"]}: workload identity is missing')
+            profile = item['test'].removeprefix('TestLoadBoundedKafkaCopy/')
+            if profile in LOAD_PROFILES:
+                codec = profile.removeprefix('source-').removesuffix('-v1') if profile.startswith('source-') else 'none'
+                if (workload['name'] != profile or workload.get('source_compression') != codec or
+                        item.get('source_compression_records') != {codec: item['records']}):
+                    raise ValueError(f'{item["test"]}: workload or observed source compression does not match')
             for field in ('records', 'records_per_second', 'elapsed_seconds'):
                 value = item[field]
                 if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                     raise ValueError(f'{item["test"]}: invalid {field}')
             measurements.append(dict(item, suite=suite))
-    required = {('load', test) for test in LOAD_CASES} | {('soak', SOAK)}
+    if recorded_workloads and unrecorded_workloads:
+        raise ValueError('workload identity is missing from some measurements')
+    required = {('load', test) for test in LOAD_CASES
+                if recorded_workloads or test.removeprefix('TestLoadBoundedKafkaCopy/') not in LOAD_PROFILES} | {('soak', SOAK)}
     if not required <= seen or not environments['soak'].get('soak_duration'):
         raise ValueError('required load or soak measurements are missing')
     return {'schema': 1, 'version': version, 'source_commit': commit,
@@ -82,11 +103,11 @@ def markdown(report):
             'SQL input release through process exit. The soak uses paced input and destination stalls; '
             'its rate does not measure maximum copying capacity. These figures do not establish a performance '
             'change against another release. Use paired, interleaved runs for that comparison.', '',
-            '| Suite / scenario | Records | Records/s | Sampled peak RSS MiB |',
-            '| --- | ---: | ---: | ---: |']
+            '| Suite / scenario | Workload | Records | Records/s | Sampled peak RSS MiB |',
+            '| --- | --- | ---: | ---: | ---: |']
     for item in report['measurements']:
         label = LOAD_CASES.get(item['test'], item['test'])
-        rows.append(f'| {item["suite"]} / {label} | {item["records"]:,} | '
+        rows.append(f'| {item["suite"]} / {label} | {item["workload"]["name"]} | {item["records"]:,} | '
                     f'{item["records_per_second"]:,.0f} | {item["sampled_peak_rss_bytes"] / (1 << 20):.1f} |')
     rows += ['', '## Environments', '']
     for suite, env in report['environments'].items():

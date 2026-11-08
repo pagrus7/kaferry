@@ -35,11 +35,17 @@ class SuitesTest(unittest.TestCase):
                           '-tags=integration', './src/tests/system'], command)
 
     def test_ci_keeps_extra_execution_gates_and_command_failures(self):
+        profiles = [('pass', 'TestLoadBoundedKafkaCopy/' + name) for name in
+                    ('near-limit-v1', 'hot-keys-v1', 'headers-v1', 'tombstones-v1',
+                     'source-none-v1', 'source-gzip-v1', 'source-snappy-v1', 'source-lz4-v1', 'source-zstd-v1')]
+        ordinary = [('pass', 'TestLoadBoundedKafkaCopy/default'), ('pass', 'TestLoadObservability/round-0/disabled')]
         for code, events, valid in [
             (9, [], False),
             (0, [('pass', 'TestLoadBoundedKafkaCopy/default')], False),
             (0, [('pass', 'TestLoadBoundedKafkaCopy/default'), ('skip', 'TestLoadObservability/round-0/disabled')], False),
-            (0, [('pass', 'TestLoadBoundedKafkaCopy/default'), ('pass', 'TestLoadObservability/round-0/disabled')], True),
+            (0, ordinary, False),
+            (0, ordinary + profiles[:-1] + [('skip', 'TestLoadBoundedKafkaCopy/source-zstd-v1')], False),
+            (0, ordinary + profiles, True),
         ]:
             with self.subTest(code=code, events=events), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)

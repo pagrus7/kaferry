@@ -69,6 +69,7 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		require.Equal(t, "random", os.Getenv("KAFERRY_ARCHIVE_PAYLOAD"), "application endurance requires high entropy payloads")
 		require.NotEmpty(t, os.Getenv("KAFERRY_SOAK_DEST_STALL_CONTAINER"), "application endurance requires destination stalls")
 		report.Endurance = newEnduranceEvidence(duration)
+		report.Workload.Name = report.Endurance.Profile
 	}
 	require.Less(t, duration.Seconds()*float64(rate)*1.05, float64(1<<32)-8192, "requested stream exceeds the fixture ID range")
 	a := admin(t)
