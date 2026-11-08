@@ -128,15 +128,19 @@ class PairedBrokerStorageTest(unittest.TestCase):
 
     def test_cleanup_stops_writers_and_preserves_data_on_unverified_shutdown_or_owner(self):
         # Given success, interruption, failed shutdown or a changed ownership marker.
-        for failure in (None, 'suite', 'brokers-stop', 'storage-clean'):
-            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+        cases = ((suite, failure) for suite in ('recovery', 'auth')
+                 for failure in (None, 'suite', 'storage-capacity', 'brokers-stop', 'storage-clean'))
+        for suite, failure in cases:
+            with self.subTest(suite=suite, failure=failure), tempfile.TemporaryDirectory() as temporary:
                 root, calls = Path(temporary), []
-                args = suite_args(root)
+                args = suite_args(root, suite)
                 def command(command, output, label, env, **kwargs):
                     calls.append((label, command, env.copy()))
                     if label == 'storage-capacity':
-                        (output / 'storage-capacity.log').write_text('10000000\n')
-                    if label == failure:
+                        (output / 'storage-capacity.log').write_text('1\n' if failure == label else '10000000\n')
+                    if label == 'suite' and suite == 'auth':
+                        (output / 'qualification.broker-images.json').write_text('[{"ID":"auth-fixture"}]')
+                    if label == failure and label != 'storage-capacity':
                         if label == 'suite':
                             raise KeyboardInterrupt()
                         raise RuntimeError('unverified storage')
@@ -146,18 +150,25 @@ class PairedBrokerStorageTest(unittest.TestCase):
                      patch('tools.qualification.qualify.subprocess.run'), patch('tools.qualification.qualify.verify_run'):
                     # When finishing, then only this project stops and cleanup follows a successful stop.
                     if failure:
-                        with self.assertRaises(KeyboardInterrupt if failure == 'suite' else RuntimeError):
+                        error = KeyboardInterrupt if failure == 'suite' else ValueError if failure == 'storage-capacity' else RuntimeError
+                        with self.assertRaises(error):
                             run_suite(args)
                     else:
                         run_suite(args)
                 labels = [label for label, _, _ in calls]
-                expected = ['storage-capacity', 'storage-prepare', 'brokers-up', 'suite', 'brokers-stop']
+                expected = ['storage-capacity']
+                if failure != 'storage-capacity':
+                    expected += ['storage-prepare'] + ([] if suite == 'auth' else ['brokers-up']) + ['suite']
+                expected += ['brokers-stop']
                 if failure != 'brokers-stop':
                     expected.append('storage-clean')
                 self.assertEqual(expected + ['brokers-down'], labels)
                 for label, command, env in calls:
                     if label != 'suite':
-                        self.assertEqual('kaferry-compat', command[command.index('-p') + 1])
+                        self.assertEqual('kaferry-qualification' if suite == 'auth' else 'kaferry-compat',
+                                         command[command.index('-p') + 1])
+                        overlay = 'src/tests/' + ('qualification/' if suite == 'auth' else '') + 'broker-storage.compose.yaml'
+                        self.assertIn(overlay, command)
                     self.assertNotEqual(['docker', 'volume', 'rm'], command[:3])
                 receipt = assert_owned_cleanup(self, args, calls, failure)
                 self.assertNotIn('private-volume', json.dumps(receipt))

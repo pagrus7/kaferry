@@ -11,8 +11,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools.qualification.qualify import external_storage_admission, resolve_run, run_suite
-from tools.qualification.test_broker_storage import assert_owned_cleanup, suite_args
+from tools.ci.suites import EXPECTED
+from tools.qualification.qualify import IMAGES, external_storage_admission, resolve_run, run_suite
+from tools.qualification.test_broker_storage import suite_args
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -57,46 +58,6 @@ class AuthBrokerStorageTest(unittest.TestCase):
                             external_storage_admission(Path(temporary), {'KAFERRY_BROKER_VOLUME': 'lab'}, False, auth=True)
                 self.assertEqual(8 * 1024**3, json.loads((Path(temporary) / 'capacity.json').read_text())['required_runtime_memory_bytes'])
 
-    def test_auth_script_owns_startup_and_shared_cleanup_stops_before_deleting(self):
-        # Given normal completion, interruption, broker-space shortage or unverified cleanup.
-        for failure in (None, 'suite', 'storage-capacity', 'brokers-stop', 'storage-clean'):
-            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
-                root, calls = Path(temporary), []
-                args = suite_args(root, 'auth')
-                def command(command, output, label, env, **kwargs):
-                    calls.append((label, command, env.copy()))
-                    if label == 'storage-capacity':
-                        (output / 'storage-capacity.log').write_text('1\n' if failure == label else '10000000\n')
-                    elif label == failure:
-                        if label == 'suite':
-                            raise KeyboardInterrupt()
-                        raise RuntimeError('unverified storage')
-                with patch('tools.qualification.qualify.LAB_LOCK', root / 'lease'), \
-                     patch('tools.qualification.qualify.capture', return_value='fixture'), \
-                     patch('tools.qualification.qualify.identity_platforms', return_value={}), \
-                     patch('tools.qualification.qualify.external_storage_admission', return_value={'required_broker_bytes': 4096}), \
-                     patch('tools.qualification.qualify.logged', side_effect=command), \
-                     patch('tools.qualification.qualify.subprocess.run'), patch('tools.qualification.qualify.verify_run'):
-                    # When the suite finishes, then no outer startup bypasses certificate generation.
-                    if failure:
-                        expected = KeyboardInterrupt if failure == 'suite' else ValueError if failure == 'storage-capacity' else RuntimeError
-                        with self.assertRaises(expected):
-                            run_suite(args)
-                    else:
-                        run_suite(args)
-                labels = [label for label, _, _ in calls]
-                expected = ['storage-capacity']
-                if failure != 'storage-capacity':
-                    expected += ['storage-prepare', 'suite']
-                expected += ['brokers-stop'] + ([] if failure == 'brokers-stop' else ['storage-clean']) + ['brokers-down']
-                self.assertEqual(expected, labels)
-                for label, command, env in calls:
-                    if label != 'suite':
-                        self.assertEqual('kaferry-qualification', command[command.index('-p') + 1])
-                        self.assertIn('src/tests/qualification/broker-storage.compose.yaml', command)
-                assert_owned_cleanup(self, args, calls, failure)
-
-
 class AuthStorageShellTest(unittest.TestCase):
     def test_auth_namespace_ownership_symlinks_and_peer_data(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -133,40 +94,89 @@ class AuthStorageShellTest(unittest.TestCase):
             self.assertEqual(b'foreign', (paired / 'keep').read_bytes())
             self.assertNotEqual(0, storage('prepare', KAFERRY_FIXTURE_PROJECT='kaferry-compat').returncode)
 
-    def test_auth_runner_preserves_startup_flags_and_temporary_certificate_paths(self):
-        # Given the existing shell entrypoint and synthetic Docker/Go executables.
+    def test_auth_runner_checks_live_images_and_preserves_paths_and_original_failures(self):
+        # Given actual runner/shell execution with synthetic Docker/Go executables.
         storage_modes = ({}, {'KAFERRY_BROKER_VOLUME': 'lab', 'KAFERRY_BROKER_RUN_ID': 'a' * 32})
-        for storage_env in storage_modes:
-            with self.subTest(storage=storage_env), tempfile.TemporaryDirectory() as temporary:
+        images = json.dumps([dict(ID='sha256:' + 'a' * 64,
+                                 ContainerName=f'kaferry-qualification-kafka-secure-{i}-1') for i in range(1, 4)])
+        cases = [(images, 0, 0, 0), ('', 0, 0, 0), ('[]', 0, 0, 0), ('[{"ID":""}]', 0, 0, 0),
+                 ('invalid JSON', 0, 0, 0), (images, 13, 0, 0), (images, 0, 7, 0),
+                 (images, 0, 0, 9), (images, 0, 7, 9)]
+        for storage_env, (image_output, image_exit, suite_exit, cleanup_exit) in (
+                (storage, case) for storage in storage_modes for case in cases):
+            with self.subTest(storage=storage_env, images=image_output, exits=(image_exit, suite_exit, cleanup_exit)), \
+                 tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 fixture = root / 'src/tests/qualification'; fixture.mkdir(parents=True)
                 shutil.copyfile(ROOT / 'src/tests/qualification/run.sh', fixture / 'run.sh')
                 (fixture / 'certificates.sh').write_text('mkdir -p "$1"\ntouch "$1/ca.pem" "$1/wrong-ca.pem" "$1/client.pem" "$1/client.key"\n')
+                storage = root / 'src/tests/replicated'; storage.mkdir()
+                shutil.copyfile(ROOT / 'src/tests/replicated/storage.sh', storage / 'storage.sh')
                 tools = root / 'tools'; tools.mkdir()
                 docker = tools / 'docker'
                 docker.write_text('#!' + sys.executable + '\nimport json, os, pathlib, sys\n'
                     'cert = pathlib.Path(os.environ["KAFERRY_QUAL_CERT_DIR"])\n'
+                    'alive = pathlib.Path(os.environ["ALIVE"])\n'
+                    'assert os.environ["KAFERRY_AUTH_IMAGE"] == os.environ["EXPECTED_AUTH_IMAGE"]\n'
                     'with open(os.environ["CALLS"], "a") as log: log.write(json.dumps(dict(args=sys.argv[1:], cert=str(cert))) + "\\n")\n'
                     'if "up" in sys.argv:\n'
+                    '    alive.touch()\n'
                     '    assert (cert / "ca.pem").is_file()\n'
-                    '    for name in ("client-krb5.conf", "copier.keytab"): (cert / name).touch()\n')
+                    '    for name in ("client-krb5.conf", "copier.keytab"): (cert / name).touch()\n'
+                    'if "images" in sys.argv:\n'
+                    '    assert alive.exists() and (cert / "ca.pem").is_file(), "images collected after teardown"\n'
+                    '    assert bool(os.environ.get("KAFERRY_BROKER_VOLUME")) == bool(int(os.environ["EXTERNAL"]))\n'
+                    '    if os.environ["EXTERNAL"] == "1": assert len(os.environ["KAFERRY_BROKER_RUN_ID"]) == 32\n'
+                    '    print(os.environ["IMAGE_OUTPUT"])\n'
+                    '    sys.exit(int(os.environ["IMAGE_EXIT"]))\n'
+                    'if sys.argv[-1] == "capacity": print("10000000")\n'
+                    'if "down" in sys.argv or "stop" in sys.argv: alive.unlink(missing_ok=True)\n'
+                    'if "down" in sys.argv and cert != pathlib.Path("/tmp"): sys.exit(int(os.environ["CLEANUP_EXIT"]))\n')
                 go = tools / 'go'
-                go.write_text('#!' + sys.executable + '\nimport os, pathlib\n'
+                go.write_text('#!' + sys.executable + '\nimport json, os, pathlib, sys\n'
+                    'assert pathlib.Path(os.environ["ALIVE"]).exists()\n'
+                    'assert "-timeout=10m" in sys.argv\n'
+                    'assert (pathlib.Path(os.environ["KAFERRY_REPORT_DIR"]) / "qualification.broker-images.json").is_file()\n'
                     'for name in ("KAFERRY_QUAL_CA", "KAFERRY_QUAL_WRONG_CA", "KAFERRY_QUAL_KRB_CONFIG", "KAFERRY_QUAL_KEYTAB"):\n'
                     '    assert pathlib.Path(os.environ[name]).is_file(), name\n'
                     'for name in ("client.pem", "client.key"):\n'
-                    '    assert (pathlib.Path(os.environ["KAFERRY_QUAL_CERT_DIR"]) / name).is_file()\n')
+                    '    assert (pathlib.Path(os.environ["KAFERRY_QUAL_CERT_DIR"]) / name).is_file()\n'
+                    'for name in json.loads(os.environ["AUTH_TESTS"]): print(json.dumps(dict(Action="pass", Test=name)))\n'
+                    'sys.exit(int(os.environ["SUITE_EXIT"]))\n')
                 docker.chmod(0o700); go.chmod(0o700)
                 env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'], GO=str(go),
-                           CALLS=str(root / 'calls'), KAFERRY_REPORT_DIR=str(root / 'evidence'))
+                           CALLS=str(root / 'calls'), ALIVE=str(root / 'alive'), PYTHONPATH=str(ROOT),
+                           IMAGE_OUTPUT=image_output, IMAGE_EXIT=str(image_exit), SUITE_EXIT=str(suite_exit),
+                           CLEANUP_EXIT=str(cleanup_exit), EXTERNAL=str(int(bool(storage_env))),
+                           AUTH_TESTS=json.dumps(EXPECTED['qualification']), EXPECTED_AUTH_IMAGE=IMAGES['3.9.2'])
                 env.pop('KAFERRY_BROKER_VOLUME', None)
-                env.update(storage_env)
-                # When executed without brokers, then startup waits and all host client paths stay valid.
-                result = subprocess.run(['/bin/sh', str(fixture / 'run.sh')], cwd=root, env=env, capture_output=True, text=True)
-                self.assertEqual(0, result.returncode, result.stderr)
+                env.pop('KAFERRY_BROKER_RUN_ID', None)
+                args = suite_args(root, 'auth', broker_volume='lab' if storage_env else None)
+                failed = image_exit or suite_exit or cleanup_exit or image_output != images
+                with patch.dict(os.environ, env, clear=True), patch('tools.qualification.qualify.ROOT', root), \
+                     patch('tools.qualification.qualify.LAB_LOCK', root / 'lease'), \
+                     patch('tools.qualification.qualify.capture', return_value='fixture'), \
+                     patch('tools.qualification.qualify.identity_platforms', return_value={}), \
+                     patch('tools.qualification.qualify.external_storage_admission', return_value={'required_broker_bytes': 4096}), \
+                     patch('builtins.print'):
+                    # When executing, then image validation occurs before tests and teardown using the resolved environment.
+                    if failed:
+                        with self.assertRaisesRegex(RuntimeError, f'suite exited {image_exit or suite_exit or cleanup_exit or 1}'):
+                            run_suite(args)
+                    else:
+                        run_suite(args)
+                receipt = json.loads((args.output / 'manifest.json').read_text())
+                self.assertEqual('failed' if failed else 'passed', receipt['status'])
+                if image_output == images and not image_exit:
+                    self.assertEqual(images, receipt['broker_images'])
+                else:
+                    self.assertNotIn('broker_images', receipt)
+                    self.assertIn('image_error', receipt)
+                self.assertFalse((root / 'alive').exists())
                 calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
                 startup = next(call['args'] for call in calls if 'up' in call['args'])
                 self.assertEqual(['up', '-d', '--build', '--wait', '--wait-timeout', '90'], startup[startup.index('up'):])
                 for call in calls:
                     self.assertEqual(bool(storage_env), 'src/tests/qualification/broker-storage.compose.yaml' in call['args'])
-                    self.assertFalse(Path(call['cert']).exists(), 'private fixture certificates must be removed')
+                    if call['cert'] != '/tmp':
+                        self.assertFalse(Path(call['cert']).exists(), 'private fixture certificates must be removed')

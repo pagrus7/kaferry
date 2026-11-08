@@ -64,7 +64,7 @@ class FixtureImagesTest(unittest.TestCase):
                      patch('tools.qualification.qualify.capture', return_value='fixture'), \
                      patch('tools.qualification.qualify.platform.platform', return_value='fixture-platform'), \
                      patch('tools.qualification.qualify.identity_platforms', return_value={}), \
-                     patch('tools.qualification.qualify.paired_storage_admission', return_value={'required_broker_bytes': 4096}), \
+                     patch('tools.qualification.qualify.external_storage_admission', return_value={'required_broker_bytes': 4096}), \
                      patch('tools.qualification.qualify.logged', side_effect=command), \
                      patch('tools.qualification.qualify.subprocess.check_output', side_effect=images) as inspect, \
                      patch('tools.qualification.qualify.subprocess.run'), patch('tools.qualification.qualify.verify_run'):

@@ -197,6 +197,7 @@ def suite_command(args, env):
         return go_suite('recovery', go=prefix[0], timeout=f'{args.duration+600}s'), EXPECTED['recovery']
     if args.suite == 'auth':
         env['KAFERRY_AUTH_IMAGE'] = IMAGES[args.source]
+        env['KAFERRY_QUAL_PYTHON'] = sys.executable
         return ['sh', 'src/tests/qualification/run.sh'], EXPECTED['qualification']
     if args.suite == 'migration':
         if not args.previous_binary or not args.previous_binary.is_file():
@@ -583,7 +584,12 @@ def startup_health(output, compose, env):
 
 def fixture_images(spec):
     images = subprocess.check_output(spec.compose + ['images', '--format', 'json'],
-        env=spec.env, cwd=ROOT, text=True, timeout=10).strip()
+        env=spec.env, cwd=ROOT, text=True, timeout=10)
+    return validate_fixture_images(images)
+
+
+def validate_fixture_images(images):
+    images = images.strip()
     if not images:
         raise ValueError('fixture did not report its broker images')
     rows = json.loads(images)
@@ -691,8 +697,6 @@ def verify_run(args, spec, receipt):
                 source_brokers=3, destination_brokers=3, replication_factor=3, min_insync_replicas=2):
             raise ValueError('independent reconciliation did not verify the replicated topology')
         receipt['reconciliation'] = probe
-    if args.suite == 'auth':
-        receipt['broker_images'] = (args.output / 'qualification.broker-images.json').read_text()
     if args.suite in ('fault', 'recovery'):
         from tools.qualification.fault_results import collect
         receipt['fault_results'] = collect(args.output, args.suite, receipt, spec.env.get('KAFERRY_ORACLE_RUN'))
@@ -734,7 +738,18 @@ def run_suite(args, *, fixture=None, cancelled=None):
         spec = resolve_run(args, receipt, fixture)
         write_json(args.output / 'manifest.json', receipt)
         with broker_fixture(args, spec, receipt, fixture, cancelled):
-            logged(spec.command, args.output, 'suite', spec.env, timeout=spec.timeout, cancelled=cancelled)
+            try:
+                logged(spec.command, args.output, 'suite', spec.env, timeout=spec.timeout, cancelled=cancelled)
+            finally:
+                if args.suite == 'auth':
+                    suite_failed = sys.exc_info()[0] is not None
+                    try:
+                        receipt['broker_images'] = validate_fixture_images(
+                            (args.output / 'qualification.broker-images.json').read_text())
+                    except (OSError, ValueError) as error:
+                        if not suite_failed:
+                            raise
+                        receipt['image_error'] = str(error)
             verify_run(args, spec, receipt)
         receipt['status'] = 'passed'
     except (Exception, KeyboardInterrupt) as error:
