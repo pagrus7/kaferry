@@ -160,9 +160,10 @@ def source_operation_failure(case, worker, witness, raw):
                 target['proxy'] == target['service']+'-'+target['listener'] for target in targets))
 
 
-def broker_case(directory, id, identity):
+def copy_case(directory, id, identity):
     root = Path(directory)
-    case = json.loads((root/('broker-'+id.split('/')[1])/'replicated-broker.json').read_text())
+    family, name = id.split('/')
+    case = json.loads((root/(family+'-'+name)/('replicated-'+family+'.json')).read_text())
     if (case['id'] != id or case['source_partitions'] != 24 or
             case['timeout_milliseconds'] != fault_timeout_catalog()[id]):
         raise ValueError('replicated broker case differs from its registered configuration')
@@ -198,7 +199,7 @@ def broker_case(directory, id, identity):
                 not safety['started_at'] <= stamp(worker['started_at']) < stamp(worker['stopped_at']) <= safety['writers_stopped_at'] or
                 not worker['reason']):
             raise ValueError('broker fault worker exits or resource caps are invalid')
-        witness, raw = load_lifecycle(root/('broker-'+id.split('/')[1]), worker)
+        witness, raw = load_lifecycle(root/(family+'-'+name), worker)
         if (worker['lifetime'] != index+1 or stamp(witness['recorded_at']) < stamp(worker['stopped_at'])):
             raise ValueError('broker lifecycle was not observed after its sole Wait')
         worker_work(case, worker, witness, raw)
@@ -206,6 +207,13 @@ def broker_case(directory, id, identity):
         raise ValueError('broker case exact lifetime cap claim differs from available measurements')
     if {(w['pid'], w['exit_code']) for w in workers} != {(w['pid'], w['exit_code']) for w in safety['writer_observations']}:
         raise ValueError('broker fault worker measurements differ from independent exit observations')
+    return case, safety, safety_path
+
+
+def broker_case(directory, id, identity):
+    root = Path(directory)
+    case, safety, safety_path = copy_case(directory, id, identity)
+    baseline, workers = case['baseline'], case['worker_measurements']
     events, windows = case['events'], safety['fault_events']
     rolling = id.startswith('broker/rolling-')
     if len(events) != (3 if rolling else 1) or len(windows) != len(events):
@@ -286,6 +294,120 @@ def broker_case(directory, id, identity):
     return safety
 
 
+def interval(value, minimum):
+    before, after = value['before'], value['after']
+    seconds = stamp(after['at'])-stamp(before['at'])
+    if seconds < minimum:
+        raise ValueError('network observation shortened its configured interval')
+    for state in (before, after):
+        if (not all(vector(state[key]) for key in ('saved', 'destination_ends')) or
+                not vector(state['publishing']['acknowledged_by_partition']) or
+                not all(topology(state, side, 3) for side in ('source', 'destination'))):
+            raise ValueError('network observation lacks independent healthy topology or progress')
+    if (not advances(after['publishing']['acknowledged_by_partition'], before['publishing']['acknowledged_by_partition']) or
+            (sum(after['publishing']['acknowledged_by_partition'])-sum(before['publishing']['acknowledged_by_partition']))/seconds < .95*240):
+        raise ValueError('independent publisher did not sustain input during network exposure')
+    return before, after, (sum(after['destination_ends'])-sum(before['destination_ends']))/seconds
+
+
+def backlog(state):
+    return max(0, sum(state['publishing']['acknowledged_by_partition'])-sum(state['destination_ends']))
+
+
+def network_case(directory, id, identity):
+    root = Path(directory)
+    case, safety, safety_path = copy_case(directory, id, identity)
+    if not id.startswith('network/') or id not in REPLICATED_CASES:
+        raise ValueError('unknown network fault exposure')
+    events, windows, workers = case['events'], safety['fault_events'], case['worker_measurements']
+    if len(events) != 1 or len(windows) != 1:
+        raise ValueError('network case requires exactly one fault window')
+    event, window = events[0], windows[0]
+    fault = event['fault']
+    role, targets, injections = fault['role'], fault['targets'], window['injections']
+    name = id.split('/')[1]
+    budgets = {key: value/1000 for key, value in fault_timeout_catalog()[id].items()}
+    leader, outage = name == 'destination-leaders-outage', name == 'destination-outage'
+    expected_role = dict(kind='leader' if leader else 'worker-destination', cluster='destination', worker=1, partition=0)
+    if leader:
+        expected_role['topic'] = case['destination_topic']
+    expected_fault = dict(kind='cut')
+    if name in ('latency', 'bandwidth', 'slow-close'):
+        expected_fault = dict(kind={'slow-close':'slow_close'}.get(name, name),
+                              stream='downstream' if name == 'slow-close' else 'upstream',
+                              value={'latency':500, 'bandwidth':32, 'slow-close':int(budgets['delivery_timeout']*1000)}[name])
+    if (role != expected_role or fault['fault'] != expected_fault or window['target'] != role or
+            window['unavailable'] is not False or len(targets) != (1 if leader else 3) or
+            {t['broker'] for t in targets} != ({targets[0]['broker']} if leader else {1, 2, 3}) or
+            len({t['container'] for t in targets}) != len(targets) or
+            len({t['proxy_container'] for t in targets}) != 1 or
+            any(t['cluster'] != 'destination' or t['listener'] != 'worker1' or
+                type(t['broker']) is not int or not 1 <= t['broker'] <= 3 or not t['container'] or not t['proxy_container'] or
+                t['service'] != f'destination-{t["broker"]}' or t['proxy'] != f'destination-{t["broker"]}-worker1' for t in targets)):
+        raise ValueError('network fault did not isolate the exact owned worker destination routes')
+    if (len(injections) != (2 if name == 'slow-close' else 1) or
+            injections[0]['kind'] != expected_fault['kind'] or
+            any(injections[0]['target'][key] != fault[key] for key in ('role', 'fault', 'targets', 'start'))):
+        raise ValueError('network exposure differs from the independent fault window')
+    healthy_before, healthy_after, healthy_rate = interval(event['healthy'], budgets['session.timeout.ms'])
+    during_before, during_after, during_rate = interval(event['during'], budgets['session.timeout.ms']+(budgets['delivery_timeout'] if outage else 0))
+    recovery_before, recovery_after, recovery_rate = interval(event['recovery'], budgets['session.timeout.ms'])
+    if (healthy_before != case['baseline'] or healthy_rate < .95*240 or recovery_rate < .95*healthy_rate or
+            not stamp(healthy_after['at']) < stamp(fault['start']) <= injections[0]['at'] <= stamp(during_before['at']) or
+            not stamp(during_after['at']) < stamp(fault['heal']) <= stamp(recovery_before['at']) < stamp(recovery_after['at']) <= window['healed_at'] or
+            not advances(recovery_after['saved'], recovery_before['saved']) or
+            not advances(recovery_before['saved'], during_after['saved']) or backlog(recovery_before) > 24):
+        raise ValueError('network exposure lacks ordered injection, complete hold, heal or recovered throughput')
+    brokers = {t['broker'] for t in targets}
+    affected = [n for n, p in enumerate(during_before['topology']['destination']) if p['Leader'] in brokers]
+    unaffected = sorted(set(range(24))-set(affected))
+    if (not affected or event['affected_partitions'] != affected or event['unaffected_partitions'] != unaffected or
+            leader and (not unaffected or during_before['topology']['destination'][0]['Leader'] != targets[0]['broker']) or
+            not leader and affected != list(range(24)) or
+            any(state['topology']['destination'] != during_before['topology']['destination'] for state in
+                (healthy_after, during_after, recovery_before, recovery_after))):
+        raise ValueError('network targets do not match the independently observed destination leaders')
+    if name not in ('latency', 'bandwidth') and any(
+            during_after['destination_ends'][p] != during_before['destination_ends'][p] or
+            during_after['saved'][p] > during_after['destination_ends'][p] for p in affected):
+        raise ValueError('blocked destination path acknowledged output or saved beyond the delivered prefix')
+    if any(during_after['destination_ends'][p] <= during_before['destination_ends'][p]+2 or
+           during_after['saved'][p] <= during_before['saved'][p]+2 for p in unaffected):
+        raise ValueError('leader-only outage lacks independent unaffected saved progress')
+    pending = during_after['cli_progress']
+    if name in ('latency', 'bandwidth', 'slow-close') and pending['submitted'] <= pending['confirmed']:
+        raise ValueError('network degradation did not expose unresolved CLI writes')
+    if name in ('latency', 'bandwidth') and backlog(during_after) <= backlog(healthy_after)+24:
+        raise ValueError('network toxic did not measurably increase actual output backlog')
+    if name == 'bandwidth' and during_rate >= .75*healthy_rate:
+        raise ValueError('bandwidth toxic did not reduce measured output throughput')
+    if (len(workers) != (2 if outage else 1) or
+            not 0 < case['publishing']['max_acknowledgement_gap_seconds'] <= 2):
+        raise ValueError('network fault restarted an unsupported worker or lost steady independent input')
+    connection = event['connection_effect']
+    if outage:
+        if not (stamp(fault['start']) < stamp(connection['exit_observed_at']) < stamp(fault['heal']) < stamp(workers[1]['started_at'])):
+            raise ValueError('destination outage lacks an observed fail-fast exit and post-heal restart')
+    elif name == 'slow-close':
+        stimulus = connection['stimulus']
+        if (stimulus['role'] != role or stimulus['targets'] != targets or
+                stimulus['fault'] != dict(kind='timeout', stream='upstream', value=1) or
+                injections[1]['kind'] != 'timeout' or
+                any(injections[1]['target'][key] != stimulus[key] for key in ('role', 'fault', 'targets', 'start')) or
+                connection['proxy'] not in {t['proxy'] for t in targets} or not connection['read_error'] or
+                connection['minimum_delay_seconds'] != budgets['session.timeout.ms'] or
+                not injections[0]['at'] <= stamp(stimulus['start']) <= injections[1]['at'] <= stamp(connection['started_at']) <= stamp(during_before['at']) or
+                stamp(connection['delayed_until'])-stamp(connection['started_at']) < budgets['session.timeout.ms'] or
+                not stamp(during_after['at']) <= stamp(connection['delayed_until']) < stamp(stimulus['heal']) <= stamp(fault['heal']) <= stamp(connection['eof_observed_at']) <= stamp(recovery_before['at'])):
+            raise ValueError('slow-close lacks actual delayed EOF and removal on the original worker routes')
+    elif connection is not None:
+        raise ValueError('network case contains an unexpected connection stimulus')
+    safety['network_exposure'] = case
+    for reference in (safety['safety'], safety['bootstrap']):
+        reference['observations'] = (safety_path.parent/reference['observations']).resolve().relative_to(root.resolve()).as_posix()
+    return safety
+
+
 def collect(directory, selected, identity, run):
     if (not run or not run.isalnum() or not selected or len(selected) != len(set(selected)) or
             any(id not in REPLICATED_CASES for id in selected)):
@@ -301,9 +423,9 @@ def collect(directory, selected, identity, run):
             case = validate(directory, identity)
         else:
             try:
-                case = broker_case(directory, id, identity)
+                case = network_case(directory, id, identity) if id.startswith('network/') else broker_case(directory, id, identity)
             except (KeyError, TypeError, IndexError) as error:
-                raise ValueError('malformed replicated broker evidence') from error
+                raise ValueError('malformed replicated fault evidence') from error
         observed_path = paths[observed.index(id)]
         if (Path(directory)/case['safety']['observations']).resolve() != (observed_path.parent/'samples.jsonl').resolve():
             raise ValueError('replicated proof references another observer run')

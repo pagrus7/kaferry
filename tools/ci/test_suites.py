@@ -25,7 +25,7 @@ class SuitesTest(unittest.TestCase):
                 self.assertEqual(119000, sum(catalog[id].values()))
                 self.assertEqual(359, suites.replicated_execution_seconds([id]))
         self.assertEqual(240, suites.replicated_execution_seconds(['ownership/zombie-worker']))
-        self.assertEqual(2035, suites.replicated_execution_seconds(list(suites.REPLICATED_CASES)))
+        self.assertEqual(3680, suites.replicated_execution_seconds(list(suites.REPLICATED_CASES)))
         for selected in ([], ['broker/not-implemented']):
             with self.assertRaises(ValueError):
                 suites.replicated_execution_seconds(selected)
@@ -34,6 +34,26 @@ class SuitesTest(unittest.TestCase):
             changed['broker/source-leader'].pop(key)
             with patch('tools.ci.suites.json.loads', return_value=changed), self.assertRaises(ValueError):
                 suites.fault_timeout_catalog()
+
+    def test_network_case_budgets_are_exact_and_do_not_extend_legacy_cases(self):
+        # Given the five implemented worker network exposures, when selecting
+        # cases, then each adds only its actual89s recovery horizon.
+        catalog = suites.fault_timeout_catalog()
+        ids = {'network/'+name for name in ('destination-outage', 'destination-leaders-outage', 'latency', 'bandwidth', 'slow-close')}
+        self.assertEqual(ids, {id for id in suites.REPLICATED_CASES if id.startswith('network/')})
+        for id in ids:
+            self.assertEqual(89000, sum(catalog[id].values()))
+            self.assertEqual(329, suites.replicated_execution_seconds([id]))
+        self.assertEqual(658, suites.replicated_execution_seconds(['network/latency','network/bandwidth']))
+        self.assertEqual(1073, suites.fault_execution_seconds())
+        self.assertEqual(240, suites.replicated_execution_seconds(['ownership/zombie-worker']))
+        for key in ('socket.timeout.ms','progress_save_timeout'):
+            changed = json.loads(json.dumps(catalog))
+            changed['network/latency'].pop(key)
+            with patch('tools.ci.suites.json.loads', return_value=changed), self.assertRaises(ValueError):
+                suites.fault_timeout_catalog()
+        with self.assertRaises(ValueError):
+            suites.replicated_execution_seconds(['network/latency']*2)
 
     def test_registered_ownership_bounds_extend_only_the_catalog_key_allowlist(self):
         # Given the new exposure's actual bounds, when loading the catalog,

@@ -40,10 +40,11 @@ func replicatedBrokerProducer(t *testing.T, brokers string, delivery time.Durati
 // acknowledgement counts, rather than the scheduler, gate scenario transitions.
 // Only one bounded batch is in flight; errors terminate publishing immediately.
 type replicatedPublisher struct {
-	cancel context.CancelFunc
-	done   chan struct{}
-	mu     sync.Mutex
-	state  replicatedPublishing
+	cancel           context.CancelFunc
+	done             chan struct{}
+	mu               sync.Mutex
+	state            replicatedPublishing
+	lastAcknowledged []time.Time
 }
 
 type replicatedPublishing struct {
@@ -65,6 +66,10 @@ func startReplicatedBrokerPublisher(ctx context.Context, client *kgo.Client, top
 	ctx, cancel := context.WithCancel(ctx)
 	p := &replicatedPublisher{cancel: cancel, done: make(chan struct{}), state: replicatedPublishing{
 		Started: time.Now().UTC(), Acknowledged: make([]int64, replicatedPartitions), Offered: make([]int64, replicatedPartitions)}}
+	p.lastAcknowledged = make([]time.Time, replicatedPartitions)
+	for partition := range p.lastAcknowledged {
+		p.lastAcknowledged[partition] = p.state.Started
+	}
 	go p.runOffers(ctx, client, topic, delivery)
 	return p
 }
@@ -128,6 +133,9 @@ func (p *replicatedPublisher) offer(ctx context.Context, client *kgo.Client, rec
 		defer p.mu.Unlock()
 		busy[partition] = false
 		if err == nil {
+			now := time.Now().UTC()
+			p.state.MaxGapSeconds = max(p.state.MaxGapSeconds, now.Sub(p.lastAcknowledged[partition]).Seconds())
+			p.lastAcknowledged[partition] = now
 			p.state.Acknowledged[partition]++
 		} else if p.state.err == nil {
 			p.state.err = err

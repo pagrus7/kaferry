@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from tools.ci.suites import REPLICATED_CASES, fault_timeout_catalog
 from tools.qualification.replicated_results import (EXACT_SCOPE, NEGOTIATION_EOF,
-                                                  SAMPLED_SCOPE, SOURCE_OPERATION_EOFS, broker_case, collect)
+                                                  SAMPLED_SCOPE, SOURCE_OPERATION_EOFS, broker_case, network_case, collect)
 from tools.qualification.broker_lifecycle import FORCED_COPY_PHASES
 from tools.qualification.broker_readiness import CRITERION, admin
 
@@ -186,6 +186,54 @@ def rewrite_witness(edit):
         worker['lifecycle']['sha256'] = checksum(data)
         worker['failure_context']['exit_witness'] = witness
     return artifacts
+
+
+def network_proof(id):
+    case, safety = proof(id)
+    case.pop('readiness_criterion')
+    name = id.split('/')[1]
+    def observed(second, count):
+        result = state(second, count)
+        result['broker_healthy'] = False
+        result['topology']['destination'] = [dict(Leader=n%3+1, ISR=[1,2,3]) for n in range(24)]
+        return result
+    case['baseline'] = observed(10,100)
+    case['publishing'].update(acknowledged_by_partition=[1000]*24, offered_by_partition=[1000]*24,max_acknowledgement_gap_seconds=.1)
+    safety['independent_reconciliation']['partitions'] = [dict(partition=n,expected=1000) for n in range(24)]
+    leader, outage = name == 'destination-leaders-outage', name == 'destination-outage'
+    role = dict(kind='leader' if leader else 'worker-destination', cluster='destination', worker=1,partition=0)
+    if leader: role['topic'] = 'destination'
+    targets = [dict(cluster='destination',broker=n,container=f'container-{n}',service=f'destination-{n}',listener='worker1',
+                    proxy=f'destination-{n}-worker1',proxy_container='proxy-container') for n in ([1] if leader else [1,2,3])]
+    primitive = dict(kind='cut')
+    if name in ('latency','bandwidth','slow-close'):
+        primitive = dict(kind='slow_close' if name == 'slow-close' else name,stream='downstream' if name == 'slow-close' else 'upstream',
+                         value={'latency':500,'bandwidth':32,'slow-close':60000}[name])
+    fault = dict(role=role,fault=primitive,targets=targets,start=stamp(18),heal=stamp(87 if outage else 27))
+    before, after = observed(20,200), observed(86 if outage else 26,860 if outage else 260)
+    affected = [n for n in range(24) if not leader or n%3 == 0]
+    for partition in affected:
+        after['saved'][partition] = after['destination_ends'][partition] = 240 if name in ('latency','bandwidth') else 200
+    event = dict(fault=fault,healthy=dict(before=case['baseline'],after=observed(16,160)),during=dict(before=before,after=after),
+                 recovery=dict(before=observed(90 if outage else 30,900 if outage else 300),after=observed(96 if outage else 36,960 if outage else 360)),
+                 affected_partitions=affected,unaffected_partitions=sorted(set(range(24))-set(affected)),connection_effect=None)
+    window = dict(target=role,unavailable=False,healed_at=97 if outage else 37,
+                  injections=[dict(kind=primitive['kind'],target={k:v for k,v in fault.items() if k != 'heal'},at=19)])
+    if outage:
+        first = case['worker_measurements'][0]
+        first.update(exit_code=1,terminal_error='context deadline exceeded',stopped_at=stamp(88),reason='observed delivery failure')
+        second = dict(first,pid=124,exit_code=0,started_at=stamp(89),stopped_at=stamp(500),reason='completed')
+        case['worker_measurements'].append(second)
+        case['restarts'] = 1
+        safety['writer_observations'] = [dict(pid=123,exit_code=1),dict(pid=124,exit_code=0)]
+        event['connection_effect'] = dict(exit_observed_at=stamp(80))
+    if name == 'slow-close':
+        stimulus = dict(role=role,fault=dict(kind='timeout',stream='upstream',value=1),targets=targets,start=stamp(19.2),heal=stamp(26.7))
+        event['connection_effect'] = dict(stimulus=stimulus,proxy=targets[0]['proxy'],started_at=stamp(19.5),delayed_until=stamp(26.5),
+                                        minimum_delay_seconds=6,read_error='i/o timeout',eof_observed_at=stamp(27.1))
+        window['injections'].append(dict(kind='timeout',target={k:v for k,v in stimulus.items() if k != 'heal'},at=19.3))
+    case['events'], safety['fault_events'] = [event], [window]
+    return case, safety
 
 
 class ReplicatedResultsTest(unittest.TestCase):
@@ -482,6 +530,71 @@ class ReplicatedResultsTest(unittest.TestCase):
                 return row
             with patch('tools.qualification.replicated_results.broker_case', side_effect=stale), self.assertRaisesRegex(ValueError,'another observer run'):
                 collect(root,selected,{},'fresh')
+
+
+class NetworkResultsTest(unittest.TestCase):
+    def validate(self, name, change=None):
+        id = 'network/'+name
+        case, safety = network_proof(id)
+        if change: change(case,safety)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            directory = root/('network-'+name)
+            directory.mkdir()
+            (directory/'replicated-network.json').write_text(json.dumps(case))
+            path = root/'fault-oracle/fresh/case/observations/case.json'
+            with patch('tools.qualification.replicated_results.observation_path',return_value=path), \
+                 patch('tools.qualification.replicated_results.validate_case',return_value=safety):
+                return network_case(root,id,{key:safety[key] for key in ('source_commit','binary_sha256','binary_platform','execution_platform')})
+
+    def test_each_network_case_requires_its_specific_actual_exposure(self):
+        # Given independently validated safety/reconciliation, when every actual
+        # exposure and recovered throughput is present, then collect all five IDs.
+        for name in ('destination-outage','destination-leaders-outage','latency','bandwidth','slow-close'):
+            with self.subTest(name=name):
+                self.assertEqual('network/'+name,self.validate(name)['network_exposure']['id'])
+
+    def test_network_evidence_fails_closed_on_missing_or_ineffective_exposures(self):
+        # Given otherwise passing independent proof, when a live effect, scope,
+        # window, cap or recovery is missing, then qualification must fail.
+        mutations = [
+            ('destination-outage',lambda c,s:c['events'][0]['during']['after'].update(at=stamp(79))),
+            ('destination-outage',lambda c,s:c['events'][0]['connection_effect'].update(exit_observed_at=stamp(17))),
+            ('destination-outage',lambda c,s:c['worker_measurements'][1].update(started_at=stamp(85))),
+            ('destination-outage',lambda c,s:c['events'][0]['fault']['targets'][0].update(listener='admin')),
+            ('destination-leaders-outage',lambda c,s:c['events'][0]['during']['after']['saved'].__setitem__(1,200)),
+            ('destination-leaders-outage',lambda c,s:c['events'][0].update(unaffected_partitions=[])),
+            ('latency',lambda c,s:c['events'][0]['during']['after'].update(destination_ends=[260]*24)),
+            ('latency',lambda c,s:c['events'][0]['fault']['fault'].update(stream='downstream')),
+            ('bandwidth',lambda c,s:c['events'][0]['recovery']['after'].update(destination_ends=[301]*24)),
+            ('bandwidth',lambda c,s:c['events'][0]['during']['after'].update(destination_ends=[250]*24)),
+            ('slow-close',lambda c,s:c['events'][0]['connection_effect'].update(delayed_until=stamp(20))),
+            ('slow-close',lambda c,s:c['events'][0]['connection_effect'].pop('stimulus')),
+            ('slow-close',lambda c,s:c['events'][0]['connection_effect'].update(eof_observed_at=stamp(26.8))),
+            ('slow-close',lambda c,s:s['fault_events'][0]['injections'].pop()),
+            ('latency',lambda c,s:s['fault_events'][0].update(unavailable=True)),
+            ('latency',lambda c,s:c['publishing'].update(max_acknowledgement_gap_seconds=2.1)),
+            ('latency',lambda c,s:c['worker_measurements'][0].update(sampled_peak_rss_bytes=512*1024**2+1)),
+        ]
+        for name,change in mutations:
+            with self.subTest(name=name,change=change),self.assertRaises((ValueError,KeyError)):
+                self.validate(name,change)
+
+    def test_network_collection_uses_the_exact_selected_run_and_exposure_validator(self):
+        # Given one selected network case, when collecting its current observer
+        # run, then use that exposure validator and reject another case's receipt.
+        selected = ['network/latency']
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root/'fault-oracle/fresh/latency/observations/case.json'
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(dict(id=selected[0])))
+            row = dict(id=selected[0],safety=dict(observations=str(path.relative_to(root).with_name('samples.jsonl'))))
+            with patch('tools.qualification.replicated_results.network_case',return_value=row) as validate:
+                self.assertEqual([row],collect(root,selected,{},'fresh'))
+                validate.assert_called_once_with(root,selected[0],{})
+            with self.assertRaises(ValueError):
+                collect(root,['network/bandwidth'],{},'fresh')
 
 
 if __name__ == '__main__':
