@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
+	"net"
 	"slices"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -211,4 +213,81 @@ func TestReplicatedPublisherStopsAfterRejectedBatch(t *testing.T) {
 	require.Positive(t, slices.Max(failed.Offered))
 	require.Zero(t, slices.Max(failed.Acknowledged))
 	require.Zero(t, source.BufferedProduceRecords())
+	ends, err := kadm.NewClient(source).ListEndOffsets(t.Context(), "source")
+	require.NoError(t, err)
+	require.NoError(t, ends.Error())
+	for _, partition := range ends["source"] {
+		require.Zero(t, partition.Offset, "permanent authorization rejection appended input")
+	}
+}
+
+func TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound(t *testing.T) {
+	// Given six safe leader rejections and healthy partitions on other brokers,
+	// when native retries pass the shared fixture's five-try cap, then every
+	// original offer is acknowledged exactly once inside the same 60s bound.
+	cluster := kfake.MustCluster(kfake.NumBrokers(3), kfake.SeedTopics(replicatedPartitions, "source"))
+	defer cluster.Close()
+	var rejected atomic.Int32
+	cluster.ControlKey(int16(kmsg.Produce), func(request kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
+		produce := request.(*kmsg.ProduceRequest)
+		if !replicatedProduceContainsZero(produce) || rejected.Load() >= 6 {
+			return nil, nil, false
+		}
+		rejected.Add(1)
+		response := rejectedReplicatedProduce(produce, 6)
+		node := cluster.CurrentNode()
+		host, port, err := net.SplitHostPort(cluster.ListenAddrs()[node])
+		if err != nil {
+			return nil, err, true
+		}
+		number, err := strconv.Atoi(port)
+		if err != nil {
+			return nil, err, true
+		}
+		response.Brokers = []kmsg.ProduceResponseBroker{{NodeID: node, Host: host, Port: int32(number)}}
+		for ti := range response.Topics {
+			for pi := range response.Topics[ti].Partitions {
+				part := &response.Topics[ti].Partitions[pi]
+				part.CurrentLeader.LeaderID, part.CurrentLeader.LeaderEpoch = node, 0
+			}
+		}
+		return response, nil, true
+	})
+	client := replicatedBrokerProducer(t, cluster.ListenAddrs()[0], 60*time.Second)
+	require.Equal(t, int64(1<<63-1), client.OptValue(kgo.RecordRetries))
+	require.Equal(t, 60*time.Second, client.OptValue(kgo.RecordDeliveryTimeout))
+	require.Equal(t, 5*time.Second, client.OptValue(kgo.MetadataMinAge))
+	require.Equal(t, false, client.OptValue(kgo.DisableIdempotentWrite))
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+	publisher := startReplicatedBrokerPublisher(ctx, client, "source", 60*time.Second)
+	t.Cleanup(func() { publisher.stop() })
+	require.Eventually(t, func() bool {
+		state := publisher.snapshot()
+		return state.err != nil || slices.Min(state.Acknowledged) >= 1
+	}, 60*time.Second, 10*time.Millisecond)
+	state := publisher.stop()
+	require.NoError(t, state.err)
+	require.Equal(t, int32(6), rejected.Load())
+	require.GreaterOrEqual(t, slices.Min(state.Acknowledged), int64(1))
+	require.Equal(t, state.Offered, state.Acknowledged)
+	require.Zero(t, client.BufferedProduceRecords())
+	ends, err := kadm.NewClient(client).ListEndOffsets(ctx, "source")
+	require.NoError(t, err)
+	require.NoError(t, ends.Error())
+	for partition, count := range state.Acknowledged {
+		require.Equal(t, count, ends["source"][int32(partition)].Offset)
+	}
+}
+
+func replicatedProduceContainsZero(produce *kmsg.ProduceRequest) bool {
+	for _, topic := range produce.Topics {
+		for _, partition := range topic.Partitions {
+			if partition.Partition == 0 {
+				return true
+			}
+		}
+	}
+	return false
 }

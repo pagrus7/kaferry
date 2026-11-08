@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/pagrus7/kaferry/src/tests/system/faults"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -20,9 +22,18 @@ func replicatedBrokerProducer(t *testing.T, brokers string, delivery time.Durati
 	// The dedicated fixture proves its plain connection settings before faults.
 	// A severed first API request must retry within the existing delivery bound,
 	// rather than treating the EOF as a guessed TLS/SASL configuration error.
-	return fixtureClient(t, brokers, kgo.RecordPartitioner(kgo.ManualPartitioner()),
+	// Restore the SDK-equivalent unlimited safe retries instead of the shared
+	// fixture's five-try cap; the existing delivery bound still limits each write.
+	diagnostic := &faults.SDKDiagnostics{}
+	client := fixtureClient(t, brokers, kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		kgo.MaxBufferedRecords(2*replicatedPartitions), kgo.RecordDeliveryTimeout(delivery),
-		kgo.AllowIdempotentProduceCancellation(), kgo.AlwaysRetryEOF())
+		kgo.AllowIdempotentProduceCancellation(), kgo.AlwaysRetryEOF(), kgo.RecordRetries(math.MaxInt), kgo.WithLogger(diagnostic))
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("source publisher SDK record_retries=%v metadata_min_age=%v delivery_timeout=%v:\n%s", client.OptValue(kgo.RecordRetries), client.OptValue(kgo.MetadataMinAge), client.OptValue(kgo.RecordDeliveryTimeout), diagnostic.Snapshot())
+		}
+	})
+	return client
 }
 
 // replicatedPublisher publishes one record per partition every 100ms. The

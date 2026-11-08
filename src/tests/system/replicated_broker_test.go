@@ -33,6 +33,7 @@ type brokerObservation struct {
 	BrokerHealthy bool                          `json:"broker_healthy"`
 	Pending       copySummary                   `json:"cli_progress"`
 	Publishing    replicatedPublishing          `json:"publishing"`
+	QueryErrors   []string                      `json:"query_errors,omitempty"`
 }
 
 type brokerCopy struct {
@@ -52,6 +53,10 @@ type brokerCopy struct {
 	active                                        *faults.Injection
 	activeWindow                                  int
 	beforeFault                                   brokerObservation
+	polls                                         []brokerPoll
+	omittedPolls                                  int
+	healthChecks                                  []brokerHealthCheck
+	conditionQueries                              []string
 }
 
 func replicatedBrokerFault(t *testing.T, name string) {
@@ -79,6 +84,7 @@ func replicatedBrokerFault(t *testing.T, name string) {
 	require.NoError(t, err)
 	t.Cleanup(metadata.Close)
 	s := &brokerCopy{t: t, ctx: ctx, metadata: metadata, timeouts: timeouts, directory: directory}
+	t.Cleanup(s.retainPolls)
 	s.lab = &faults.Lab{Project: os.Getenv("KAFERRY_FIXTURE_PROJECT"), API: os.Getenv("KAFERRY_TOXIPROXY_API"), Metadata: metadata}
 	prefix := fmt.Sprintf("kaferry-broker-%d", time.Now().UnixNano())
 	s.src, s.dst, s.group = prefix+"-source", prefix+"-destination", prefix+"-group"
@@ -320,9 +326,10 @@ func (s *brokerCopy) observe(ctx context.Context) (brokerObservation, bool) {
 	state := brokerObservation{At: time.Now().UTC(), Publishing: s.publisher.snapshot()}
 	state.Topology = make(map[string][]faults.Partition)
 	for side, topic := range map[string]string{"source": s.src, "destination": s.dst} {
-		var ok bool
-		state.Topology[side], ok = s.topology(ctx, side, topic)
-		if !ok {
+		var err error
+		state.Topology[side], err = s.topology(ctx, side, topic)
+		if err != nil {
+			state.QueryErrors = append(state.QueryErrors, brokerDiagnosticText(err.Error()))
 			return state, false
 		}
 	}
@@ -331,10 +338,12 @@ func (s *brokerCopy) observe(ctx context.Context) (brokerObservation, bool) {
 	state.Pending, found, err = currentCopyProgress(s.workers[len(s.workers)-1])
 	require.NoError(s.t, err, "read current broker worker progress")
 	if !found {
+		state.QueryErrors = append(state.QueryErrors, "CLI has not emitted complete progress")
 		return state, false
 	}
 	parts, err := s.metadata["source"].FetchOffsetsForTopics(ctx, s.group, s.src)
 	if err != nil || parts.Error() != nil || len(parts[s.src]) != replicatedPartitions {
+		state.QueryErrors = append(state.QueryErrors, brokerDiagnosticText(fmt.Sprintf("source saved offsets: request=%v partitions=%v count=%d", err, parts.Error(), len(parts[s.src]))))
 		return state, false
 	}
 	state.Saved = make([]int64, replicatedPartitions)
@@ -343,6 +352,7 @@ func (s *brokerCopy) observe(ctx context.Context) (brokerObservation, bool) {
 	}
 	ends, err := s.metadata["destination"].ListEndOffsets(ctx, s.dst)
 	if err != nil || ends.Error() != nil || len(ends[s.dst]) != replicatedPartitions {
+		state.QueryErrors = append(state.QueryErrors, brokerDiagnosticText(fmt.Sprintf("destination end offsets: request=%v partitions=%v count=%d", err, ends.Error(), len(ends[s.dst]))))
 		return state, false
 	}
 	state.Ends = make([]int64, replicatedPartitions)
@@ -352,20 +362,26 @@ func (s *brokerCopy) observe(ctx context.Context) (brokerObservation, bool) {
 	return state, true
 }
 
-func (s *brokerCopy) topology(ctx context.Context, side, topic string) ([]faults.Partition, bool) {
+func (s *brokerCopy) topology(ctx context.Context, side, topic string) ([]faults.Partition, error) {
 	metadata, err := s.metadata[side].Metadata(ctx, topic)
-	if err != nil || metadata.Topics[topic].Err != nil || len(metadata.Topics[topic].Partitions) != replicatedPartitions {
-		return nil, false
+	if err != nil {
+		return nil, fmt.Errorf("%s topology request: %w", side, err)
+	}
+	if err := metadata.Topics[topic].Err; err != nil {
+		return nil, fmt.Errorf("%s topology topic: %w", side, err)
+	}
+	if len(metadata.Topics[topic].Partitions) != replicatedPartitions {
+		return nil, fmt.Errorf("%s topology partition_count=%d", side, len(metadata.Topics[topic].Partitions))
 	}
 	var result []faults.Partition
 	for partition := int32(0); partition < replicatedPartitions; partition++ {
 		part := metadata.Topics[topic].Partitions[partition]
 		if part.Err != nil {
-			return nil, false
+			return nil, fmt.Errorf("%s topology partition %d: %w", side, partition, part.Err)
 		}
 		result = append(result, faults.Partition{Leader: part.Leader, ISR: part.ISR})
 	}
-	return result, true
+	return result, nil
 }
 
 func (s *brokerCopy) wait(label string, allowFailure bool, condition func(context.Context, brokerObservation) bool) brokerObservation {
@@ -377,8 +393,16 @@ func (s *brokerCopy) wait(label string, allowFailure bool, condition func(contex
 		s.live(allowFailure)
 		require.NoError(s.t, s.publisher.snapshot().err, "steady source publisher failed")
 		query, cancel := context.WithTimeout(deadline, 2*time.Second)
+		started := time.Now()
+		s.healthChecks = nil
+		s.conditionQueries = nil
 		state, ok := s.observe(query)
 		ready := ok && condition(query, state)
+		poll := brokerPoll{Label: label, DurationMS: time.Since(started).Milliseconds(), Complete: ok, State: state, Health: s.healthChecks, Conditions: s.conditionQueries}
+		if err := query.Err(); err != nil {
+			poll.QueryError = err.Error()
+		}
+		s.recordPoll(poll)
 		cancel()
 		if ready {
 			return state
@@ -416,12 +440,17 @@ func fullyReplicated(state brokerObservation, side string) bool {
 }
 
 func (s *brokerCopy) healthy(ctx context.Context, targets ...faults.Target) bool {
+	check := brokerHealthCheck{At: time.Now().UTC()}
+	defer func() { s.healthChecks = append(s.healthChecks, check) }()
 	args := []string{"inspect", "--format", `{{.State.Running}} {{.State.Health.Status}}`}
 	for _, target := range targets {
 		args = append(args, target.Container)
+		check.Containers = append(check.Containers, target.Container)
 	}
 	data, err := faults.Docker(ctx, args...)
+	check.Output = brokerDiagnosticText(string(data))
 	if err != nil {
+		check.Error = brokerDiagnosticText(err.Error())
 		return false
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
@@ -433,6 +462,7 @@ func (s *brokerCopy) healthy(ctx context.Context, targets ...faults.Target) bool
 			return false
 		}
 	}
+	check.Passed = true
 	return true
 }
 
@@ -515,35 +545,40 @@ func (s *brokerCopy) isrLoss(before brokerObservation) {
 	controllers, err := s.lab.Resolve(s.ctx, faults.Role{Kind: "cluster", Cluster: "destination", Listener: "controller"})
 	require.NoError(s.t, err)
 	require.Len(s.t, controllers, 3)
+	partition := -1
 	isr := s.wait("actual ISR1 with the leader and controller quorum alive", false, func(query context.Context, state brokerObservation) bool {
-		part := state.Topology["destination"][0]
-		if part.Leader != broker || !slices.Equal(part.ISR, []int32{broker}) {
+		selected, ok := brokerISRPartition(injection.Event, before, state)
+		if !ok || !s.healthy(query, controllers...) || s.destinationMinISR(query) != "2" {
 			return false
 		}
-		return s.healthy(query, controllers...) && s.destinationMinISR(query) == "2"
+		partition = selected
+		return true
 	})
 	isr.BrokerHealthy = true
 	stalled := s.wait("new source input cannot advance destination or saved target prefix below min ISR", false, func(_ context.Context, state brokerObservation) bool {
-		part := state.Topology["destination"][0]
+		part := state.Topology["destination"][partition]
 		if part.Leader != broker || len(part.ISR) != 1 {
 			return false
 		}
-		require.Equal(s.t, isr.Ends[0], state.Ends[0], "destination acknowledged output below min ISR2")
-		require.LessOrEqual(s.t, state.Saved[0], isr.Ends[0], "saved progress passed acknowledged destination prefix")
-		return state.Publishing.Acknowledged[0] > isr.Publishing.Acknowledged[0]+3 && state.Pending.Submitted > state.Pending.Confirmed
+		require.Equal(s.t, isr.Ends[partition], state.Ends[partition], "destination acknowledged output below min ISR2")
+		require.LessOrEqual(s.t, state.Saved[partition], isr.Ends[partition], "saved progress passed acknowledged destination prefix")
+		return state.Publishing.Acknowledged[partition] > isr.Publishing.Acknowledged[partition]+3 && state.Pending.Submitted > state.Pending.Confirmed
 	})
 	s.oracle.command(s.t, map[string]any{"command": "sample", "reason": "observed-isr1-stall"})
 	pid := s.workers[0].pid()
 	healed := s.heal(injection, window, stalled)
 	require.Len(s.t, s.workers, 1, "ISR loss requires retry by the same process")
 	require.Equal(s.t, pid, s.workers[0].pid())
-	s.events = append(s.events, map[string]any{"fault": injection.Event, "before": before, "isr_lost": isr, "stalled": stalled, "recovered": healed, "min_insync_replicas": 2, "controller_targets": controllers})
+	s.events = append(s.events, map[string]any{"fault": injection.Event, "before": before, "isr_partition": partition, "isr_lost": isr, "stalled": stalled, "recovered": healed, "min_insync_replicas": 2, "controller_targets": controllers})
 }
 
 func (s *brokerCopy) destinationMinISR(ctx context.Context) string {
 	configs, err := s.metadata["destination"].DescribeTopicConfigs(ctx, s.dst)
 	if err != nil || len(configs) != 1 || configs[0].Err != nil {
+		s.conditionQueries = append(s.conditionQueries, brokerDiagnosticText(fmt.Sprintf("destination minISR: request=%v config=%v", err, configs)))
 		return ""
 	}
-	return configValue(configs[0].Configs, "min.insync.replicas")
+	value := configValue(configs[0].Configs, "min.insync.replicas")
+	s.conditionQueries = append(s.conditionQueries, "destination minISR: "+value)
+	return value
 }

@@ -55,7 +55,7 @@ def proof(id):
             role['topic'] = 'destination' if side == 'destination' else 'source'
         if isr:
             role['listener'] = 'internal'
-        targets = [dict(cluster=side, broker=broker, container='container', service=f'{side}-{broker}', listener=listener)
+        targets = [dict(cluster=side, broker=broker, container='container', service=f'{side}-{broker}', listener=listener, proxy=f'{side}-{broker}-{listener}')
                    for listener in (['internal'] if isr else ['internal', 'controller', 'admin', 'worker1', 'worker2', 'worker3'])]
         fault = dict(role=role, fault=dict(kind=kind), targets=targets, start=stamp(at), heal=stamp(at+4))
         recovered = state(at+5, 4+index*3)
@@ -63,9 +63,14 @@ def proof(id):
         if isr:
             lost, stalled = state(at+1, 2), state(at+2, 2)
             for row in (lost, stalled):
-                row['topology']['destination'][0] = dict(Leader=1, ISR=[1])
-            stalled['publishing']['acknowledged_by_partition'][0] = 6
-            event.update(isr_lost=lost, stalled=stalled, min_insync_replicas=2,controller_targets=[dict(cluster='destination',broker=n,listener='controller',container=f'controller-{n}') for n in (1,2,3)])
+                row['topology']['destination'][6] = dict(Leader=1, ISR=[1])
+            lost['publishing']['acknowledged_by_partition'][6] = 6
+            stalled['publishing']['acknowledged_by_partition'][6] = 10
+            recovered = state(at+5, 16)
+            event.update(isr_partition=6,isr_lost=lost, stalled=stalled,recovered=recovered, min_insync_replicas=2,controller_targets=[dict(cluster='destination',broker=n,listener='controller',container=f'controller-{n}') for n in (1,2,3)])
+            case['publishing'].update(offered_by_partition=[20]*24,acknowledged_by_partition=[20]*24)
+            for part in safety['independent_reconciliation']['partitions']:
+                part['expected'] = 20
         elif not rolling:
             failover = state(at+2, 4)
             failover['topology'][side][0] = dict(Leader=2, ISR=[2, 3])
@@ -130,11 +135,18 @@ class ReplicatedResultsTest(unittest.TestCase):
             ('broker/destination-leader', lambda c,s:c['publishing']['offered_by_partition'].__setitem__(0,11)),
             ('broker/destination-leader', lambda c,s:c['publishing'].update(max_offer_gap_seconds=3)),
             ('broker/destination-leader', lambda c,s:c['worker_measurements'][0].update(peak_uncommitted_records=1025)),
-            ('broker/destination-isr-loss', lambda c,s:c['events'][0]['isr_lost']['topology']['destination'][0].update(ISR=[1,2])),
+            ('broker/destination-isr-loss', lambda c,s:c['events'][0]['isr_lost']['topology']['destination'][6].update(ISR=[1,2])),
             ('broker/destination-isr-loss', lambda c,s:c['events'][0]['stalled']['cli_progress'].update(submitted=90)),
-            ('broker/destination-isr-loss', lambda c,s:c['events'][0]['stalled']['saved'].__setitem__(0,3)),
-            ('broker/destination-isr-loss', lambda c,s:c['events'][0]['stalled']['destination_ends'].__setitem__(0,3)),
+            ('broker/destination-isr-loss', lambda c,s:c['events'][0]['stalled']['saved'].__setitem__(6,3)),
+            ('broker/destination-isr-loss', lambda c,s:c['events'][0]['stalled']['destination_ends'].__setitem__(6,3)),
             ('broker/destination-isr-loss', lambda c,s:c['events'][0]['fault']['targets'][0].update(listener='controller')),
+            ('broker/destination-isr-loss', lambda c,s:c['events'][0]['fault']['targets'][0].update(proxy='destination-2-internal')),
+            ('broker/destination-isr-loss', lambda c,s:c['events'][0].pop('isr_partition')),
+            ('broker/destination-isr-loss', lambda c,s:c['events'][0].update(isr_partition=0)),
+            ('broker/destination-isr-loss', lambda c,s:c['events'][0]['isr_lost']['topology']['destination'][6].update(Leader=2)),
+            ('broker/destination-isr-loss', lambda c,s:c['events'][0]['isr_lost']['publishing']['acknowledged_by_partition'].__setitem__(6,5)),
+            ('broker/destination-isr-loss', lambda c,s:c['events'][0]['isr_lost']['cli_progress'].update(submitted=90)),
+            ('broker/destination-isr-loss', lambda c,s:c['events'][0]['stalled'].update(at=stamp(26))),
         ]
         for id, change in mutations:
             with self.subTest(id=id, change=change), self.assertRaises(ValueError):

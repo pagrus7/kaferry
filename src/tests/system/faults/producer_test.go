@@ -40,41 +40,11 @@ func newProxyProducer(seeds []string, diagnostic kgo.Logger, hooks ...kgo.Hook) 
 	return kgo.NewClient(options...)
 }
 
-// Keep original SDK response and transport errors without unbounded debug logs.
-// The fixture has only synthetic records; no record values are logged.
-type proxyDiagnostics struct {
-	mu      sync.Mutex
-	lines   []string
-	dropped int
-}
-
-func (*proxyDiagnostics) Level() kgo.LogLevel { return kgo.LogLevelDebug }
-
-func (d *proxyDiagnostics) Log(level kgo.LogLevel, message string, values ...any) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if len(d.lines) >= 128 {
-		d.dropped++
-		return
-	}
-	line := fmt.Sprintf("%s %s %v", level, message, values)
-	if len(line) > 2048 {
-		line = line[:2048] + " [truncated]"
-	}
-	d.lines = append(d.lines, line)
-}
-
-func (d *proxyDiagnostics) snapshot() string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return fmt.Sprintf("%s\nSDK diagnostic rows omitted: %d", strings.Join(d.lines, "\n"), d.dropped)
-}
-
 func TestProxyProducerFirstRetriableResponseRetainsOriginalDiagnostic(t *testing.T) {
 	// Given prepared metadata and an open producer connection, the first Produce
 	// receives NOT_ENOUGH_REPLICAS without appending anything at the broker.
 	cluster, routes := readinessCluster(t)
-	diagnostic := &proxyDiagnostics{}
+	diagnostic := &SDKDiagnostics{}
 	client, err := newProxyProducer(cluster.ListenAddrs(), diagnostic)
 	require.NoError(t, err)
 	defer client.Close()
@@ -94,22 +64,25 @@ func TestProxyProducerFirstRetriableResponseRetainsOriginalDiagnostic(t *testing
 	// allow exactly one retried request and one acknowledged appended record.
 	result := client.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 0, Value: []byte("once")})
 	require.Len(t, result, 1)
-	require.NoError(t, result.FirstErr(), diagnostic.snapshot())
+	require.NoError(t, result.FirstErr(), diagnostic.Snapshot())
 	require.Zero(t, result[0].Record.Offset)
 	require.Equal(t, int32(2), requests.Load())
-	require.Contains(t, diagnostic.snapshot(), "NOT_ENOUGH_REPLICAS")
+	require.Contains(t, diagnostic.Snapshot(), "NOT_ENOUGH_REPLICAS")
 	ends, err := kadm.NewClient(client).ListEndOffsets(ctx, topic)
 	require.NoError(t, err)
 	require.NoError(t, ends.Error())
 	require.Equal(t, int64(1), ends[topic][0].Offset)
 	// Then retaining more SDK output stays bounded and exposes any omission.
-	bounded := &proxyDiagnostics{}
-	for range 130 {
-		bounded.Log(kgo.LogLevelError, strings.Repeat("synthetic transport error ", 100))
+	bounded := &SDKDiagnostics{}
+	for index := range 130 {
+		bounded.Log(kgo.LogLevelError, fmt.Sprint("row=", index, " ", strings.Repeat("synthetic transport error ", 100)))
 	}
-	require.Less(t, len(bounded.snapshot()), 128*2100)
-	require.Contains(t, bounded.snapshot(), "[truncated]")
-	require.Contains(t, bounded.snapshot(), "SDK diagnostic rows omitted: 2")
+	require.Less(t, len(bounded.Snapshot()), 128*2100)
+	require.Contains(t, bounded.Snapshot(), "[truncated]")
+	require.Contains(t, bounded.Snapshot(), "SDK diagnostic rows omitted: 2")
+	require.NotContains(t, bounded.Snapshot(), "row=0 ")
+	require.NotContains(t, bounded.Snapshot(), "row=1 ")
+	require.Contains(t, bounded.Snapshot(), "row=129 ")
 }
 
 func rejectFirstProxyProduce(cluster *kfake.Cluster, code int16) *atomic.Int32 {
@@ -141,7 +114,7 @@ func TestProxyProducerRejectsPermanentProduceFailureWithoutRetry(t *testing.T) {
 	// still returns that error after one request without appending a record.
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "records"))
 	defer cluster.Close()
-	diagnostic := &proxyDiagnostics{}
+	diagnostic := &SDKDiagnostics{}
 	client, err := newProxyProducer(cluster.ListenAddrs(), diagnostic)
 	require.NoError(t, err)
 	defer client.Close()
@@ -152,7 +125,7 @@ func TestProxyProducerRejectsPermanentProduceFailureWithoutRetry(t *testing.T) {
 	require.Len(t, result, 1)
 	require.ErrorIs(t, result.FirstErr(), kerr.TopicAuthorizationFailed)
 	require.Equal(t, int32(1), requests.Load())
-	require.Contains(t, diagnostic.snapshot(), "TOPIC_AUTHORIZATION_FAILED")
+	require.Contains(t, diagnostic.Snapshot(), "TOPIC_AUTHORIZATION_FAILED")
 	ends, err := kadm.NewClient(client).ListEndOffsets(ctx, "records")
 	require.NoError(t, err)
 	require.NoError(t, ends.Error())

@@ -61,8 +61,8 @@ func proveProxyRoute(t *testing.T, lab *Lab, admin *kadm.Client, cluster string,
 	})
 	// Bootstrap on broker 1, then let Kafka metadata discover a different leader.
 	workerSeed := Endpoints(cluster, worker)[0]
-	diagnostic := &proxyDiagnostics{}
-	t.Cleanup(func() { t.Logf("bounded producer SDK diagnostics:\n%s", diagnostic.snapshot()) })
+	diagnostic := &SDKDiagnostics{}
+	t.Cleanup(func() { t.Logf("bounded producer SDK diagnostics:\n%s", diagnostic.Snapshot()) })
 	client, err := newProxyProducer([]string{workerSeed}, diagnostic)
 	require.NoError(t, err)
 	closeProbe := sync.OnceFunc(client.Close)

@@ -174,19 +174,30 @@ def broker_case(directory, id, identity):
             raise ValueError('leader fault did not resolve the selected topic partition at injection')
         if isr_loss:
             lost, stalled = event['isr_lost'], event['stalled']
+            selected = event.get('isr_partition')
+            if type(selected) is not int or not 0 <= selected < 24:
+                raise ValueError('ISR loss omitted its observed affected partition')
             controllers = event['controller_targets']
-            lost_part, stalled_part = lost['topology']['destination'][0], stalled['topology']['destination'][0]
+            lost_part, stalled_part = lost['topology']['destination'][selected], stalled['topology']['destination'][selected]
             if (len(workers) != 1 or len(targets) != 1 or targets[0]['listener'] != 'internal' or role['listener'] != 'internal' or
+                    targets[0]['proxy'] != f'destination-{broker}-internal' or event['before'] != previous or
+                    previous['topology']['destination'][role['partition']]['Leader'] != broker or
+                    previous['topology']['destination'][selected]['Leader'] != broker or
                     len(controllers) != 3 or {t['broker'] for t in controllers} != {1, 2, 3} or
                     len({t['container'] for t in controllers}) != 3 or
                     any(t['cluster'] != 'destination' or t['listener'] != 'controller' or not t['container'] for t in controllers) or
                     not lost['broker_healthy'] or event['min_insync_replicas'] != 2 or
                     lost_part != dict(Leader=broker, ISR=[broker]) or stalled_part != lost_part or
                     not stamp(fault['start']) < stamp(lost['at']) <= stamp(stalled['at']) < stamp(fault['heal']) or
-                    stalled['destination_ends'][0] != lost['destination_ends'][0] or
-                    stalled['saved'][0] > lost['destination_ends'][0] or
-                    stalled['publishing']['acknowledged_by_partition'][0] <= lost['publishing']['acknowledged_by_partition'][0]+3 or
-                    stalled['cli_progress']['submitted'] <= stalled['cli_progress']['confirmed']):
+                    lost['saved'][selected] > lost['destination_ends'][selected] or
+                    lost['publishing']['acknowledged_by_partition'][selected] <= max(lost['destination_ends'][selected], lost['saved'][selected])+3 or
+                    lost['cli_progress']['submitted'] <= lost['cli_progress']['confirmed'] or
+                    stalled['destination_ends'][selected] != lost['destination_ends'][selected] or
+                    stalled['saved'][selected] > lost['destination_ends'][selected] or
+                    stalled['publishing']['acknowledged_by_partition'][selected] <= lost['publishing']['acknowledged_by_partition'][selected]+3 or
+                    stalled['cli_progress']['submitted'] <= stalled['cli_progress']['confirmed'] or
+                    not advances(recovered['saved'], stalled['saved']) or
+                    not advances(recovered['publishing']['acknowledged_by_partition'], stalled['publishing']['acknowledged_by_partition'])):
                 raise ValueError('ISR loss lacks observed ISR1/minISR2, unresolved output and same-process retry')
         else:
             if len(targets) != 6 or {t['listener'] for t in targets} != {'internal', 'controller', 'admin', 'worker1', 'worker2', 'worker3'}:
