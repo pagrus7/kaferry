@@ -63,8 +63,25 @@ Each extracted archive passes version/commit and file-copy checks. Linux Kafka, 
 
 1. Inspect the intended tag's source, dependency versions and upgrade changes. Write its notes and validate with `python3 -m tools.release.release_notes vX.Y.Z`. Update living known-issue docs with current behavior, without release chronology; do not copy the release's change narrative into them.
 2. Follow the [review process](../development/reviews/README.md) for required reviews, formatting-only exceptions and PR statuses. Validate changed claims against the tagged implementation and run the appropriate [checks](../../CONTRIBUTING.md#test-targets).
-3. Commit the notes with the release changes. Before tagging, dispatch the release workflow on the candidate branch with publishing disabled and `candidate_version` set to the intended `vX.Y.Z`. This validates the authored notes and embeds the intended version using the publishing build flags. Compare binary digests to establish reproducibility before using validation artifacts as evidence for published binaries. Check that the completed run succeeded and its `headSha` equals the full reviewed commit SHA, including the notes. A version tag makes the source available to `go install` before archive publication; do not tag a candidate that has not passed this validation. Push an annotated `vX.Y.Z` tag on that exact commit. Manual dispatch defaults to validation without publishing; omitting `candidate_version` uses `validation-COMMIT` instead. Manual publishing must select that version tag; the workflow verifies that the built commit matches it and rejects a different supplied candidate version.
-4. Check the GitHub release body, assets and checksums after publishing. Verify the [platform archive contents](#build-and-validation) and that `archive-demo.tar.gz` contains the tutorial SQL, configuration and generated input. Keep notes aligned with that tag. If a tagged build fails, fix the problem and use a new version tag.
+3. Commit the notes with the release changes. Before tagging, dispatch the release workflow on the candidate branch with publishing disabled and `candidate_version` set to the intended `vX.Y.Z`. This validates the authored notes and embeds the intended version using the publishing build flags. Check that the completed run succeeded and its `headSha` equals the full reviewed commit SHA, including the notes. Manual dispatch defaults to validation without publishing; omitting `candidate_version` uses `validation-COMMIT` instead. The pinned Go toolchain derives main-module version metadata from Git tags, so adding the version tag can change the binary digest even with the same source and explicit version/revision flags. Validation artifacts do not establish qualification of the published binary.
+4. Push an annotated `vX.Y.Z` tag on that exact validated commit. A version tag makes the source available to `go install` before archive publication; do not tag a candidate that has not passed validation. The workflow publishes a GitHub prerelease without changing the latest release. Manual publishing does the same and must select that version tag; the workflow verifies that the built commit matches it and rejects a different supplied candidate version.
+5. Check the prerelease body, assets and checksums. Verify the [platform archive contents](#build-and-validation) and that `archive-demo.tar.gz` contains the tutorial SQL, configuration and generated input. Complete [lab preparation](../design/qualification.md#prepare) from a clean checkout of the tag. Download the published assets and verify the archive's provenance against the reviewed commit before extracting it. Below, replace `PLATFORM` with your native platform and `FULL_REVIEWED_COMMIT_SHA` with that commit; use a new `DOWNLOAD` directory. Complete the release's required qualification using this extracted executable through `--binary`, retaining its SHA-256 in the evidence. The example runs the full compatibility matrix; other required qualification scenarios must also pass.
+
+   ```sh
+   gh release download vX.Y.Z --repo pagrus7/kaferry --dir DOWNLOAD &&
+   (cd DOWNLOAD && shasum -a 256 -c SHA256SUMS) &&
+   gh attestation verify DOWNLOAD/kaferry-vX.Y.Z-PLATFORM.tar.gz \
+     --repo pagrus7/kaferry \
+     --signer-workflow pagrus7/kaferry/.github/workflows/release.yml \
+     --source-ref refs/tags/vX.Y.Z --source-digest FULL_REVIEWED_COMMIT_SHA \
+     --deny-self-hosted-runners &&
+   tar -xzf DOWNLOAD/kaferry-vX.Y.Z-PLATFORM.tar.gz -C DOWNLOAD &&
+   shasum -a 256 DOWNLOAD/kaferry &&
+   python3 -m tools.qualification.qualify matrix --tier full \
+     --binary "$PWD/DOWNLOAD/kaferry" --output build-results/published-matrix
+   ```
+
+6. Only after all required qualification passes for that published executable, promote the same prerelease with `gh release edit vX.Y.Z --prerelease=false --latest`. Then dispatch [container publishing](#container-publishing) for that stable tag. Keep notes aligned with the tag. If a tagged build or published-binary qualification fails, fix the problem and use a new patch version tag; never move the tag or replace published binaries.
 
 To correct published prose, edit the tracked note file, then validate before updating the body. Keep tags and assets unchanged:
 
@@ -89,4 +106,10 @@ The workflow builds separate multi-platform OCI archives for `kaferry` and `kafe
 
 Native AMD64/ARM64 jobs load both archives without rebuilding and compare their binary and license bytes with the inputs. CLI tests exercise file copying and Kafka checkpointing/resume after SIGTERM. The [smoke helper](../../tools/release/container_smoke.py) runs demo tests with `--demo`: four independent containers run concurrently for two fresh runs without external networking, rejection of corrupted destination output, and cancellation while the broker is running. Every failure is reported after all four checks finish. Only after both native jobs pass can publishing copy the same OCI archives to GHCR and attest their image-index digests. Version tags are immutable: publishing a different digest under an existing version fails. After attestation, a serialized publish job updates `latest` only when its version matches the current stable GitHub release. Retry a failed publish job with its retained artifacts; do not rebuild a published version.
 
-The release workflow calls image publishing after the GitHub release is published. Manual dispatch of `containers.yml` takes an existing stable release tag and defaults to validation without publishing. Publishing needs the repository's package-write and attestation permissions. A newly created GHCR package is private by default; set its visibility to public in package settings before advertising pulls. This changes package visibility, not the image bytes.
+Container publication is a separate manual dispatch after the qualified GitHub prerelease is promoted to stable. `containers.yml` takes an existing stable release tag and defaults to validation without publishing. Dispatch it with publishing enabled to run the native checks above and then publish those tested OCI archives:
+
+```sh
+gh workflow run containers.yml --ref main -f tag=vX.Y.Z -f publish=true
+```
+
+Publishing needs the repository's package-write and attestation permissions. A newly created GHCR package is private by default; set its visibility to public in package settings before advertising pulls. This changes package visibility, not the image bytes.
