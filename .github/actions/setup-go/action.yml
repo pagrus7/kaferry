@@ -1,9 +1,16 @@
-name: Set up Go with a refreshed job cache
-description: Restore Go modules and compilation results, then save successful work for this commit.
+name: Set up Go with a restored compilation cache
+description: Restore Go modules and compilation results; callers save successful non-PR work.
 inputs:
   cache-name:
     description: Stable job and suite name for independently populated compilation caches.
     required: true
+outputs:
+  cache-key:
+    description: Key for this commit's compilation results.
+    value: ${{ steps.cache.outputs.cache-primary-key }}
+  cache-hit:
+    description: Whether this commit already has an exact cache entry.
+    value: ${{ steps.cache.outputs.cache-hit }}
 runs:
   using: composite
   steps:
@@ -11,7 +18,8 @@ runs:
       with:
         go-version: '1.27.3'
         cache: false
-    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+    - id: cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ~/go/pkg/mod

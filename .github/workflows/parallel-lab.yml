@@ -19,6 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-go
+        id: go
         with:
           cache-name: pr-brokers
       - name: Build candidate
@@ -31,3 +32,7 @@ jobs:
           name: parallel-lab-evidence
           path: build-results/parallel
           retention-days: 7
+      - uses: ./.github/actions/save-go
+        with:
+          key: ${{ steps.go.outputs.cache-key }}
+          cache-hit: ${{ steps.go.outputs.cache-hit }}

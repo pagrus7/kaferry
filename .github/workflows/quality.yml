@@ -24,6 +24,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-go
+        id: go
         with:
           cache-name: quality-go
       - name: Install pinned analyzers
@@ -66,6 +67,10 @@ jobs:
           name: quality-go
           path: build-results/
           retention-days: 30
+      - uses: ./.github/actions/save-go
+        with:
+          key: ${{ steps.go.outputs.cache-key }}
+          cache-hit: ${{ steps.go.outputs.cache-hit }}
   codeql:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

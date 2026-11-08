@@ -19,6 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-go
+        id: go
         with:
           cache-name: pr-brokers
       - run: make build
@@ -36,6 +37,10 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: go test -run '^$' -race -tags=integration,qualification ./src/tests/compatibility
+      - uses: ./.github/actions/save-go
+        with:
+          key: ${{ steps.go.outputs.cache-key }}
+          cache-hit: ${{ steps.go.outputs.cache-hit }}
   warm-container-cache:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
@@ -43,10 +48,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-go
+        id: go
         with:
           cache-name: container-inputs
       - name: Compile both Linux container inputs
         run: python3 -m tools.release.container_artifacts candidate .cache/container-context
+      - uses: ./.github/actions/save-go
+        with:
+          key: ${{ steps.go.outputs.cache-key }}
+          cache-hit: ${{ steps.go.outputs.cache-hit }}
   fast:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -60,6 +70,7 @@ jobs:
       - name: Documentation links and shell examples
         run: python3 -m tools.docs.docs
       - uses: ./.github/actions/setup-go
+        id: go
         with:
           cache-name: checks-fast
       - run: make fmt
@@ -103,6 +114,10 @@ jobs:
           name: checks-fast
           path: build-results/
           retention-days: 30
+      - uses: ./.github/actions/save-go
+        with:
+          key: ${{ steps.go.outputs.cache-key }}
+          cache-hit: ${{ steps.go.outputs.cache-hit }}
   kafka:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -117,6 +132,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-go
+        id: go
         with:
           cache-name: checks-kafka
       - run: python3 -m tools.ci.ci broker make broker
@@ -189,6 +205,10 @@ jobs:
           name: checks-kafka
           path: build-results/
           retention-days: 30
+      - uses: ./.github/actions/save-go
+        with:
+          key: ${{ steps.go.outputs.cache-key }}
+          cache-hit: ${{ steps.go.outputs.cache-hit }}
   load:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -201,6 +221,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-go
+        id: go
         with:
           cache-name: checks-load
       - run: python3 -m tools.ci.ci broker make broker
@@ -235,3 +256,7 @@ jobs:
           name: checks-load
           path: build-results/
           retention-days: 30
+      - uses: ./.github/actions/save-go
+        with:
+          key: ${{ steps.go.outputs.cache-key }}
+          cache-hit: ${{ steps.go.outputs.cache-hit }}

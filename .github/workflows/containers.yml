@@ -44,6 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-go
+        id: go
         with:
           cache-name: container-inputs
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -92,6 +93,10 @@ jobs:
             .cache/container-context/
           include-hidden-files: true
           retention-days: 7
+      - uses: ./.github/actions/save-go
+        with:
+          key: ${{ steps.go.outputs.cache-key }}
+          cache-hit: ${{ steps.go.outputs.cache-hit }}
   test:
     needs: build
     timeout-minutes: 15
