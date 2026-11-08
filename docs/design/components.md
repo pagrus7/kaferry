@@ -78,6 +78,8 @@ Implementation is AI-driven with Codex and Claude Code under human direction.
 
 Testing commands and evidence are in the [contributor guide](../../CONTRIBUTING.md#tests).
 
+The shared Go setup caches modules and compiled packages by runner architecture, Go version, workload, `go.sum` and commit, restoring the newest matching workload entry. Main pushes and manual checks compile the binary and broker fixtures into the shared `pr-brokers` cache used by integrity, compatibility and parallel-lab jobs. The compile steps match each workload's tags, race instrumentation and CGO setting so a new PR can restore main's compilation results. Successful jobs refresh their cache for later pushes.
+
 ### Local reviews
 
 Follow [docs/development/reviews/](../development/reviews/README.md) for required reviewers, formatting-only exceptions and follow-ups.
