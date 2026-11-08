@@ -210,6 +210,8 @@ container state and healthcheck history captured before teardown. This supplemen
 
 `resources` runs copy, capture, checkpoint and archive-adapter component tests, including injected failures at filesystem durability boundaries. `fault` includes abrupt process death and restart; its independent reconciliation permits replay duplicates only within the observed fault and recovery windows described below. `model` compares randomized ownership, delivery, gap and save sequences against a reference model. The same lifecycle target participates in `make fuzz`; `FUZZ_ITERATIONS` sets its execution budget.
 
+System-test topic helpers admit historical record timestamps and disable time-based retention unless a scenario overrides it. Source truncation cases delete offsets explicitly.
+
 `integration` requires two CLI cases for the [source truncation contract](../reference.md#record-error-policies). A protocol fixture rejects an observed source fetch with an out-of-range error; the running CLI must fail explicitly without output or progress beyond its saved initial position. A real-broker case first exits the CLI at observed saved progress, then deletes unread offsets. Restart must copy exactly the retained records, save their end and report the old position, log start and offset gap. These cases distinguish broker-error handling from reported restart skips; they do not measure retention scheduling or claim recovery of deleted records.
 
 ### Load workload profiles
