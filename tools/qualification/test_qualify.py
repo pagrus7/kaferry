@@ -26,6 +26,9 @@ class MatrixTest(unittest.TestCase):
             'binary_platform': 'linux-amd64', 'execution_platform': 'linux-amd64'})
         identity.start()
         self.addCleanup(identity.stop)
+        images = patch('tools.qualification.qualify.fixture_images', return_value='fixture')
+        images.start()
+        self.addCleanup(images.stop)
 
     def suite_args(self, directory, suite, **options):
         binary = directory / 'candidate'

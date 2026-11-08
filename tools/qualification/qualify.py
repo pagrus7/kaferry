@@ -508,6 +508,20 @@ def startup_health(output, compose, env):
     write_json(output/'startup-health.json', dict(project=project, containers=rows))
 
 
+def fixture_images(spec):
+    images = subprocess.check_output(spec.compose + ['images', '--format', 'json'],
+        env=spec.env, cwd=ROOT, text=True, timeout=10).strip()
+    if not images:
+        raise ValueError('fixture did not report its broker images')
+    rows = json.loads(images)
+    if isinstance(rows, dict):
+        rows = list(rows.values())
+    if not isinstance(rows, list) or not rows or any(
+            not isinstance(row, dict) or not isinstance(row.get('ID'), str) or not row['ID'].strip() for row in rows):
+        raise ValueError('fixture did not report its broker image identities')
+    return images
+
+
 @contextmanager
 def broker_fixture(args, spec, receipt, fixture, cancelled):
     # Parallel children use the coordinator's lease and their assigned project.
@@ -535,7 +549,7 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
                 logged(spec.compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output,
                        'brokers-up', spec.env, timeout=180, cancelled=cancelled)
                 startup_complete = True
-                receipt['broker_images'] = capture(spec.compose + ['images', '--format', 'json'])
+                receipt['broker_images'] = fixture_images(spec)
             if args.suite in REPLICATED_SUITES:
                 logged([spec.env.get('GO', 'go'), 'test', '-count=1', '-json', '-tags=integration',
                         '-timeout=3m', '-run', '^TestReplicatedProxyRoutes$', './src/tests/system/faults'],
