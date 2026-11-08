@@ -65,7 +65,7 @@ python3 -m unittest discover -s tools -t .
 
 ### Test targets
 
-[Makefile](Makefile) defines the commands. Start disposable brokers with `make broker` before integration, fault, load or soak tests, and remove them afterward with `make broker-down`.
+[Makefile](Makefile) defines the commands. Start disposable brokers with `make broker` before integration, fault, load or soak tests, and remove them afterward with `make broker-down`. Before `make fault`, run `make qualification-setup` with the same Python major/minor version to install its independent librdkafka observer.
 
 | Command | Scope |
 | --- | --- |

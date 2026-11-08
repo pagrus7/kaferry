@@ -157,6 +157,7 @@ class MatrixTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'combined'): parallel_capacity(required, output, ['docker'], {})
             self.assertEqual(required, json.loads((output/'parallel-capacity.json').read_text())['required_combined_bytes'])
 
+    @patch('tools.qualification.fault_results.configure', new=lambda env: env.update(KAFERRY_ORACLE_RUN='fixture'))
     def test_parallel_child_uses_only_its_assigned_fixture_on_failure(self):
         # Given a child admitted by the coordinator with its own project and ports.
         with tempfile.TemporaryDirectory() as temporary:
@@ -213,6 +214,7 @@ class MatrixTest(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
                 duration(value)
 
+    @patch('tools.qualification.fault_results.configure', new=lambda env: env.update(KAFERRY_ORACLE_RUN='fixture'))
     def test_endurance_deadline_includes_ten_second_consume_only_period(self):
         for suite in ('soak', 'capture'):
             with self.subTest(suite=suite):
@@ -377,6 +379,8 @@ class MatrixTest(unittest.TestCase):
             published = json.loads((args.output / 'publication/endurance-results.json').read_text())
             self.assertEqual('failed', published['manifest']['status'])
 
+    @patch('tools.qualification.fault_results.configure', new=lambda env: env.update(KAFERRY_ORACLE_RUN='fixture'))
+    @patch('tools.qualification.fault_results.collect', new=lambda *args: {})
     def test_teardown_failure_rejects_success_and_preserves_suite_failure(self):
         for suite_failure in (False, True):
             with self.subTest(suite_failure=suite_failure), tempfile.TemporaryDirectory() as temporary:

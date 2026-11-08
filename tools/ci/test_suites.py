@@ -12,14 +12,55 @@ from unittest.mock import patch
 
 import tools.ci.suites as suites
 from tools.qualification.qualify import suite_command
+from tools.qualification.fault_results import FAULT_CASES
 
 
 class SuitesTest(unittest.TestCase):
+    def test_fault_outer_budget_accounts_for_the_same_catalog_as_windows(self):
+        # Given the fixture's actual per-case timeout catalog, with churn's
+        # overlapping windows sharing one maximum extension of its case.
+        catalog = json.loads((Path(__file__).resolve().parents[2]/'src/tests/qualification/fault-timeouts-ms.json').read_text())
+        self.assertLessEqual(FAULT_CASES, set(catalog))
+        self.assertEqual(473000, sum(sum(catalog[id].values()) for id in FAULT_CASES))
+        # When selecting the suite, then preserve the existing 600s execution
+        # allowance plus the mandatory 473s observation work, without changing
+        # individual configured timeouts or overriding an explicit caller limit.
+        self.assertEqual(1073, suites.fault_execution_seconds())
+        self.assertIn('-timeout=1073s', suites.command('fault'))
+        self.assertIn('-timeout=12m', suites.command('fault', timeout='12m'))
+        catalog['fault/churn']['delivery_timeout'] += 1000
+        catalog['another-suite/registered-case'] = {'session.timeout.ms': 6000}
+        with patch('tools.ci.suites.json.loads', return_value=catalog):
+            self.assertEqual(1074, suites.fault_execution_seconds())
+        catalog.pop('fault/crash')
+        with patch('tools.ci.suites.json.loads', return_value=catalog):
+            with self.assertRaisesRegex(ValueError, 'omitted a selected case'):
+                suites.fault_execution_seconds()
+
+    def test_failed_fault_run_replaces_prior_successful_receipt(self):
+        # Given an older successful receipt in the reusable CI report directory.
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory/'fault-results.json').write_text(json.dumps(dict(status='passed')))
+            def configure(env):
+                env['KAFERRY_ORACLE_RUN'] = 'fresh'
+            # When this execution fails, then retain that failure and never leave
+            # the prior success available for evidence collection.
+            with patch.dict(os.environ, KAFERRY_REPORT_DIR=temporary), \
+                 patch.object(sys, 'argv', ['suites', 'run', 'fault']), \
+                 patch('tools.qualification.fault_results.configure', side_effect=configure), \
+                 patch('tools.ci.suites.subprocess.run', return_value=subprocess.CompletedProcess([], 17)), \
+                 patch('tools.qualification.fault_results.collect') as collect:
+                self.assertEqual(17, suites.main())
+            collect.assert_not_called()
+            self.assertEqual(dict(schema=1, status='failed', oracle_run='fresh'),
+                             json.loads((directory/'fault-results.json').read_text()))
+
     def test_qualification_keeps_shared_selection_and_its_deadlines(self):
         # Given local qualification with a non-default Go executable.
         for name, tags, pattern, timeout in [
             ('load', 'integration,load', '^TestLoad', '20m'),
-            ('fault', 'integration,fault', '^TestBlockingCommit|^TestRebalanceChurn|^TestCrashResume|^TestRecoveryBlockedOutput', '10m'),
+            ('fault', 'integration,fault', '^TestBlockingCommit|^TestRebalanceChurn|^TestCrashResume|^TestRecoveryBlockedOutput', '1073s'),
             ('soak', 'integration,load', '^TestStreamingSoak', '370s'),
         ]:
             with self.subTest(suite=name):

@@ -166,7 +166,11 @@ python3 -m tools.qualification.qualify run benchmark
 python3 -m tools.qualification.qualify run smoke
 ```
 
-`resources` runs copy, capture, checkpoint and archive-adapter component tests, including injected failures at filesystem durability boundaries. `fault` includes abrupt process death and restart; its reconciliation permits replay duplicates under the at-least-once contract. `model` compares randomized ownership, delivery, gap and save sequences against a reference model. The same lifecycle target participates in `make fuzz`; `FUZZ_ITERATIONS` sets its execution budget.
+Failed Compose startup also retains `startup-health.json`: label-verified fixture
+container state and healthcheck history captured before teardown. This supplements
+`brokers.log` and `brokers-up.log`.
+
+`resources` runs copy, capture, checkpoint and archive-adapter component tests, including injected failures at filesystem durability boundaries. `fault` includes abrupt process death and restart; its independent reconciliation permits replay duplicates only within the observed fault and recovery windows described below. `model` compares randomized ownership, delivery, gap and save sequences against a reference model. The same lifecycle target participates in `make fuzz`; `FUZZ_ITERATIONS` sets its execution budget.
 
 `integration` requires two CLI cases for the [source truncation contract](../reference.md#record-error-policies). A protocol fixture rejects an observed source fetch with an out-of-range error; the running CLI must fail explicitly without output or progress beyond its saved initial position. A real-broker case first exits the CLI at observed saved progress, then deletes unread offsets. Restart must copy exactly the retained records, save their end and report the old position, log start and offset gap. These cases distinguish broker-error handling from reported restart skips; they do not measure retention scheduling or claim recovery of deleted records.
 
@@ -240,6 +244,20 @@ Safety assertions run before long qualification. `make check` exercises confirme
 tracking, stale deliveries, partial saves, shutdown deadlines and injected archive I/O
 failures with the race detector. `make fault` adds real-process recovery on the disposable
 source/destination brokers; start them with `make broker`. Code PRs run this fault suite.
+Run `make qualification-setup` first, with the same Python major/minor version used
+for `make fault`, `run fault` or `run recovery`. Missing independent-checker dependencies
+fail before qualification starts; they do not skip reconciliation.
+
+Before allowing a copier to start, the independent observer initializes its broker and
+coordinator connections within the existing ready deadline. `bootstrap.jsonl` retains
+each setup attempt, error and duration separately from measured qualification. Only
+transient driver timeouts, transport failures and coordinator discovery failures may
+repeat during setup. Readiness requires an exact independent fixed-cut baseline with
+fresh saved group progress and an empty destination; source records may already exist.
+Unsafe progress or changed records fail immediately. Measured qualification begins
+after this baseline, and a failed undeclared run-time query remains fatal on its first
+attempt. Query deadlines remain one second. Snapshot consumers use zero broker-side
+fetch wait with the one-second socket budget and pause after each fixed cut.
 
 The blocked-output cases first save a prefix on two partitions, pause the destination,
 and wait for the copier to report new submissions. They then kill it, signal it, wait
@@ -249,6 +267,63 @@ then pauses the source and requires shutdown to time out while saving progress. 
 record, and every received copy is checked, including permitted duplicates. The small
 byte caps exercise backpressure without a large dataset. CLI logs go to temporary files
 rather than accumulating in the test process's memory.
+
+Every blocked-output case, crash/resume and rebalance-churn run also starts a separate
+librdkafka consumer for each side. About once per second, and at explicit before/after
+fault observations, it reads saved group positions, captures destination end offsets,
+then consumes only through those captured ends. For every source partition, the saved
+position must be at most the contiguous prefix independently matched at the destination.
+An observer catching up to the captured ends avoids comparing current saves against a
+stale verifier. Output appended beyond those ends cannot repair an unsafe sample.
+These are ordered cross-cluster observations, not atomic snapshots: a transient unsafe
+save repaired before the destination snapshot can be missed. Capture spans, idle intervals,
+per-partition sample counts and first/last observations are retained; the one-second cadence
+is a scheduling target, not an atomic or uninterrupted safety guarantee. Intervals between
+samples are outside the sampled claim. Broker outages that prevent
+an observation produce explicit gaps, never passing samples. Final observation must be
+available. This Kafka-group observer does not cover archive checkpoints.
+
+Final reconciliation independently consumes all retained source records and all output
+through the final destination ends after fixture writers stop. It checks full key/value
+bytes, null versus empty, ordered headers, timestamps and preserved partition IDs for
+every copy. Fixture records must have unique full identities within their partition;
+ambiguous identical source records fail rather than disguising loss as replay. Record
+identities and copy history live in a disk-backed index, rather than growing Python heap
+state across repeated recovery cycles. The blocking-commit adapter probe also records
+observations, but its empty topic establishes a commit-deadline claim only; it cannot
+establish a no-loss claim for a candidate executable.
+
+Each fault records its resolved target, successful injection observations and observed
+heal. Duplicate attribution uses per-partition destination offset cuts captured before
+injection and after recovery, so independent-consumer lag cannot move an old delivery
+inside a window. The recovery allowance is the sum of the scenario's configured session,
+delivery and shutdown timeout budgets: expiration, redelivery and stopping can occur in
+sequence. The adapter-only probe uses its configured session budget. Both receipts of
+every consecutive duplicate pair outside all such windows fail qualification. After
+fixture writers stop, independent consumption and sampling continue through the complete
+recovery allowance, followed by a healthy post-recovery observation and final reconciliation.
+A shortened or interrupted observation cannot qualify. These windows conservatively include the pre-injection
+offset observation boundary, not an independently measurable broker acknowledgement time.
+
+`fault-results.json` maps stable case IDs to checksummed `samples.jsonl` observations,
+per-partition coverage, fault events, independent final reconciliation and binary/source
+identity. Repeated recovery includes a receipt for every successfully injected case in
+every completed cycle. Successful setup attempts that miss the source-outage injection
+do not produce a qualified case. Evidence collection rejects missing cases, failed
+reconciliation, unsafe observations, missing injection/heal proof and binary mismatches.
+Each case must be registered in the shared timeout catalog; producer windows and
+receipt validation both require that case's exact timeout keys and values. Adding a
+scenario requires registering the budgets used by its actual fixture configuration.
+`make fault` retains this evidence under `build-results/`; standalone runs use `--output`.
+
+The `fault` Go process allowance preserves its existing 600 seconds for execution and
+adds 473 seconds for the required recovery horizons. The shared fixture timeout catalog
+supplies both actual scenario settings and observation windows: churn 135 seconds,
+crash 96, blocking commit 45, and the five recovery cases 39, 39, 11, 69 and 39. Churn's
+three ownership windows overlap, so only its final 135-second horizon extends the case.
+The resulting outer budget is 1,073 seconds; individual CLI, fault and query deadlines
+stay unchanged. Repeated `recovery` keeps its requested duration plus the existing
+600-second allowance for completing its final cycle.
 
 Run repeated recovery separately from uninterrupted uptime:
 

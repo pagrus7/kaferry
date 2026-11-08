@@ -23,11 +23,16 @@ func TestBlockingCommitAcrossBrokerOutage(t *testing.T) {
 	container := ownBroker(t, name, fixtureProject("kaferry-compat"), "")
 	admin := admin(t)
 	name = topic(t, admin, 1)
-	source, store := probeSourceProgress(t, name, name+"-fault")
+	oracle := startFaultOracle(t, "fault/blocking-commit", broker(t), broker(t), name, name, name+"-fault", 1, true)
+	source, store := probeSourceProgress(t, name, name+"-fault", oracle.timeouts["session.timeout.ms"])
 	ownership := &probeOwnership{owned: make(map[int32]bool)}
 	require.NoError(t, source.Start(t.Context(), ownership, nil))
 	pollOwnership(t, []*adapter.Source{source}, func() bool { return len(ownership.owned) == 1 })
+	window := oracle.begin(t, "coordinator-pause", map[string]string{"container": container.name, "role": "source-coordinator"}, true,
+		oracle.timeouts,
+		"source adapter owns partition 0; no source data")
 	require.NoError(t, container.pause(t))
+	oracle.injected(t, window, "broker-pause", map[string]string{"container": container.name}, "Docker pause succeeded")
 	deadline, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
 	defer cancel()
 	// When the member commits while the coordinator is unavailable.
@@ -46,4 +51,6 @@ func TestBlockingCommitAcrossBrokerOutage(t *testing.T) {
 	if err != nil || !present || failure != nil {
 		t.Fatal("member commit did not recover", results, err)
 	}
+	oracle.healed(t, window, "Docker unpause and same-owner save of position 0 succeeded")
+	oracle.finish(t)
 }

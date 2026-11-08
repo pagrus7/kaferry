@@ -104,20 +104,20 @@ func recoveryBlockedOutput(t *testing.T, failure string) bool {
 	group := src + "-recovery"
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000','heartbeat.interval.ms'='1000'), CONNECTION destination AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s@destination' SELECT * FROM TOPIC '%s' WITH (GROUP='%s')", broker(t), destination, dst, src, group)
-	deliveryTimeout := "30s"
-	if failure == "delivery-timeout" {
-		deliveryTimeout = "2s"
-	}
-	settings := "record_cap=32\npartition_record_cap=16\nbyte_cap=8192\npartition_byte_cap=4096\nprogress_interval='20ms'\nshutdown_timeout='3s'\ndelivery_timeout='" + deliveryTimeout + "'\n"
+	oracle := startFaultOracle(t, "recovery/"+failure, broker(t), destination, src, dst, group, 2, false)
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='%d','heartbeat.interval.ms'='1000'), CONNECTION destination AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s@destination' SELECT * FROM TOPIC '%s' WITH (GROUP='%s')",
+		broker(t), oracle.timeouts["session.timeout.ms"].Milliseconds(), destination, dst, src, group)
+	deadlines := fmt.Sprintf("shutdown_timeout=%q\ndelivery_timeout=%q\n", oracle.timeouts["shutdown_timeout"], oracle.timeouts["delivery_timeout"])
+	settings := "record_cap=32\npartition_record_cap=16\nbyte_cap=8192\npartition_byte_cap=4096\nprogress_interval='20ms'\n" + deadlines
 	byteCap, recordCap := int64(8192), 32
 	if failure == "source-outage-shutdown" {
 		// Leave room for the whole batch so capacity cannot commit each delivery.
-		settings = "record_cap=1024\npartition_record_cap=512\nbyte_cap=134217728\npartition_byte_cap=16777216\nprogress_interval='20ms'\nshutdown_timeout='3s'\n"
+		settings = "record_cap=1024\npartition_record_cap=512\nbyte_cap=134217728\npartition_byte_cap=16777216\nprogress_interval='20ms'\n" + deadlines
 		byteCap, recordCap = 134217728, 1024
 	}
 	config := configuration(t, settings)
 	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+	oracle.writer(process)
 	waitMembers(t, a, group, 1, 2, nil)
 	p := producer(t)
 	ledger := recoveryLedger{expected: map[string]*kgo.Record{}, seen: map[string]bool{}}
@@ -144,9 +144,15 @@ func recoveryBlockedOutput(t *testing.T, failure string) bool {
 	}
 
 	var replacement *cliProcess
+	window := oracle.begin(t, failure, map[string]any{"worker": "original", "pid": process.pid(),
+		"source_container": os.Getenv("KAFKA_FAULT_CONTAINER"), "destination_container": os.Getenv("KAFKA_FAULT_DEST_CONTAINER")}, true,
+		oracle.timeouts,
+		"both source partitions have saved prefix 1 and destination has two records")
 	if failure == "ownership-loss" {
 		replacement = startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+		oracle.writer(replacement)
 		waitMembers(t, a, group, 2, 2, nil)
+		oracle.injected(t, window, "member-join", map[string]int{"pid": replacement.pid()}, "peer joined; two workers own the two source partitions")
 	}
 
 	// When output is blocked, establish outstanding submissions. For the source
@@ -154,6 +160,7 @@ func recoveryBlockedOutput(t *testing.T, failure string) bool {
 	restoreDestination, restoreSource := func() {}, func() {}
 	if failure != "source-outage-shutdown" {
 		restoreDestination = pauseRecoveryBroker(t, os.Getenv("KAFKA_FAULT_DEST_CONTAINER"))
+		oracle.injected(t, window, "destination-pause", map[string]string{"container": os.Getenv("KAFKA_FAULT_DEST_CONTAINER")}, "Docker destination pause succeeded")
 	}
 	if failure == "source-outage-shutdown" {
 		// Freeze the copier before inspecting progress, so host scheduling cannot
@@ -164,14 +171,17 @@ func recoveryBlockedOutput(t *testing.T, failure string) bool {
 			publishBatch(first, first+16)
 			waitRecoveryProgress(t, process, first+16, first+16)
 			require.NoError(t, process.signal(syscall.SIGSTOP))
+			oracle.injected(t, window, "process-suspend", map[string]int{"pid": process.pid()}, "SIGSTOP succeeded before saved-offset inspection")
 			parts := committedPartitions(t, a, group, src, 2)
 			for _, part := range parts {
 				pending = pending || part.At < int64((first+16)/2)
 			}
 			if pending {
 				restoreSource = pauseRecoveryBroker(t, os.Getenv("KAFKA_FAULT_CONTAINER"))
+				oracle.injected(t, window, "source-pause", map[string]string{"container": os.Getenv("KAFKA_FAULT_CONTAINER")}, "worker suspended with confirmed unsaved work; Docker source pause succeeded")
 			}
 			require.NoError(t, process.signal(syscall.SIGCONT))
+			oracle.injected(t, window, "process-resume", map[string]int{"pid": process.pid()}, "SIGCONT succeeded after saved-offset inspection")
 			if pending {
 				break
 			}
@@ -197,6 +207,7 @@ func recoveryBlockedOutput(t *testing.T, failure string) bool {
 	case <-time.After(8 * time.Second):
 		t.Fatal("failed copier did not terminate within its budget")
 	}
+	oracle.injected(t, window, failure, map[string]int{"pid": process.pid()}, "original worker terminated with blocked output or saved-progress outage")
 	if failure == "source-outage-shutdown" && process.wait() == nil {
 		restoreSource()
 		// SIGSTOP cannot retract a request already sent to Kafka. Only classify
@@ -206,6 +217,8 @@ func recoveryBlockedOutput(t *testing.T, failure string) bool {
 				"successful shutdown must have saved all confirmed input")
 		}
 		t.Log("in-flight commit completed before broker suspension; retrying setup")
+		// This is a measured setup attempt, not successful fault qualification.
+		// No case receipt is published; the next attempt must exercise the error.
 		return false
 	}
 	require.Error(t, process.wait(), "blocked delivery must not report successful shutdown")
@@ -231,8 +244,10 @@ func recoveryBlockedOutput(t *testing.T, failure string) bool {
 	if replacement == nil {
 		waitMembers(t, a, group, 0, 0, nil)
 		replacement = startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+		oracle.writer(replacement)
 	}
 	waitMembers(t, a, group, 1, 2, nil)
+	oracle.healed(t, window, "brokers restored; replacement owns both source partitions")
 	reader := fixtureClient(t, destination)
 	assign(t, reader, dst, 2)
 	positions := map[int32]int64{}
@@ -266,5 +281,6 @@ func recoveryBlockedOutput(t *testing.T, failure string) bool {
 	require.LessOrEqual(t, summary.PeakBytes, byteCap)
 	require.LessOrEqual(t, summary.PeakRecords, recordCap)
 	t.Logf("unique=%d duplicates=%d missing=0 corrupt=0", len(ledger.seen), ledger.duplicates)
+	oracle.finish(t)
 	return true
 }

@@ -204,6 +204,8 @@ def suite_command(args, env):
         return prefix + ['-race', '-run', '^TestProgressLifecycleModel$', './src/internal/copy'], ['TestProgressLifecycleModel']
     if args.suite in ('fuzz', 'benchmark', 'smoke'):
         return ['make', args.suite], []
+    if args.suite == 'fault':
+        return go_suite('fault', go=prefix[0]), EXPECTED['fault']
     return go_suite(args.suite, go=prefix[0], timeout='20m' if args.suite == 'load' else '10m'), EXPECTED[args.suite]
 
 
@@ -416,6 +418,10 @@ def resolve_run(args, receipt, fixture):
         raise ValueError('--config is only accepted by the external cloud suite')
     if args.suite == 'cloud' and not args.config:
         raise ValueError('cloud requires --config; this command never provisions a service')
+    if args.suite in ('fault', 'recovery'):
+        from tools.qualification.fault_results import configure
+        configure(env)
+        receipt['fault_oracle_run'] = env['KAFERRY_ORACLE_RUN']
     command, expected = suite_command(args, env)
     receipt.update(command=list(map(str, command)), expected_tests=expected)
     if fixtures:
@@ -540,6 +546,9 @@ def verify_run(args, spec, receipt):
         receipt['reconciliation'] = probe
     if args.suite == 'auth':
         receipt['broker_images'] = (args.output / 'qualification.broker-images.json').read_text()
+    if args.suite in ('fault', 'recovery'):
+        from tools.qualification.fault_results import collect
+        receipt['fault_results'] = collect(args.output, args.suite, receipt, spec.env.get('KAFERRY_ORACLE_RUN'))
 
 
 def run_suite(args, *, fixture=None, cancelled=None):

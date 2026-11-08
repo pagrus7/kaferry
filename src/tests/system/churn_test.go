@@ -57,31 +57,43 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 	a := admin(t)
 	src, dst := topic(t, a, 2), topic(t, a, 2)
 	group := src + "-churn"
-	path := configuration(t, "record_cap=32\npartition_record_cap=8\n")
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", dst, src, group)
+	oracle := startFaultOracle(t, "fault/churn", broker(t), broker(t), src, dst, group, 2, false)
+	path := configuration(t, fmt.Sprintf("record_cap=32\npartition_record_cap=8\ndelivery_timeout=%q\nshutdown_timeout=%q\n",
+		oracle.timeouts["delivery_timeout"], oracle.timeouts["shutdown_timeout"]))
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='%d') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ",
+		broker(t), oracle.timeouts["session.timeout.ms"].Milliseconds(), dst, src, group)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	results := make(chan workerResult, 8)
-	start := func() func() {
-		_, stop := startChurnWorker(t, ctx, statement, path, results)
-		return stop
-	}
-	stopA := start()
+	workerA, stopA := startChurnWorker(t, ctx, statement, path, results)
+	oracle.writer(workerA)
 	defer stopA()
 	waitMembers(t, a, group, 1, 2, results)
 	p := producer(t)
+	publishRange := func(first, end int) {
+		for id := first; id < end; id++ {
+			publish(t, p, &kgo.Record{Topic: src, Partition: int32(id % 2), Key: []byte(fmt.Sprint(id % 7)), Value: []byte(fmt.Sprint(id)), Timestamp: time.Now()})
+		}
+	}
+	// Establish a healthy segment outside every ownership-change window.
+	const baseline = 16
+	publishRange(0, baseline)
+	waitTopicCount(t, a, dst, 2, baseline)
 	for cycle := range 3 {
 
 		// When a second worker joins, records flow, and that worker leaves again.
-		stopB := start()
+		window := oracle.begin(t, "ownership-change", map[string]any{"group": group, "joining_worker": fmt.Sprint(cycle)}, false,
+			oracle.timeouts,
+			"one worker owns both source partitions")
+		peer, stopB := startChurnWorker(t, ctx, statement, path, results)
+		oracle.writer(peer)
 		defer stopB()
 		waitMembers(t, a, group, 2, 2, results)
-		for i := range 96 {
-			id := cycle*96 + i
-			publish(t, p, &kgo.Record{Topic: src, Partition: int32(id % 2), Key: []byte(fmt.Sprint(id % 7)), Value: []byte(fmt.Sprint(id)), Timestamp: time.Now()})
-		}
-		waitTopicCount(t, a, dst, 2, int64((cycle+1)*96))
+		oracle.injected(t, window, "member-join", map[string]int{"pid": peer.pid()}, "two workers joined and own both source partitions")
+		publishRange(baseline+cycle*96, baseline+(cycle+1)*96)
+		waitTopicCount(t, a, dst, 2, int64(baseline+(cycle+1)*96))
 		stopB()
+		oracle.injected(t, window, "member-leave", map[string]int{"pid": peer.pid()}, "SIGTERM requested for peer")
 		select {
 		case result := <-results:
 
@@ -91,6 +103,7 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 			t.Fatal("churn worker shutdown timed out")
 		}
 		waitMembers(t, a, group, 1, 2, results)
+		oracle.healed(t, window, "peer exited cleanly; survivor owns both source partitions")
 	}
 	stopA()
 	select {
@@ -102,21 +115,22 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 
 	// Then all consumed offsets are committed despite repeated ownership changes.
 	for _, part := range committedPartitions(t, a, group, src, 2) {
-		require.Equal(t, int64(144), part.At, "churn lost source progress")
+		require.Equal(t, int64(152), part.At, "churn lost source progress")
 	}
 	reader := consumer(t)
 	assign(t, reader, dst, 2)
 	seen := make(map[string]bool)
-	for len(seen) < 288 {
+	for len(seen) < baseline+288 {
 		record := read(t, reader)
 		id, err := strconv.Atoi(string(record.Value))
 		require.NoError(t, err)
 		require.EqualValues(t, id%2, record.Partition, "preserved routing survives reassignment")
 		seen[string(record.Value)] = true
 	}
-	for id := range 288 {
+	for id := range baseline + 288 {
 		if !seen[fmt.Sprint(id)] {
 			t.Fatal("record lost through churn", id)
 		}
 	}
+	oracle.finish(t)
 }

@@ -19,6 +19,7 @@ func TestCrashResumeReconcilesRetainedRecords(t *testing.T) {
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
 	group := src + "-crash"
+	oracle := startFaultOracle(t, "fault/crash", broker(t), broker(t), src, dst, group, 1, false)
 	producer := producer(t)
 	reader := consumer(t)
 	assign(t, reader, dst, 1)
@@ -34,17 +35,25 @@ func TestCrashResumeReconcilesRetainedRecords(t *testing.T) {
 	publishRange(0, 16)
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000','heartbeat.interval.ms'='1000') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST)", broker(t), dst, src, group)
-	config := configuration(t)
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='%d','heartbeat.interval.ms'='1000') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST)",
+		broker(t), oracle.timeouts["session.timeout.ms"].Milliseconds(), dst, src, group)
+	config := configuration(t, fmt.Sprintf("delivery_timeout=%q\nshutdown_timeout=%q\n", oracle.timeouts["delivery_timeout"], oracle.timeouts["shutdown_timeout"]))
 	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+	oracle.writer(process)
 	waitEnd(t, a, dst, 1)
 	// When the process dies without a drain/save and a fresh process resumes.
+	window := oracle.begin(t, "process-kill", map[string]any{"worker": "original", "pid": process.pid()}, false,
+		oracle.timeouts,
+		"destination partition 0 has at least one record")
 	require.NoError(t, process.command.Process.Kill())
 	require.Error(t, process.wait())
+	oracle.injected(t, window, "process-kill", map[string]int{"pid": process.pid()}, "original worker exited after kill")
 	publishRange(16, 64)
 	waitMembers(t, a, group, 0, 0, nil)
 	resumed := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+	oracle.writer(resumed)
 	waitMembers(t, a, group, 1, 1, nil)
+	oracle.healed(t, window, "replacement owns the source partition")
 	seen, duplicates := make(map[uint64]bool), 0
 	for len(seen) < 64 {
 		record := read(t, reader)
@@ -65,4 +74,5 @@ func TestCrashResumeReconcilesRetainedRecords(t *testing.T) {
 	progress := committedPartitions(t, a, group, src, 1)
 	require.Equal(t, int64(64), progress[0].At)
 	t.Logf("unique_records=%d replay_duplicates=%d missing=0 corrupted=0", len(seen), duplicates)
+	oracle.finish(t)
 }
