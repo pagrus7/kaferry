@@ -43,6 +43,11 @@ REPLICATED_SOURCE_PORTS = (46092, 46093, 46094)
 REPLICATED_DESTINATION_PORTS = (47092, 47093, 47094)
 
 
+def replicated_fixture(args):
+    return (getattr(args, 'suite', None) == 'replicated' or
+            getattr(args, 'suite', None) == 'endurance' and getattr(args, 'topology', None) == 'replicated')
+
+
 def plan(tier):
     versions = (VERSIONS[0], VERSIONS[-1]) if tier == 'pr' else VERSIONS
     pairs = [(v, v) for v in versions] if tier == 'nightly' else itertools.product(versions, repeat=2)
@@ -168,12 +173,14 @@ def suite_command(args, env):
     if args.suite in STREAMING_SUITES:
         # Clear inherited workload selectors so the receipt describes this run.
         env.pop('KAFERRY_SOAK_PROFILE', None)
+        env.pop('KAFERRY_SOAK_TOPOLOGY', None)
         env.update(KAFERRY_SOAK_DURATION=f'{args.duration}s', KAFERRY_SOAK_RATE=str(args.rate),
                    KAFERRY_SOAK_MODE='archive' if args.suite == 'capture' else 'kafka')
         if args.suite == 'endurance':
             if args.rate != 200:
                 raise ValueError('endurance uses a fixed --rate 200')
-            env.update(KAFERRY_SOAK_PROFILE='application', KAFERRY_ARCHIVE_PAYLOAD='random')
+            env.update(KAFERRY_SOAK_PROFILE='application', KAFERRY_ARCHIVE_PAYLOAD='random',
+                       KAFERRY_SOAK_TOPOLOGY=getattr(args, 'topology', None) or 'single')
         if args.suite in ('soak', 'endurance'):
             env['KAFERRY_SOAK_DEST_STALL_CONTAINER'] = env.get('KAFKA_FAULT_DEST_CONTAINER', 'kaferry-endurance-kafka-dr-1' if args.suite == 'endurance' else 'kaferry-compat-kafka-dr-1')
         else:
@@ -209,23 +216,26 @@ def suite_command(args, env):
     return go_suite(args.suite, go=prefix[0], timeout='20m' if args.suite == 'load' else '10m'), EXPECTED[args.suite]
 
 
+def endurance_allowance(seconds, replicas=1):
+    bursts = 1 + (seconds - 10) // 60
+    records = seconds * 200 + bursts * 400
+    return dict(records=records, required_broker_bytes=records * (5120 + 256) * 3 * replicas + 4 * 1024**3,
+                required_evidence_bytes=max(1024**3, seconds * 8192))
+
+
 def endurance_capacity(seconds, output, compose, env):
     # No compression credit. Require the combined allowance on each filesystem
     # because Docker may put both writable container layers on the same disk.
-    bursts = 1 + (seconds - 10) // 60
-    records = seconds * 200 + bursts * 400
-    broker_bytes = records * (5120 + 256) * 3 + 4 * 1024**3
-    evidence_bytes = max(1024**3, seconds * 8192)
+    capacity = endurance_allowance(seconds)
     free = {}
     for service in ('kafka', 'kafka-dr'):
         result = subprocess.check_output(compose + ['exec', '-T', service, 'df', '-Pk',
             '/tmp/kaferry-logs'], env=env, cwd=ROOT, text=True, timeout=15)
         free[service] = int(result.splitlines()[-1].split()[3]) * 1024
     evidence_free = shutil.disk_usage(output).free
-    capacity = dict(records=records, required_broker_bytes=broker_bytes,
-        broker_free_bytes=free, required_evidence_bytes=evidence_bytes, evidence_free_bytes=evidence_free)
+    capacity.update(broker_free_bytes=free, evidence_free_bytes=evidence_free)
     write_json(output / 'capacity.json', capacity)
-    if min(free.values()) < broker_bytes or evidence_free < evidence_bytes:
+    if min(free.values()) < capacity['required_broker_bytes'] or evidence_free < capacity['required_evidence_bytes']:
         raise ValueError('insufficient endurance disk allowance; inspect capacity.json')
     return capacity
 
@@ -255,12 +265,14 @@ def parallel_capacity(required, output, compose, env):
     return result
 
 
-def replicated_admission(output, env):
+def replicated_admission(output, env, endurance_seconds=None):
     runtime = json.loads(capture(['docker', 'info', '--format', '{{json .}}']))
     capacity = dict(required_cpus=2, required_runtime_memory_bytes=8 * 1024**3,
                     required_broker_bytes=4 * 1024**3, required_evidence_bytes=1024**3,
                     runtime_cpus=runtime.get('NCPU', 0), runtime_memory_bytes=runtime.get('MemTotal', 0),
                     evidence_free_bytes=shutil.disk_usage(output).free)
+    if endurance_seconds is not None:
+        capacity.update(endurance_allowance(endurance_seconds, replicas=3))
     write_json(output / 'capacity.json', capacity)
     if (capacity['runtime_cpus'] < capacity['required_cpus'] or
             capacity['runtime_memory_bytes'] < capacity['required_runtime_memory_bytes'] or
@@ -365,6 +377,9 @@ class RunSpec:
 
 def resolve_run(args, receipt, fixture):
     args = argparse.Namespace(**dict(vars(args), binary=str(Path(args.binary).resolve())))
+    topology = getattr(args, 'topology', None)
+    if topology is not None and (args.suite != 'endurance' or topology not in ('single', 'replicated')):
+        raise ValueError('--topology is only accepted by run endurance: single or replicated')
     project = 'kaferry-endurance' if args.suite == 'endurance' else 'kaferry-compat'
     source_port, destination_port = (39192, 40192) if args.suite == 'endurance' else (39092, 40092)
     if fixture is not None:
@@ -376,9 +391,9 @@ def resolve_run(args, receipt, fixture):
                KAFKA_FAULT_CONTAINER=project+'-kafka-1', KAFKA_FAULT_DEST_CONTAINER=project+'-kafka-dr-1', KAFERRY_FIXTURE_PROJECT=project, CGO_ENABLED='1')
     compose = ['docker', 'compose', '-f', 'src/tests/compose.yaml', '-p', project, '--profile', 'cross-cluster']
     volume = getattr(args, 'broker_volume', None)
-    if volume and (args.suite != 'replicated' or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', volume)):
-        raise ValueError('--broker-volume requires run replicated and a Docker volume name')
-    if args.suite == 'replicated':
+    if volume and (not replicated_fixture(args) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', volume)):
+        raise ValueError('--broker-volume requires a replicated fixture and a Docker volume name')
+    if replicated_fixture(args):
         if fixture is not None or args.source != VERSIONS[-1] or args.destination != VERSIONS[-1]:
             raise ValueError('replicated uses the newest catalog image and its dedicated fixture')
         project = 'kaferry-replicated'
@@ -463,8 +478,9 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
         owns_fixture = False
         startup_attempted, startup_complete = False, False
         try:
-            if args.suite == 'replicated':
-                receipt['capacity'] = replicated_admission(args.output, spec.env)
+            if replicated_fixture(args):
+                receipt['capacity'] = replicated_admission(args.output, spec.env,
+                    args.duration if args.suite == 'endurance' else None)
                 owns_fixture = True
                 replicated_storage(args.output, spec.compose, spec.env, receipt['capacity'], cancelled)
                 startup_attempted = True
@@ -489,7 +505,8 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
                 receipt['parallel_capacity'] = parallel_capacity(fixture['reserved_bytes'], args.output, spec.compose, spec.env)
                 write_json(args.output / 'manifest.json', receipt)
             if args.suite == 'endurance':
-                receipt['capacity'] = endurance_capacity(args.duration, args.output, spec.compose, spec.env)
+                if not replicated_fixture(args):
+                    receipt['capacity'] = endurance_capacity(args.duration, args.output, spec.compose, spec.env)
                 write_json(args.output / 'manifest.json', receipt)
             yield
         except (Exception, KeyboardInterrupt) as error:
@@ -510,11 +527,11 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
                 except (OSError, subprocess.SubprocessError) as error:
                     errors.append({'phase': 'logs', 'error': str(error)})
                 finally:
-                    if args.suite == 'replicated':
+                    if replicated_fixture(args):
                         errors.extend(cleanup_replicated(args.output, spec.compose, spec.env))
                     try:
                         # Keep storage if ownership validation or writer shutdown failed.
-                        volumes = [] if args.suite == 'replicated' and errors else ['-v']
+                        volumes = [] if replicated_fixture(args) and errors else ['-v']
                         logged(spec.compose + ['down', *volumes, '--remove-orphans'], args.output, 'brokers-down', spec.env, timeout=60)
                     except (OSError, RuntimeError) as error:
                         errors.append({'phase': 'teardown', 'error': str(error)})
@@ -567,9 +584,13 @@ def run_suite(args, *, fixture=None, cancelled=None):
     if args.suite in STREAMING_SUITES:
         receipt['drain_seconds'] = SOAK_DRAIN_SECONDS
     if args.suite == 'endurance':
+        topology = getattr(args, 'topology', None) or 'single'
         receipt['workload'] = dict(profile='application-24x32-v1', processes=1, routing='KEY',
-            source_partitions=24, destination_partitions=32, replication_factor=1,
+            source_partitions=24, destination_partitions=32, topology=topology,
+            replication_factor=3 if topology == 'replicated' else 1,
             rate=200, payload='random', duration_claim='endurance' if args.duration >= 86400 else 'rehearsal')
+        if topology == 'replicated':
+            receipt['workload']['min_insync_replicas'] = 2
     if args.suite == 'cloud':
         receipt.update(source_version='external', destination_version='external', id='cloud-external-external')
     started = time.monotonic()
@@ -684,7 +705,8 @@ def main(argv=None):
         running = sub.add_parser(name, help='run one suite' if name == 'run' else 'run every planned case sequentially')
         if name == 'run':
             running.add_argument('suite', choices=SUITES)
-            running.add_argument('--broker-volume', help='existing labeled external volume; replicated fixture only')
+            running.add_argument('--broker-volume', help='existing labeled external volume; replicated fixtures only')
+            running.add_argument('--topology', choices=('single', 'replicated'), help='endurance topology (default: single)')
         elif name == 'matrix':
             running.add_argument('--tier', choices=('pr', 'nightly', 'full'), default='pr')
         running.add_argument('--source', choices=VERSIONS)
@@ -717,7 +739,7 @@ def main(argv=None):
     requested_duration = getattr(args, 'duration', None)
     if args.action in ('run', 'matrix', 'releases'):
         endurance = getattr(args, 'suite', None) == 'endurance'
-        newest = getattr(args, 'suite', None) == 'replicated'
+        newest = replicated_fixture(args)
         args.source = args.source or VERSIONS[-1 if newest else 0]
         args.destination = args.destination or VERSIONS[-1 if newest else 0]
         args.duration = args.duration if args.duration is not None else (86400 if endurance else 7200 if getattr(args, 'suite', None) == 'recovery' else 120)

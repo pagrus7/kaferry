@@ -13,7 +13,9 @@ type enduranceEvidence struct {
 	Profile                        string  `json:"profile"`
 	Processes                      int     `json:"processes"`
 	Routing                        string  `json:"routing"`
+	Topology                       string  `json:"topology"`
 	ReplicationFactor              int     `json:"replication_factor"`
+	MinInsyncReplicas              int     `json:"min_insync_replicas,omitempty"`
 	PayloadBytes                   [2]int  `json:"payload_bytes_min_max"`
 	PayloadEntropy                 string  `json:"payload_entropy"`
 	KeyDistribution                string  `json:"key_distribution"`
@@ -41,7 +43,7 @@ type enduranceEvidence struct {
 }
 
 func newEnduranceEvidence(duration time.Duration) *enduranceEvidence {
-	return &enduranceEvidence{Profile: "application-24x32-v1", Processes: 1, Routing: "KEY", ReplicationFactor: 1,
+	return &enduranceEvidence{Profile: "application-24x32-v1", Processes: 1, Routing: "KEY", Topology: "single", ReplicationFactor: 1,
 		PayloadBytes: [2]int{1024, 5119}, PayloadEntropy: "deterministic PCG bytes; first four bytes encode ID",
 		KeyDistribution: "ID modulo 257; every seventh key is null",
 		TargetRate:      200, TargetRecords: enduranceScheduled(duration), MinWindowRatio: 1}

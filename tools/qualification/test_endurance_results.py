@@ -77,6 +77,26 @@ class PublicationTest(unittest.TestCase):
                 if field == 'missing': (self.evidence / 'soak.metrics.json').unlink()
                 with self.assertRaises(ValueError): self.prepare()
 
+    def test_replicated_report_names_its_topology_and_rejects_mismatched_measurements(self):
+        # Given a successful replicated run with matching observed setup and workload.
+        self.receipt['workload'] = dict(topology='replicated', replication_factor=3, min_insync_replicas=2)
+        self.metrics['endurance'].update(topology='replicated', replication_factor=3, min_insync_replicas=2)
+        self.save()
+        package = self.prepare()
+        text = (package / 'endurance-results.md').read_text()
+        self.assertIn('three-broker clusters with replication factor 3', text)
+        self.assertNotIn('single-broker clusters', text)
+        # When identities are missing or disagree, then a passing report cannot be generated.
+        for field, value in [('topology', 'single'), ('replication_factor', 1), ('min_insync_replicas', 1),
+                             ('topology', None), ('replication_factor', None), ('min_insync_replicas', None)]:
+            with self.subTest(field=field, value=value):
+                self.metrics['endurance'].update(topology='replicated', replication_factor=3, min_insync_replicas=2)
+                self.metrics['endurance'][field] = value
+                self.save()
+                with patch('tools.qualification.endurance_results.summarize', return_value=''):
+                    with self.assertRaisesRegex(ValueError, 'topology'):
+                        prepare(self.evidence, self.evidence / 'mismatched')
+
     def test_upload_requires_matching_release_and_retains_unique_asset_names(self):
         package = self.prepare()
         uploaded = []

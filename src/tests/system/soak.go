@@ -34,6 +34,10 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	profile := os.Getenv("KAFERRY_SOAK_PROFILE")
 	require.True(t, profile == "" || profile == "application", "unknown soak profile")
 	endurance := profile == "application"
+	topology := os.Getenv("KAFERRY_SOAK_TOPOLOGY")
+	require.True(t, topology == "" || topology == "single" || topology == "replicated", "unknown soak topology")
+	replicated := topology == "replicated"
+	require.True(t, !replicated || endurance, "replicated topology requires application endurance")
 	if endurance {
 		sourcePartitions, destinationPartitions = 24, 32
 	}
@@ -69,6 +73,10 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		require.Equal(t, "random", os.Getenv("KAFERRY_ARCHIVE_PAYLOAD"), "application endurance requires high entropy payloads")
 		require.NotEmpty(t, os.Getenv("KAFERRY_SOAK_DEST_STALL_CONTAINER"), "application endurance requires destination stalls")
 		report.Endurance = newEnduranceEvidence(duration)
+		if replicated {
+			report.Endurance.Topology = "replicated"
+			report.Endurance.ReplicationFactor, report.Endurance.MinInsyncReplicas = 3, 2
+		}
 		report.Workload.Name = report.Endurance.Profile
 	}
 	require.Less(t, duration.Seconds()*float64(rate)*1.05, float64(1<<32)-8192, "requested stream exceeds the fixture ID range")
@@ -76,7 +84,7 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	destinationBrokers := broker(t)
 	destinationAdmin := a
 	stall := os.Getenv("KAFERRY_SOAK_DEST_STALL_CONTAINER")
-	var stalledBroker *ownedBroker
+	var stalledBrokers []*ownedBroker
 	if archiveMode && stall != "" {
 		t.Fatal("archive soak does not use a destination broker stall")
 	}
@@ -85,14 +93,22 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		if endurance {
 			project = "kaferry-endurance"
 		}
-		stalledBroker = ownBroker(t, stall, fixtureProject(project), "kafka-dr")
+		if replicated {
+			project = fixtureProject("kaferry-replicated")
+			for node := 1; node <= 3; node++ {
+				service := fmt.Sprintf("destination-%d", node)
+				stalledBrokers = append(stalledBrokers, ownBroker(t, project+"-"+service+"-1", project, service))
+			}
+		} else {
+			stalledBrokers = []*ownedBroker{ownBroker(t, stall, fixtureProject(project), "kafka-dr")}
+		}
 		destinationBrokers = os.Getenv("KAFKA_TEST_DEST_BROKERS")
 		if destinationBrokers == "" || destinationBrokers == broker(t) {
 			t.Fatal("destination stalls require a separate KAFKA_TEST_DEST_BROKERS cluster")
 		}
 		destinationAdmin = kadm.NewClient(fixtureClient(t, destinationBrokers))
 	}
-	src, dst := topic(t, a, sourcePartitions), topic(t, destinationAdmin, destinationPartitions)
+	src, dst := soakTopic(t, a, sourcePartitions, replicated), soakTopic(t, destinationAdmin, destinationPartitions, replicated)
 	if endurance {
 		// Retain all input/output until final reconciliation, even for seven-day runs.
 		for _, fixture := range []struct {
@@ -136,7 +152,7 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	nextPublish, nextSample := start, start.Add(time.Second)
 	nextBurst, nextStall := start.Add(10*time.Second), start.Add(30*time.Second)
 	bursts := 0
-	stalls := &destinationStalls{broker: stalledBroker, next: nextStall}
+	stalls := &destinationStalls{brokers: stalledBrokers, next: nextStall}
 	monitor := soakMonitor{next: nextSample, kafka: !archiveMode, endurance: report.Endurance}
 	reconciled := false
 	report.PublishingSeconds, report.DrainSeconds = duration.Seconds(), soakDrainDuration.Seconds()
@@ -186,9 +202,9 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		default:
 		}
 		now := time.Now()
-		wasPaused := stalls.broker.paused()
+		wasPaused := stalls.paused()
 		stalls.step(t, now, now.Sub(start) < duration)
-		if endurance && wasPaused && !stalls.broker.paused() {
+		if endurance && wasPaused && !stalls.paused() {
 			report.Endurance.recoveryAt = time.Now()
 		}
 		if endurance {
@@ -254,7 +270,7 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		}
 		sampleStart := time.Now()
 		var destinationEnds map[int32]int64
-		if !archiveMode && !stalls.broker.paused() && !now.Before(monitor.next) {
+		if !archiveMode && !stalls.paused() && !now.Before(monitor.next) {
 			destinationEnds = destinationOffsets(t, destinationAdmin, dst, destinationPartitions)
 		}
 		monitor.sample(t, now, process.pid(), a, group, src, records, destinationEnds,
@@ -346,21 +362,34 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 }
 
 type destinationStalls struct {
-	broker      *ownedBroker
+	brokers     []*ownedBroker
 	until, next time.Time
 	count       int
 }
 
+func (s *destinationStalls) paused() bool {
+	for _, broker := range s.brokers {
+		if broker.paused() {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *destinationStalls) step(t *testing.T, now time.Time, publishing bool) {
 	t.Helper()
-	if s.broker != nil && !s.broker.paused() && publishing && !now.Before(s.next) {
-		require.NoError(t, s.broker.pause(t))
+	if len(s.brokers) > 0 && !s.paused() && publishing && !now.Before(s.next) {
+		for _, broker := range s.brokers {
+			require.NoError(t, broker.pause(t))
+		}
 		s.count++
 		s.until = time.Now().Add(time.Second)
 		s.next = s.next.Add(time.Minute)
 	}
-	if s.broker.paused() && !now.Before(s.until) {
-		require.NoError(t, s.broker.recover())
+	if s.paused() && !now.Before(s.until) {
+		for _, broker := range s.brokers {
+			require.NoError(t, broker.recover())
+		}
 	}
 }
 

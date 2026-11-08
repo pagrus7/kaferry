@@ -41,6 +41,23 @@ def prepare(evidence, output):
             not metrics[0].get('delivery', {}).get('reconciliation_complete') or
             metrics[0].get('delivery', {}).get('integrity', {}).get('matched') is not True):
         raise ValueError('passing endurance evidence is missing or incomplete')
+    workload = receipt.get('workload', {})
+    topology = workload.get('topology', 'single')
+    if topology not in ('single', 'replicated'):
+        raise ValueError('unknown endurance topology')
+    replicas = 3 if topology == 'replicated' else 1
+    if workload.get('replication_factor', replicas) != replicas:
+        raise ValueError('endurance workload and topology disagree')
+    if topology == 'replicated' and (workload.get('replication_factor') != 3 or workload.get('min_insync_replicas') != 2):
+        raise ValueError('replicated endurance workload requires RF=3/min ISR=2')
+    for item in metrics:
+        measured = item.get('endurance', {})
+        if (measured.get('topology', topology) != topology or
+                measured.get('replication_factor', replicas) != replicas or
+                topology == 'replicated' and item.get('passed') and
+                (measured.get('topology') != topology or measured.get('replication_factor') != replicas or
+                 measured.get('min_insync_replicas') != 2)):
+            raise ValueError('endurance measurements and topology disagree')
     body = summarize(evidence)
     rehearsal = receipt['requested_seconds'] < 86400
     title = 'Endurance rehearsal' if rehearsal else 'Application endurance'
@@ -54,7 +71,8 @@ def prepare(evidence, output):
             f"Host: `{receipt['platform']}` · Go: `{receipt['go']}`.", '',
             '[Full manifest and measurements](endurance-results.json).', '',
             'This single-process workload uses 24 source and 32 destination partitions, key routing, '
-            '200 records/second plus bursts, high entropy payloads and separate single-broker clusters with replication factor 1. '
+            '200 records/second plus bursts, high entropy payloads and separate '
+            f'{"three" if replicas == 3 else "single"}-broker clusters with replication factor {replicas}. '
             'It measures application endurance under this workload; it does not establish saturation capacity or replicated resilience.', '']
     if rehearsal:
         rows += ['This is a rehearsal; it does not establish 24 hours of continuous uptime.', '']

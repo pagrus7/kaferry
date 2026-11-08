@@ -31,10 +31,19 @@ func admin(t *testing.T) *kadm.Client {
 
 func topic(t *testing.T, a *kadm.Client, partitions int) string {
 	t.Helper()
+	return configuredTopic(t, a, partitions, 1, nil)
+}
+
+func configuredTopic(t *testing.T, a *kadm.Client, partitions int, replicas int16, properties map[string]*string) string {
+	t.Helper()
 	name := fmt.Sprintf("kaferry-compat-%d", time.Now().UnixNano())
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	_, err := a.CreateTopic(ctx, int32(partitions), 1, map[string]*string{"message.timestamp.before.max.ms": kadm.StringPtr("9223372036854775807"), "message.timestamp.after.max.ms": kadm.StringPtr("9223372036854775807")}, name)
+	settings := map[string]*string{"message.timestamp.before.max.ms": kadm.StringPtr("9223372036854775807"), "message.timestamp.after.max.ms": kadm.StringPtr("9223372036854775807")}
+	for name, value := range properties {
+		settings[name] = value
+	}
+	_, err := a.CreateTopic(ctx, int32(partitions), replicas, settings, name)
 	require.NoError(t, err, "create fixture topic")
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
