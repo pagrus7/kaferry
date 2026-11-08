@@ -130,8 +130,7 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 		return err
 	}
 	saved, progressErr := c.Saved(ctx, p.Group, r.Fingerprint, p.Window, p.MaxStalenessMS)
-	var mismatch *plan.FingerprintMismatch
-	if progressErr != nil && !errors.As(progressErr, &mismatch) {
+	if progressErr != nil && !errors.Is(progressErr, plan.ErrFingerprintMismatch) {
 		return progressErr
 	}
 	after, err := c.Membership(ctx, p.Group, kafkaport.GroupProtocol(p, r.Fingerprint))
@@ -204,8 +203,7 @@ func (r *StatusReport) observed(before, after kafkaport.Membership, p plan.Plan)
 
 func (s *Service) fileStatus(p plan.Plan, limits config.Worker, r *StatusReport) error {
 	info, err := s.files.Source(p, r.Fingerprint, limits)
-	var mismatch *plan.FingerprintMismatch
-	if err != nil && !errors.As(err, &mismatch) {
+	if err != nil && !errors.Is(err, plan.ErrFingerprintMismatch) {
 		return err
 	}
 	r.Source.File = fileSummary(info.ArchiveInspection)

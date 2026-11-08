@@ -72,8 +72,7 @@ func (s *Store) Append(id string, record avro.Record) (Segment, error) {
 		return Segment{}, s.fail(errors.New("archive segment is not open"))
 	}
 	if err := f.writer.Append(record); err != nil {
-		var invalid *avro.InvalidRecord
-		if errors.As(err, &invalid) || errors.Is(err, avro.ErrRotationRequired) {
+		if errors.Is(err, avro.ErrInvalidRecord) || errors.Is(err, avro.ErrRotationRequired) {
 			return segment(f.writer), err
 		}
 		return segment(f.writer), s.fail(err)

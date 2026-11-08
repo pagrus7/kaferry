@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 
@@ -71,9 +72,7 @@ func (p *Planner) connections(inline []sql.Connection, profiles Profiles) (Profi
 		if !validAlias(alias) {
 			return nil, fmt.Errorf("configuration: connection aliases must start with an ASCII letter or underscore and contain only ASCII letters, digits and underscores")
 		}
-		copy := make(map[string]string, len(properties))
-		maps.Copy(copy, properties)
-		connections[alias] = copy
+		connections[alias] = maps.Clone(properties)
 	}
 	seen := make(map[string]sql.Position)
 	for _, connection := range inline {
@@ -109,9 +108,7 @@ func validAlias(alias string) bool {
 	return true
 }
 
-type FingerprintMismatch struct{}
-
-func (*FingerprintMismatch) Error() string { return "query fingerprint mismatch" }
+var ErrFingerprintMismatch = errors.New("query fingerprint mismatch")
 
 // Fingerprint receives verified Kafka identities at startup. File identities stay in
 // progress metadata; moving a file must not change the query identity.

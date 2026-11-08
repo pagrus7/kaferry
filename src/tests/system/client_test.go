@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -19,21 +18,9 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func broker(t *testing.T) string {
-	t.Helper()
-	value := os.Getenv("KAFKA_TEST_BROKERS")
-	if value == "" {
-		t.Skip("set KAFKA_TEST_BROKERS to a disposable broker")
-	}
-	return value
-}
-
 func TestTopicToTopicSlice(t *testing.T) {
 	// Given
-	a := admin(t)
-	source := topic(t, a, 2)
-	destination := topic(t, a, 3)
-	p := producer(t)
+	a, source, destination, p := pairedTopics(t, 2, 3)
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	for i := range 40 {
 		publish(t, p, &kgo.Record{Topic: source, Partition: int32(i % 2), Key: []byte(fmt.Sprintf("key-%d", i%7)), Value: []byte(fmt.Sprintf("value-%d", i)), Headers: []kgo.RecordHeader{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, Timestamp: stamp})

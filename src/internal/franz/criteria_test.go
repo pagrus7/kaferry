@@ -1,6 +1,7 @@
 package franz
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -77,10 +78,10 @@ func newPartitionInitialization(t *testing.T, windowed bool) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, source.Close()) }()
 	life := &lifecycleMock{}
-	require.NoError(t, source.Start(life, nil))
+	require.NoError(t, source.Start(context.Background(), life, nil))
 	ctx := componentContext(t)
 	for len(life.assignments) == 0 && ctx.Err() == nil {
-		_, checkErr := source.Poll(20 * time.Millisecond)
+		_, checkErr := source.Poll(context.Background(), 20*time.Millisecond)
 		require.NoError(t, checkErr)
 	}
 	require.NotEmpty(t, life.assignments)
@@ -93,7 +94,7 @@ func newPartitionInitialization(t *testing.T, windowed bool) {
 	require.NoError(t, newProducer.ProduceSync(ctx, &kgo.Record{Topic: "input", Partition: 1, Value: []byte("new partition first"), Timestamp: time.Now().Add(-time.Minute)}).FirstErr())
 	var position int64 = -1
 	for position < 0 && ctx.Err() == nil {
-		event, checkErr := source.Poll(20 * time.Millisecond)
+		event, checkErr := source.Poll(context.Background(), 20*time.Millisecond)
 		require.NoError(t, checkErr)
 		if event.Input != nil && event.Input.Cursor.Partition == 1 {
 			position = event.Input.Cursor.Position

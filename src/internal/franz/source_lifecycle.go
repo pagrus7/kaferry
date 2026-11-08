@@ -8,11 +8,11 @@ import (
 	core "github.com/pagrus7/kaferry/src/internal/copy"
 )
 
-func (s *Source) lifecycle(event lifecycleEvent) error {
+func (s *Source) lifecycle(ctx context.Context, event lifecycleEvent) error {
 	if event.revoke {
 		return s.revoke(event)
 	}
-	ctx, cancel := context.WithTimeout(s.query, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := s.validateAssignment(ctx, event.ids); err != nil {
 		event.answer <- lifecycleAnswer{err: err}

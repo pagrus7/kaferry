@@ -204,7 +204,7 @@ func TestCLISQLDiagnosticsIdentifyInputWithoutCreatingOutput(t *testing.T) {
 			require.NotContains(t, stderr.String(), "sensitive_SENTINEL_5c27")
 			{
 				_, err := os.Stat(destination)
-				require.True(t, os.IsNotExist(err))
+				require.ErrorIs(t, err, os.ErrNotExist)
 			}
 			checkpoints, err := filepath.Glob(filepath.Join(dir, "*.json"))
 			require.NoError(t, err)
@@ -224,7 +224,7 @@ func TestSQLDiagnosticSourceLabelsEscapeControlCharacters(t *testing.T) {
 	want := strconv.Quote(source) + ": line 2, column 8: invalid value\n"
 	require.Equal(t, want, output.String())
 	require.EqualValues(t, 1, strings.Count(output.String(), "\n"))
-	require.False(t, strings.ContainsRune(output.String(), '\x1b'))
+	require.NotContains(t, output.String(), "\x1b")
 }
 
 func TestCLIRejectsReadFailureAfterValidSQL(t *testing.T) {

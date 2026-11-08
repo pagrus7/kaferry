@@ -28,16 +28,16 @@ type Lifecycle interface {
 // changes while intake is paused. Close releases resources without saving progress.
 type Source interface {
 	// Start installs callbacks; Observer may be nil.
-	Start(Lifecycle, Observer) error
+	Start(context.Context, Lifecycle, Observer) error
 	// Poll returns owned record buffers that remain valid after later polls.
 	// An empty event means no input is available. If both fields are set, the
 	// runner handles Input before EOF. The timeout bounds waiting for input,
 	// not synchronous metadata, lifecycle or filesystem operations.
-	Poll(time.Duration) (Event, error)
+	Poll(context.Context, time.Duration) (Event, error)
 	// Pause suppresses input for this partition until resumed, while retaining ownership.
 	Pause(int32, bool) error
 	// HighWatermark returns Kafka's replicated end; archive sources do not support it.
-	HighWatermark(int32) (int64, error)
+	HighWatermark(context.Context, int32) (int64, error)
 	Close() error
 }
 
@@ -45,13 +45,16 @@ type Source interface {
 // Delivery reports, rather than successful submission or flushing, confirm output.
 type Sink interface {
 	// Submit accepts a record on nil and may retain its buffers until its delivery
-	// outcome. Busy means no acceptance: retry the same record and token later.
+	// outcome. ErrBusy means no acceptance: retry the same record and token later.
 	// RecordError identifies a rejected, unsent record that policy may skip.
 	// Other errors stop execution; they do not establish that output is absent.
-	Submit(Record, Token) error
+	// Accepted writes may continue after ctx is canceled so shutdown can drain
+	// their deliveries.
+	Submit(context.Context, Record, Token) error
 	// Flush requests completion of accepted writes. It may block for archive sync
 	// or return while Kafka deliveries are pending; callers still drain Deliveries.
-	Flush() error
+	// A canceled ctx does not discard already accepted writes.
+	Flush(context.Context) error
 	// Deliveries stays open during execution. Reports may arrive out of order or
 	// after revocation; the runner ignores tokens from earlier assignments. A Fatal
 	// report stops execution without matching a token. Delivery errors are not skippable.

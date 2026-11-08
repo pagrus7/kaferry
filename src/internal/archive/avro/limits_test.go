@@ -96,8 +96,7 @@ func TestRejectedEncodedRecordPreservesEarlierAndLaterRecords(t *testing.T) {
 	rejected.Key, rejected.Headers = nil, nil
 	rejected.Value = make([]byte, c.limit)
 	// When encoding fails its limit, then no pending data is overwritten or published.
-	var invalid *InvalidRecord
-	require.ErrorAs(t, w.Append(rejected), &invalid)
+	require.ErrorIs(t, w.Append(rejected), ErrInvalidRecord)
 	require.Equal(t, before, output.Bytes())
 	require.EqualValues(t, 1, w.Count())
 	// Then a later valid record uses clean scratch space and both admitted records survive.

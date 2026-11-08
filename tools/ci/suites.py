@@ -37,6 +37,8 @@ CI_EXTRA = {
 
 def command(name, go='go', output='-json', timeout=None, packages='./src/tests/system'):
     tags, pattern, race = GO_SUITES[name]
+    if name == 'soak' and packages == './src/tests/system':
+        packages = './src/tests/compatibility'
     result = [go, 'test', '-count=1']
     if output:
         result.append(output)

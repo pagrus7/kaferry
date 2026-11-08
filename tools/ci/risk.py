@@ -3,8 +3,8 @@
 import json
 import os
 from pathlib import Path
-import re
-import subprocess
+
+from tools.ci.pr_diff import changed_paths
 
 
 def suites(paths):
@@ -17,10 +17,7 @@ def suites(paths):
 def select(event):
     pr = event['pull_request']
     base, head = pr['base']['sha'], pr['head']['sha']
-    if not all(re.fullmatch('[a-f0-9]{40}', sha) for sha in (base, head)):
-        raise ValueError('Expected full base and head commit SHAs')
-    paths = subprocess.check_output(['git', 'diff', '--no-renames', '--name-only',
-                                     f'{base}...{head}'], text=True).splitlines()
+    paths = changed_paths(event)
     return {'base': base, 'head': head, 'paths': paths, 'suites': suites(paths)}
 
 

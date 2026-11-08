@@ -92,8 +92,8 @@ func TestDeferredRecordRetainsFollowingEOFUntilBudgetIsReleased(t *testing.T) {
 	r, _, sink, store, _ := fixture(t)
 	r.limits.ByteCap, r.limits.PartitionByteCap = 150, 150
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
-	require.NoError(t, r.input(incoming(0, 0, 30)))
-	require.NoError(t, r.input(incoming(0, 1, 200)))
+	require.NoError(t, r.input(context.Background(), incoming(0, 0, 30)))
+	require.NoError(t, r.input(context.Background(), incoming(0, 1, 200)))
 
 	// When an already queued EOF arrives behind the held record.
 	err := r.eof(Cursor{Partition: 0, Position: 2})
@@ -107,7 +107,7 @@ func TestDeferredRecordRetainsFollowingEOFUntilBudgetIsReleased(t *testing.T) {
 	sink.reports <- Delivery{Token: sink.writes[0]}
 	require.NoError(t, r.deliveries())
 	require.NoError(t, r.commit(r.ids()))
-	err = r.admitDeferred()
+	err = r.admitDeferred(context.Background())
 
 	// Then both input and EOF are consumed in order, with the second delivery still pending.
 	if err != nil || len(sink.writes) != 2 || r.flow.deferred != nil || r.partitions[0].stop == nil || r.readyToExit() {

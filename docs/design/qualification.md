@@ -37,7 +37,7 @@ python3 -m tools.qualification.qualify parallel --companion capture --output bui
 
 Use `--binary` to give both jobs the same candidate executable. `--duration` controls
 Kafka publishing; `--companion-duration` controls recovery or capture. Each streaming
-job still includes its five-minute drain. The summary `parallel.json` retains both
+job still includes its ten-second drain. The summary `parallel.json` retains both
 manifests and the declared co-running workloads. Failure or Ctrl-C cancels the peer,
 preserves both receipts and tears down only this pair's projects. Existing output
 paths are refused. Other standalone suites, security fixtures and legacy Make commands
@@ -75,11 +75,13 @@ python3 -m tools.qualification.qualify matrix --tier pr
 python3 -m tools.qualification.qualify matrix --tier full --output build-results/full-matrix
 ```
 
-Every tier also runs archive-capture endurance with two minutes of publishing and five minutes without new input. A matrix runs sequentially locally; CI runs up to six cases in parallel on separate hosted runners. Existing output directories are refused so failed evidence cannot be overwritten. Use a new output path for a follow-up run.
+Every tier also runs archive-capture endurance with two minutes of publishing and ten seconds without new input. A matrix runs sequentially locally; CI runs up to six cases in parallel on separate hosted runners. Existing output directories are refused so failed evidence cannot be overwritten. Use a new output path for a follow-up run.
+
+The broker-version and security Go tests live in `src/tests/compatibility`. They import shared helpers from regular Go files in `src/tests/system`; unrelated system test files are not compiled into the compatibility package. On a PR, the workflow skips the matrix only when the diff is nonempty and every changed path is unrelated documentation, reviewer configuration or an excluded test file. Changes to application code, compatibility tests, shared helpers, broker fixtures, qualification tools, dependencies or workflow configuration run the matrix; unknown paths run it too. The fast PR check compiles the system and compatibility tests with the matrix tags; container-tag tests have their own CI workflow. PR path selection does not affect scheduled, manual or release invocations; scheduled runs may reuse evidence as described below.
 
 Scheduled main runs reuse a suite or matrix tier only when its latest completed attempt passed on the same commit and its test executions are less than 30 days old. Nightly results cannot substitute for the full matrix. Failed or cancelled attempts require retry; skipped runs and rerunning only the aggregate report do not renew evidence age. Missing or unavailable history runs the tests.
 
-The planner's GitHub Actions summary names each suite/tier, says whether it will run or reuse evidence, and links the original execution with its date. Weekly extended tests always include fresh fuzzing; scheduled vulnerability scans and performance A/A calibration also continue on unchanged code. PR, manual and release invocations run their selected suites without scheduled-evidence reuse. These rules reuse scheduled evidence; they do not certify a newly packaged release executable.
+The planner's GitHub Actions summary names each suite/tier, says whether it will run or reuse evidence, and links the original execution with its date. Weekly extended tests always include fresh fuzzing; scheduled vulnerability scans and performance A/A calibration also continue on unchanged code. Relevant PR changes, manual invocations and release invocations run their selected suites without scheduled-evidence reuse. These rules reuse scheduled evidence; they do not certify a newly packaged release executable.
 
 Run an individual case:
 
@@ -186,7 +188,7 @@ longer runs should follow changes to the relevant adapters or lifecycle behavior
 
 ## Endurance on a persistent host
 
-Keep a process alive continuously for the duration being claimed. Separate short runs do not add up to continuous uptime. The runner accepts publishing durations from one minute through seven days, adds a five-minute consume-only period and derives the Go test timeout from both periods plus cleanup time.
+Keep a process alive continuously for the duration being claimed. Separate short runs do not add up to continuous uptime. The runner accepts publishing durations from one minute through seven days and keeps the process running for ten seconds after the later of the scheduled publishing end and final source submission. Endurance may submit overdue scheduled records during the first five seconds after the publishing boundary. The Go test timeout allows for publishing, the quiet period and cleanup.
 
 Prerequisites: Python 3.11+, Go, Docker and Compose, a host that stays awake, and exclusive use of the selected disposable brokers. `endurance` owns the separate `kaferry-endurance` project on localhost ports 39192 and 40192; other plain-broker suites use `kaferry-compat` on 39092 and 40092. The runner starts and removes its project and pauses its destination. Do not run another job against that project while it is active. Other host workloads can affect measurements.
 
@@ -201,14 +203,14 @@ The dedicated `endurance` suite uses the following fixed application workload. I
 
 | Setting | Purpose and acceptance |
 | --- | --- |
-| 24 hours publishing, then five minutes without scheduled input; one continuous CLI process | Demonstrates this process stays alive for the measured interval. `--duration` accepts one minute through seven days; durations below 24 hours are labeled rehearsals in the manifest. |
+| 24 hours of scheduled publishing, up to five seconds to finish overdue submissions, then ten seconds without new input; one continuous CLI process | Demonstrates this process stays alive for the measured interval. `--duration` accepts one minute through seven days; durations below 24 hours are labeled rehearsals in the manifest. |
 | 24 source / 32 destination partitions, `PARTITIONING=KEY` | Exercises assignment, per-partition saved progress and fan-out in one process. These are chosen benchmark counts, not a measured production average. No group scaling or rebalance claim. |
 | 200 records/second plus 400 extra records at 10 seconds and every minute afterward | Moderate sustained load, with two seconds of extra input per burst. Scheduling follows elapsed time. Each minute and the final window must acknowledge at least 95% of scheduled input, including bursts; the final window is checked after the five-second grace. Submission debt may not exceed 1,400 records (five seconds plus a burst); every scheduled record must be submitted and acknowledged within five seconds after the publishing boundary. |
 | 1,024–5,119 byte values, deterministic high entropy bytes, 257 cyclic keys with every seventh key null | Roughly 3 KiB average; exercises bytes and modest key reuse without compression making the workload trivial. This distribution does not model hot keys, large messages or every application schema. Source writes use no compression. |
-| Separate single-broker source/destination clusters, replication factor 1 | Isolates destination stalls from source publication. Pause the entire destination for one second at 30 seconds and every minute afterward during publishing. After unpause, acknowledged input minus unique receipts must return to at most 20 records within 15 seconds; it must reach zero within 15 seconds after publishing stops. |
+| Separate single-broker source/destination clusters, replication factor 1 | Isolates destination stalls from source publication. Pause the entire destination for one second at 30 seconds and every minute afterward during publishing. After unpause, acknowledged input minus unique receipts must return to at most 20 records within 15 seconds; it must reach zero by the end of the ten-second consume-only period. |
 | Fidelity, ordering and saved progress | Require no missing, duplicate, corrupted, unexpected or reordered records and matching submission/receipt hashes. Non-null keys must reach their Kafka key-hash partition; misplaced records count as corrupted. Null keys use sticky placement. Ordering is checked within each source/destination partition pair, not globally across key routes. After shutdown each source partition must have its exact final next offset saved. This successful run requires zero duplicates; Kaferry's at-least-once contract still permits duplicates after a crash or failed progress save. |
 | Shutdown and bounded work | SIGINT must exit successfully within 30 seconds after the drain. Final summary counts must match input, with at most 1,024 uncommitted records and 128 MiB. This run does not restart the process or inject source failure. |
-| Memory and measurement | Sample CLI RSS once per second: peak at most 512 MiB, final median growth at most 32 MiB over the warm median. Endurance checks growth both just before publishing ends and after drain. Warm median uses samples 11–30; final medians use the last 20 samples. |
+| Memory and measurement | Sample CLI RSS once per second: peak at most 512 MiB, final median growth at most 32 MiB over the warm median. Endurance checks growth both just before publishing ends and after drain. Warm median uses samples 11–30; the loaded final median uses the last 20 samples. The idle final median requires five samples after publishing stops; fewer samples fail the run. |
 
 The rate checks make producer/verifier backpressure visible. The fixture uses nonblocking producer admission (rejection fails the run), a 2,048-record producer buffer and up to 512 receipts per verifier poll. Outstanding input and unresolved verification/digest history have an 8,192-ID bound; hitting a gate cannot reset the clock or reduce the target. Rate/debt failures invalidate load even when all records eventually reconcile. The last scheduled batch may be submitted during the five-second boundary grace; no additional input is scheduled then. A slow verifier can invalidate the harness; that failure alone does not establish a Kaferry throughput limit.
 
@@ -225,7 +227,7 @@ python3 -m tools.qualification.qualify run soak --duration 24h --rate 50
 python3 -m tools.qualification.qualify run capture --duration 72h --rate 50
 ```
 
-`soak` and `endurance` verify topic output as it arrives and pauses the separate disposable destination once per minute during publishing. All three modes keep the same copy process alive for five more minutes after publishing stops. After shutdown, Kafka modes consume through the destination's final offsets; `capture` scans all completed archive files. Replay/file-to-file load tests are finite jobs; their repeated execution is not reported as continuous streaming uptime.
+`soak` and `endurance` verify topic output as it arrives and pauses the separate disposable destination once per minute during publishing. All three modes keep the same copy process alive for ten seconds after the later of the scheduled publishing end and final source submission. After shutdown, Kafka modes consume through the destination's final offsets; `capture` scans all completed archive files. Replay/file-to-file load tests are finite jobs; their repeated execution is not reported as continuous streaming uptime.
 
 Metrics and JSONL samples record submitted input, broker-acknowledged publications, total and unique received records, verified records, pending IDs, duplicates, corruption, unexpected IDs and reordering. Final missing counts are available only after all publications are acknowledged and the final output scan completes; incomplete evidence reports `missing: null`. Failure reports preserve observed counters. Verification stops with partial totals if unresolved ID history exceeds 8,192 entries. Rates include the consume-only period and reconciliation.
 

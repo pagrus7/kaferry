@@ -96,8 +96,7 @@ func (c *Capture) createPartition(record avro.Record) (partition, error) {
 }
 func (c *Capture) appendFailure(p partition, err error) error {
 
-	var invalid *avro.InvalidRecord
-	if !errors.As(err, &invalid) {
+	if !errors.Is(err, avro.ErrInvalidRecord) {
 		return c.fail(err)
 	}
 	if p.segment.Records == 0 {

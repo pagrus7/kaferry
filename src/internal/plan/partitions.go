@@ -87,12 +87,11 @@ func (f *PartitionFilter) Select(available []int32) ([]int32, error) {
 			}
 		}
 	}
-	selected := make([]int32, 0, len(available))
-	for _, id := range available {
-		if f.Matches(id) {
-			selected = append(selected, id)
-		}
+	selected := slices.Clone(available)
+	if selected == nil {
+		selected = []int32{}
 	}
+	selected = slices.DeleteFunc(selected, func(id int32) bool { return !f.Matches(id) })
 	slices.Sort(selected)
 	return selected, nil
 }

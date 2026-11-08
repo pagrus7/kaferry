@@ -137,8 +137,7 @@ func TestInvalidFirstSourceStopsWithoutAcknowledging(t *testing.T) {
 	r.Source.Cluster = ""
 	err := c.Append(r)
 	require.Error(t, err)
-	var invalid *avro.InvalidRecord
-	require.False(t, errors.As(err, &invalid), "identity mistakes are not SQL-skippable resource errors")
+	require.NotErrorIs(t, err, avro.ErrInvalidRecord, "identity mistakes are not SQL-skippable resource errors")
 	require.ErrorIs(t, c.Flush(), err)
 	require.NoError(t, c.Close())
 	_ = openStore(t, root, NativeFiles{}, checkpoint.DurableWriter{})
@@ -168,8 +167,7 @@ func TestAppendIOAndCallerErrorsCannotBeSkipped(t *testing.T) {
 			// When submission fails, then it poisons the writer rather than becoming SQL-skippable.
 			_, err = s.Append(part.ID, r)
 			require.Error(t, err)
-			var skippable *avro.InvalidRecord
-			require.False(t, errors.As(err, &skippable))
+			require.NotErrorIs(t, err, avro.ErrInvalidRecord)
 			fs.hook = nil
 			require.ErrorIs(t, s.Checkpoint(), err)
 		})

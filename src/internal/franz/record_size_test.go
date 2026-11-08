@@ -51,7 +51,7 @@ func TestProducerBoundaryRefusesOversizeBeforeAsyncSubmission(t *testing.T) {
 	}{{926, false}, {927, true}, {930, true}} {
 		record := core.Record{Value: make([]byte, tc.length)}
 		// When a record touches the ceiling, including the enclosing bytes prefix.
-		err := sink.Submit(record, core.Token{})
+		err := sink.Submit(context.Background(), record, core.Token{})
 		// Then any oversize result is synchronously skippable; accepted records deliver successfully.
 		if tc.rejected {
 			var rejected *core.RecordError

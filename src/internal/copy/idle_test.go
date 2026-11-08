@@ -74,7 +74,7 @@ func TestDelayedHandoffDistinguishesPartitionCompletionFromIdleExit(t *testing.T
 	}
 	trigger := incoming(0, 0, 1)
 	trigger.Record.TimestampMS = &stamp
-	require.NoError(t, a.input(trigger))
+	require.NoError(t, a.input(context.Background(), trigger))
 	require.Nil(t, a.partitions[1].stop, "fixture completed the partition intended for handoff")
 
 	// When P1 is revoked from A and its assignment to B is delayed past idle_exit.

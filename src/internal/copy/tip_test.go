@@ -2,6 +2,7 @@ package copy
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 	"github.com/stretchr/testify/require"
@@ -17,7 +18,7 @@ type watermarkSource struct {
 	calls   int
 }
 
-func (s *watermarkSource) HighWatermark(int32) (int64, error) {
+func (s *watermarkSource) HighWatermark(context.Context, int32) (int64, error) {
 	s.calls++
 	return s.high, s.failure
 }
@@ -32,14 +33,14 @@ func TestTipSamplingRetriesWithoutStartingWaitOrBlockingOtherPartitions(t *testi
 	for _, p := range r.partitions {
 		p.atTip = true
 	}
-	query := &watermarkSource{testSource: source, failure: &Recoverable{Err: errors.New("timeout")}}
+	query := &watermarkSource{testSource: source, failure: MarkRecoverable(errors.New("timeout"))}
 	r.source = query
 
 	// When sampling during the outage and checking again before the retry delay.
-	err := r.tips()
+	err := r.tips(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, 1, query.calls, "watermark queries were not interleaved with polling")
-	err = r.tips()
+	err = r.tips(context.Background())
 
 	// Then both partitions are attempted once; neither H nor tip_wait is started.
 	if err != nil || query.calls != 2 {
@@ -54,9 +55,9 @@ func TestTipSamplingRetriesWithoutStartingWaitOrBlockingOtherPartitions(t *testi
 	// When the delay elapses and the source recovers with an empty watermark.
 	clock.Sleep(time.Second)
 	query.failure = nil
-	err = r.tips()
+	err = r.tips(context.Background())
 	require.NoError(t, err)
-	err = r.tips()
+	err = r.tips(context.Background())
 
 	// Then each empty partition completes without starting a transaction wait.
 	if err != nil || query.calls != 4 {
@@ -80,7 +81,7 @@ func TestTipSamplingPermanentFailuresStopImmediately(t *testing.T) {
 	r.source = &watermarkSource{testSource: source, failure: failure}
 
 	// When sampling the watermark.
-	err := r.tips()
+	err := r.tips(context.Background())
 
 	// Then the permanent failure is returned without starting a retry.
 	if !errors.Is(err, failure) || !r.partitions[0].sampling.next.IsZero() {
@@ -96,7 +97,7 @@ func TestTipSamplingBackoffCapsResetsAndLimitsLogs(t *testing.T) {
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{}, Window: plan.Window{Upper: &hi}}}))
 	p := r.partitions[0]
 	p.atTip = true
-	query := &watermarkSource{testSource: source, failure: &Recoverable{Err: errors.New("leader unavailable")}}
+	query := &watermarkSource{testSource: source, failure: MarkRecoverable(errors.New("leader unavailable"))}
 	r.source = query
 	var logs bytes.Buffer
 	r.log = slog.New(slog.NewTextHandler(&logs, nil))
@@ -104,7 +105,7 @@ func TestTipSamplingBackoffCapsResetsAndLimitsLogs(t *testing.T) {
 	for attempt, seconds := range []int{1, 2, 4, 8, 16, 30, 30, 30} {
 		// When the next scheduled attempt fails.
 		delay := time.Duration(seconds) * time.Second
-		err := r.tips()
+		err := r.tips(context.Background())
 
 		// Then delay grows to 30s; suppressed polls do not query or start tip_wait.
 		if err != nil || query.calls != attempt+1 || p.sampling.delay != delay || !p.sampling.next.Equal(clock.Now().Add(delay)) || p.high != nil || !p.waitStarted.IsZero() {
@@ -113,7 +114,7 @@ func TestTipSamplingBackoffCapsResetsAndLimitsLogs(t *testing.T) {
 
 		// When polling before the retry deadline.
 		clock.Sleep(delay - time.Millisecond)
-		err = r.tips()
+		err = r.tips(context.Background())
 
 		// Then an early poll makes no watermark request.
 		if err != nil || query.calls != attempt+1 {
@@ -124,7 +125,7 @@ func TestTipSamplingBackoffCapsResetsAndLimitsLogs(t *testing.T) {
 
 	// When the leader recovers at the next permitted sample.
 	query.failure = nil
-	err := r.tips()
+	err := r.tips(context.Background())
 
 	// Then retry state resets, the partition completes, and logs remain bounded.
 	if err != nil || p.stop == nil || p.sampling.delay != 0 || p.sampling.attempts != 0 || !p.sampling.next.IsZero() || !p.sampling.logged.IsZero() || !p.waitStarted.IsZero() {
@@ -133,7 +134,7 @@ func TestTipSamplingBackoffCapsResetsAndLimitsLogs(t *testing.T) {
 	if strings.Count(logs.String(), "tip watermark query retrying") != 2 || strings.Count(logs.String(), "tip watermark query recovered") != 1 {
 		t.Fatal("retry diagnostics not rate limited", logs.String())
 	}
-	if !strings.Contains(logs.String(), `reason="leader unavailable"`) || !strings.Contains(logs.String(), "attempt=1") {
+	if !strings.Contains(logs.String(), "leader unavailable") || !strings.Contains(logs.String(), "attempt=1") {
 		t.Fatal("retry diagnostics omit cause/attempt", logs.String())
 	}
 }

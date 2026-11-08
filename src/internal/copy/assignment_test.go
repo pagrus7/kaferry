@@ -1,6 +1,7 @@
 package copy
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,8 +11,8 @@ func TestReassignedPartitionResumesWithFreshRunnerState(t *testing.T) {
 	// Given a partition paused by its uncommitted record cap.
 	r, source, sink, _, _ := fixture(t)
 	r.limits.RecordCap, r.limits.PartitionRecordCap = 1, 1
-	require.NoError(t, source.Start(r, nil))
-	require.NoError(t, r.input(incoming(0, 0, 1)))
+	require.NoError(t, source.Start(context.Background(), r, nil))
+	require.NoError(t, r.input(context.Background(), incoming(0, 0, 1)))
 	require.NoError(t, r.pause())
 	require.True(t, source.paused[0], "fixture did not reach the pause cap")
 
@@ -21,7 +22,7 @@ func TestReassignedPartitionResumesWithFreshRunnerState(t *testing.T) {
 	require.NoError(t, source.Pause(0, false))
 	err = r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}})
 	require.NoError(t, err)
-	err = r.input(incoming(0, 0, 1))
+	err = r.input(context.Background(), incoming(0, 0, 1))
 
 	// Then the new generation publishes again and late old delivery is fenced.
 	if err != nil || source.paused[0] || len(sink.writes) != 2 || sink.writes[0].Generation == sink.writes[1].Generation {

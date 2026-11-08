@@ -71,11 +71,11 @@ func (c *Committer) Save(ctx context.Context, cursors []core.Cursor) (map[int32]
 func classifyCommit(err error) error {
 	for _, recoverable := range []error{kerr.RebalanceInProgress, kerr.IllegalGeneration, kerr.UnknownMemberID, kerr.CoordinatorNotAvailable, kerr.NotCoordinator, kerr.CoordinatorLoadInProgress, kerr.RequestTimedOut, context.DeadlineExceeded} {
 		if errors.Is(err, recoverable) {
-			return &core.Recoverable{Err: err}
+			return core.MarkRecoverable(err)
 		}
 	}
 	if brokerUnreachable(err) || kgo.IsRetryableBrokerErr(err) {
-		return &core.Recoverable{Err: err}
+		return core.MarkRecoverable(err)
 	}
 	return err
 }
@@ -112,7 +112,7 @@ func (c *Committer) snapshot(cursors []core.Cursor) (map[string]map[int32]kgo.Ep
 func (c *Committer) metadataHook(encoded map[int32]string) func(*kmsg.OffsetCommitRequest) error {
 	return func(req *kmsg.OffsetCommitRequest) error {
 		if req.Group != c.group || req.MemberID == "" || req.Generation < 0 {
-			return &core.Recoverable{Err: fmt.Errorf("consumer group ownership unavailable for commit")}
+			return core.MarkRecoverable(fmt.Errorf("consumer group ownership unavailable for commit"))
 		}
 		for t := range req.Topics {
 			if !sameTopic(req.Topics[t].Topic, req.Topics[t].TopicID, c.topicID, c.topic) {

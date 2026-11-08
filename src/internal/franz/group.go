@@ -196,7 +196,7 @@ func validateSavedWindows(saved map[int32]kafkaport.SavedProgress, fp string, wi
 		}
 	}
 	if mismatch {
-		return saved, &kafkaport.Conflict{Err: &plan.FingerprintMismatch{}}
+		return saved, &kafkaport.Conflict{Err: plan.ErrFingerprintMismatch}
 	}
 	return saved, nil
 }

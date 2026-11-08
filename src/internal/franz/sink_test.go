@@ -59,7 +59,7 @@ func TestProducerHeadroomCoversPromiseBeforeClientUnbuffering(t *testing.T) {
 	p := &delayedUnbufferingProducer{maxRecords: optionsClient.OptValue(kgo.MaxBufferedRecords).(int64), maxBytes: optionsClient.OptValue(kgo.MaxBufferedBytes).(int64)}
 	s.client = p
 	r := core.Record{Value: make([]byte, 512)}
-	require.NoError(t, s.Submit(r, core.Token{}))
+	require.NoError(t, s.Submit(context.Background(), r, core.Token{}))
 	callback := p.promises[0]
 	promiseReturned, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var released sync.Once
@@ -75,7 +75,7 @@ func TestProducerHeadroomCoversPromiseBeforeClientUnbuffering(t *testing.T) {
 	}()
 	await(t, promiseReturned, "producer promise")
 	// When the core submits in that transition window, then reserved headroom prevents ErrMaxBuffered.
-	require.NoError(t, s.Submit(r, core.Token{}))
+	require.NoError(t, s.Submit(context.Background(), r, core.Token{}))
 	releasePromise()
 	await(t, done, "producer unbuffering")
 	require.Len(t, p.promises, 2, "client rejected correctly admitted record")
@@ -105,10 +105,8 @@ func (p *producerMock) Close() {
 }
 func sinkFixture(t *testing.T) (*Sink, *producerMock) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
 	client := &producerMock{}
-	s := &Sink{client: client, topic: "output", settings: settings{queueRecords: 1, queueBytes: 1000000, messageBytes: 1000000, delivery: 40 * time.Millisecond}, clock: core.RealClock{}, log: quietLogger(), reports: make(chan core.Delivery, 2), ctx: ctx, cancel: cancel, lastMetadata: time.Now()}
+	s := &Sink{client: client, topic: "output", settings: settings{queueRecords: 1, queueBytes: 1000000, messageBytes: 1000000, delivery: 40 * time.Millisecond}, clock: core.RealClock{}, log: quietLogger(), reports: make(chan core.Delivery, 2), cancel: func() {}, lastMetadata: time.Now()}
 	return s, client
 }
 func TestSinkGatesWorkAndUsesSubmissionTimeForDelivery(t *testing.T) {
@@ -118,11 +116,10 @@ func TestSinkGatesWorkAndUsesSubmissionTimeForDelivery(t *testing.T) {
 	r := core.Record{Key: []byte{}, Value: nil, TimestampMS: &stamp, Headers: []core.Header{{Name: "a\x00b", Value: nil}, {Name: string([]byte{255}), Value: []byte{}}}}
 	token := core.Token{Partition: 2}
 	before := time.Now()
-	require.NoError(t, s.Submit(r, token))
+	require.NoError(t, s.Submit(context.Background(), r, token))
 	after := time.Now()
 	// When another record arrives before the first delivery, then it returns Busy without calling the client.
-	var busy *core.Busy
-	if err := s.Submit(r, token); !errors.As(err, &busy) || len(client.records) != 1 {
+	if err := s.Submit(context.Background(), r, token); !errors.Is(err, core.ErrBusy) || len(client.records) != 1 {
 		t.Fatal("full producer admitted work", err)
 	}
 	deadline, ok := client.contexts[0].Deadline()
@@ -140,19 +137,19 @@ func TestSinkGatesWorkAndUsesSubmissionTimeForDelivery(t *testing.T) {
 	if report.Token != token || !errors.Is(report.Err, failure) || report.Fatal || s.records.Load() != 0 || s.bytes.Load() != 0 {
 		t.Fatal("write failure did not settle its work", report)
 	}
-	require.NoError(t, s.Submit(r, token), "completed work retained producer capacity")
+	require.NoError(t, s.Submit(context.Background(), r, token), "completed work retained producer capacity")
 }
 func TestSinkRejectsOnlyProvenUnsentRecords(t *testing.T) {
 	// Given a producer with a small size bound and known timestamp acceptance limits.
 	s, client := sinkFixture(t)
 	s.settings.messageBytes = 1000
-	if err := s.Submit(core.Record{Value: make([]byte, 1001)}, core.Token{}); err == nil || len(client.records) != 0 {
+	if err := s.Submit(context.Background(), core.Record{Value: make([]byte, 1001)}, core.Token{}); err == nil || len(client.records) != 0 {
 		t.Fatal("oversized record sent", err)
 	}
 	s.configuration = map[string]string{"message.timestamp.type": "CreateTime", "message.timestamp.before.max.ms": "1000"}
 	stamp := time.Now().Add(-time.Hour).UnixMilli()
 	// When a timestamp is proven too old locally, then the record error permits the explicit SKIP policy.
-	err := s.Submit(core.Record{TimestampMS: &stamp}, core.Token{})
+	err := s.Submit(context.Background(), core.Record{TimestampMS: &stamp}, core.Token{})
 	var recordError *core.RecordError
 	if !errors.As(err, &recordError) || recordError.Class != "rejected_timestamp" || len(client.records) != 0 {
 		t.Fatal("unsafe local timestamp classification", err)
@@ -161,8 +158,8 @@ func TestSinkRejectsOnlyProvenUnsentRecords(t *testing.T) {
 func TestSinkCloseDoesNotWaitForUndrainedDeliveryReports(t *testing.T) {
 	// Given a pending write, a coalesced flush, and a delivery channel the core has not read.
 	s, client := sinkFixture(t)
-	require.NoError(t, s.Submit(core.Record{}, core.Token{}))
-	require.NoError(t, s.Flush())
+	require.NoError(t, s.Submit(context.Background(), core.Record{}, core.Token{}))
+	require.NoError(t, s.Flush(context.Background()))
 	// When closing, then cancellation releases the flush and callback without needing the core to drain reports.
 	done := make(chan struct{})
 	go func() { s.Close(); close(done) }()
@@ -174,6 +171,9 @@ func TestSinkCloseDoesNotWaitForUndrainedDeliveryReports(t *testing.T) {
 	if !client.closed {
 		t.Fatal("producer not closed")
 	}
+	require.ErrorIs(t, receiveDelivery(t, s).Err, context.Canceled)
+	require.Zero(t, s.records.Load())
+	require.Zero(t, s.bytes.Load())
 }
 
 type sinkClock struct{ now time.Time }
@@ -216,7 +216,7 @@ func TestSinkRefreshesRoutingOnIntervalWithoutBlockingOnMetadataFailure(t *testi
 		clock.now = start.Add(time.Duration(step.seconds) * time.Second)
 		count, failure = step.partitions, step.failure
 		// When records arrive before and after each refresh interval, including an outage.
-		require.NoError(t, s.Submit(core.Record{}, core.Token{}), "optional metadata check prevented publishing")
+		require.NoError(t, s.Submit(context.Background(), core.Record{}, core.Token{}), "optional metadata check prevented publishing")
 		n := len(producer.records) - 1
 		producer.callbacks[n](producer.records[n], nil)
 		// Then refreshes stay throttled and remember only successfully read partition counts.
@@ -240,17 +240,16 @@ func TestSinkByteQueueCapReleasesAfterDelivery(t *testing.T) {
 	s, client := sinkFixture(t)
 	s.settings.queueRecords, s.settings.queueBytes = 3, 1024
 	r := core.Record{Value: make([]byte, 600)}
-	require.NoError(t, s.Submit(r, core.Token{}))
+	require.NoError(t, s.Submit(context.Background(), r, core.Token{}))
 	// When another value exceeds the byte allowance, then admission waits without touching the producer.
-	var busy *core.Busy
-	require.ErrorAs(t, s.Submit(r, core.Token{}), &busy)
+	require.ErrorIs(t, s.Submit(context.Background(), r, core.Token{}), core.ErrBusy)
 	require.Len(t, client.records, 1)
 	require.Equal(t, int64(1), s.records.Load())
 	require.Equal(t, r.Size(), s.bytes.Load())
 	// When delivery releases the first value, then retry admits the second value.
 	client.callbacks[0](client.records[0], nil)
 	require.NoError(t, receiveDelivery(t, s).Err)
-	require.NoError(t, s.Submit(r, core.Token{}))
+	require.NoError(t, s.Submit(context.Background(), r, core.Token{}))
 	require.Len(t, client.records, 2)
 	client.callbacks[1](client.records[1], nil)
 	require.NoError(t, receiveDelivery(t, s).Err)
@@ -263,7 +262,7 @@ func TestSinkRejectsRecordLargerThanQueueWithoutAdmittingWork(t *testing.T) {
 	s, client := sinkFixture(t)
 	s.settings.queueRecords, s.settings.queueBytes, s.settings.messageBytes = 3, 1024, 2000
 	// When a record fits the message ceiling but cannot fit the empty queue.
-	err := s.Submit(core.Record{Value: make([]byte, 1025)}, core.Token{})
+	err := s.Submit(context.Background(), core.Record{Value: make([]byte, 1025)}, core.Token{})
 	// Then the synchronous validation error leaves client and counters untouched.
 	var rejected *core.RecordError
 	require.ErrorAs(t, err, &rejected)
@@ -286,7 +285,7 @@ func TestSinkUnknownTimestampTypeChecksClientSafeBoundaries(t *testing.T) {
 			// Given an unreadable destination timestamp type and a timestamp near the client's range.
 			s, client := sinkFixture(t)
 			// When submitting, then only the exact safe boundaries reach the producer.
-			err := s.Submit(core.Record{TimestampMS: &tc.stamp}, core.Token{})
+			err := s.Submit(context.Background(), core.Record{TimestampMS: &tc.stamp}, core.Token{})
 			if tc.accepted {
 				require.NoError(t, err)
 				require.Len(t, client.records, 1)
@@ -324,7 +323,7 @@ func TestSinkPreservesOriginalPartitionRatherThanReplayCursor(t *testing.T) {
 		token := core.Token{Partition: 0}
 		record := core.Record{Source: &core.Provenance{Partition: 5}, Key: key, Headers: []core.Header{{Name: "same", Value: nil}, {Name: "same", Value: []byte{}}}}
 		// When sending, then choose the original partition and retain raw key and header nulls.
-		require.NoError(t, s.Submit(record, token))
+		require.NoError(t, s.Submit(context.Background(), record, token))
 		require.Len(t, client.records, 1)
 		require.EqualValues(t, 5, client.records[0].Partition)
 		require.Equal(t, key, client.records[0].Key)
@@ -340,7 +339,7 @@ func TestSinkCannotSkipMissingPartitionProvenance(t *testing.T) {
 		s, client := sinkFixture(t)
 		s.preserve = true
 		// When submitting, then fail without a skippable record error or a producer call.
-		err := s.Submit(core.Record{Source: source}, core.Token{})
+		err := s.Submit(context.Background(), core.Record{Source: source}, core.Token{})
 		require.ErrorContains(t, err, "valid original source partition")
 		var recordError *core.RecordError
 		require.NotErrorAs(t, err, &recordError)

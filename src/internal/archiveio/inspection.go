@@ -61,7 +61,7 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result Sour
 	result.summarizeFiles(files)
 	result.Saved = saved != nil
 	if saved != nil && saved.Fingerprint != fp {
-		return result, &Conflict{Err: &plan.FingerprintMismatch{}}
+		return result, &Conflict{Err: plan.ErrFingerprintMismatch}
 	}
 	return result, nil
 }

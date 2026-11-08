@@ -1,6 +1,7 @@
 package copy
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -119,9 +120,9 @@ func TestPartitionCapsPauseOnlyTheFullPartitionUntilSaved(t *testing.T) {
 			r.limits.RecordCap, r.limits.ByteCap = 100, 1000000
 			r.limits.PartitionRecordCap, r.limits.PartitionByteCap = tc.records, tc.bytes
 			require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0}}, {Cursor: Cursor{Partition: 1}}}))
-			require.NoError(t, r.input(incoming(0, 0, 10)))
-			require.NoError(t, r.input(incoming(0, 1, 10)))
-			require.NoError(t, r.input(incoming(1, 0, 10)))
+			require.NoError(t, r.input(context.Background(), incoming(0, 0, 10)))
+			require.NoError(t, r.input(context.Background(), incoming(0, 1, 10)))
+			require.NoError(t, r.input(context.Background(), incoming(1, 0, 10)))
 
 			// When applying pauses, then only the partition at its cap pauses.
 			require.NoError(t, r.pause())

@@ -95,7 +95,7 @@ func TestExplainIgnoresMetricTransportAndRunValidatesBeforeOutput(t *testing.T) 
 			}
 			{
 				_, err := os.Stat(fixture.destination)
-				require.True(t, os.IsNotExist(err))
+				require.ErrorIs(t, err, os.ErrNotExist)
 			}
 		})
 	}

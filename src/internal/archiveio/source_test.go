@@ -47,22 +47,22 @@ func TestReplaySourceBackpressureEOFAndConfirmedStop(t *testing.T) {
 	clock := &clockMock{}
 	source := NewSource(session, clock, "")
 	life := &lifecycleMock{}
-	require.NoError(t, source.Start(life, nil))
+	require.NoError(t, source.Start(context.Background(), life, nil))
 	require.EqualValues(t, 10, life.assignments[0].Cursor.Position)
 	// When paused or checkpoint capacity is full, then polling waits without inventing EOF or losing a record.
 	require.NoError(t, source.Pause(0, true))
-	event, err := source.Poll(time.Millisecond)
+	event, err := source.Poll(context.Background(), time.Millisecond)
 	require.NoError(t, err)
 	require.Nil(t, event.Input)
 	require.Zero(t, session.reads)
 	require.NoError(t, source.Pause(0, false))
 	session.err = replay.ErrPendingFull
-	event, err = source.Poll(time.Millisecond)
+	event, err = source.Poll(context.Background(), time.Millisecond)
 	require.NoError(t, err)
 	require.Nil(t, event.EOF)
 	require.Equal(t, 2, clock.sleeps)
 	session.err = nil
-	event, err = source.Poll(time.Millisecond)
+	event, err = source.Poll(context.Background(), time.Millisecond)
 	require.NoError(t, err)
 	require.EqualValues(t, 11, event.Input.Next)
 	// When the destination confirms a stop, then only that prefix and its reason are saved.
@@ -72,7 +72,7 @@ func TestReplaySourceBackpressureEOFAndConfirmedStop(t *testing.T) {
 	require.EqualValues(t, 11, session.confirmed)
 	require.Equal(t, stop, session.stop)
 	session.err = io.EOF
-	event, err = source.Poll(time.Millisecond)
+	event, err = source.Poll(context.Background(), time.Millisecond)
 	require.NoError(t, err)
 	require.EqualValues(t, 11, event.EOF.Position)
 	require.NoError(t, source.Close())
@@ -84,7 +84,7 @@ func TestReplaySourcePropagatesFailureAndRejectsInvalidCommit(t *testing.T) {
 	session := &replayMock{err: failure}
 	source := NewSource(session, &clockMock{}, "")
 	// When reading or saving, then the original error is retained and no invented prefix is committed.
-	_, err := source.Poll(time.Millisecond)
+	_, err := source.Poll(context.Background(), time.Millisecond)
 	require.ErrorIs(t, err, failure)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

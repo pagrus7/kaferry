@@ -16,7 +16,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools.qualification.qualify import duration, endurance_capacity, lab_lock, logged, main, plan, report, run_suite, suite_command, valid_receipts, parallel_allowance, parallel_capacity, parallel_run
+from tools.qualification.qualify import duration, endurance_capacity, lab_lock, logged, main, plan, report, resolve_run, run_suite, suite_command, valid_receipts, parallel_allowance, parallel_capacity, parallel_run
 from tools.qualification.broker_probe import logical, reconcile, records
 
 
@@ -188,13 +188,20 @@ class MatrixTest(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
                 duration(value)
 
-    def test_endurance_deadline_includes_five_minute_consume_only_period(self):
+    def test_endurance_deadline_includes_ten_second_consume_only_period(self):
         for suite in ('soak', 'capture'):
             with self.subTest(suite=suite):
                 args = argparse.Namespace(suite=suite, duration=259200, rate=50)
                 command, required = suite_command(args, {})
-                self.assertIn('-timeout=259800s', command)
+                self.assertIn('-timeout=259510s', command)
                 self.assertEqual(['TestStreamingSoakFidelityCommitLagMemoryAndShutdown'], required)
+
+        with tempfile.TemporaryDirectory() as temporary, patch('tools.qualification.qualify.capture', return_value='fixture'):
+            root = Path(temporary)
+            for suite, timeout in [('capture', 370), ('recovery', 660)]:
+                with self.subTest(suite=suite):
+                    spec = resolve_run(self.suite_args(root, suite, rate=50), {}, None)
+                    self.assertEqual(timeout, spec.timeout)
 
     def test_dedicated_endurance_defaults_and_short_soak_remain_separate(self):
         for suite, seconds, rate in [('endurance', 86400, 200), ('soak', 120, 50)]:
@@ -204,7 +211,7 @@ class MatrixTest(unittest.TestCase):
             self.assertEqual((seconds, rate), (args.duration, args.rate))
             env = {'KAFERRY_SOAK_PROFILE': 'inherited'}
             command, _ = suite_command(args, env)
-            self.assertIn(f'-timeout={seconds+600}s', command)
+            self.assertIn(f'-timeout={seconds+310}s', command)
             self.assertEqual('application' if suite == 'endurance' else None, env.get('KAFERRY_SOAK_PROFILE'))
             if suite == 'endurance':
                 self.assertEqual('random', env['KAFERRY_ARCHIVE_PAYLOAD'])

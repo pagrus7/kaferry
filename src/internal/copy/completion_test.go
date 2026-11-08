@@ -2,6 +2,7 @@ package copy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"reflect"
@@ -25,11 +26,11 @@ func TestRunnerThresholdEqualityDoesNotStopUntilWallTimePasses(t *testing.T) {
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}))
 	input := incoming(0, 0, 1)
 	input.Record.TimestampMS = &stamp
-	require.NoError(t, r.input(input))
+	require.NoError(t, r.input(context.Background(), input))
 	require.NoError(t, r.eof(Cursor{Partition: 0, Position: 1}))
 
 	// When checking completion without advancing wall time.
-	require.NoError(t, r.tips())
+	require.NoError(t, r.tips(context.Background()))
 
 	// Then equality filters the record without stopping or sampling the log end.
 	if query.calls != 0 || r.partitions[0].stop != nil || r.timestampStops != 0 || r.filtered != 1 || len(sink.writes) != 0 {
@@ -38,7 +39,7 @@ func TestRunnerThresholdEqualityDoesNotStopUntilWallTimePasses(t *testing.T) {
 
 	// When wall time passes the threshold and the already-consumed tip is sampled.
 	clock.Sleep(time.Millisecond)
-	require.NoError(t, r.tips())
+	require.NoError(t, r.tips(context.Background()))
 	require.NoError(t, r.commit(r.ids()))
 
 	// Then the tip rule stops and saves the next position, not a timestamp trigger.
@@ -59,15 +60,15 @@ func TestRunnerFixedTipWaitsForAcknowledgementAndDoesNotCopyLaterRecords(t *test
 	r.log = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}))
 	require.NoError(t, r.eof(Cursor{Partition: 0, Position: 0}))
-	require.NoError(t, r.tips())
+	require.NoError(t, r.tips(context.Background()))
 	first, later := incoming(0, 0, 1), incoming(0, 5, 1)
 	first.Record.TimestampMS, later.Record.TimestampMS = &stamp, &stamp
-	require.NoError(t, r.input(first))
+	require.NoError(t, r.input(context.Background(), first))
 
 	// When new data beyond the sampled end proves the intervening cursor gap.
 	source.high = 100
-	require.NoError(t, r.input(later))
-	require.NoError(t, r.tips())
+	require.NoError(t, r.input(context.Background(), later))
+	require.NoError(t, r.tips(context.Background()))
 	require.NoError(t, r.commit(r.ids()))
 
 	// Then only the first record was submitted and unresolved work prevents saving.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/pagrus7/kaferry/src/internal/archive/avro"
 )
@@ -62,7 +63,7 @@ func NewReader(files []Progress, blocks Blocks) (*Reader, error) {
 	if err := validateProgress(files); err != nil {
 		return nil, err
 	}
-	r := &Reader{blocks: blocks, files: append([]Progress(nil), files...), pending: -1}
+	r := &Reader{blocks: blocks, files: slices.Clone(files), pending: -1}
 	for i, p := range r.files {
 		if p.ended() {
 			continue

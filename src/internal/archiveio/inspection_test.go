@@ -1,6 +1,7 @@
 package archiveio
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"math"
@@ -114,7 +115,7 @@ func TestInspectionRejectsRelativeDisorderOverflowWithoutWriting(t *testing.T) {
 			require.ErrorContains(t, err, "overflows milliseconds")
 			if !saved {
 				_, err = os.Stat(checkpoint.Path(directory, p.Group))
-				require.True(t, os.IsNotExist(err))
+				require.ErrorIs(t, err, os.ErrNotExist)
 			}
 
 		})
@@ -140,7 +141,7 @@ func incompatibleReplayInspection(t *testing.T, count int) {
 	require.NoError(t, err)
 	for n := range 2 {
 		record := core.Record{Source: &core.Provenance{Cluster: "cluster", Topic: "orders", TopicID: [16]byte{1}, Partition: 3, Offset: int64(n)}, Value: []byte("record"), TimestampType: "unknown"}
-		require.NoError(t, output.Submit(record, core.Token{}))
+		require.NoError(t, output.Submit(context.Background(), record, core.Token{}))
 	}
 	require.NoError(t, output.Finish())
 	output.Close()
@@ -149,9 +150,9 @@ func incompatibleReplayInspection(t *testing.T, count int) {
 	require.NoError(t, err)
 	source, err := factory.OpenSource(p, fp, limits, 0)
 	require.NoError(t, err)
-	require.NoError(t, source.Start(&lifecycleMock{}, nil))
+	require.NoError(t, source.Start(context.Background(), &lifecycleMock{}, nil))
 	for range count {
-		event, checkErr := source.Poll(0)
+		event, checkErr := source.Poll(context.Background(), 0)
 		require.NoError(t, checkErr)
 		require.NotNil(t, event.Input)
 		_, checkErr = source.Save(t.Context(), []core.Cursor{{Position: event.Input.Next}})
@@ -169,8 +170,7 @@ func incompatibleReplayInspection(t *testing.T, count int) {
 	require.NoError(t, err)
 	info, err := NewInspector(core.RealClock{}).Source(p, current, limits)
 	// Then diagnostics preserve the saved identity and position without applying the incompatible query or writing.
-	var mismatch *plan.FingerprintMismatch
-	require.ErrorAs(t, err, &mismatch)
+	require.ErrorIs(t, err, plan.ErrFingerprintMismatch)
 	require.True(t, info.Saved)
 	require.EqualValues(t, count, info.Position)
 	require.Equal(t, fp, info.Fingerprint)
@@ -189,7 +189,7 @@ func incompatibleReplayInspection(t *testing.T, count int) {
 		}
 		info, err = NewInspector(core.RealClock{}).Source(p, current, limits)
 		require.Error(t, err)
-		require.NotErrorAs(t, err, &mismatch)
+		require.NotErrorIs(t, err, plan.ErrFingerprintMismatch)
 		require.False(t, info.Saved)
 	}
 }

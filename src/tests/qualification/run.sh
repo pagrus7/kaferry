@@ -35,4 +35,4 @@ export KAFERRY_QUAL_WRONG_CA="$cert_dir/wrong-ca.pem"
 export KAFERRY_QUAL_KRB_CONFIG="$cert_dir/client-krb5.conf"
 export KAFERRY_QUAL_KEYTAB="$cert_dir/copier.keytab"
 CGO_ENABLED=1 "${GO:-go}" test -count=1 -timeout=10m -race -tags=integration,qualification \
-  -run 'TestSaslTls|TestReplicatedCluster|TestMutualTls|TestServerTls' "${KAFERRY_TEST_OUTPUT:--v}" ./src/tests/system
+  -run 'TestSaslTls|TestReplicatedCluster|TestMutualTls|TestServerTls' "${KAFERRY_TEST_OUTPUT:--v}" ./src/tests/compatibility

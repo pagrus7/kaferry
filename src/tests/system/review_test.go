@@ -128,7 +128,7 @@ func pollOwnership(t *testing.T, sources []*adapter.Source, ready func() bool) {
 	deadline := time.Now().Add(20 * time.Second)
 	for !ready() && time.Now().Before(deadline) {
 		for _, source := range sources {
-			if _, err := source.Poll(20 * time.Millisecond); err != nil {
+			if _, err := source.Poll(t.Context(), 20*time.Millisecond); err != nil {
 				t.Fatal("ownership probe poll", err)
 			}
 		}
@@ -145,14 +145,14 @@ func TestCooperativeReassignmentResumesOnlyNewPartitions(t *testing.T) {
 	group := name + "-pause"
 	first := probeSource(t, name, group)
 	ownershipA := &probeOwnership{owned: make(map[int32]bool), revoked: -1}
-	require.NoError(t, first.Start(ownershipA, nil))
+	require.NoError(t, first.Start(t.Context(), ownershipA, nil))
 	pollOwnership(t, []*adapter.Source{first}, func() bool { return len(ownershipA.owned) == 2 })
 	for id := range ownershipA.owned {
 		require.NoError(t, first.Pause(id, true))
 	}
 	second := probeSource(t, name, group)
 	ownershipB := &probeOwnership{owned: make(map[int32]bool)}
-	require.NoError(t, second.Start(ownershipB, nil))
+	require.NoError(t, second.Start(t.Context(), ownershipB, nil))
 	pollOwnership(t, []*adapter.Source{first, second}, func() bool { return len(ownershipA.owned) == 1 && len(ownershipB.owned) == 1 })
 	reassigned := ownershipA.revoked
 	if reassigned < 0 {
@@ -171,7 +171,7 @@ func TestCooperativeReassignmentResumesOnlyNewPartitions(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	seen := false
 	for time.Now().Before(deadline) {
-		event, err := first.Poll(20 * time.Millisecond)
+		event, err := first.Poll(t.Context(), 20*time.Millisecond)
 		require.NoError(t, err)
 		if event.Input != nil {
 			require.Equal(t, reassigned, event.Input.Cursor.Partition, "resumed a retained paused partition")

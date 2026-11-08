@@ -32,7 +32,7 @@ fast: check
 	test -z "$$(gofmt -l src)"
 	$(PYTHON) -m unittest discover -s tools -t . -p 'test_*.py'
 	$(PYTHON) -m tools.docs.docs
-	$(GO) test -run '^$$' -tags=integration,load,fault,qualification,migration ./src/tests/system
+	$(GO) test -run '^$$' -tags=integration,load,fault,qualification,migration ./src/tests/system ./src/tests/compatibility
 	$(MAKE) build
 	$(PYTHON) -m tools.release.notices bin/kaferry bin/THIRD_PARTY_NOTICES.txt
 	$(PYTHON) -m tools.release.install_smoke

@@ -149,7 +149,7 @@ type assignmentSource struct {
 	failure error
 }
 
-func (s assignmentSource) Start(lifecycle core.Lifecycle, _ core.Observer) error {
+func (s assignmentSource) Start(_ context.Context, lifecycle core.Lifecycle, _ core.Observer) error {
 	if err := lifecycle.Assign([]core.Assignment{{Cursor: core.Cursor{Partition: 0}}}); err != nil {
 		return err
 	}

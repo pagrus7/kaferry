@@ -166,7 +166,7 @@ func secureReader(t *testing.T, topic string) *kgo.Client {
 	return client
 }
 
-func TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
+func RunSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 	// Given
 	_, p, src, dst, group := secureFixture(t)
 	stamp := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
@@ -213,7 +213,7 @@ func TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 	}
 }
 
-func TestSaslTlsScramMechanisms(t *testing.T) {
+func RunSaslTlsScramMechanisms(t *testing.T) {
 	for _, mechanism := range []string{"SCRAM-SHA-256", "SCRAM-SHA-512"} {
 		t.Run(mechanism, func(t *testing.T) {
 			// Given a record and a restricted SCRAM identity over TLS.
@@ -257,7 +257,7 @@ func waitScramReady(t *testing.T, cfg map[string]string, topic string) {
 	waitTopicReady(t, a, topic, 1)
 }
 
-func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
+func RunReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	// Given
 	a, p, src, dst, group := secureFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -307,4 +307,7 @@ func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	progressReader := kadm.NewClient(secureClient(t, secureProperties(t, "admin", "fixture-admin-secret")))
 	progress := committedPartitions(t, progressReader, group, src, 1)
 	require.Equal(t, int64(64), progress[0].At, "failover shutdown did not save confirmed progress")
+	// Restore full replication before another security test creates its topics.
+	require.NoError(t, owned.recover())
+	waitSecureFixture(t, a, src, dst, group)
 }

@@ -25,14 +25,7 @@ class RiskTest(unittest.TestCase):
                 # When selected, then only the prose allowlist can skip the integrity suites.
                 self.assertEqual(suites(paths), ['fault', 'qualification'] if extra else [])
 
-    def test_full_diff_includes_deleted_and_renamed_paths(self):
-        # Given a full PR diff, including the old name of a moved file.
-        base, head = 'a' * 40, 'b' * 40
-        event = {'pull_request': {'base': {'sha': base}, 'head': {'sha': head}}}
-        with patch('tools.ci.risk.subprocess.check_output', return_value='src/internal/archive/avro/old.go\ndocs/new.md\n') as git:
-            # When classifying, then Git cannot hide a deletion behind rename detection.
+    def test_full_diff_reaches_suite_selector(self):
+        event = {'pull_request': {'base': {'sha': 'a' * 40}, 'head': {'sha': 'b' * 40}}}
+        with patch('tools.ci.risk.changed_paths', return_value=['src/internal/archive/avro/old.go', 'docs/new.md']):
             self.assertEqual(select(event)['suites'], ['fault', 'qualification'])
-            git.assert_called_once_with(['git', 'diff', '--no-renames', '--name-only', f'{base}...{head}'], text=True)
-        event['pull_request']['head']['sha'] = '--help'
-        with self.assertRaisesRegex(ValueError, 'full base and head'):
-            select(event)

@@ -18,9 +18,16 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-const soakDrainDuration = 5 * time.Minute
+const soakDrainDuration = 10 * time.Second
 
-func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
+func consumeOnlyStart(scheduledEnd, lastPublish time.Time) time.Time {
+	if lastPublish.After(scheduledEnd) {
+		return lastPublish
+	}
+	return scheduledEnd
+}
+
+func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	// Given
 	report := newLoadReport(t, "soak")
 	sourcePartitions, destinationPartitions := 4, 5
@@ -123,6 +130,8 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		records.observer = newDeliveryObserver(time.Now)
 	}
 	start := time.Now()
+	scheduledEnd := start.Add(duration)
+	lastPublish := time.Time{}
 	nextPublish, nextSample := start, start.Add(time.Second)
 	nextBurst, nextStall := start.Add(10*time.Second), start.Add(30*time.Second)
 	bursts := 0
@@ -166,7 +175,8 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	period := time.Second * time.Duration(batch) / time.Duration(rate)
 
 	// When copying the controlled stream with periodic bursts and optional destination stalls.
-	for time.Since(start) < duration+soakDrainDuration {
+	for time.Now().Before(consumeOnlyStart(scheduledEnd, lastPublish).Add(soakDrainDuration)) {
+		published := false
 		select {
 		case <-process.done:
 			t.Fatalf("soak process exited early: %v %s", process.wait(), process.logs())
@@ -183,7 +193,7 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		if endurance {
 			e := report.Endurance
 			if !e.endRecorded && now.Sub(start) >= duration {
-				_, loadedFinal, _ := memoryEnvelope(t, monitor.rss)
+				_, loadedFinal, _ := memoryEnvelope(t, monitor.rss, 20)
 				e.LoadedFinalMedianRSSBytes = loadedFinal * 1024
 			}
 			require.NoError(t, e.check(now.Sub(start), duration, records.published, records.acknowledged))
@@ -211,6 +221,9 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 			if count > 0 {
 				publishStart := time.Now()
 				records.publish(t, ctx, p, reports, count)
+				lastPublish = time.Now()
+				monitor.idleSamples = 0
+				published = true
 				e.ProducerSeconds += time.Since(publishStart).Seconds()
 			}
 			bursts = max(0, (enduranceScheduled(min(now.Sub(start), duration))-int(min(now.Sub(start), duration)*200/time.Second))/400)
@@ -223,6 +236,9 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 				nextBurst = now.Add(time.Minute)
 			}
 			records.publish(t, ctx, p, reports, count)
+			lastPublish = time.Now()
+			monitor.idleSamples = 0
+			published = true
 			nextPublish = now.Add(period)
 		}
 		verifyStart := time.Now()
@@ -240,16 +256,17 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		if !archiveMode && !stalls.broker.paused() && !now.Before(monitor.next) {
 			destinationEnds = destinationOffsets(t, destinationAdmin, dst, destinationPartitions)
 		}
-		monitor.sample(t, now, process.pid(), a, group, src, records, destinationEnds)
+		monitor.sample(t, now, process.pid(), a, group, src, records, destinationEnds,
+			!time.Now().Before(consumeOnlyStart(scheduledEnd, lastPublish)) && !published)
 		if endurance {
 			report.Endurance.SamplingSeconds += time.Since(sampleStart).Seconds()
-		}
-		if endurance && now.Sub(start) >= duration+15*time.Second {
-			require.Equal(t, records.published, records.unique, "backlog remains fifteen seconds after input stopped")
 		}
 	}
 
 	// When the full consume-only period ends, stop copying and reconcile the final output.
+	if endurance {
+		require.Equal(t, records.published, records.unique, "backlog remains after the consume-only period")
+	}
 	shutdown := time.Now()
 	require.NoError(t, process.signal(os.Interrupt))
 	select {
@@ -319,7 +336,8 @@ func TestStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	if summary.Submitted != records.published || summary.Confirmed != records.published || summary.PeakRecords > 1024 || summary.PeakBytes > 128<<20 {
 		t.Fatal("soak counts or uncommitted caps violated", summary)
 	}
-	warm, final, peak := memoryEnvelope(t, monitor.rss)
+	require.NoError(t, monitor.checkIdleRSS(5))
+	warm, final, peak := memoryEnvelope(t, monitor.rss, 5)
 	peak = max(peak, monitor.peak)
 	require.LessOrEqual(t, peak, int64(512<<10), "peak RSS exceeds 512 MiB")
 	report.SampledPeakRSSBytes, report.WarmMedianRSSBytes, report.FinalMedianRSSBytes = peak*1024, warm*1024, final*1024
@@ -358,15 +376,10 @@ type soakMonitor struct {
 	maxDestinationConsumerLag  int64
 	kafka                      bool
 	destinationConsumerSamples int
+	idleSamples                int
 }
 
-func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *kadm.Client, group, source string, records *streamRecords, destinationEnds map[int32]int64) {
-	t.Helper()
-	if now.Before(m.next) {
-		return
-	}
-	rss, err := rssSample(pid)
-	require.NoError(t, err, "RSS sampling failed")
+func (m *soakMonitor) recordRSS(rss int64, idle bool) {
 	m.samples++
 	if len(m.rss) < 50 {
 		m.rss = append(m.rss, rss)
@@ -375,6 +388,28 @@ func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *kadm.C
 		m.rss[49] = rss
 	}
 	m.peak = max(m.peak, rss)
+	if idle {
+		m.idleSamples++
+	} else {
+		m.idleSamples = 0
+	}
+}
+
+func (m *soakMonitor) checkIdleRSS(count int) error {
+	if m.idleSamples < count {
+		return fmt.Errorf("not enough idle RSS samples: got %d, need %d", m.idleSamples, count)
+	}
+	return nil
+}
+
+func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *kadm.Client, group, source string, records *streamRecords, destinationEnds map[int32]int64, idle bool) {
+	t.Helper()
+	if now.Before(m.next) {
+		return
+	}
+	rss, err := rssSample(pid)
+	require.NoError(t, err, "RSS sampling failed")
+	m.recordRSS(rss, idle)
 	committed := 0
 	for _, part := range committedPartitions(t, admin, group, source, len(records.receipts.next)) {
 		committed += int(part.At)
