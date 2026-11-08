@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -17,6 +18,7 @@ type ownedBroker struct {
 	run        func(...string) ([]byte, error)
 	restore    string
 	cleanupSet bool
+	observe    func(string, time.Time, time.Time, error)
 }
 
 func fixtureProject(fallback string) string {
@@ -57,7 +59,17 @@ func (b *ownedBroker) stop(t *testing.T) error  { return b.interrupt(t, "start",
 func (b *ownedBroker) paused() bool             { return b != nil && b.restore == "unpause" }
 
 func (b *ownedBroker) interrupt(t *testing.T, restore string, args ...string) error {
+	started := time.Now()
+	if b.observe != nil {
+		b.observe(args[0], started, time.Time{}, nil)
+	}
 	data, err := b.run(append(args, b.name)...)
+	finished := time.Now()
+	defer func() {
+		if b.observe != nil {
+			b.observe(args[0], started, finished, err)
+		}
+	}()
 	if err != nil {
 		return fmt.Errorf("broker %s: %w: %s", args[0], err, data)
 	}
@@ -77,7 +89,17 @@ func (b *ownedBroker) recover() error {
 	if b.restore == "" {
 		return nil
 	}
+	started := time.Now()
+	if b.observe != nil {
+		b.observe(b.restore, started, time.Time{}, nil)
+	}
 	data, err := b.run(b.restore, b.name)
+	finished, operation := time.Now(), b.restore
+	defer func() {
+		if b.observe != nil {
+			b.observe(operation, started, finished, err)
+		}
+	}()
 	if err != nil {
 		return fmt.Errorf("broker %s: %w: %s", b.restore, err, data)
 	}

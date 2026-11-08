@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -47,6 +48,7 @@ func TestOwnedBrokerRestoresAfterEarlyReturnAndRetriesFailure(t *testing.T) {
 		t.Run(fmt.Sprintf("stop=%t", stopped), func(t *testing.T) {
 			// Given a broker whose first recovery attempt fails.
 			var commands []string
+			var observations []string
 			failure := errors.New("temporary restore failure")
 			restore := "unpause"
 			interrupt := "pause broker"
@@ -67,6 +69,15 @@ func TestOwnedBrokerRestoresAfterEarlyReturnAndRetriesFailure(t *testing.T) {
 					return nil, nil
 				})
 				require.NoError(t, err)
+				broker.observe = func(operation string, started, finished time.Time, err error) {
+					require.False(t, started.IsZero())
+					if finished.IsZero() {
+						observations = append(observations, operation+":unknown")
+						return
+					}
+					require.False(t, finished.Before(started))
+					observations = append(observations, fmt.Sprintf("%s:%t", operation, err == nil))
+				}
 				apply := broker.pause
 				if stopped {
 					apply = broker.stop
@@ -80,6 +91,36 @@ func TestOwnedBrokerRestoresAfterEarlyReturnAndRetriesFailure(t *testing.T) {
 				// Return with the broker interrupted; registered cleanup must restore it.
 			})
 			require.Equal(t, []string{interrupt, restore + " broker", restore + " broker", interrupt, restore + " broker"}, commands)
+			action := strings.Fields(interrupt)[0]
+			require.Equal(t, []string{action + ":unknown", action + ":true", restore + ":unknown", restore + ":false",
+				restore + ":unknown", restore + ":true", action + ":unknown", action + ":true", restore + ":unknown", restore + ":true"}, observations)
 		})
 	}
+}
+
+func TestOwnedBrokerKeepsCleanupCorrectWhenObservationAborts(t *testing.T) {
+	// Given command observations that abort after a successful Docker operation.
+	var commands []string
+	t.Run("scenario", func(t *testing.T) {
+		broker, err := inspectBroker("broker", "assigned", "", func(args ...string) ([]byte, error) {
+			if args[0] == "inspect" {
+				return []byte("assigned"), nil
+			}
+			commands = append(commands, strings.Join(args, " "))
+			return nil, nil
+		})
+		require.NoError(t, err)
+		broker.observe = func(_ string, _, finished time.Time, _ error) {
+			if !finished.IsZero() {
+				panic("observation failed")
+			}
+		}
+		// When observing pause and unpause aborts, then cleanup still knows their results.
+		require.Panics(t, func() { _ = broker.pause(t) })
+		require.True(t, broker.paused())
+		require.Panics(t, func() { _ = broker.recover() })
+		require.False(t, broker.paused())
+	})
+	// Then cleanup neither strands a paused broker nor repeats successful unpause.
+	require.Equal(t, []string{"pause broker", "unpause broker"}, commands)
 }

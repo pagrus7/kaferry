@@ -236,10 +236,11 @@ class MatrixTest(unittest.TestCase):
                 main(['run', suite])
             args = run.call_args.args[0]
             self.assertEqual((seconds, rate), (args.duration, args.rate))
-            env = {'KAFERRY_SOAK_PROFILE': 'inherited'}
+            env = {'KAFERRY_SOAK_PROFILE': 'inherited', 'KAFERRY_SOAK_TOPOLOGY': 'replicated'}
             command, _ = suite_command(args, env)
             self.assertIn(f'-timeout={seconds+310}s', command)
             self.assertEqual('application' if suite == 'endurance' else None, env.get('KAFERRY_SOAK_PROFILE'))
+            self.assertEqual('single' if suite == 'endurance' else None, env.get('KAFERRY_SOAK_TOPOLOGY'))
             if suite == 'endurance':
                 self.assertEqual('random', env['KAFERRY_ARCHIVE_PAYLOAD'])
                 self.assertEqual('kaferry-endurance-kafka-dr-1', env['KAFERRY_SOAK_DEST_STALL_CONTAINER'])
@@ -529,10 +530,12 @@ class MatrixTest(unittest.TestCase):
 
     def test_replicated_failures_clean_only_owned_scope_and_preserve_unverified_storage(self):
         # Given an interruption or a failed storage ownership check after copying.
-        for interruption, volume in [(True, 'dedicated-storage'), (False, 'dedicated-storage'), (False, None)]:
-            with self.subTest(interruption=interruption, volume=volume), tempfile.TemporaryDirectory() as temporary:
+        for suite, interruption, volume in [(suite, interruption, volume) for suite in ('replicated', 'endurance')
+                for interruption, volume in [(True, 'dedicated-storage'), (False, 'dedicated-storage'), (False, None)]]:
+            with self.subTest(suite=suite, interruption=interruption, volume=volume), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
-                args = self.suite_args(root, 'replicated', source='4.4.0', destination='4.4.0', broker_volume=volume)
+                args = self.suite_args(root, suite, source='4.4.0', destination='4.4.0', broker_volume=volume,
+                                       topology='replicated' if suite == 'endurance' else None, rate=200)
                 calls = []
                 def command(command, output, label, env, **kwargs):
                     calls.append((command, label, env.copy()))
@@ -546,14 +549,18 @@ class MatrixTest(unittest.TestCase):
                         raise RuntimeError('ownership mismatch')
                 with patch('tools.qualification.qualify.LAB_LOCK', root / 'host.lock'), \
                      patch('tools.qualification.qualify.capture', return_value='fixture'), \
-                     patch('tools.qualification.qualify.replicated_admission', return_value={'required_broker_bytes': 4 * 1024**3}), \
+                     patch('tools.qualification.qualify.replicated_admission', return_value={'required_broker_bytes': 4 * 1024**3}) as admission, \
                      patch('tools.qualification.qualify.verify_run'), patch('tools.qualification.qualify.logged', side_effect=command), \
                      patch('tools.qualification.qualify.subprocess.run'):
                     # When finishing, then writers stop before cleanup and a cleanup failure cannot qualify.
                     with self.assertRaises(KeyboardInterrupt if interruption else RuntimeError):
                         run_suite(args)
-                self.assertEqual(['storage-capacity', 'storage-prepare', 'proxy-up', 'proxy-configure', 'brokers-up', 'proxy-proof', 'suite', 'brokers-stop',
-                                  'storage-clean', 'brokers-down'], [label for _, label, _ in calls])
+                self.assertEqual(60 if suite == 'endurance' else None, admission.call_args.args[2])
+                phases = ['storage-capacity', 'storage-prepare', 'proxy-up', 'proxy-configure', 'brokers-up']
+                if suite == 'replicated':
+                    phases.append('proxy-proof')
+                phases += ['suite', 'brokers-stop', 'storage-clean', 'brokers-down']
+                self.assertEqual(phases, [label for _, label, _ in calls])
                 self.assertEqual(1, len({env['KAFERRY_REPLICATED_RUN_ID'] for _, _, env in calls}))
                 for command, label, env in calls:
                     self.assertEqual('true' if volume else 'false', env['KAFERRY_REPLICATED_VOLUME_EXTERNAL'])
@@ -564,6 +571,10 @@ class MatrixTest(unittest.TestCase):
                     self.assertNotIn('-v', calls[-1][0], 'failed ownership validation must preserve even a local volume')
                 receipt = json.loads((args.output / 'manifest.json').read_text())
                 self.assertEqual('interrupted' if interruption else 'failed', receipt['status'])
+                if suite == 'endurance':
+                    self.assertNotIn('proxy_path_check', receipt, 'endurance must not run the cut/heal proxy proof')
+                    self.assertEqual('replicated', receipt['workload']['topology'])
+                    self.assertEqual((3, 2), (receipt['workload']['replication_factor'], receipt['workload']['min_insync_replicas']))
                 self.assertNotIn('dedicated-storage', json.dumps(receipt), 'keep private resource names out of receipts')
 
     def test_replicated_broker_space_is_admitted_before_preparing_or_starting_brokers(self):

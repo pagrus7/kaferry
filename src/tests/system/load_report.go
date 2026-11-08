@@ -67,6 +67,9 @@ func newLoadReport(t *testing.T, kind string) *loadReport {
 	r := &loadReport{Test: t.Name(), Kind: kind, Platform: runtime.GOOS + "/" + runtime.GOARCH,
 		FixtureClient: "franz-go", Workload: defaultWorkloadProfile()}
 	if directory := os.Getenv("KAFERRY_REPORT_DIR"); directory != "" {
+		// Register temporary-file removal first. Cleanup then stops processes and
+		// collects their logs before removing this test's temporary directories.
+		_ = t.TempDir()
 		t.Cleanup(func() {
 			if r.cli != nil {
 				binaryPath := r.cli.command.Path
@@ -93,7 +96,10 @@ func newLoadReport(t *testing.T, kind string) *loadReport {
 				return
 			}
 			if r.cli != nil {
-				if err := os.WriteFile(prefix+".cli.log", []byte(r.cli.logs()), 0644); err != nil {
+				data, err := os.ReadFile(r.cli.output)
+				if err != nil {
+					t.Error("read CLI build log:", err)
+				} else if err := os.WriteFile(prefix+".cli.log", data, 0644); err != nil {
 					t.Error("write CLI build log:", err)
 				}
 			}
