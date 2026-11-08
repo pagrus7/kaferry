@@ -9,6 +9,15 @@ from tools.qualification.fault_results import observation_path, validate_case
 
 
 IDENTITY = ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')
+FORCED_SAVE_EXIT = 'shutdown timed out while saving progress; exiting without further cleanup'
+NEGOTIATION_EOF = ('broker closed the connection immediately during api versions negotiation, which often happens '
+                   'when the broker requires TLS but the client is using plaintext: is TLS missing?')
+SAMPLED_SCOPE = 'sampled progress only; forced save exit omits final lifetime highwater'
+EXACT_SCOPE = 'exact lifetime highwater from final copy summary'
+BROKER_ERRORS = ('context deadline exceeded', 'REQUEST_TIMED_OUT', 'NOT_COORDINATOR', 'COORDINATOR_NOT_AVAILABLE',
+                'UNKNOWN_MEMBER_ID', 'ILLEGAL_GENERATION', 'NOT_LEADER_OR_FOLLOWER', 'BROKER_NOT_AVAILABLE',
+                'connection refused', 'i/o timeout', 'EOF', 'delivery timeout',
+                'outstanding writes did not finish within 10 seconds', 'shutdown timed out while finishing writes')
 
 
 def stamp(value):
@@ -28,6 +37,63 @@ def topology(state, side, size):
     return (len(parts) == 24 and all(type(p['Leader']) is int and 1 <= p['Leader'] <= 3 and
             len(p['ISR']) == size and len(set(p['ISR'])) == size and p['Leader'] in p['ISR'] and
             set(p['ISR']) <= {1, 2, 3} for p in parts))
+
+
+def healthy_copy(state):
+    progress = state['cli_progress']
+    return (vector(state['saved']) and min(state['saved']) > 0 and
+            vector(state['publishing']['acknowledged_by_partition']) and
+            min(state['publishing']['acknowledged_by_partition']) > 0 and
+            0 < progress['confirmed'] <= progress['submitted'] and
+            all(topology(state, side, 3) for side in ('source', 'destination')))
+
+
+def affected_failure(case, worker, side):
+    proof = worker['failure_context']
+    window = proof['window']
+    if type(window) is not int or not 0 <= window < len(case['events']):
+        return False
+    event = case['events'][window]
+    fault = event['fault']
+    before = event.get('before', case['baseline'])
+    return (proof['role'] == fault['role'] and proof['kind'] == fault['fault']['kind'] and
+            proof['kind'] in ('kill', 'restart') and proof['role']['cluster'] == side and
+            proof['transport'] == 'plaintext' and proof['before'] == before and healthy_copy(before) and
+            proof['start'] == fault['start'] and proof['heal'] == fault['heal'] and
+            proof['observed_exit_at'] == worker['stopped_at'] and
+            stamp(before['at']) < stamp(proof['start']) < stamp(proof['observed_exit_at']) <= stamp(proof['heal']))
+
+
+def worker_work(case, worker):
+    available, summary = worker['lifetime_highwater_available'], worker['copy_summary']
+    terminal = worker.get('terminal_error', '')
+    if (type(available) is not bool or type(worker['progress_observations']) is not int or worker['progress_observations'] <= 0 or
+            type(worker['sampled_max_pending_entries']) is not int or not 0 <= worker['sampled_max_pending_entries'] <= 1024 or
+            type(worker['sampled_max_pending_estimated_bytes']) is not int or not 0 <= worker['sampled_max_pending_estimated_bytes'] <= 128*1024**2):
+        raise ValueError('broker worker lacks observed current-work cap evidence')
+    if not available:
+        if (summary is not None or worker['peak_uncommitted_records'] is not None or worker['peak_uncommitted_bytes'] is not None or
+                worker['cap_measurement_scope'] != SAMPLED_SCOPE or worker['exit_code'] != 1 or terminal != FORCED_SAVE_EXIT or
+                not affected_failure(case, worker, 'source')):
+            raise ValueError('unavailable lifetime highwater requires the documented active source forced-save exit')
+        return
+    if (worker['cap_measurement_scope'] != EXACT_SCOPE or summary['msg'] != 'copy summary' or
+            type(summary['submitted']) is not int or type(summary['confirmed']) is not int or
+            not 0 <= summary['confirmed'] <= summary['submitted'] or
+            type(worker['peak_uncommitted_records']) is not int or type(worker['peak_uncommitted_bytes']) is not int or
+            not worker['sampled_max_pending_entries'] <= worker['peak_uncommitted_records'] <= 1024 or
+            not worker['sampled_max_pending_estimated_bytes'] <= worker['peak_uncommitted_bytes'] <= 128*1024**2 or
+            summary['peak_uncommitted_records'] != worker['peak_uncommitted_records'] or
+            summary['peak_uncommitted_bytes'] != worker['peak_uncommitted_bytes']):
+        raise ValueError('broker worker lacks exact lifetime work-cap evidence')
+    if worker['exit_code'] == 0:
+        if terminal:
+            raise ValueError('completed broker worker has a terminal failure')
+    elif terminal and all(line == NEGOTIATION_EOF for line in terminal.splitlines()):
+        if len(terminal.splitlines()) != summary['submitted']-summary['confirmed'] or not affected_failure(case, worker, 'destination'):
+            raise ValueError('negotiation EOF lacks every failed write and an affected active plaintext destination fault')
+    elif not terminal or any(not any(message in line for message in BROKER_ERRORS) for line in terminal.splitlines()):
+        raise ValueError('broker worker has an unsupported terminal failure')
 
 
 def broker_case(directory, id, identity):
@@ -52,8 +118,8 @@ def broker_case(directory, id, identity):
                 safety['independent_reconciliation']['partitions'], key=lambda p: p['partition'])]):
         raise ValueError('source publications were not completely drained and reconciled')
     baseline = case['baseline']
-    if not vector(baseline['saved']) or min(baseline['saved']) <= 0:
-        raise ValueError('broker fault lacks a nonempty saved baseline on every partition')
+    if not healthy_copy(baseline):
+        raise ValueError('broker fault lacks healthy copying and a nonempty saved baseline on every partition')
     workers = case['worker_measurements']
     if (not workers or len(workers) > len(case['events'])+1 or case['restarts'] != len(workers)-1 or
             case['restart_scope'] != 'same selected binary, SQL, group and worker1 route'):
@@ -65,13 +131,12 @@ def broker_case(directory, id, identity):
                 worker['rss_samples'] <= 0 or worker['rss_failures'] != 0 or
                 not 0 < worker['sampled_peak_rss_bytes'] <= 512*1024**2 or
                 worker['record_cap'] != 1024 or worker['byte_cap'] != 128*1024**2 or
-                not 0 <= worker['peak_uncommitted_records'] <= 1024 or
-                not 0 <= worker['peak_uncommitted_bytes'] <= 128*1024**2 or
                 not safety['started_at'] <= stamp(worker['started_at']) < stamp(worker['stopped_at']) <= safety['writers_stopped_at'] or
                 not worker['reason']):
             raise ValueError('broker fault worker exits or resource caps are invalid')
-        if worker['exit_code'] == 1 and not worker['terminal_error']:
-            raise ValueError('broker fault restart omitted the observed terminal failure')
+        worker_work(case, worker)
+    if case['exact_lifetime_work_caps_qualified'] is not all(w['lifetime_highwater_available'] for w in workers):
+        raise ValueError('broker case exact lifetime cap claim differs from available measurements')
     if {(w['pid'], w['exit_code']) for w in workers} != {(w['pid'], w['exit_code']) for w in safety['writer_observations']}:
         raise ValueError('broker fault worker measurements differ from independent exit observations')
     events, windows = case['events'], safety['fault_events']

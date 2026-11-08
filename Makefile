@@ -21,6 +21,8 @@ REPLICATED_HELPER_TESTS := \
 	TestBrokerCurrentProgressRequiresReadableCompleteEvidence \
 	TestBrokerCurrentProgressRejectsMalformedCompleteRows \
 	TestBrokerRestartRechecksFailureAfterHealthObservation \
+	TestBrokerNegotiationEOFRequiresAffectedPlainCopyAndEveryUnconfirmedError \
+	TestBrokerForcedSaveExitLeavesLifetimeHighwaterUnavailable \
 	TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss \
 	TestReplicatedAuditFailureCleanupRetainsDiagnostics \
 	TestReplicatedAuditFailureCleanupSkipsPassingCases \

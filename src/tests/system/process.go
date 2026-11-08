@@ -26,6 +26,7 @@ type cliProcess struct {
 	done    chan struct{}
 	output  string
 	err     error
+	stopped time.Time
 }
 
 func startCLI(t *testing.T, ctx context.Context, binary, input string, args ...string) *cliProcess {
@@ -81,7 +82,7 @@ func (p *cliProcess) start(t *testing.T) {
 	p.command.Stderr = log
 	p.command.Stdout = log
 	require.NoError(t, p.command.Start())
-	go func() { p.err = p.command.Wait(); close(p.done) }()
+	go func() { p.err = p.command.Wait(); p.stopped = time.Now().UTC(); close(p.done) }()
 	t.Cleanup(func() {
 		if !p.finished() {
 			_ = p.command.Process.Kill()

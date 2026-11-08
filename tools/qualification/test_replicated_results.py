@@ -9,7 +9,8 @@ import unittest
 from unittest.mock import patch
 
 from tools.ci.suites import REPLICATED_CASES, fault_timeout_catalog
-from tools.qualification.replicated_results import broker_case, collect
+from tools.qualification.replicated_results import (EXACT_SCOPE, FORCED_SAVE_EXIT, NEGOTIATION_EOF,
+                                                  SAMPLED_SCOPE, broker_case, collect)
 
 
 def stamp(second):
@@ -28,11 +29,14 @@ def proof(id):
     rolling, isr = '/rolling-' in id, id.endswith('isr-loss')
     case = dict(id=id, source_partitions=24, source_topic='source', destination_topic='destination',
                 timeout_milliseconds=fault_timeout_catalog()[id], baseline=state(10, 1), events=[],
-                restarts=0, restart_scope='same selected binary, SQL, group and worker1 route',
+                restarts=0, restart_scope='same selected binary, SQL, group and worker1 route', exact_lifetime_work_caps_qualified=True,
                 safety_case=dict(observations='fault-oracle/fresh/case/observations/case.json', sha256='checksum'),
                 publishing=dict(started=stamp(5), stopped=stamp(499), offered_by_partition=[10]*24, acknowledged_by_partition=[10]*24,max_offer_gap_seconds=0.1),
                 worker_measurements=[dict(pid=123, binary_sha256='binary',worker_route=1,exit_code=0, rss_samples=10, rss_failures=0, sampled_peak_rss_bytes=100,
                     record_cap=1024, byte_cap=128*1024**2, peak_uncommitted_records=1024, peak_uncommitted_bytes=128*1024**2,
+                    lifetime_highwater_available=True, cap_measurement_scope=EXACT_SCOPE, progress_observations=10,
+                    sampled_max_pending_entries=128, sampled_max_pending_estimated_bytes=1024,
+                    copy_summary=dict(msg='copy summary', submitted=100,confirmed=100,peak_uncommitted_records=1024,peak_uncommitted_bytes=128*1024**2),
                     started_at=stamp(2), stopped_at=stamp(500), reason='completed')])
     safety = dict(id=id, execution='candidate CLI', parameters=dict(source_partitions=24, routing='PRESERVE'),
                   source_commit='commit', binary_sha256='binary', binary_platform='linux-amd64', execution_platform='linux-amd64',
@@ -70,6 +74,25 @@ def proof(id):
         safety['fault_events'].append(dict(target=role, healed_at=at+6, injections=[dict(kind=kind, target={k:v for k,v in fault.items() if k != 'heal'}, at=at+0.5)]))
         previous = recovered
     return case, safety
+
+
+def failed_worker(case, safety, forced):
+    worker = case['worker_measurements'][0]
+    replacement = copy.deepcopy(worker)
+    replacement.update(pid=124, started_at=stamp(26))
+    worker.update(exit_code=1, stopped_at=stamp(23), terminal_error=FORCED_SAVE_EXIT if forced else NEGOTIATION_EOF+'\n'+NEGOTIATION_EOF)
+    fault = case['events'][0]['fault']
+    worker['failure_context'] = dict(window=0,role=fault['role'],kind=fault['fault']['kind'], start=fault['start'],heal=fault['heal'],
+                                     observed_exit_at=worker['stopped_at'],before=copy.deepcopy(case['baseline']),transport='plaintext')
+    if forced:
+        worker.update(lifetime_highwater_available=False,copy_summary=None,peak_uncommitted_records=None,peak_uncommitted_bytes=None,cap_measurement_scope=SAMPLED_SCOPE)
+        case['exact_lifetime_work_caps_qualified'] = False
+    else:
+        worker['copy_summary']['confirmed'] = 98
+    case['worker_measurements'].append(replacement)
+    case['restarts'] = 1
+    safety['writer_observations'] = [dict(pid=123,exit_code=1),dict(pid=124,exit_code=0)]
+    return worker
 
 
 class ReplicatedResultsTest(unittest.TestCase):
@@ -124,6 +147,51 @@ class ReplicatedResultsTest(unittest.TestCase):
             for selected in ([], ['broker/not-built'], ['broker/source-leader'], ['broker/source-leader']*2):
                 with self.subTest(selected=selected), self.assertRaises(ValueError):
                     collect(temporary,selected,{},'fresh')
+
+    def test_forced_source_exit_preserves_no_loss_scope_without_claiming_exact_lifetime_caps(self):
+        # Given documented forced-save exit 1, when independent safety passes,
+        # then sampled work stays separate and lifetime peaks are explicitly null.
+        result = self.validate('broker/source-leader', lambda c,s:failed_worker(c,s,True))
+        exposure = result['broker_exposure']
+        self.assertFalse(exposure['exact_lifetime_work_caps_qualified'])
+        self.assertIsNone(exposure['worker_measurements'][0]['peak_uncommitted_records'])
+        for mutate in (
+            lambda c,w:w.update(terminal_error='unknown forced exit'),
+            lambda c,w:w.update(peak_uncommitted_records=w['sampled_max_pending_entries']),
+            lambda c,w:w.update(copy_summary=dict(msg='copy summary')),
+            lambda c,w:w.update(lifetime_highwater_available=True),
+            lambda c,w:w['failure_context'].update(transport='TLS'),
+            lambda c,w:w['failure_context'].update(observed_exit_at=stamp(25)),
+            lambda c,w:w['failure_context']['before']['cli_progress'].update(confirmed=0),
+            lambda c,w:c.update(exact_lifetime_work_caps_qualified=True),
+            lambda c,w:w.update(sampled_max_pending_entries=1025),
+        ):
+            def change(case, safety):
+                worker = failed_worker(case,safety,True)
+                mutate(case,worker)
+            with self.subTest(mutate=mutate), self.assertRaises(ValueError):
+                self.validate('broker/source-leader',change)
+
+    def test_destination_eof_requires_exact_unconfirmed_count_and_active_plain_fault(self):
+        # Given exact summary highwater and two failed writes, when every terminal
+        # line is the pinned diagnostic during destination loss, then restart is
+        # collectable; configuration/startup/out-of-window evidence remains fatal.
+        self.validate('broker/destination-leader',lambda c,s:failed_worker(c,s,False))
+        for mutate in (
+            lambda w:w.update(terminal_error=NEGOTIATION_EOF),
+            lambda w:w.update(terminal_error=NEGOTIATION_EOF+'\nunknown failure'),
+            lambda w:w.update(terminal_error='TLS handshake failed'),
+            lambda w:w['failure_context'].update(transport='TLS'),
+            lambda w:w['failure_context']['role'].update(cluster='source'),
+            lambda w:w['failure_context'].update(observed_exit_at=stamp(19)),
+            lambda w:w['failure_context'].update(observed_exit_at=stamp(25)),
+            lambda w:w['failure_context']['before']['cli_progress'].update(confirmed=0),
+        ):
+            def change(case,safety):
+                worker = failed_worker(case,safety,False)
+                mutate(worker)
+            with self.subTest(mutate=mutate), self.assertRaises(ValueError):
+                self.validate('broker/destination-leader',change)
 
     def test_collection_binds_each_proof_to_this_observer_run(self):
         # Given two selected broker cases from this observer run, when collecting,

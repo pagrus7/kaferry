@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const brokerProgressRow = `{"msg":"progress","submitted":9,"confirmed":7,"peak_uncommitted_records":2,"peak_uncommitted_bytes":4096}` + "\n"
+const brokerProgressRow = `{"msg":"progress","submitted":9,"confirmed":7,"pending_entries":2,"pending_estimated_bytes":4096,"peak_uncommitted_records":2,"peak_uncommitted_bytes":4096}` + "\n"
 
 func TestBrokerCurrentProgressDoesNotWaitForChildExit(t *testing.T) {
 	// Given a real child that reports progress and remains alive awaiting input.

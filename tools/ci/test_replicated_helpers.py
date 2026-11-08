@@ -20,6 +20,8 @@ HELPERS = (
     'TestBrokerCurrentProgressRequiresReadableCompleteEvidence',
     'TestBrokerCurrentProgressRejectsMalformedCompleteRows',
     'TestBrokerRestartRechecksFailureAfterHealthObservation',
+    'TestBrokerNegotiationEOFRequiresAffectedPlainCopyAndEveryUnconfirmedError',
+    'TestBrokerForcedSaveExitLeavesLifetimeHighwaterUnavailable',
     'TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss',
     'TestReplicatedAuditFailureCleanupRetainsDiagnostics',
     'TestReplicatedAuditFailureCleanupSkipsPassingCases',

@@ -49,6 +49,9 @@ type brokerCopy struct {
 	starts                                        []time.Time
 	measurements                                  []map[string]any
 	events                                        []map[string]any
+	active                                        *faults.Injection
+	activeWindow                                  int
+	beforeFault                                   brokerObservation
 }
 
 func replicatedBrokerFault(t *testing.T, name string) {
@@ -91,7 +94,7 @@ func replicatedBrokerFault(t *testing.T, name string) {
 	s.publisher = startReplicatedBrokerPublisher(ctx, producer, s.src, timeouts["delivery_timeout"])
 	t.Cleanup(func() { s.publisher.stop() })
 	baseline := s.wait("nonempty saved prefix on every partition", false, func(_ context.Context, state brokerObservation) bool {
-		return allAbove(state.Saved, make([]int64, replicatedPartitions), 0)
+		return brokerHealthyCopy(state)
 	})
 
 	// When the registered fault is injected at an independently observed state,
@@ -127,10 +130,15 @@ func replicatedBrokerFault(t *testing.T, name string) {
 	require.NoError(t, err)
 	relative, err := filepath.Rel(filepath.Dir(directory), safetyPath)
 	require.NoError(t, err)
+	exactCaps := true
+	for _, worker := range s.measurements {
+		exactCaps = exactCaps && worker["lifetime_highwater_available"] == true
+	}
 	data, err := json.MarshalIndent(map[string]any{"id": "broker/" + name, "source_partitions": replicatedPartitions,
 		"source_topic": s.src, "destination_topic": s.dst, "group": s.group, "baseline": baseline, "events": s.events,
 		"publishing": publication, "worker_measurements": s.measurements, "restarts": len(s.workers) - 1, "restart_scope": "same selected binary, SQL, group and worker1 route",
-		"timeout_milliseconds": durationMilliseconds(timeouts), "safety_case": map[string]string{"observations": relative, "sha256": fmt.Sprintf("%x", sha256.Sum256(safety))}}, "", "  ")
+		"exact_lifetime_work_caps_qualified": exactCaps,
+		"timeout_milliseconds":               durationMilliseconds(timeouts), "safety_case": map[string]string{"observations": relative, "sha256": fmt.Sprintf("%x", sha256.Sum256(safety))}}, "", "  ")
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "replicated-broker.json"), append(data, '\n'), 0600))
 }
@@ -208,22 +216,29 @@ func (s *brokerCopy) measureLast(reason string) {
 	require.LessOrEqual(s.t, memory.peak*1024, int64(512<<20))
 	logs, err := process.currentLogs()
 	require.NoError(s.t, err)
-	_, found, err := latestCopyProgress(logs)
+	work, err := brokerWork(logs)
 	require.NoError(s.t, err)
-	require.True(s.t, found, "completed broker worker omitted progress evidence")
-	summary := summaryFrom(s.t, logs)
-	require.LessOrEqual(s.t, summary.PeakRecords, 1024)
-	require.LessOrEqual(s.t, summary.PeakBytes, int64(134217728))
 	terminal := ""
+	proof := s.failureProof(process)
 	if process.command.ProcessState.ExitCode() != 0 {
-		terminal, err = completedBrokerFailure(process, true)
+		terminal, err = completedBrokerFailure(process, true, proof)
 		require.NoError(s.t, err)
 	}
-	s.measurements = append(s.measurements, map[string]any{"pid": process.pid(), "started_at": s.starts[i], "stopped_at": time.Now().UTC(),
+	available := work.Summary != nil
+	require.True(s.t, available || terminal == brokerForcedSaveExit, "CLI omitted copy summary without the documented forced-save exit")
+	measurement := map[string]any{"pid": process.pid(), "started_at": s.starts[i], "stopped_at": process.stopped,
 		"binary_sha256": os.Getenv("KAFERRY_EXPECT_BINARY_SHA256"), "worker_route": 1,
-		"terminal_error": terminal,
-		"exit_code":      process.command.ProcessState.ExitCode(), "reason": reason, "sampled_peak_rss_bytes": memory.peak * 1024, "rss_samples": memory.samples,
-		"rss_failures": memory.failures, "record_cap": 1024, "byte_cap": 134217728, "peak_uncommitted_records": summary.PeakRecords, "peak_uncommitted_bytes": summary.PeakBytes})
+		"terminal_error": terminal, "failure_context": proof, "copy_summary": work.Summary,
+		"exit_code": process.command.ProcessState.ExitCode(), "reason": reason, "sampled_peak_rss_bytes": memory.peak * 1024, "rss_samples": memory.samples,
+		"rss_failures": memory.failures, "record_cap": 1024, "byte_cap": 134217728,
+		"lifetime_highwater_available": available, "peak_uncommitted_records": nil, "peak_uncommitted_bytes": nil,
+		"progress_observations": work.ProgressSamples, "sampled_max_pending_entries": work.SampledPending,
+		"sampled_max_pending_estimated_bytes": work.SampledPendingBytes, "cap_measurement_scope": brokerSampledWorkScope}
+	if available {
+		measurement["peak_uncommitted_records"], measurement["peak_uncommitted_bytes"] = work.Summary.PeakRecords, work.Summary.PeakBytes
+		measurement["cap_measurement_scope"] = brokerExactWorkScope
+	}
+	s.measurements = append(s.measurements, measurement)
 	require.NoError(s.t, os.WriteFile(filepath.Join(s.directory, fmt.Sprintf("worker-%d.cli.log", i+1)), []byte(logs), 0600))
 }
 
@@ -232,11 +247,11 @@ func (s *brokerCopy) live(allowFailure bool) {
 	if !process.finished() {
 		return
 	}
-	_, err := completedBrokerFailure(process, allowFailure)
+	_, err := completedBrokerFailure(process, allowFailure, s.failureProof(process))
 	require.NoError(s.t, err)
 }
 
-func completedBrokerFailure(process *cliProcess, allowFailure bool) (string, error) {
+func completedBrokerFailure(process *cliProcess, allowFailure bool, proof ...*brokerFailureProof) (string, error) {
 	logs, err := process.currentLogs()
 	if err != nil {
 		return "", err
@@ -250,14 +265,17 @@ func completedBrokerFailure(process *cliProcess, allowFailure bool) (string, err
 	// Only the product's existing transport/coordinator/deadline failures may
 	// use this case's recorded restart. Other failures remain qualification errors.
 	terminal, known := brokerTerminalFailure(logs)
+	if !known && len(proof) == 1 {
+		terminal, known = brokerContextualFailure(logs, proof[0])
+	}
 	if !known {
 		return "", fmt.Errorf("broker fault produced an unexplained CLI failure: %s", logs)
 	}
 	return terminal, nil
 }
 
-func restartBrokerWorker(process *cliProcess, allowFailure bool, restart func()) error {
-	if _, err := completedBrokerFailure(process, allowFailure); err != nil {
+func restartBrokerWorker(process *cliProcess, allowFailure bool, restart func(), proof ...*brokerFailureProof) error {
+	if _, err := completedBrokerFailure(process, allowFailure, proof...); err != nil {
 		return err
 	}
 	restart()
@@ -272,7 +290,7 @@ func brokerTerminalFailure(logs string) (string, bool) {
 			continue
 		}
 		known := false
-		for _, message := range []string{"context deadline exceeded", "REQUEST_TIMED_OUT", "NOT_COORDINATOR", "COORDINATOR_NOT_AVAILABLE", "UNKNOWN_MEMBER_ID", "ILLEGAL_GENERATION", "NOT_LEADER_OR_FOLLOWER", "BROKER_NOT_AVAILABLE", "connection refused", "i/o timeout", "EOF", "delivery timeout", "outstanding writes did not finish within 10 seconds", "shutdown timed out while saving progress", "shutdown timed out while finishing writes"} {
+		for _, message := range []string{"context deadline exceeded", "REQUEST_TIMED_OUT", "NOT_COORDINATOR", "COORDINATOR_NOT_AVAILABLE", "UNKNOWN_MEMBER_ID", "ILLEGAL_GENERATION", "NOT_LEADER_OR_FOLLOWER", "BROKER_NOT_AVAILABLE", "connection refused", "i/o timeout", "EOF", "delivery timeout", "outstanding writes did not finish within 10 seconds", "shutdown timed out while finishing writes"} {
 			known = known || strings.Contains(line, message)
 		}
 		terminal = append(terminal, line)
@@ -418,7 +436,8 @@ func (s *brokerCopy) healthy(ctx context.Context, targets ...faults.Target) bool
 	return true
 }
 
-func (s *brokerCopy) inject(role faults.Role, kind string) (*faults.Injection, int) {
+func (s *brokerCopy) inject(role faults.Role, kind string, before brokerObservation) (*faults.Injection, int) {
+	require.True(s.t, brokerHealthyCopy(before), "fault requires healthy verified plaintext copying before injection")
 	window := s.oracle.begin(s.t, kind, role, kind != "cut", s.timeouts, "nonempty saved prefix on every source partition; steady acknowledged source input")
 	injection, err := s.lab.Inject(s.ctx, role, faults.Fault{Kind: kind})
 	if injection != nil {
@@ -438,6 +457,7 @@ func (s *brokerCopy) inject(role faults.Role, kind string) (*faults.Injection, i
 		})
 	}
 	require.NoError(s.t, err)
+	s.active, s.activeWindow, s.beforeFault = injection, window, before
 	s.oracle.injected(s.t, window, kind, injection.Event, "owned Docker/Toxiproxy operation completed on the resolved targets")
 	return injection, window
 }
@@ -455,7 +475,7 @@ func (s *brokerCopy) heal(injection *faults.Injection, window int, before broker
 		require.NoError(s.t, restartBrokerWorker(s.workers[len(s.workers)-1], allowFailure, func() {
 			s.measureLast("broker fault fail-fast exit; restarted after health and ISR recovery")
 			s.start()
-		}))
+		}, s.failureProof(s.workers[len(s.workers)-1])))
 	}
 	after := s.wait("post-heal publication and saved progress on every partition", false, func(_ context.Context, state brokerObservation) bool {
 		return fullyReplicated(state, injection.Event.Role.Cluster) && allAbove(state.Saved, before.Saved, 2) && allAbove(state.Publishing.Acknowledged, before.Publishing.Acknowledged, 2)
@@ -470,7 +490,7 @@ func (s *brokerCopy) leaderLoss(side string, before brokerObservation) {
 	if side == "destination" {
 		topic = s.dst
 	}
-	injection, window := s.inject(faults.Role{Kind: "leader", Cluster: side, Topic: topic, Partition: 0}, "kill")
+	injection, window := s.inject(faults.Role{Kind: "leader", Cluster: side, Topic: topic, Partition: 0}, "kill", before)
 	broker := injection.Event.Targets[0].Broker
 	after := s.wait("replacement partition leader while original broker is killed", true, func(_ context.Context, state brokerObservation) bool {
 		part := state.Topology[side][0]
@@ -482,15 +502,15 @@ func (s *brokerCopy) leaderLoss(side string, before brokerObservation) {
 
 func (s *brokerCopy) rolling(side string) {
 	for broker := int32(1); broker <= 3; broker++ {
-		before := s.wait("healthy prefix before next rolling broker", false, func(_ context.Context, state brokerObservation) bool { return fullyReplicated(state, side) })
-		injection, window := s.inject(faults.Role{Kind: "broker", Cluster: side, Broker: broker}, "restart")
+		before := s.wait("healthy prefix before next rolling broker", false, func(_ context.Context, state brokerObservation) bool { return brokerHealthyCopy(state) })
+		injection, window := s.inject(faults.Role{Kind: "broker", Cluster: side, Broker: broker}, "restart", before)
 		after := s.heal(injection, window, before)
 		s.events = append(s.events, map[string]any{"fault": injection.Event, "before": before, "recovered": after})
 	}
 }
 
 func (s *brokerCopy) isrLoss(before brokerObservation) {
-	injection, window := s.inject(faults.Role{Kind: "leader", Cluster: "destination", Topic: s.dst, Partition: 0, Listener: "internal"}, "cut")
+	injection, window := s.inject(faults.Role{Kind: "leader", Cluster: "destination", Topic: s.dst, Partition: 0, Listener: "internal"}, "cut", before)
 	broker := injection.Event.Targets[0].Broker
 	controllers, err := s.lab.Resolve(s.ctx, faults.Role{Kind: "cluster", Cluster: "destination", Listener: "controller"})
 	require.NoError(s.t, err)

@@ -2,6 +2,8 @@ package faults
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -19,12 +22,105 @@ func proxyProducer(seeds ...string) (*kgo.Client, error) {
 }
 
 func proxyProducerWithHooks(seeds []string, hooks ...kgo.Hook) (*kgo.Client, error) {
+	return newProxyProducer(seeds, nil, hooks...)
+}
+
+func newProxyProducer(seeds []string, diagnostic kgo.Logger, hooks ...kgo.Hook) (*kgo.Client, error) {
 	// A diagnostic write must be cancellable even after an ambiguous request.
 	// Close this producer before healing; output reconciliation still rejects
 	// any cancelled record that actually reached Kafka.
-	return kgo.NewClient(kgo.SeedBrokers(seeds...), kgo.RecordPartitioner(kgo.ManualPartitioner()),
-		kgo.AllowIdempotentProduceCancellation(), kgo.RecordDeliveryTimeout(2*time.Second),
-		kgo.RecordRetries(0), kgo.ProduceRequestTimeout(time.Second), kgo.RequestTimeoutOverhead(time.Second), kgo.WithHooks(hooks...))
+	options := []kgo.Opt{kgo.SeedBrokers(seeds...), kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.AllowIdempotentProduceCancellation(), kgo.RecordDeliveryTimeout(2 * time.Second),
+		kgo.RecordRetries(0), kgo.ProduceRequestTimeout(time.Second), kgo.RequestTimeoutOverhead(time.Second), kgo.WithHooks(hooks...)}
+	if diagnostic != nil {
+		options = append(options, kgo.WithLogger(diagnostic))
+	}
+	return kgo.NewClient(options...)
+}
+
+// Keep original SDK response and transport errors without unbounded debug logs.
+// The fixture has only synthetic records; no record values are logged.
+type proxyDiagnostics struct {
+	mu      sync.Mutex
+	lines   []string
+	dropped int
+}
+
+func (*proxyDiagnostics) Level() kgo.LogLevel { return kgo.LogLevelDebug }
+
+func (d *proxyDiagnostics) Log(level kgo.LogLevel, message string, values ...any) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.lines) >= 128 {
+		d.dropped++
+		return
+	}
+	line := fmt.Sprintf("%s %s %v", level, message, values)
+	if len(line) > 2048 {
+		line = line[:2048] + " [truncated]"
+	}
+	d.lines = append(d.lines, line)
+}
+
+func (d *proxyDiagnostics) snapshot() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return fmt.Sprintf("%s\nSDK diagnostic rows omitted: %d", strings.Join(d.lines, "\n"), d.dropped)
+}
+
+func TestProxyProducerFirstRetriableResponseRetainsOriginalDiagnostic(t *testing.T) {
+	// Given prepared metadata and an open producer connection, the first Produce
+	// receives NOT_ENOUGH_REPLICAS without appending anything at the broker.
+	cluster, routes := readinessCluster(t)
+	diagnostic := &proxyDiagnostics{}
+	client, err := newProxyProducer(cluster.ListenAddrs(), diagnostic)
+	require.NoError(t, err)
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	const topic = "first-retriable-response"
+	_, err = kadm.NewClient(client).CreateTopic(ctx, 3, 3, nil, topic)
+	require.NoError(t, err)
+	require.NoError(t, prepareProxyProducer(ctx, client, topic, 0, routes, t.Logf))
+	var requests atomic.Int32
+	cluster.ControlKey(int16(kmsg.Produce), func(request kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
+		if requests.Add(1) != 1 {
+			return nil, nil, false
+		}
+		produce := request.(*kmsg.ProduceRequest)
+		response := kmsg.NewPtrProduceResponse()
+		response.Version = produce.Version
+		for _, topic := range produce.Topics {
+			result := kmsg.ProduceResponseTopic{Topic: topic.Topic, TopicID: topic.TopicID}
+			for _, partition := range topic.Partitions {
+				failed := kmsg.NewProduceResponseTopicPartition()
+				failed.Partition, failed.ErrorCode = partition.Partition, kerr.NotEnoughReplicas.Code
+				result.Partitions = append(result.Partitions, failed)
+			}
+			response.Topics = append(response.Topics, result)
+		}
+		return response, nil, true
+	})
+	// When the zero-retry override rejects that first response, preserve its
+	// original protocol error rather than assigning a cause to ErrRecordRetries.
+	err = client.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 0, Value: []byte("once")}).FirstErr()
+	require.ErrorIs(t, err, kerr.NotEnoughReplicas)
+	require.Equal(t, int32(1), requests.Load())
+	require.Contains(t, diagnostic.snapshot(), "NOT_ENOUGH_REPLICAS")
+	require.Contains(t, diagnostic.snapshot(), "max_retries_reached true")
+	ends, err := kadm.NewClient(client).ListEndOffsets(ctx, topic)
+	require.NoError(t, err)
+	require.NoError(t, ends.Error())
+	require.Zero(t, ends[topic][0].Offset)
+	// Then retaining more SDK output stays bounded and exposes any omission.
+	bounded := &proxyDiagnostics{}
+	for range 130 {
+		bounded.Log(kgo.LogLevelError, strings.Repeat("synthetic transport error ", 100))
+	}
+	require.Less(t, len(bounded.snapshot()), 128*2100)
+	require.Contains(t, bounded.snapshot(), "[truncated]")
+	require.Contains(t, bounded.snapshot(), "SDK diagnostic rows omitted: 2")
 }
 
 func TestProxyProducerCancellationCannotRetryAfterHealing(t *testing.T) {
