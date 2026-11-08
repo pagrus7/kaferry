@@ -14,6 +14,11 @@ ROOT = Path(__file__).resolve().parents[2]
 HELPERS = (
     'TestReplicatedPublisherAcknowledgesAllPartitionsAndStops',
     'TestReplicatedPublisherStopsAfterRejectedBatch',
+    'TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites',
+    'TestBrokerFaultRestartRequiresClassifiedTerminalFailure',
+    'TestBrokerCurrentProgressDoesNotWaitForChildExit',
+    'TestBrokerCurrentProgressRequiresReadableCompleteEvidence',
+    'TestBrokerCurrentProgressRejectsMalformedCompleteRows',
     'TestReplicatedAuditFailureCleanupRetainsDiagnostics',
     'TestReplicatedAuditFailureCleanupSkipsPassingCases',
     'TestReplicatedAuditFailureCaptureSharesDeadline',
@@ -62,7 +67,7 @@ class ReplicatedHelpersTest(unittest.TestCase):
                         self.assertIn(flag, args)
                     pattern = args[args.index('-run')+1]
                     self.assertTrue(all(re.fullmatch(pattern, name) for name in HELPERS))
-                    for excluded in ('TestReplicatedZombieWorker', 'TestReplicatedProxyRoutes', HELPERS[0]+'Extra'):
+                    for excluded in ('TestReplicatedZombieWorker', 'TestReplicatedProxyRoutes', 'TestBrokerCurrentLogChild', HELPERS[0]+'Extra'):
                         self.assertIsNone(re.fullmatch(pattern, excluded))
 
     def test_local_and_hosted_fast_checks_share_the_target(self):

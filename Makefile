@@ -15,6 +15,11 @@ SOAK_TEST_TIMEOUT ?= 1h
 REPLICATED_HELPER_TESTS := \
 	TestReplicatedPublisherAcknowledgesAllPartitionsAndStops \
 	TestReplicatedPublisherStopsAfterRejectedBatch \
+	TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites \
+	TestBrokerFaultRestartRequiresClassifiedTerminalFailure \
+	TestBrokerCurrentProgressDoesNotWaitForChildExit \
+	TestBrokerCurrentProgressRequiresReadableCompleteEvidence \
+	TestBrokerCurrentProgressRejectsMalformedCompleteRows \
 	TestReplicatedAuditFailureCleanupRetainsDiagnostics \
 	TestReplicatedAuditFailureCleanupSkipsPassingCases \
 	TestReplicatedAuditFailureCaptureSharesDeadline \
