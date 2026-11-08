@@ -24,10 +24,9 @@ jobs:
         run: make wording
       - name: Documentation links and shell examples
         run: python3 -m tools.docs.docs
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: ./.github/actions/setup-go
         with:
-          go-version: '1.27.3'
-          cache: true
+          cache-name: checks-fast
       - run: make fmt
       - run: python3 -m tools.ci.ci unit go test -vet=off -count=1 -json -race -coverpkg=./... -coverprofile=build-results/coverage.out ./...
         env:
@@ -82,10 +81,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: ./.github/actions/setup-go
         with:
-          go-version: '1.27.3'
-          cache: true
+          cache-name: checks-kafka
       - run: python3 -m tools.ci.ci broker make broker
       - run: python3 -m tools.ci.ci integration go test -count=1 -json -race -tags=integration -coverpkg=./... -coverprofile=build-results/coverage.out ./src/tests/system
         env:
@@ -165,10 +163,9 @@ jobs:
       KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: ./.github/actions/setup-go
         with:
-          go-version: '1.27.3'
-          cache: true
+          cache-name: checks-load
       - run: python3 -m tools.ci.ci broker make broker
       - name: Capture bounded load measurements
         run: python3 -m tools.ci.ci load make load
