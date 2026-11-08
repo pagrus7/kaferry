@@ -63,6 +63,21 @@ def reconcile(messages, expected, preserve, expected_count=None):
     return {'expected': count, 'verified': len(seen), 'missing': 0, 'duplicates': 0, 'corrupted': 0}
 
 
+def replicated_topology(source, destination):
+    if (not source.cluster_id or not destination.cluster_id or source.cluster_id == destination.cluster_id or
+            len(source.brokers) != 3 or len(destination.brokers) != 3):
+        raise ValueError('replicated fixture requires two distinct three-broker clusters')
+    return dict(source_brokers=3, destination_brokers=3, replication_factor=3, min_insync_replicas=2)
+
+
+def topic_ready(metadata, partitions, replicated=False):
+    if not metadata or metadata.error or len(metadata.partitions) != partitions:
+        return False
+    return all(not part.error and part.leader >= 0 and (not replicated or (
+        len(set(part.replicas)) == 3 and set(part.isrs) == set(part.replicas)))
+        for part in metadata.partitions.values())
+
+
 def client_properties(properties, region):
     result = dict(properties)
     if result.get('sasl.mechanism') == 'AWS_MSK_IAM':
@@ -133,10 +148,12 @@ def run_probe(args):
         import confluent_kafka as kafka
         import fastavro
         import cramjam
-        from confluent_kafka.admin import AdminClient, NewTopic
+        from confluent_kafka.admin import AdminClient, ConfigResource, NewTopic
     except ImportError:
         raise ValueError('run python3 -m tools.qualification.qualify setup before broker/cloud qualification')
     config = json.loads(args.config.read_text()) if args.config else {}
+    if args.replicated and args.config:
+        raise ValueError('replicated fixture smoke does not accept external configuration')
     source = config.get('source', {'bootstrap.servers': args.source})
     destination = config.get('destination', {'bootstrap.servers': args.destination})
     fixture_source = client_properties(config.get('fixture_source', source), config.get('aws_region'))
@@ -161,18 +178,23 @@ def run_probe(args):
 
     def topic(side, suffix, partitions):
         name = namespace + '-' + suffix
-        futures = admins[side].create_topics([NewTopic(name, num_partitions=partitions, replication_factor=int(config.get('replication_factor', -1)))], request_timeout=60)
+        factor = 3 if args.replicated else int(config.get('replication_factor', -1))
+        futures = admins[side].create_topics([NewTopic(name, num_partitions=partitions, replication_factor=factor)], request_timeout=60)
         futures[name].result(timeout=70)
         created[side].append(name)
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             metadata = admins[side].list_topics(name, timeout=10).topics.get(name)
-            if metadata and not metadata.error and len(metadata.partitions) == partitions and all(
-                    not p.error and p.leader >= 0 for p in metadata.partitions.values()):
+            if topic_ready(metadata, partitions, args.replicated):
                 break
             time.sleep(0.1)
         else:
-            raise ValueError('fixture topic leaders did not become ready')
+            raise ValueError('fixture topic leaders and required replicas did not become ready')
+        if args.replicated:
+            resource = ConfigResource(ConfigResource.Type.TOPIC, name)
+            described = admins[side].describe_configs([resource], request_timeout=30)[resource].result(timeout=40)
+            if described['min.insync.replicas'].value != '2':
+                raise ValueError('replicated fixture topic does not require min.insync.replicas=2')
         return name
 
     def copy(label, query):
@@ -192,8 +214,11 @@ def run_probe(args):
             print(label + '/' + phase + ': ' + json.dumps(counts), flush=True)
 
     try:
-        report['source_cluster'] = admins[0].list_topics(timeout=30).cluster_id
-        report['destination_cluster'] = admins[1].list_topics(timeout=30).cluster_id
+        source_metadata, destination_metadata = [admin.list_topics(timeout=30) for admin in admins]
+        report['source_cluster'] = source_metadata.cluster_id
+        report['destination_cluster'] = destination_metadata.cluster_id
+        if args.replicated:
+            report['topology'] = replicated_topology(source_metadata, destination_metadata)
         src = topic(0, 'source', 4)
         # Different librdkafka producers exercise every supported compression codec.
         for number, codec in enumerate(('none', 'gzip', 'snappy', 'lz4', 'zstd')):
@@ -219,6 +244,9 @@ def run_probe(args):
         copy_resume('replay', f"INSERT INTO TOPIC {sql_string(dst + '@destination')} SELECT * FROM ARCHIVE {sql_string(clone)} WITH (GROUP='replay')",
             lambda: read_topic(kafka.Consumer, kafka.TopicPartition, fixture_destination, dst, 4), True)
         report['status'] = 'passed'
+    except Exception:
+        report['status'] = 'failed'
+        raise
     finally:
         try:
             for admin, names in zip(admins, created):
@@ -240,6 +268,7 @@ def main():
     parser.add_argument('--source', default='127.0.0.1:39092')
     parser.add_argument('--destination', default='127.0.0.1:40092')
     parser.add_argument('--config', type=Path, help='private JSON containing source/destination Kafka properties')
+    parser.add_argument('--replicated', action='store_true', help='require the plain RF=3/min-ISR=2 fixture')
     args = parser.parse_args()
     args.binary = args.binary.resolve()
     run_probe(args)

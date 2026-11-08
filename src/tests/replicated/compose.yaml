@@ -1,0 +1,106 @@
+x-broker: &broker
+  image: ${KAFERRY_REPLICATED_IMAGE:-apache/kafka:4.4.0@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f}
+  profiles: [replicated]
+  user: "1000:1000"
+  volumes:
+    - data:/storage
+  healthcheck:
+    test: [CMD, /opt/kafka/bin/kafka-topics.sh, --bootstrap-server, "localhost:9092", --list]
+    start_period: 30s
+    start_interval: 1s
+    interval: 5s
+    timeout: 5s
+    retries: 18
+
+x-environment: &environment
+  KAFKA_PROCESS_ROLES: broker,controller
+  KAFKA_HEAP_OPTS: -Xms128m -Xmx512m
+  KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: 4
+  KAFKA_TRANSACTION_STATE_LOG_NUM_PARTITIONS: 4
+  KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,CLIENT://:9094
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,CLIENT:PLAINTEXT
+  KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+  KAFKA_MIN_INSYNC_REPLICAS: 2
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+x-source: &source
+  <<: *environment
+  CLUSTER_ID: rUeZ6q3ORyS3JLd4Kc2Q9A
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@source-1:9093,2@source-2:9093,3@source-3:9093
+
+x-destination: &destination
+  <<: *environment
+  CLUSTER_ID: MQ3bplrhSxyW9DFKmR7zQw
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@destination-1:9093,2@destination-2:9093,3@destination-3:9093
+
+services:
+  storage:
+    image: ${KAFERRY_REPLICATED_IMAGE:-apache/kafka:4.4.0@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f}
+    profiles: [storage]
+    user: "0:0"
+    network_mode: none
+    entrypoint: [/bin/sh]
+    environment:
+      KAFERRY_FIXTURE_PROJECT: ${COMPOSE_PROJECT_NAME}
+      KAFERRY_REPLICATED_RUN_ID: ${KAFERRY_REPLICATED_RUN_ID:-}
+    volumes:
+      - data:/storage
+  source-1:
+    <<: *broker
+    ports: ["127.0.0.1:46092:9094"]
+    environment:
+      <<: *source
+      KAFKA_NODE_ID: 1
+      KAFKA_LOG_DIRS: /storage/kaferry-replicated/${COMPOSE_PROJECT_NAME}/${KAFERRY_REPLICATED_RUN_ID:-}/source-1
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://source-1:9092,CLIENT://127.0.0.1:46092
+  source-2:
+    <<: *broker
+    ports: ["127.0.0.1:46093:9094"]
+    environment:
+      <<: *source
+      KAFKA_NODE_ID: 2
+      KAFKA_LOG_DIRS: /storage/kaferry-replicated/${COMPOSE_PROJECT_NAME}/${KAFERRY_REPLICATED_RUN_ID:-}/source-2
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://source-2:9092,CLIENT://127.0.0.1:46093
+  source-3:
+    <<: *broker
+    ports: ["127.0.0.1:46094:9094"]
+    environment:
+      <<: *source
+      KAFKA_NODE_ID: 3
+      KAFKA_LOG_DIRS: /storage/kaferry-replicated/${COMPOSE_PROJECT_NAME}/${KAFERRY_REPLICATED_RUN_ID:-}/source-3
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://source-3:9092,CLIENT://127.0.0.1:46094
+  destination-1:
+    <<: *broker
+    ports: ["127.0.0.1:47092:9094"]
+    environment:
+      <<: *destination
+      KAFKA_NODE_ID: 1
+      KAFKA_LOG_DIRS: /storage/kaferry-replicated/${COMPOSE_PROJECT_NAME}/${KAFERRY_REPLICATED_RUN_ID:-}/destination-1
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://destination-1:9092,CLIENT://127.0.0.1:47092
+  destination-2:
+    <<: *broker
+    ports: ["127.0.0.1:47093:9094"]
+    environment:
+      <<: *destination
+      KAFKA_NODE_ID: 2
+      KAFKA_LOG_DIRS: /storage/kaferry-replicated/${COMPOSE_PROJECT_NAME}/${KAFERRY_REPLICATED_RUN_ID:-}/destination-2
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://destination-2:9092,CLIENT://127.0.0.1:47093
+  destination-3:
+    <<: *broker
+    ports: ["127.0.0.1:47094:9094"]
+    environment:
+      <<: *destination
+      KAFKA_NODE_ID: 3
+      KAFKA_LOG_DIRS: /storage/kaferry-replicated/${COMPOSE_PROJECT_NAME}/${KAFERRY_REPLICATED_RUN_ID:-}/destination-3
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://destination-3:9092,CLIENT://127.0.0.1:47094
+
+volumes:
+  data:
+    name: ${KAFERRY_REPLICATED_BROKER_VOLUME:-${COMPOSE_PROJECT_NAME}-data}
+    external: ${KAFERRY_REPLICATED_VOLUME_EXTERNAL:-false}

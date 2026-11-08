@@ -1,0 +1,62 @@
+name: replicated fixture
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/tests/replicated/**'
+      - 'src/tests/qualification/matrix.json'
+      - 'tools/qualification/qualify.py'
+      - 'tools/qualification/broker_probe.py'
+      - 'tools/qualification/test_qualify.py'
+      - '.github/workflows/replicated-lab.yml'
+permissions:
+  contents: read
+concurrency:
+  group: replicated-fixture-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-name: pr-brokers
+      - name: Validate the rendered fixture
+        env:
+          KAFERRY_REPLICATED_RUN_ID: '00000000000000000000000000000000'
+        run: |
+          python3 - <<'PY'
+          import json, subprocess
+          from pathlib import Path
+          # Given the newest pinned catalog entry, render only the replicated brokers.
+          image = list(json.loads(Path('src/tests/qualification/matrix.json').read_text()).values())[-1]
+          fixture = json.loads(subprocess.check_output(['docker', 'compose', '-f', 'src/tests/replicated/compose.yaml', '-p', 'kaferry-replicated', '--profile', 'replicated', 'config', '--format', 'json']))
+          services = fixture['services']
+          # When rendered, then all six brokers retain RF=3, min ISR=2 and capped heaps.
+          assert set(services) == {f'{side}-{node}' for side in ('source', 'destination') for node in range(1, 4)}
+          assert len({service['environment']['KAFKA_LOG_DIRS'] for service in services.values()}) == 6
+          for service in services.values():
+              assert service['image'] == image
+              assert service['user'] == '1000:1000'
+              env = service['environment']
+              assert env['KAFKA_DEFAULT_REPLICATION_FACTOR'] == '3'
+              assert env['KAFKA_MIN_INSYNC_REPLICAS'] == '2'
+              assert env['KAFKA_HEAP_OPTS'] == '-Xms128m -Xmx512m'
+          assert services['source-1']['environment']['CLUSTER_ID'] != services['destination-1']['environment']['CLUSTER_ID']
+          PY
+      - name: Install the independent checker and build candidate
+        run: make qualification-setup
+      - name: Copy and independently reconcile the replicated fixture
+        run: python3 -m tools.qualification.qualify run replicated --output build-results/replicated
+      - name: Verify fixture teardown
+        run: |
+          test -z "$(docker ps -aq --filter label=com.docker.compose.project=kaferry-replicated)"
+          test -z "$(docker volume ls -q --filter label=com.docker.compose.project=kaferry-replicated)"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: replicated-fixture-evidence
+          path: build-results/replicated
+          retention-days: 14
