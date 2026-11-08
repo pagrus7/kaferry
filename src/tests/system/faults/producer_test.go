@@ -15,12 +15,16 @@ import (
 )
 
 func proxyProducer(seeds ...string) (*kgo.Client, error) {
+	return proxyProducerWithHooks(seeds)
+}
+
+func proxyProducerWithHooks(seeds []string, hooks ...kgo.Hook) (*kgo.Client, error) {
 	// A diagnostic write must be cancellable even after an ambiguous request.
 	// Close this producer before healing; output reconciliation still rejects
 	// any cancelled record that actually reached Kafka.
 	return kgo.NewClient(kgo.SeedBrokers(seeds...), kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		kgo.AllowIdempotentProduceCancellation(), kgo.RecordDeliveryTimeout(2*time.Second),
-		kgo.RecordRetries(0), kgo.ProduceRequestTimeout(time.Second), kgo.RequestTimeoutOverhead(time.Second))
+		kgo.RecordRetries(0), kgo.ProduceRequestTimeout(time.Second), kgo.RequestTimeoutOverhead(time.Second), kgo.WithHooks(hooks...))
 }
 
 func TestProxyProducerCancellationCannotRetryAfterHealing(t *testing.T) {

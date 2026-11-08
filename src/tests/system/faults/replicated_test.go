@@ -51,19 +51,21 @@ func proveProxyRoute(t *testing.T, lab *Lab, admin *kadm.Client, cluster string,
 		_, deleteErr := admin.DeleteTopics(cleanup, topic)
 		require.NoError(t, deleteErr)
 	})
-	partition := proxyPartition(ctx, t, admin, topic)
 	// Bootstrap on broker 1, then let Kafka metadata discover a different leader.
 	workerSeed := Endpoints(cluster, worker)[0]
 	client, err := proxyProducer(workerSeed)
 	require.NoError(t, err)
 	closeProbe := sync.OnceFunc(client.Close)
 	defer closeProbe()
+	partition := proxyPartition(ctx, t, kadm.NewClient(client), topic)
+	require.NoError(t, prepareProxyProducer(ctx, client, topic, partition, proxyRoutes(cluster, worker), t.Logf))
 	produce := func(producer *kgo.Client, value string) error {
 		return producer.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: partition, Value: []byte(value)}).FirstErr()
 	}
 	observer, err := kgo.NewClient(kgo.SeedBrokers(Endpoints(cluster, 0)...), kgo.RecordPartitioner(kgo.ManualPartitioner()))
 	require.NoError(t, err)
 	defer observer.Close()
+	require.NoError(t, prepareProxyProducer(ctx, observer, topic, partition, proxyRoutes(cluster, 0), t.Logf))
 	require.NoError(t, produce(client, "before"))
 	// When the metadata-discovered leader's route is cut, that worker cannot write.
 	injection, err := lab.Inject(ctx, Role{Kind: "leader", Cluster: cluster, Topic: topic, Partition: partition, Worker: worker}, Fault{Kind: "cut"})
@@ -89,6 +91,7 @@ func proveProxyRoute(t *testing.T, lab *Lab, admin *kadm.Client, cluster string,
 	recovered, err := proxyProducer(workerSeed)
 	require.NoError(t, err)
 	defer recovered.Close()
+	require.NoError(t, prepareProxyProducer(ctx, recovered, topic, partition, proxyRoutes(cluster, worker), t.Logf))
 	require.NoError(t, produce(recovered, "after"))
 	reader, err := kgo.NewClient(kgo.SeedBrokers(Endpoints(cluster, 0)...),
 		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{topic: {partition: kgo.NewOffset().AtStart()}}))
@@ -109,6 +112,7 @@ func proveProxyRoute(t *testing.T, lab *Lab, admin *kadm.Client, cluster string,
 
 func proxyPartition(ctx context.Context, t *testing.T, admin *kadm.Client, topic string) int32 {
 	t.Helper()
+	t.Log("producer setup: select a non-bootstrap partition through this producer's route")
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for {
