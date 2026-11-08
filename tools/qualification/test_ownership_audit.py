@@ -78,6 +78,7 @@ class OwnershipAuditTest(unittest.TestCase):
         self.safety = dict(id='ownership/zombie-worker', source_commit='a'*40, binary_sha256='b'*64,
                            binary_platform='linux/amd64', execution_platform='linux/amd64',
                            execution='candidate CLI', parameters=dict(source_partitions=24, routing='PRESERVE'),
+                           safety=dict(observations='samples.jsonl'), bootstrap=dict(observations='bootstrap.jsonl'),
                            writer_observations=[dict(pid=10, exit_code=0), dict(pid=11, exit_code=0)])
         (self.directory/'case.json').write_text('{}\n')
         first = [member('one', 'old', list(range(12))), member('two', 'peer', list(range(12, 24)))]
@@ -132,7 +133,7 @@ class OwnershipAuditTest(unittest.TestCase):
         # these tests isolate the additional selected-CLI ownership evidence.
         with patch.object(audit, 'validate_case', return_value=copy.deepcopy(self.safety)) as safety:
             result = audit.validate(self.directory, identity)
-            safety.assert_called_once_with((self.directory/'case.json').resolve())
+            safety.assert_called_once_with((self.directory/self.case['safety_case']['observations']).resolve())
             return result
 
     def test_actual_rejection_and_legitimate_rejoin_are_distinguished(self):
@@ -150,6 +151,19 @@ class OwnershipAuditTest(unittest.TestCase):
         self.assertEqual({'session.timeout.ms': 6000, 'delivery_timeout': 2000, 'shutdown_timeout': 5000},
                          fault_timeout_catalog()['ownership/zombie-worker'])
         self.assertEqual(1073, fault_execution_seconds())
+
+    def test_shared_observation_references_are_rebased_for_the_outer_receipt(self):
+        # Given the real helper's nested case layout inside a suite directory.
+        relative = 'fault-oracle/run/scenario/observations/case.json'
+        path = self.directory/relative
+        path.parent.mkdir(parents=True)
+        path.write_text('{}\n')
+        self.case['safety_case']['observations'] = relative
+        # When reused by the outer receipt, then bootstrap and samples remain
+        # valid contained paths from that receipt's root, as in legacy collect().
+        result = self.validate()
+        for key, name in (('safety', 'samples.jsonl'), ('bootstrap', 'bootstrap.jsonl')):
+            self.assertEqual(str(Path(relative).parent/name), result[key]['observations'])
 
     def test_local_suppression_needs_complete_audit_and_peer_progress(self):
         # Given a correct client that suppresses stale commits locally.

@@ -163,11 +163,12 @@ def received_commits(diagnostics, broker, workers):
 
 
 def _validate(directory, identity=None):
-    directory = Path(directory)
+    directory = Path(directory).resolve()
     case = json.loads((directory/'replicated-ownership.json').read_text())
     if case['id'] != 'ownership/zombie-worker' or case['source_partitions'] != 24:
         raise ValueError('unknown replicated ownership case')
-    safety = validate_case(observation_path(directory, case['safety_case'], 'case.json'))
+    safety_path = observation_path(directory, case['safety_case'], 'case.json')
+    safety = validate_case(safety_path)
     if (safety['id'] != case['id'] or safety['execution'] != 'candidate CLI' or
             safety['parameters'] != dict(source_partitions=24, routing='PRESERVE') or identity and any(safety[key] != identity[key] for key in
             ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform'))):
@@ -355,6 +356,9 @@ def _validate(directory, identity=None):
                 accepted_peer_partitions=sorted(peer_progress), accepted_rejoin_commits=len(rejoined),
                 post_transfer_commits=len(post), source_partitions=24, audit_files=files,
                 scope='network receipts and correlated broker completions around both selected CLI lifetimes; no rejection is inferred when a stale request is absent')
+    for key in ('safety', 'bootstrap'):
+        reference = safety[key]
+        reference['observations'] = (safety_path.parent/reference['observations']).resolve().relative_to(directory).as_posix()
     return dict(safety, ownership_fencing=proof)
 
 
