@@ -55,15 +55,7 @@ func (p *Pool) Read(file File, pos Position) (record avro.Record, next Position,
 	if p.closed {
 		return record, next, errors.New("archive replay pool is closed")
 	}
-	defer func() {
-		if result != nil {
-			if errors.Is(result, io.EOF) {
-				result = io.ErrUnexpectedEOF
-			}
-			result = fmt.Errorf("read archive file %s at block byte %d, record %d: %w", file.name(), pos.Block, pos.Record, result)
-			p.failed = result
-		}
-	}()
+	defer func() { result = p.readResult(file, pos, result) }()
 	if pos.Record < 0 {
 		return record, next, errors.New("negative archive record cursor")
 	}
@@ -98,6 +90,18 @@ func (p *Pool) Read(file File, pos Position) (record avro.Record, next Position,
 		next.Block, next.Record = entry.block.End, 0
 	}
 	return record, next, nil
+}
+
+func (p *Pool) readResult(file File, pos Position, result error) error {
+
+	if result != nil {
+		if errors.Is(result, io.EOF) {
+			result = io.ErrUnexpectedEOF
+		}
+		result = fmt.Errorf("read archive file %s at block byte %d, record %d: %w", file.name(), pos.Block, pos.Record, result)
+		p.failed = result
+	}
+	return result
 }
 
 func (p *Pool) load(key blockKey) (*blockEntry, error) {

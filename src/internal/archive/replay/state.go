@@ -26,8 +26,8 @@ func (s State) validate() error {
 	if s.Version != 1 || !validGroup(s.Group) || s.Fingerprint == "" || len(s.Fingerprint) > 4096 || !utf8.ValidString(s.Fingerprint) || s.Position < 0 || s.Files == nil {
 		return errors.New("invalid or unsupported replay checkpoint")
 	}
-	if s.Stop != nil && (s.Stop.At != s.Position || s.Stop.Reason != "worker_record_cap" && s.Stop.Reason != "eof" || s.Stop.Reason == "eof" && !s.Complete) {
-		return errors.New("invalid replay stop")
+	if err := s.validateStop(); err != nil {
+		return err
 	}
 	if s.Window.Lower != nil && s.Window.Upper != nil && *s.Window.Lower >= *s.Window.Upper {
 		return errors.New("invalid replay time window")
@@ -42,6 +42,13 @@ func (s State) validate() error {
 	}
 	if s.Complete != allDone || (s.Position == 0) != allInitial {
 		return errors.New("replay completion or sequence disagrees with file cursors")
+	}
+	return nil
+}
+
+func (s State) validateStop() error {
+	if s.Stop != nil && (s.Stop.At != s.Position || s.Stop.Reason != "worker_record_cap" && s.Stop.Reason != "eof" || s.Stop.Reason == "eof" && !s.Complete) {
+		return errors.New("invalid replay stop")
 	}
 	return nil
 }

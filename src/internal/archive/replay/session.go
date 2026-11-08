@@ -64,55 +64,14 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 		return nil, err
 	}
 	if saved == nil {
-		window, checkErr := query.Window.Resolve(clock.Now())
-		if checkErr != nil {
-			return nil, checkErr
-		}
-		if checkErr = query.Window.ValidateStored(window, query.disorderAllowance()); checkErr != nil {
-			return nil, checkErr
-		}
-		selection, checkErr := inputs.Select(query.Partitions)
-		if checkErr != nil {
-			return nil, checkErr
-		}
-		s.PrivateFiles = selection.PrivateFiles
-		s.saved = State{Version: 1, Group: query.Group, Fingerprint: query.Fingerprint, Window: window, Complete: len(selection.Files) == 0, Files: make([]Progress, 0, len(selection.Files))}
-		for _, file := range selection.Files {
-			s.saved.Files = append(s.saved.Files, Progress{File: file, Next: initial(file)})
-		}
-		if checkErr = s.saved.validate(); checkErr != nil {
-			return nil, checkErr
-		}
-		if checkErr = query.validatePartitions(s.saved.Files); checkErr != nil {
-			return nil, checkErr
-		}
-		if checkErr = store.Save(s.saved.clone()); checkErr != nil {
-			return nil, checkErr
-		}
+		err = s.initialize(query, clock, inputs)
 	} else {
-		s.saved = saved.clone()
-		if err = s.saved.validate(); err != nil {
-			return nil, err
-		}
-		if s.saved.Group != query.Group || s.saved.Fingerprint != query.Fingerprint {
-			return nil, errors.New("replay checkpoint query identity mismatch")
-		}
-		if err = query.Window.ValidateStored(s.saved.Window, query.disorderAllowance()); err != nil {
-			return nil, err
-		}
-		if err = query.validatePartitions(s.saved.Files); err != nil {
-			return nil, err
-		}
-		if !s.saved.Complete {
-			files := make([]File, len(s.saved.Files))
-			for i, p := range s.saved.Files {
-				files[i] = p.File
-			}
-			if err = inputs.Validate(files); err != nil {
-				return nil, err
-			}
-		}
+		err = s.restore(query, saved, inputs)
 	}
+	if err != nil {
+		return nil, err
+	}
+
 	if s.criteria.TimestampStopEnabled() && s.saved.Window.Upper != nil {
 		threshold := *s.saved.Window.Upper + s.criteria.DisorderMS()
 		s.threshold = &threshold
@@ -124,6 +83,62 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 		}
 	}
 	return s, nil
+}
+
+func (s *Session) initialize(query Query, clock Clock, inputs Snapshot) error {
+
+	window, checkErr := query.Window.Resolve(clock.Now())
+	if checkErr != nil {
+		return checkErr
+	}
+	if checkErr = query.Window.ValidateStored(window, query.disorderAllowance()); checkErr != nil {
+		return checkErr
+	}
+	selection, checkErr := inputs.Select(query.Partitions)
+	if checkErr != nil {
+		return checkErr
+	}
+	s.PrivateFiles = selection.PrivateFiles
+	s.saved = State{Version: 1, Group: query.Group, Fingerprint: query.Fingerprint, Window: window, Complete: len(selection.Files) == 0, Files: make([]Progress, 0, len(selection.Files))}
+	for _, file := range selection.Files {
+		s.saved.Files = append(s.saved.Files, Progress{File: file, Next: initial(file)})
+	}
+	if checkErr = s.saved.validate(); checkErr != nil {
+		return checkErr
+	}
+	if checkErr = query.validatePartitions(s.saved.Files); checkErr != nil {
+		return checkErr
+	}
+	if checkErr = s.store.Save(s.saved.clone()); checkErr != nil {
+		return checkErr
+	}
+	return nil
+}
+func (s *Session) restore(query Query, saved *State, inputs Snapshot) error {
+
+	s.saved = saved.clone()
+	if err := s.saved.validate(); err != nil {
+		return err
+	}
+	if s.saved.Group != query.Group || s.saved.Fingerprint != query.Fingerprint {
+		return errors.New("replay checkpoint query identity mismatch")
+	}
+	if err := query.Window.ValidateStored(s.saved.Window, query.disorderAllowance()); err != nil {
+		return err
+	}
+	if err := query.validatePartitions(s.saved.Files); err != nil {
+		return err
+	}
+	if !s.saved.Complete {
+		files := make([]File, len(s.saved.Files))
+		for i, p := range s.saved.Files {
+			files[i] = p.File
+		}
+		if err := inputs.Validate(files); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (q Query) validatePartitions(files []Progress) error {
