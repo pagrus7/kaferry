@@ -5,6 +5,7 @@ on:
 permissions:
   contents: read
   actions: read
+  pull-requests: read
 concurrency:
   group: integrity-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -16,11 +17,31 @@ jobs:
       run: ${{ steps.scope.outputs.run }}
       suites: ${{ steps.scope.outputs.suites }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: paths
         with:
-          fetch-depth: 0
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!README.md'
+              - '!docs/**/*.md'
+            grammar:
+              - 'docs/design/grammar.md'
       - id: scope
-        run: python3 -m tools.ci.risk
+        env:
+          RUN: ${{ steps.paths.outputs.code == 'true' || steps.paths.outputs.grammar == 'true' }}
+        run: |
+          if [ "$RUN" = true ]; then
+            suites='["fault","qualification"]'
+            summary='fault, qualification'
+          else
+            suites='[]'
+            summary='none (prose only)'
+          fi
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+          echo "suites=$suites" >> "$GITHUB_OUTPUT"
+          echo "Suites: $summary" >> "$GITHUB_STEP_SUMMARY"
   suites:
     needs: select
     if: needs.select.outputs.run == 'true'

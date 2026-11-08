@@ -41,7 +41,8 @@ jobs:
           CGO_ENABLED: "1"
       - name: Coverage reports
         run: |
-          python3 -m tools.ci.quality coverage
+          go tool cover -func=build-results/coverage.out > build-results/coverage.txt
+          echo "Go statement coverage: $(tail -n 1 build-results/coverage.txt | awk '{print $NF}')" >> "$GITHUB_STEP_SUMMARY"
           go tool cover -html=build-results/coverage.out -o=build-results/coverage.html
       - name: Compile broker fixtures without CGO
         env:
@@ -140,7 +141,8 @@ jobs:
         run: python3 -m tools.ci.ci load make load
       - name: Coverage reports
         run: |
-          python3 -m tools.ci.quality coverage
+          go tool cover -func=build-results/coverage.out > build-results/coverage.txt
+          echo "Go statement coverage: $(tail -n 1 build-results/coverage.txt | awk '{print $NF}')" >> "$GITHUB_STEP_SUMMARY"
           go tool cover -html=build-results/coverage.out -o=build-results/coverage.html
       - name: Publish Go coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1

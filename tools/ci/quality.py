@@ -1,29 +1,11 @@
 #!/usr/bin/env python3
-"""Report coverage and Python duplication."""
+"""Report benchmarks and Python duplication."""
 
 import json
 import os
 from pathlib import Path
 import re
 import sys
-
-from tools.review.review_coverage import sum_blocks
-
-
-def coverage(text):
-    blocks = sum_blocks([text])
-    packages = {}
-    for (name, _, _, _, _), (statements, hits) in blocks.items():
-        package = name.rsplit("/", 1)[0]
-        counts = packages.setdefault(package, {"covered": 0, "statements": 0})
-        counts["statements"] += statements
-        counts["covered"] += statements if hits > 0 else 0
-    total = sum(p["statements"] for p in packages.values())
-    if not total:
-        raise ValueError("coverage profile contains no statements")
-    covered = sum(p["covered"] for p in packages.values())
-    return {"covered": covered, "statements": total, "percent": covered * 100 / total,
-            "packages": packages}
 
 
 def benchmarks(text):
@@ -42,16 +24,6 @@ def maintainability(directory):
 
 def markdown(directory):
     rows = []
-    profile = directory / "coverage.json"
-    if profile.exists():
-        r = json.loads(profile.read_text())
-        rows += ["## Go coverage", "", f"**{r['percent']:.1f}% of statements** ({r['covered']}/{r['statements']}). "
-                 "All Go packages instrumented; excludes native C/C++.", "",
-                 "| Package | Statement coverage |", "| --- | ---: |"]
-        for name, counts in sorted(r["packages"].items()):
-            percent = f"{counts['covered'] * 100 / counts['statements']:.1f}%" if counts["statements"] else "—"
-            rows.append(f"| {name.removeprefix('github.com/pagrus7/kaferry/')} | {percent} |")
-        rows += ["", "The artifact includes the original profile and annotated HTML.", ""]
     report = directory / "quality.json"
     if report.exists():
         r = json.loads(report.read_text())
@@ -77,11 +49,7 @@ if __name__ == "__main__":
     directory = Path(os.environ.get("KAFERRY_REPORT_DIR", "build-results"))
     directory.mkdir(parents=True, exist_ok=True)
     operation = sys.argv[1]
-    if operation == "coverage":
-        result = coverage((directory / "coverage.out").read_text())
-    elif operation == "maintainability":
-        result = maintainability(directory)
-    else:
-        raise ValueError("expected coverage or maintainability")
-    name = "coverage" if operation == "coverage" else "quality"
-    (directory / f"{name}.json").write_text(json.dumps(result, indent=2) + "\n")
+    if operation != "maintainability":
+        raise ValueError("expected maintainability")
+    result = maintainability(directory)
+    (directory / "quality.json").write_text(json.dumps(result, indent=2) + "\n")
