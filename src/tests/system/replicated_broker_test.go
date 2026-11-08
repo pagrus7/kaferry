@@ -115,7 +115,10 @@ func replicatedBrokerFault(t *testing.T, name string) {
 	})
 	process := s.workers[len(s.workers)-1]
 	require.NoError(t, process.signal(os.Interrupt))
-	require.NoError(t, process.wait(), process.logs())
+	waitErr := process.wait()
+	logs, err := process.currentLogs()
+	require.NoError(t, err)
+	require.NoError(t, waitErr, logs)
 	s.measureLast("completed")
 
 	// Then the shared independent observer completes every configured recovery
@@ -185,7 +188,12 @@ func (s *brokerCopy) start() {
 			_ = process.command.Process.Kill()
 		}
 		_ = process.wait()
-		if err := os.WriteFile(logPath, []byte(process.logs()), 0600); err != nil {
+		logs, err := process.currentLogs()
+		if err != nil {
+			s.t.Error("read selected worker log: ", err)
+			return
+		}
+		if err := os.WriteFile(logPath, []byte(logs), 0600); err != nil {
 			s.t.Error("retain selected worker log: ", err)
 		}
 	})
@@ -200,16 +208,21 @@ func (s *brokerCopy) measureLast(reason string) {
 	require.Positive(s.t, memory.samples)
 	require.Zero(s.t, memory.failures)
 	require.LessOrEqual(s.t, memory.peak*1024, int64(512<<20))
-	summary := summaryFrom(s.t, process.logs())
+	logs, err := process.currentLogs()
+	require.NoError(s.t, err)
+	_, found, err := latestCopyProgress(logs)
+	require.NoError(s.t, err)
+	require.True(s.t, found, "completed broker worker omitted progress evidence")
+	summary := summaryFrom(s.t, logs)
 	require.LessOrEqual(s.t, summary.PeakRecords, 1024)
 	require.LessOrEqual(s.t, summary.PeakBytes, int64(134217728))
-	terminal, _ := brokerTerminalFailure(process.logs())
+	terminal, _ := brokerTerminalFailure(logs)
 	s.measurements = append(s.measurements, map[string]any{"pid": process.pid(), "started_at": s.starts[i], "stopped_at": time.Now().UTC(),
 		"binary_sha256": os.Getenv("KAFERRY_EXPECT_BINARY_SHA256"), "worker_route": 1,
 		"terminal_error": terminal,
 		"exit_code":      process.command.ProcessState.ExitCode(), "reason": reason, "sampled_peak_rss_bytes": memory.peak * 1024, "rss_samples": memory.samples,
 		"rss_failures": memory.failures, "record_cap": 1024, "byte_cap": 134217728, "peak_uncommitted_records": summary.PeakRecords, "peak_uncommitted_bytes": summary.PeakBytes})
-	require.NoError(s.t, os.WriteFile(filepath.Join(s.directory, fmt.Sprintf("worker-%d.cli.log", i+1)), []byte(process.logs()), 0600))
+	require.NoError(s.t, os.WriteFile(filepath.Join(s.directory, fmt.Sprintf("worker-%d.cli.log", i+1)), []byte(logs), 0600))
 }
 
 func (s *brokerCopy) live(allowFailure bool) {
@@ -217,13 +230,15 @@ func (s *brokerCopy) live(allowFailure bool) {
 	if !process.finished() {
 		return
 	}
-	require.True(s.t, allowFailure, "CLI exited before recovery: %s", process.logs())
+	logs, err := process.currentLogs()
+	require.NoError(s.t, err)
+	require.True(s.t, allowFailure, "CLI exited before recovery: %s", logs)
 	require.Error(s.t, process.wait())
-	require.Equal(s.t, 1, process.command.ProcessState.ExitCode(), process.logs())
+	require.Equal(s.t, 1, process.command.ProcessState.ExitCode(), logs)
 	// Only the product's existing transport/coordinator/deadline failures may
 	// use this case's recorded restart. Other failures remain qualification errors.
-	_, known := brokerTerminalFailure(process.logs())
-	require.True(s.t, known, "broker fault produced an unexplained CLI failure: %s", process.logs())
+	_, known := brokerTerminalFailure(logs)
+	require.True(s.t, known, "broker fault produced an unexplained CLI failure: %s", logs)
 }
 
 func brokerTerminalFailure(logs string) (string, bool) {
@@ -270,7 +285,13 @@ func (s *brokerCopy) observe(ctx context.Context) (brokerObservation, bool) {
 			return state, false
 		}
 	}
-	state.Pending = latestCopyProgress(s.workers[len(s.workers)-1].logs())
+	var err error
+	var found bool
+	state.Pending, found, err = currentCopyProgress(s.workers[len(s.workers)-1])
+	require.NoError(s.t, err, "read current broker worker progress")
+	if !found {
+		return state, false
+	}
 	parts, err := s.metadata["source"].FetchOffsetsForTopics(ctx, s.group, s.src)
 	if err != nil || parts.Error() != nil || len(parts[s.src]) != replicatedPartitions {
 		return state, false
@@ -290,15 +311,60 @@ func (s *brokerCopy) observe(ctx context.Context) (brokerObservation, bool) {
 	return state, true
 }
 
-func latestCopyProgress(logs string) copySummary {
+func currentCopyProgress(process *cliProcess) (copySummary, bool, error) {
+	logs, err := process.currentLogs()
+	if err != nil {
+		return copySummary{}, false, err
+	}
+	return latestCopyProgress(logs)
+}
+
+func latestCopyProgress(logs string) (copySummary, bool, error) {
 	var result copySummary
-	for _, line := range strings.Split(logs, "\n") {
-		var progress copySummary
-		if json.Unmarshal([]byte(line), &progress) == nil && progress.Message == "progress" {
-			result = progress
+	found := false
+	// A live writer may be between writing a JSON record and its newline. Only
+	// complete rows are evidence; currentLogs rejects this suffix after exit.
+	complete := logs[:strings.LastIndexByte(logs, '\n')+1]
+	for _, line := range strings.Split(complete, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "{") {
+			continue // Terminal command errors are plain text, not progress rows.
+		}
+		progress, ok, err := decodeCopyProgress(line)
+		if err != nil {
+			return copySummary{}, false, err
+		}
+		if ok {
+			result, found = progress, true
 		}
 	}
-	return result
+	return result, found, nil
+}
+
+func decodeCopyProgress(line string) (copySummary, bool, error) {
+	var header struct {
+		Message string `json:"msg"`
+	}
+	if err := json.Unmarshal([]byte(line), &header); err != nil {
+		return copySummary{}, false, fmt.Errorf("decode complete CLI log row: %w", err)
+	}
+	if header.Message != "progress" {
+		return copySummary{}, false, nil
+	}
+	var counts struct {
+		Submitted *int `json:"submitted"`
+		Confirmed *int `json:"confirmed"`
+	}
+	if err := json.Unmarshal([]byte(line), &counts); err != nil {
+		return copySummary{}, false, fmt.Errorf("decode CLI progress counts: %w", err)
+	}
+	if counts.Submitted == nil || counts.Confirmed == nil || *counts.Submitted < 0 || *counts.Confirmed < 0 || *counts.Confirmed > *counts.Submitted {
+		return copySummary{}, false, fmt.Errorf("CLI progress requires nonnegative submitted and confirmed counts with confirmed at most submitted")
+	}
+	var progress copySummary
+	if err := json.Unmarshal([]byte(line), &progress); err != nil {
+		return copySummary{}, false, fmt.Errorf("decode CLI progress record: %w", err)
+	}
+	return progress, true, nil
 }
 
 func (s *brokerCopy) topology(ctx context.Context, side, topic string) ([]faults.Partition, bool) {

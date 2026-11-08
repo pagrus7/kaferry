@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -118,6 +119,34 @@ func (p *cliProcess) logs() string {
 		return err.Error()
 	}
 	return string(data)
+}
+
+// currentLogs reads a fixed file-end snapshot without waiting for the process.
+// The bound is for short deterministic cases; long-running observers need a
+// streaming reader. An unfinished live suffix remains available to the caller,
+// while an exited process must have completed its final newline-terminated row.
+func (p *cliProcess) currentLogs() (string, error) {
+	finished := p.finished()
+	log, err := os.Open(p.output)
+	if err != nil {
+		return "", fmt.Errorf("open current CLI log: %w", err)
+	}
+	defer log.Close()
+	info, err := log.Stat()
+	if err != nil {
+		return "", fmt.Errorf("inspect current CLI log: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() > 8<<20 {
+		return "", fmt.Errorf("current CLI log must be a regular file no larger than 8 MiB")
+	}
+	data := make([]byte, int(info.Size()))
+	if _, err := io.ReadFull(log, data); err != nil {
+		return "", fmt.Errorf("read current CLI log snapshot: %w", err)
+	}
+	if finished && len(data) > 0 && data[len(data)-1] != '\n' {
+		return "", fmt.Errorf("final CLI log has an unfinished row: %w", io.ErrUnexpectedEOF)
+	}
+	return string(data), nil
 }
 func (p *cliProcess) cpu() time.Duration {
 	_ = p.wait()
