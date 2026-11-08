@@ -37,80 +37,84 @@ func TestOTLPExportPreservesMetricAndResourceContract(t *testing.T) {
 	seen := map[string]bool{}
 	for _, specific := range []bool{false, true} {
 		t.Run(map[bool]string{false: "base endpoint", true: "full metrics endpoint"}[specific], func(t *testing.T) {
-			// Given an OTLP receiver and credentials supplied outside the SQL.
-			requests := make(chan *collector.ExportMetricsServiceRequest, 1)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/prefix/v1/metrics" || r.Header.Get("Authorization") != "Bearer token" {
-					t.Error(r.URL.Path, "incorrect endpoint or credentials")
-				}
-				b, err := io.ReadAll(r.Body)
-				if err != nil {
-					t.Error(err)
-					return
-				}
-				var request collector.ExportMetricsServiceRequest
-				if err := proto.Unmarshal(b, &request); err != nil {
-					t.Error(err)
-					return
-				}
-				requests <- &request
-				w.Header().Set("Content-Type", "application/x-protobuf")
-			}))
-			defer server.Close()
-			metricEnv(t, server.URL+"/prefix/v1/metrics")
-			if !specific {
-				t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")
-				t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", server.URL+"/prefix")
-			}
-			t.Setenv("OTEL_EXPORTER_OTLP_METRICS_HEADERS", "Authorization=Bearer%20token")
-			t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "false")
-			t.Setenv("OTEL_EXPORTER_OTLP_METRICS_INSECURE", "true")
-			t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment.name=test,service.instance.id=not-unique")
-			f := NewFactory(systemEnvironment{}, slog.New(slog.NewJSONHandler(io.Discard, nil)), "test-version")
-			session, err := f.Open("test-group")
-			require.NoError(t, err)
-			session.Publish(copy.Snapshot{Submitted: 2, Confirmed: 1, Partitions: 1})
-			// When a short run performs its final best-effort export.
-			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-			defer cancel()
-			session.Close(ctx)
-			// Then the receiver sees typed metrics and a generated worker identity, without record contents.
-			select {
-			case request := <-requests:
-				if len(request.ResourceMetrics) != 1 {
-					t.Fatal(request)
-				}
-				attrs := map[string]string{}
-				for _, a := range request.ResourceMetrics[0].Resource.Attributes {
-					attrs[a.Key] = a.Value.GetStringValue()
-				}
-				if attrs["service.name"] != "kaferry" || attrs["service.version"] != "test-version" || attrs["messaging.consumer.group.name"] != "test-group" || len(attrs["service.instance.id"]) != 32 || attrs["deployment.environment.name"] != "test" {
-					t.Fatal(attrs)
-				}
-				id := attrs["service.instance.id"]
-				if seen[id] {
-					t.Fatal("sessions for the same group reused an instance identity")
-				}
-				seen[id] = true
-				found := false
-				for _, s := range request.ResourceMetrics[0].ScopeMetrics {
-					for _, m := range s.Metrics {
-						if m.Name == "kaferry.records.confirmed" {
-							found = true
-							if m.GetSum().DataPoints[0].GetAsInt() != 1 {
-								t.Fatal(m)
-							}
-						}
-					}
-				}
-				if !found {
-					t.Fatal("missing confirmed counter")
-				}
-			case <-time.After(2 * time.Second):
-				t.Fatal("no final export")
-			}
+			exportMetricContract(t, specific, seen)
 		})
 	}
+}
+func exportMetricContract(t *testing.T, specific bool, seen map[string]bool) {
+	t.Helper()
+	// Given an OTLP receiver and credentials supplied outside the SQL.
+	requests := make(chan *collector.ExportMetricsServiceRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/prefix/v1/metrics" || r.Header.Get("Authorization") != "Bearer token" {
+			t.Error(r.URL.Path, "incorrect endpoint or credentials")
+		}
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		var request collector.ExportMetricsServiceRequest
+		if err := proto.Unmarshal(b, &request); err != nil {
+			t.Error(err)
+			return
+		}
+		requests <- &request
+		w.Header().Set("Content-Type", "application/x-protobuf")
+	}))
+	defer server.Close()
+	metricEnv(t, server.URL+"/prefix/v1/metrics")
+	if !specific {
+		t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")
+		t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", server.URL+"/prefix")
+	}
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_HEADERS", "Authorization=Bearer%20token")
+	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "false")
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_INSECURE", "true")
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment.name=test,service.instance.id=not-unique")
+	f := NewFactory(systemEnvironment{}, slog.New(slog.NewJSONHandler(io.Discard, nil)), "test-version")
+	session, err := f.Open("test-group")
+	require.NoError(t, err)
+	session.Publish(copy.Snapshot{Submitted: 2, Confirmed: 1, Partitions: 1})
+	// When a short run performs its final best-effort export.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	session.Close(ctx)
+	// Then the receiver sees typed metrics and a generated worker identity, without record contents.
+	select {
+	case request := <-requests:
+		id := requireMetricContract(t, request)
+		require.NotContains(t, seen, id, "sessions for the same group reused an instance identity")
+		seen[id] = true
+	case <-time.After(2 * time.Second):
+		t.Fatal("no final export")
+	}
+}
+func requireMetricContract(t *testing.T, request *collector.ExportMetricsServiceRequest) string {
+	t.Helper()
+	require.Len(t, request.ResourceMetrics, 1)
+	attrs := map[string]string{}
+	for _, a := range request.ResourceMetrics[0].Resource.Attributes {
+		attrs[a.Key] = a.Value.GetStringValue()
+	}
+	require.Equal(t, "kaferry", attrs["service.name"])
+	require.Equal(t, "test-version", attrs["service.version"])
+	require.Equal(t, "test-group", attrs["messaging.consumer.group.name"])
+	require.Equal(t, "test", attrs["deployment.environment.name"])
+	require.Len(t, attrs["service.instance.id"], 32)
+	found := false
+	for _, scope := range request.ResourceMetrics[0].ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name == "kaferry.records.confirmed" {
+				found = true
+				require.NotNil(t, m.GetSum())
+				require.NotEmpty(t, m.GetSum().DataPoints)
+				require.Equal(t, int64(1), m.GetSum().DataPoints[0].GetAsInt())
+			}
+		}
+	}
+	require.True(t, found, "missing confirmed counter")
+	return attrs["service.instance.id"]
 }
 
 func TestExporterRejectsHTTPSDowngradeBeforeSendingCredentials(t *testing.T) {

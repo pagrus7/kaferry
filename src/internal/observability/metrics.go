@@ -129,26 +129,32 @@ func (r *runtime) register(meter metric.Meter) error {
 	}
 	instruments = append(instruments, last)
 	_, err = meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
-		if s := r.latest.Load(); s != nil {
-			values := [...]int64{int64(s.Submitted), int64(s.Confirmed), int64(s.Filtered), int64(s.Skipped), int64(s.Iterations)}
-			for i, value := range values {
-				observer.ObserveInt64(counters[i], value)
-			}
-			current := [...]int64{s.PendingEntries, s.PendingEstimatedBytes, s.EntryCap, s.EstimatedByteCap, s.Partitions}
-			for i, value := range current {
-				observer.ObserveInt64(gauges[i], value)
-			}
-			for i, reason := range []string{"timestamp", "tip", "eof", "worker_record_cap"} {
-				value := [...]int64{s.TimestampStops, s.TipStops, s.EOFStops, s.WorkerRecordStops}[i]
-				observer.ObserveInt64(gauges[5], value, metric.WithAttributes(attribute.String("reason", reason)))
-			}
-		}
+		r.observeSnapshot(observer, counters, gauges)
 		if at := r.lastSuccess.Load(); at != 0 {
 			observer.ObserveFloat64(last, float64(at)/1e9)
 		}
 		return nil
 	}, instruments...)
 	return err
+}
+
+func (r *runtime) observeSnapshot(observer metric.Observer, counters []metric.Int64ObservableCounter, gauges []metric.Int64ObservableGauge) {
+	s := r.latest.Load()
+	if s == nil {
+		return
+	}
+	values := [...]int64{int64(s.Submitted), int64(s.Confirmed), int64(s.Filtered), int64(s.Skipped), int64(s.Iterations)}
+	for i, value := range values {
+		observer.ObserveInt64(counters[i], value)
+	}
+	current := [...]int64{s.PendingEntries, s.PendingEstimatedBytes, s.EntryCap, s.EstimatedByteCap, s.Partitions}
+	for i, value := range current {
+		observer.ObserveInt64(gauges[i], value)
+	}
+	for i, reason := range []string{"timestamp", "tip", "eof", "worker_record_cap"} {
+		value := [...]int64{s.TimestampStops, s.TipStops, s.EOFStops, s.WorkerRecordStops}[i]
+		observer.ObserveInt64(gauges[5], value, metric.WithAttributes(attribute.String("reason", reason)))
+	}
 }
 
 func (r *runtime) Publish(s copy.Snapshot) { r.latest.Store(&s) }
