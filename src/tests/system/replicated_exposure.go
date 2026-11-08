@@ -23,7 +23,7 @@ func zombieCoordinatorFault(timeouts map[string]time.Duration) (faults.Fault, er
 	rpc := timeouts["socket.timeout.ms"]
 	if len(timeouts) != 5 || session != 6*time.Second || save != 10*time.Second ||
 		timeouts["delivery_timeout"] != 2*time.Second || timeouts["shutdown_timeout"] != 5*time.Second ||
-		rpc != session+(save-session)/2 || !(session < rpc && rpc < save) {
+		rpc != session+(save-session)/2 || session >= rpc || rpc >= save {
 		return faults.Fault{}, fmt.Errorf("zombie exposure requires registered 6s session, 8s midpoint RPC, 10s save, 2s delivery and 5s shutdown")
 	}
 	return faults.Fault{Kind: "timeout", Stream: "upstream", Value: 0}, nil

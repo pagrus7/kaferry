@@ -62,7 +62,7 @@ func observeOwnership(ctx context.Context, admin *kadm.Client, group, source str
 	return result, nil
 }
 
-func waitReplicated(t *testing.T, ctx context.Context, label string, publisher *replicatedPublisher, workers []*cliProcess, condition func(context.Context) bool) {
+func waitReplicated(ctx context.Context, t *testing.T, label string, publisher *replicatedPublisher, workers []*cliProcess, condition func(context.Context) bool) {
 	t.Helper()
 	deadline, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -91,7 +91,7 @@ func waitReplicated(t *testing.T, ctx context.Context, label string, publisher *
 	}
 }
 
-func replicatedTopic(t *testing.T, ctx context.Context, admin *kadm.Client, name string) {
+func replicatedTopic(ctx context.Context, t *testing.T, admin *kadm.Client, name string) {
 	t.Helper()
 	created, err := admin.CreateTopic(ctx, replicatedPartitions, 3,
 		map[string]*string{"min.insync.replicas": kadm.StringPtr("2"), "retention.ms": kadm.StringPtr("-1")}, name)
@@ -108,7 +108,7 @@ func replicatedTopic(t *testing.T, ctx context.Context, admin *kadm.Client, name
 		}
 	})
 	waitTopicReady(t, admin, name, replicatedPartitions)
-	waitReplicated(t, ctx, "all replicated topic replicas in sync", nil, nil, func(query context.Context) bool {
+	waitReplicated(ctx, t, "all replicated topic replicas in sync", nil, nil, func(query context.Context) bool {
 		metadata, err := admin.Metadata(query, name)
 		if err != nil || len(metadata.Topics[name].Partitions) != replicatedPartitions {
 			return false
@@ -145,15 +145,15 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	source, destination := metadata["source"], metadata["destination"]
 	prefix := fmt.Sprintf("kaferry-zombie-%d", time.Now().UnixNano())
 	src, dst, group := prefix+"-source", prefix+"-destination", prefix+"-group"
-	replicatedTopic(t, ctx, source, src)
-	replicatedTopic(t, ctx, destination, dst)
+	replicatedTopic(ctx, t, source, src)
+	replicatedTopic(ctx, t, destination, dst)
 	timeouts := faultTimeouts(t, "ownership/zombie-worker")
 	fault, err := zombieCoordinatorFault(timeouts)
 	require.NoError(t, err)
 	oracle := startFaultOracle(t, "ownership/zombie-worker", strings.Join(faults.Endpoints("source", 0), ","),
 		strings.Join(faults.Endpoints("destination", 0), ","), src, dst, group, replicatedPartitions, false)
-	audit := startReplicatedAudit(t, ctx, lab, directory)
-	audit.capture(t, ctx, "baseline")
+	audit := startReplicatedAudit(ctx, t, lab, directory)
+	audit.capture(ctx, t, "baseline")
 	producer := fixtureClient(t, strings.Join(faults.Endpoints("source", 0), ","), kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		kgo.MaxBufferedRecords(2*replicatedPartitions), kgo.RecordDeliveryTimeout(timeouts["delivery_timeout"]),
 		kgo.AllowIdempotentProduceCancellation())
@@ -176,12 +176,12 @@ func TestReplicatedZombieWorker(t *testing.T) {
 		exits = append(exits, observeReplicatedExit(process))
 		require.NoError(t, process.send(statement))
 		waitMembers(t, source, group, worker, replicatedPartitions, nil)
-		waitReplicated(t, ctx, "broker-observed worker client identity", nil, workers, func(query context.Context) bool {
-			state, err := observeOwnership(query, source, group, src)
-			if err != nil {
+		waitReplicated(ctx, t, "broker-observed worker client identity", nil, workers, func(query context.Context) bool {
+			observed, queryErr := observeOwnership(query, source, group, src)
+			if queryErr != nil {
 				return false
 			}
-			for _, member := range state.Members {
+			for _, member := range observed.Members {
 				if strings.HasSuffix(member.ClientID, marker) {
 					clients[index] = member.ClientID
 					return true
@@ -194,38 +194,10 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	// must not create replay before this case's one declared fault window.
 	publisher := startReplicatedPublisher(ctx, producer, src)
 	t.Cleanup(func() { publisher.stop() })
-	var baseline ownershipSnapshot
-	var saved []int64
-	waitReplicated(t, ctx, "both workers own and save every source partition", publisher, workers, func(query context.Context) bool {
-		baseline, err = observeOwnership(query, source, group, src)
-		if err != nil || len(baseline.Members) != 2 {
-			return false
-		}
-		parts, err := source.FetchOffsetsForTopics(query, group, src)
-		if err != nil || parts.Error() != nil || len(parts[src]) != replicatedPartitions {
-			return false
-		}
-		saved = make([]int64, replicatedPartitions)
-		for id, part := range parts[src] {
-			if part.At < 1 {
-				return false
-			}
-			saved[id] = part.At
-		}
-		return true
-	})
-	var generation int32
-	waitReplicated(t, ctx, "accepted worker1 saves in its independently observed latest join generation", publisher, workers, func(query context.Context) bool {
-		for _, member := range baseline.Members {
-			if member.ClientID == clients[0] {
-				var ready bool
-				generation, ready, err = audit.ready(query, clients[0], group, member.MemberID, member.Partitions, nil)
-				require.NoError(t, err)
-				return ready
-			}
-		}
-		return false
-	})
+	state := &zombieOwnership{admin: source, audit: audit, topic: src, group: group, clients: clients}
+	waitReplicated(ctx, t, "both workers own and save every source partition", publisher, workers, state.baselineReady)
+	waitReplicated(ctx, t, "accepted worker1 saves in its independently observed latest join generation", publisher, workers,
+		func(query context.Context) bool { return state.generationReady(query, t) })
 	before := publisher.snapshot()
 	role := faults.Role{Kind: "worker-coordinator", Cluster: "source", Group: group, Worker: 1}
 	window := oracle.begin(t, "worker-coordinator-blackhole", role, false,
@@ -237,62 +209,15 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	injection, err := lab.Inject(ctx, role, fault)
 	if injection != nil {
 		audit.faultAttempted = true
-		t.Cleanup(func() {
-			cleanup, done := context.WithTimeout(context.Background(), 15*time.Second)
-			defer done()
-			if err := injection.Heal(cleanup); err != nil {
-				t.Error("heal worker coordinator route:", err)
-			}
-			// Retain the actual resolved attempt even if a later assertion fails.
-			// A required recovery horizon is not a claim that it was observed.
-			event, err := json.MarshalIndent(map[string]any{"event": injection.Event, "case_failed": t.Failed(),
-				"required_recovery_seconds": oracle.recovery.Seconds()}, "", "  ")
-			if err == nil {
-				err = os.WriteFile(filepath.Join(directory, "replicated-fault-window.json"), append(event, '\n'), 0600)
-			}
-			if err != nil {
-				t.Error("retain resolved fault window:", err)
-			}
-		})
+		retainZombieFault(t, injection, directory, oracle.recovery)
 	}
 	require.NoError(t, err)
 	require.Len(t, injection.Event.Targets, 1)
 	oracle.injected(t, window, "timeout", injection.Event, "owned worker1 coordinator upstream drops packets without immediate TCP close")
-	var transfer ownershipSnapshot
-	waitReplicated(t, ctx, "expired worker1 member and complete peer ownership", publisher, workers, func(query context.Context) bool {
-		transfer, err = observeOwnership(query, source, group, src)
-		return err == nil && len(transfer.Members) == 1 && transfer.Members[0].ClientID == clients[1] &&
-			len(transfer.Members[0].Partitions) == replicatedPartitions
-	})
+	waitReplicated(ctx, t, "expired worker1 member and complete peer ownership", publisher, workers, state.transferReady)
 	aliveTransfer := []bool{!workers[0].finished(), !workers[1].finished()}
-	var peerProgress ownershipSnapshot
-	var peerSaved []int64
-	minimum := make(map[int32]int64, replicatedPartitions)
-	for partition, offset := range saved {
-		minimum[int32(partition)] = offset + 2
-	}
-	waitReplicated(t, ctx, "accepted peer progress while worker1 coordinator route remains cut", publisher, workers, func(query context.Context) bool {
-		peerProgress, err = observeOwnership(query, source, group, src)
-		if err != nil || len(peerProgress.Members) != 1 || peerProgress.Members[0].ClientID != clients[1] ||
-			len(peerProgress.Members[0].Partitions) != replicatedPartitions {
-			return false
-		}
-		parts, err := source.FetchOffsetsForTopics(query, group, src)
-		if err != nil || parts.Error() != nil || len(parts[src]) != replicatedPartitions {
-			return false
-		}
-		peerSaved = make([]int64, replicatedPartitions)
-		for partition, offset := range saved {
-			peerSaved[partition] = parts[src][int32(partition)].At
-			if peerSaved[partition] <= offset+2 {
-				return false
-			}
-		}
-		peerGeneration, ready, err := audit.ready(query, clients[1], group, peerProgress.Members[0].MemberID,
-			peerProgress.Members[0].Partitions, minimum)
-		require.NoError(t, err)
-		return ready && peerGeneration > generation
-	})
+	waitReplicated(ctx, t, "accepted peer progress while worker1 coordinator route remains cut", publisher, workers,
+		func(query context.Context) bool { return state.peerReady(query, t) })
 	aliveBeforeHeal := []bool{!workers[0].finished(), !workers[1].finished()}
 	require.Equal(t, []bool{true, true}, aliveTransfer, "both workers must live through independently observed expiry")
 	require.Equal(t, []bool{true, true}, aliveBeforeHeal, "both workers must live through accepted peer progress before heal")
@@ -300,47 +225,193 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	require.NoError(t, injection.Heal(ctx))
 	oracle.healed(t, window, "original resolved coordinator route restored after independently observed expiry and peer assignment")
 	atHeal := publisher.snapshot()
-	var healed ownershipSnapshot
 	// A rejected late periodic save is intentionally fatal to worker1. Its
 	// exit is accepted only by the final independent positive fencing audit.
-	waitReplicated(t, ctx, "post-heal steady input and progress on every partition", publisher, workers[1:], func(query context.Context) bool {
-		state := publisher.snapshot()
-		for partition, count := range state.Acknowledged {
-			if count <= atHeal.Acknowledged[partition]+24 {
-				return false
-			}
-		}
-		healed, err = observeOwnership(query, source, group, src)
-		if err != nil {
-			return false
-		}
-		parts, err := source.FetchOffsetsForTopics(query, group, src)
-		if err != nil || parts.Error() != nil {
-			return false
-		}
-		for partition, offset := range peerSaved {
-			if parts[src][int32(partition)].At <= offset+24 {
-				return false
-			}
-		}
-		return true
-	})
+	waitReplicated(ctx, t, "post-heal steady input and progress on every partition", publisher, workers[1:],
+		func(query context.Context) bool { return state.healedReady(query, publisher, atHeal) })
 	aliveHeal := []bool{!workers[0].finished(), !workers[1].finished()}
 	publication := publisher.stop()
 	require.NoError(t, publication.err)
 	require.LessOrEqual(t, publication.MaxGapSeconds, 2.0, "source did not keep publishing steadily through the ownership fault")
-	waitReplicated(t, ctx, "all acknowledged input saved before shutdown", nil, workers[1:], func(query context.Context) bool {
-		parts, err := source.FetchOffsetsForTopics(query, group, src)
-		if err != nil || parts.Error() != nil || len(parts[src]) != replicatedPartitions {
+	waitReplicated(ctx, t, "all acknowledged input saved before shutdown", nil, workers[1:],
+		func(query context.Context) bool { return state.allSaved(query, publication) })
+	measurements := stopZombieWorkers(t, directory, workers, memories, starts, exits)
+
+	// Then independent safety samples and final librdkafka reconciliation cover
+	// the full configured recovery window. The broker audit separately proves
+	// that stale ownership never committed, distinguishing legitimate rejoins.
+	oracle.finish(t)
+	audit.mark(ctx, t, "final")
+	audit.capture(ctx, t, "final")
+	safetyPath := filepath.Join(filepath.Dir(oracle.log), "observations", "case.json")
+	safety, err := os.ReadFile(safetyPath)
+	require.NoError(t, err)
+	safetyRelative, err := filepath.Rel(directory, safetyPath)
+	require.NoError(t, err)
+	data, err := json.MarshalIndent(map[string]any{"id": "ownership/zombie-worker", "source_partitions": replicatedPartitions,
+		"source_topic": src, "destination_topic": dst, "group": group, "workers": clients, "audit_guard": audit.guard,
+		"audit_marks": audit.marks,
+		"baseline":    state.baseline, "baseline_generation": state.generation, "baseline_saved": state.saved, "transfer": state.transfer, "peer_progress": state.peerProgress, "peer_saved": state.peerSaved,
+		"publishing_before_fault": before, "publishing_after_heal": atHeal, "healed": state.healed, "fault": injection.Event,
+		"heal_started":                   healStarted,
+		"processes_alive_after_transfer": aliveTransfer, "processes_alive_before_heal": aliveBeforeHeal, "processes_alive_after_heal": aliveHeal,
+		"safety_case": map[string]string{"observations": safetyRelative, "sha256": fmt.Sprintf("%x", sha256.Sum256(safety))},
+		"publishing":  publication, "worker_measurements": measurements}, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "replicated-ownership.json"), append(data, '\n'), 0600))
+	verifyOwnershipAudit(ctx, t, directory)
+}
+
+// zombieOwnership keeps the independently queried transition observations
+// together; each polling callback preserves the same acceptance conditions.
+type zombieOwnership struct {
+	admin                                    *kadm.Client
+	audit                                    *replicatedAudit
+	topic, group                             string
+	clients                                  []string
+	baseline, transfer, peerProgress, healed ownershipSnapshot
+	saved, peerSaved                         []int64
+	generation                               int32
+}
+
+func (s *zombieOwnership) offsets(ctx context.Context) ([]int64, bool) {
+	parts, err := s.admin.FetchOffsetsForTopics(ctx, s.group, s.topic)
+	if err != nil || parts.Error() != nil || len(parts[s.topic]) != replicatedPartitions {
+		return nil, false
+	}
+	result := make([]int64, replicatedPartitions)
+	for id, part := range parts[s.topic] {
+		result[id] = part.At
+	}
+	return result, true
+}
+
+func (s *zombieOwnership) baselineReady(ctx context.Context) bool {
+	var err error
+	s.baseline, err = observeOwnership(ctx, s.admin, s.group, s.topic)
+	if err != nil || len(s.baseline.Members) != 2 {
+		return false
+	}
+	var ready bool
+	s.saved, ready = s.offsets(ctx)
+	if !ready {
+		return false
+	}
+	for _, offset := range s.saved {
+		if offset < 1 {
 			return false
 		}
-		for partition, count := range publication.Acknowledged {
-			if parts[src][int32(partition)].At != count {
-				return false
-			}
+	}
+	return true
+}
+
+func (s *zombieOwnership) generationReady(ctx context.Context, t *testing.T) bool {
+	t.Helper()
+	for _, member := range s.baseline.Members {
+		if member.ClientID == s.clients[0] {
+			var ready bool
+			var err error
+			s.generation, ready, err = s.audit.ready(ctx, s.clients[0], s.group, member.MemberID, member.Partitions, nil)
+			require.NoError(t, err)
+			return ready
 		}
-		return true
+	}
+	return false
+}
+
+func (s *zombieOwnership) transferReady(ctx context.Context) bool {
+	var err error
+	s.transfer, err = observeOwnership(ctx, s.admin, s.group, s.topic)
+	return err == nil && len(s.transfer.Members) == 1 && s.transfer.Members[0].ClientID == s.clients[1] &&
+		len(s.transfer.Members[0].Partitions) == replicatedPartitions
+}
+
+func (s *zombieOwnership) peerReady(ctx context.Context, t *testing.T) bool {
+	t.Helper()
+	var err error
+	s.peerProgress, err = observeOwnership(ctx, s.admin, s.group, s.topic)
+	if err != nil || len(s.peerProgress.Members) != 1 || s.peerProgress.Members[0].ClientID != s.clients[1] ||
+		len(s.peerProgress.Members[0].Partitions) != replicatedPartitions {
+		return false
+	}
+	var ready bool
+	s.peerSaved, ready = s.offsets(ctx)
+	if !ready {
+		return false
+	}
+	minimum := make(map[int32]int64, replicatedPartitions)
+	for partition, offset := range s.saved {
+		minimum[int32(partition)] = offset + 2
+		if s.peerSaved[partition] <= offset+2 {
+			return false
+		}
+	}
+	peerGeneration, accepted, queryErr := s.audit.ready(ctx, s.clients[1], s.group, s.peerProgress.Members[0].MemberID,
+		s.peerProgress.Members[0].Partitions, minimum)
+	require.NoError(t, queryErr)
+	return accepted && peerGeneration > s.generation
+}
+
+func (s *zombieOwnership) healedReady(ctx context.Context, publisher *replicatedPublisher, atHeal replicatedPublishing) bool {
+	publication := publisher.snapshot()
+	for partition, count := range publication.Acknowledged {
+		if count <= atHeal.Acknowledged[partition]+24 {
+			return false
+		}
+	}
+	var err error
+	s.healed, err = observeOwnership(ctx, s.admin, s.group, s.topic)
+	if err != nil {
+		return false
+	}
+	saved, ready := s.offsets(ctx)
+	if !ready {
+		return false
+	}
+	for partition, offset := range s.peerSaved {
+		if saved[partition] <= offset+24 {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *zombieOwnership) allSaved(ctx context.Context, publication replicatedPublishing) bool {
+	saved, ready := s.offsets(ctx)
+	if !ready {
+		return false
+	}
+	for partition, count := range publication.Acknowledged {
+		if saved[partition] != count {
+			return false
+		}
+	}
+	return true
+}
+
+func retainZombieFault(t *testing.T, injection *faults.Injection, directory string, recovery time.Duration) {
+	t.Helper()
+	t.Cleanup(func() {
+		cleanup, done := context.WithTimeout(context.Background(), 15*time.Second)
+		defer done()
+		if err := injection.Heal(cleanup); err != nil {
+			t.Error("heal worker coordinator route:", err)
+		}
+		// Retain the actual resolved attempt even if a later assertion fails.
+		// A required recovery horizon is not a claim that it was observed.
+		event, err := json.MarshalIndent(map[string]any{"event": injection.Event, "case_failed": t.Failed(),
+			"required_recovery_seconds": recovery.Seconds()}, "", "  ")
+		if err == nil {
+			err = os.WriteFile(filepath.Join(directory, "replicated-fault-window.json"), append(event, '\n'), 0600)
+		}
+		if err != nil {
+			t.Error("retain resolved fault window:", err)
+		}
 	})
+}
+
+func stopZombieWorkers(t *testing.T, directory string, workers []*cliProcess, memories []func() rssPeak, starts []time.Time, exits []<-chan time.Time) []map[string]any {
+	t.Helper()
 	measurements := make([]map[string]any, len(workers))
 	for index, process := range workers {
 		memory := memories[index]()
@@ -370,28 +441,5 @@ func TestReplicatedZombieWorker(t *testing.T) {
 		measurements[index]["peak_uncommitted_records"], measurements[index]["peak_uncommitted_bytes"] = summary.PeakRecords, summary.PeakBytes
 		require.NoError(t, os.WriteFile(filepath.Join(directory, fmt.Sprintf("worker-%d.cli.log", index+1)), []byte(process.logs()), 0600))
 	}
-
-	// Then independent safety samples and final librdkafka reconciliation cover
-	// the full configured recovery window. The broker audit separately proves
-	// that stale ownership never committed, distinguishing legitimate rejoins.
-	oracle.finish(t)
-	audit.mark(t, ctx, "final")
-	audit.capture(t, ctx, "final")
-	safetyPath := filepath.Join(filepath.Dir(oracle.log), "observations", "case.json")
-	safety, err := os.ReadFile(safetyPath)
-	require.NoError(t, err)
-	safetyRelative, err := filepath.Rel(directory, safetyPath)
-	require.NoError(t, err)
-	data, err := json.MarshalIndent(map[string]any{"id": "ownership/zombie-worker", "source_partitions": replicatedPartitions,
-		"source_topic": src, "destination_topic": dst, "group": group, "workers": clients, "audit_guard": audit.guard,
-		"audit_marks": audit.marks,
-		"baseline":    baseline, "baseline_generation": generation, "baseline_saved": saved, "transfer": transfer, "peer_progress": peerProgress, "peer_saved": peerSaved,
-		"publishing_before_fault": before, "publishing_after_heal": atHeal, "healed": healed, "fault": injection.Event,
-		"heal_started":                   healStarted,
-		"processes_alive_after_transfer": aliveTransfer, "processes_alive_before_heal": aliveBeforeHeal, "processes_alive_after_heal": aliveHeal,
-		"safety_case": map[string]string{"observations": safetyRelative, "sha256": fmt.Sprintf("%x", sha256.Sum256(safety))},
-		"publishing":  publication, "worker_measurements": measurements}, "", "  ")
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "replicated-ownership.json"), append(data, '\n'), 0600))
-	verifyOwnershipAudit(t, ctx, directory)
+	return measurements
 }

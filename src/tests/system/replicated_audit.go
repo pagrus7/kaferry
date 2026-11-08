@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,7 +55,7 @@ type auditMark struct {
 // startReplicatedAudit enables the pinned broker's synchronous request log
 // before starting either selected CLI. The independent validator requires full
 // request/response JSON, including actual CLI member IDs and generations.
-func startReplicatedAudit(t *testing.T, ctx context.Context, lab *faults.Lab, output string) *replicatedAudit {
+func startReplicatedAudit(ctx context.Context, t *testing.T, lab *faults.Lab, output string) *replicatedAudit {
 	t.Helper()
 	targets, err := lab.Resolve(ctx, faults.Role{Kind: "cluster", Cluster: "source", Listener: "admin"})
 	require.NoError(t, err)
@@ -107,7 +108,7 @@ tr '\000' '\n' </proc/1/cmdline | sed -n '/^-D[Ll]og4j/p;/^-Dkafka.logs.dir=/p'`
 		require.NoError(t, audit.level(ctx, broker, requestLogger, "DEBUG"))
 		require.NoError(t, audit.level(ctx, broker, receivedLogger, "TRACE"))
 	}
-	audit.mark(t, ctx, "baseline")
+	audit.mark(ctx, t, "baseline")
 	return audit
 }
 
@@ -155,32 +156,7 @@ func (a *replicatedAudit) captureFailure(ctx context.Context) error {
 	var failures []error
 	for _, target := range a.targets {
 		for _, kind := range []string{"requests", "console"} {
-			artifact := failedAuditArtifact{Broker: target.Broker, Started: time.Now().UTC(),
-				Path: fmt.Sprintf("source-%d.failure.%s.log", target.Broker, kind)}
-			args := []string{"exec", target.Container, "sh", "-ec", requestLogFiles}
-			if kind == "console" {
-				args = []string{"logs", target.Container}
-			}
-			attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
-			data, err := run(attempt, args...)
-			cancel()
-			if err != nil {
-				artifact.Errors = append(artifact.Errors, err.Error())
-			}
-			if len(data) > auditCaptureLimit {
-				data = data[:auditCaptureLimit]
-				artifact.Errors = append(artifact.Errors, "capture exceeded bounded evidence size")
-			}
-			artifact.Bytes = len(data)
-			if len(data) == 0 {
-				artifact.Errors = append(artifact.Errors, "capture returned no bytes; absence of requests is not established")
-			} else if err := os.WriteFile(filepath.Join(a.output, artifact.Path), data, 0600); err != nil {
-				artifact.Errors = append(artifact.Errors, err.Error())
-			} else {
-				artifact.Saved = true
-				artifact.SHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
-			}
-			artifact.Finished = time.Now().UTC()
+			artifact := a.captureFailedArtifact(ctx, target, kind, run)
 			for _, message := range artifact.Errors {
 				failures = append(failures, fmt.Errorf("%s: %s", artifact.Path, message))
 			}
@@ -194,6 +170,36 @@ func (a *replicatedAudit) captureFailure(ctx context.Context) error {
 		err = os.WriteFile(filepath.Join(a.output, "replicated-audit.failure.json"), append(encoded, '\n'), 0600)
 	}
 	return errors.Join(append(failures, err)...)
+}
+
+func (a *replicatedAudit) captureFailedArtifact(ctx context.Context, target faults.Target, kind string, run func(context.Context, ...string) ([]byte, error)) failedAuditArtifact {
+	artifact := failedAuditArtifact{Broker: target.Broker, Started: time.Now().UTC(),
+		Path: fmt.Sprintf("source-%d.failure.%s.log", target.Broker, kind)}
+	args := []string{"exec", target.Container, "sh", "-ec", requestLogFiles}
+	if kind == "console" {
+		args = []string{"logs", target.Container}
+	}
+	attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
+	data, err := run(attempt, args...)
+	cancel()
+	if err != nil {
+		artifact.Errors = append(artifact.Errors, err.Error())
+	}
+	if len(data) > auditCaptureLimit {
+		data = data[:auditCaptureLimit]
+		artifact.Errors = append(artifact.Errors, "capture exceeded bounded evidence size")
+	}
+	artifact.Bytes = len(data)
+	if len(data) == 0 {
+		artifact.Errors = append(artifact.Errors, "capture returned no bytes; absence of requests is not established")
+	} else if err := os.WriteFile(filepath.Join(a.output, artifact.Path), data, 0600); err != nil {
+		artifact.Errors = append(artifact.Errors, err.Error())
+	} else {
+		artifact.Saved = true
+		artifact.SHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
+	}
+	artifact.Finished = time.Now().UTC()
+	return artifact
 }
 
 type boundedAuditOutput struct {
@@ -246,7 +252,7 @@ func (a *replicatedAudit) level(ctx context.Context, broker int32, logger, level
 	return kerr.ErrorForCode(response.Resources[0].ErrorCode)
 }
 
-func (a *replicatedAudit) mark(t *testing.T, ctx context.Context, phase string) {
+func (a *replicatedAudit) mark(ctx context.Context, t *testing.T, phase string) {
 	t.Helper()
 	a.marks[phase] = auditMark{Started: time.Now().UTC()}
 	for _, target := range a.targets {
@@ -284,6 +290,30 @@ type ownershipAuditRecord struct {
 // worker's latest successful join generation. Old committed group offsets alone
 // cannot show that the worker has saved in its current generation.
 func currentGenerationSaved(data []byte, client, group, member string, owned []int32, minimum map[int32]int64) (int32, bool, error) {
+	rows, generation, err := currentGenerationRows(data, client, group, member)
+	if err != nil {
+		return 0, false, err
+	}
+	accepted := make(map[int32]bool)
+	for _, row := range rows {
+		if row.Header.RequestAPIKeyName != "OFFSET_COMMIT" || row.Request.MemberID != member || row.Request.Generation != generation {
+			continue
+		}
+		parts, parseErr := auditAcceptedParts(row, minimum)
+		if parseErr != nil {
+			return 0, false, parseErr
+		}
+		maps.Copy(accepted, parts)
+	}
+	for _, partition := range owned {
+		if !accepted[partition] {
+			return generation, false, nil
+		}
+	}
+	return generation, generation >= 0 && len(owned) > 0, nil
+}
+
+func currentGenerationRows(data []byte, client, group, member string) ([]ownershipAuditRecord, int32, error) {
 	var rows []ownershipAuditRecord
 	generation := int32(-1)
 	for _, line := range strings.Split(string(data), "\n") {
@@ -293,7 +323,7 @@ func currentGenerationSaved(data []byte, client, group, member string, owned []i
 		}
 		var row ownershipAuditRecord
 		if err := json.NewDecoder(strings.NewReader(payload)).Decode(&row); err != nil {
-			return 0, false, err
+			return nil, 0, err
 		}
 		if row.Header.ClientID != client || row.Request.GroupID != group || row.Response == nil {
 			continue
@@ -303,35 +333,28 @@ func currentGenerationSaved(data []byte, client, group, member string, owned []i
 			generation = max(generation, row.Response.GenerationID)
 		}
 	}
-	accepted := make(map[int32]bool)
-	for _, row := range rows {
-		if row.Header.RequestAPIKeyName != "OFFSET_COMMIT" || row.Request.MemberID != member || row.Request.Generation != generation {
-			continue
-		}
-		positive := make(map[int32]bool)
-		for _, topic := range row.Request.Topics {
-			for _, part := range topic.Partitions {
-				offset, err := part.CommittedOffset.Int64()
-				if err != nil {
-					return 0, false, err
-				}
-				positive[part.PartitionIndex] = offset > max(0, minimum[part.PartitionIndex])
+	return rows, generation, nil
+}
+
+func auditAcceptedParts(row ownershipAuditRecord, minimum map[int32]int64) (map[int32]bool, error) {
+	positive, accepted := make(map[int32]bool), make(map[int32]bool)
+	for _, topic := range row.Request.Topics {
+		for _, part := range topic.Partitions {
+			offset, err := part.CommittedOffset.Int64()
+			if err != nil {
+				return nil, err
 			}
+			positive[part.PartitionIndex] = offset > max(0, minimum[part.PartitionIndex])
 		}
-		for _, topic := range row.Response.Topics {
-			for _, part := range topic.Partitions {
-				if part.ErrorCode == 0 && positive[part.PartitionIndex] {
-					accepted[part.PartitionIndex] = true
-				}
+	}
+	for _, topic := range row.Response.Topics {
+		for _, part := range topic.Partitions {
+			if part.ErrorCode == 0 && positive[part.PartitionIndex] {
+				accepted[part.PartitionIndex] = true
 			}
 		}
 	}
-	for _, partition := range owned {
-		if !accepted[partition] {
-			return generation, false, nil
-		}
-	}
-	return generation, generation >= 0 && len(owned) > 0, nil
+	return accepted, nil
 }
 
 func (a *replicatedAudit) ready(ctx context.Context, client, group, member string, owned []int32, minimum map[int32]int64) (int32, bool, error) {
@@ -349,7 +372,7 @@ func (a *replicatedAudit) ready(ctx context.Context, client, group, member strin
 // capture preserves every hourly segment; no size rotation is accepted by the
 // validator. A hard byte ceiling fails the case instead of silently dropping
 // observations. A guard in every broker's log is checked independently.
-func (a *replicatedAudit) capture(t *testing.T, ctx context.Context, phase string) {
+func (a *replicatedAudit) capture(ctx context.Context, t *testing.T, phase string) {
 	t.Helper()
 	for _, target := range a.targets {
 		poll, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -386,7 +409,7 @@ func (a *replicatedAudit) capture(t *testing.T, ctx context.Context, phase strin
 	a.marks[phase] = mark
 }
 
-func verifyOwnershipAudit(t *testing.T, ctx context.Context, directory string) {
+func verifyOwnershipAudit(ctx context.Context, t *testing.T, directory string) {
 	t.Helper()
 	root, err := filepath.Abs("../../..")
 	require.NoError(t, err)

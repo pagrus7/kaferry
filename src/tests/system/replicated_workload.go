@@ -38,58 +38,65 @@ func startReplicatedPublisher(ctx context.Context, client *kgo.Client, topic str
 	ctx, cancel := context.WithCancel(ctx)
 	p := &replicatedPublisher{cancel: cancel, done: make(chan struct{}),
 		state: replicatedPublishing{Started: time.Now().UTC(), Acknowledged: make([]int64, replicatedPartitions)}}
-	go func() {
-		defer close(p.done)
-		defer func() { p.mu.Lock(); p.state.Stopped = time.Now().UTC(); p.mu.Unlock() }()
-		tick := time.NewTicker(100 * time.Millisecond)
-		defer tick.Stop()
-		last := p.state.Started
-		var sequence uint64
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-tick.C:
-			}
-			batch := make([]*kgo.Record, replicatedPartitions)
-			stamp := time.Now().Truncate(time.Millisecond)
-			for partition := range replicatedPartitions {
-				value := make([]byte, 2048)
-				binary.BigEndian.PutUint64(value, sequence)
-				binary.BigEndian.PutUint32(value[8:], uint32(partition))
-				// Deterministic varied bytes make each full record unique and retain
-				// enough payload to exercise worker byte accounting.
-				for n := 12; n < len(value); n++ {
-					value[n] = byte(uint64(n)*131 + sequence*17 + uint64(partition))
-				}
-				batch[partition] = &kgo.Record{Topic: topic, Partition: int32(partition),
-					Key: []byte(fmt.Sprintf("%d/%d", partition, sequence)), Value: value, Timestamp: stamp,
-					Headers: []kgo.RecordHeader{{Key: "duplicate", Value: nil}, {Key: "duplicate", Value: []byte{}}}}
-			}
-			// Finish a submitted batch before honoring a stop request. The parent
-			// context bounds failures; stop() never abandons uncertain publications.
-			batchCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			result := client.ProduceSync(batchCtx, batch...)
-			finish()
-			now := time.Now().UTC()
-			p.mu.Lock()
-			for _, record := range result {
-				if record.Err == nil {
-					p.state.Acknowledged[record.Record.Partition]++
-				}
-			}
-			p.state.err = result.FirstErr()
-			p.state.MaxGapSeconds = max(p.state.MaxGapSeconds, now.Sub(last).Seconds())
-			p.state.Batches++
-			failed := p.state.err != nil
-			p.mu.Unlock()
-			if failed {
-				return
-			}
-			last, sequence = now, sequence+1
-		}
-	}()
+	go p.run(ctx, client, topic)
 	return p
+}
+
+func (p *replicatedPublisher) run(ctx context.Context, client *kgo.Client, topic string) {
+	defer close(p.done)
+	defer func() { p.mu.Lock(); p.state.Stopped = time.Now().UTC(); p.mu.Unlock() }()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	last := p.state.Started
+	var sequence uint64
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		// Finish a submitted batch before honoring a stop request. The parent
+		// context bounds failures; stop() never abandons uncertain publications.
+		batch := replicatedBatch(topic, sequence)
+		batchCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		result := client.ProduceSync(batchCtx, batch...)
+		finish()
+		now := time.Now().UTC()
+		p.mu.Lock()
+		for _, record := range result {
+			if record.Err == nil {
+				p.state.Acknowledged[record.Record.Partition]++
+			}
+		}
+		p.state.err = result.FirstErr()
+		p.state.MaxGapSeconds = max(p.state.MaxGapSeconds, now.Sub(last).Seconds())
+		p.state.Batches++
+		failed := p.state.err != nil
+		p.mu.Unlock()
+		if failed {
+			return
+		}
+		last, sequence = now, sequence+1
+	}
+}
+
+func replicatedBatch(topic string, sequence uint64) []*kgo.Record {
+	batch := make([]*kgo.Record, replicatedPartitions)
+	stamp := time.Now().Truncate(time.Millisecond)
+	for partition := range replicatedPartitions {
+		value := make([]byte, 2048)
+		binary.BigEndian.PutUint64(value, sequence)
+		binary.BigEndian.PutUint32(value[8:], uint32(partition))
+		// Deterministic varied bytes make each full record unique and retain
+		// enough payload to exercise worker byte accounting.
+		for n := 12; n < len(value); n++ {
+			value[n] = byte(uint64(n)*131 + sequence*17 + uint64(partition))
+		}
+		batch[partition] = &kgo.Record{Topic: topic, Partition: int32(partition),
+			Key: []byte(fmt.Sprintf("%d/%d", partition, sequence)), Value: value, Timestamp: stamp,
+			Headers: []kgo.RecordHeader{{Key: "duplicate", Value: nil}, {Key: "duplicate", Value: []byte{}}}}
+	}
+	return batch
 }
 
 func (p *replicatedPublisher) snapshot() replicatedPublishing {
