@@ -4,7 +4,13 @@ Choose a release binary, Homebrew, a source build or a container. After installa
 
 ## Release binaries
 
-Download the archive for your OS and CPU from [Releases](https://github.com/pagrus7/kaferry/releases/latest). Verify its entry in `SHA256SUMS`, extract it, and put `kaferry` on `PATH`. Keep `LICENSE` and `THIRD_PARTY_NOTICES.txt` with a redistributed binary. [Provenance verification](design/components.md#release-evidence). When supplied, `qualification.md` records the release’s tested environments and scenarios; passing tests do not cover every deployment.
+Download the archive for your OS and CPU from [Releases](https://github.com/pagrus7/kaferry/releases/latest). Verify its entry in `SHA256SUMS`, extract it, and put `kaferry` on `PATH`. Keep `LICENSE` and `THIRD_PARTY_NOTICES.txt` with a redistributed binary. When supplied, `qualification.md` records the release’s tested environments and scenarios; passing tests do not cover every deployment.
+
+When the release provides attestations, verify the archive's build origin with GitHub CLI:
+
+```sh
+gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry
+```
 
 ## Homebrew
 
