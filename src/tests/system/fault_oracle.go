@@ -38,9 +38,7 @@ func faultTimeouts(t *testing.T, id string) map[string]time.Duration {
 	require.NoError(t, err)
 	var catalog map[string]map[string]int64
 	require.NoError(t, json.Unmarshal(data, &catalog))
-	if _, present := catalog[id]; !present {
-		return nil
-	}
+	require.Contains(t, catalog, id, "register a scenario before generating fault proof")
 	result := make(map[string]time.Duration)
 	for name, milliseconds := range catalog[id] {
 		require.Positive(t, milliseconds)
@@ -147,6 +145,7 @@ func (o *faultOracle) writer(process *cliProcess) {
 func (o *faultOracle) begin(t *testing.T, kind string, target any, unavailable bool, timeouts map[string]time.Duration, observation string) int {
 	t.Helper()
 	require.NotEmpty(t, timeouts)
+	require.Equal(t, o.timeouts, timeouts, "fault proof must use its registered scenario budgets")
 	recovery := time.Duration(0)
 	basis := make(map[string]float64, len(timeouts))
 	for name, timeout := range timeouts {

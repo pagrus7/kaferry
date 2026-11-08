@@ -9,11 +9,7 @@ import sys
 import uuid
 
 from tools.qualification.fault_oracle import INITIALIZATION_ERRORS, checksum
-
-
-RECOVERY_CASES = {'recovery/'+name for name in
-                  ('kill', 'signal', 'delivery-timeout', 'source-outage-shutdown', 'ownership-loss')}
-FAULT_CASES = RECOVERY_CASES | {'fault/crash', 'fault/churn', 'fault/blocking-commit'}
+from tools.ci.suites import FAULT_CASES, RECOVERY_CASES, fault_timeout_catalog
 
 
 def nonnegative_int(value):
@@ -127,13 +123,17 @@ def _validate_observations(case, root):
     events = case['fault_events']
     if not events:
         raise ValueError('fault case has no observed fault')
+    registered = fault_timeout_catalog().get(case['id'])
+    if registered is None:
+        raise ValueError('fault case is not registered in the timeout catalog')
+    required_timeouts = {key: milliseconds/1000 for key, milliseconds in registered.items()}
     phases = [dict(before=0, fault=0, recovery=0, after=0) for _ in events]
     for event in events:
         for key in ('started_at', 'healed_at', 'closed_at', 'recovery_until', 'destination_end_observed_at'):
             timestamp(event[key], case['started_at'], case['finished_at'])
         timestamp(event['recovery_seconds'])
-        if not event['timeout_basis'] or set(event['timeout_basis'])-{'session.timeout.ms', 'delivery_timeout', 'shutdown_timeout'}:
-            raise ValueError('fault recovery has unknown timeout budgets')
+        if event['timeout_basis'] != required_timeouts:
+            raise ValueError('fault recovery timeout budgets differ from its registered scenario')
         for value in event['timeout_basis'].values():
             timestamp(value)
             if value <= 0:

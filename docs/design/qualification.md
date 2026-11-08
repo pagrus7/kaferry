@@ -311,6 +311,9 @@ identity. Repeated recovery includes a receipt for every successfully injected c
 every completed cycle. Successful setup attempts that miss the source-outage injection
 do not produce a qualified case. Evidence collection rejects missing cases, failed
 reconciliation, unsafe observations, missing injection/heal proof and binary mismatches.
+Each case must be registered in the shared timeout catalog; producer windows and
+receipt validation both require that case's exact timeout keys and values. Adding a
+scenario requires registering the budgets used by its actual fixture configuration.
 `make fault` retains this evidence under `build-results/`; standalone runs use `--output`.
 
 The `fault` Go process allowance preserves its existing 600 seconds for execution and

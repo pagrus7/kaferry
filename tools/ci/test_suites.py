@@ -20,8 +20,8 @@ class SuitesTest(unittest.TestCase):
         # Given the fixture's actual per-case timeout catalog, with churn's
         # overlapping windows sharing one maximum extension of its case.
         catalog = json.loads((Path(__file__).resolve().parents[2]/'src/tests/qualification/fault-timeouts-ms.json').read_text())
-        self.assertEqual(FAULT_CASES, set(catalog))
-        self.assertEqual(473000, sum(sum(budgets.values()) for budgets in catalog.values()))
+        self.assertLessEqual(FAULT_CASES, set(catalog))
+        self.assertEqual(473000, sum(sum(catalog[id].values()) for id in FAULT_CASES))
         # When selecting the suite, then preserve the existing 600s execution
         # allowance plus the mandatory 473s observation work, without changing
         # individual configured timeouts or overriding an explicit caller limit.
@@ -29,8 +29,13 @@ class SuitesTest(unittest.TestCase):
         self.assertIn('-timeout=1073s', suites.command('fault'))
         self.assertIn('-timeout=12m', suites.command('fault', timeout='12m'))
         catalog['fault/churn']['delivery_timeout'] += 1000
+        catalog['another-suite/registered-case'] = {'session.timeout.ms': 6000}
         with patch('tools.ci.suites.json.loads', return_value=catalog):
             self.assertEqual(1074, suites.fault_execution_seconds())
+        catalog.pop('fault/crash')
+        with patch('tools.ci.suites.json.loads', return_value=catalog):
+            with self.assertRaisesRegex(ValueError, 'omitted a selected case'):
+                suites.fault_execution_seconds()
 
     def test_failed_fault_run_replaces_prior_successful_receipt(self):
         # Given an older successful receipt in the reusable CI report directory.

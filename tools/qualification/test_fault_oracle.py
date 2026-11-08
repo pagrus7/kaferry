@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from tools.ci.suites import fault_timeout_catalog
 from tools.qualification.broker_probe import logical
 from tools.qualification.fault_oracle import KafkaReader, Oracle, Reconciliation, checksum
 from tools.qualification.fault_results import RECOVERY_CASES, collect, configure, validate_bootstrap, validate_case
@@ -98,6 +99,7 @@ class FaultOracleTest(unittest.TestCase):
         oracle = Oracle.__new__(Oracle)
         oracle.directory = path
         oracle.args = SimpleNamespace(case='recovery/kill', partitions=1, allow_empty=False, binary=path/'binary')
+        oracle.timeout_basis = {name: ms/1000 for name, ms in fault_timeout_catalog()[oracle.args.case].items()}
         oracle.platforms = dict(binary_platform='fixture/fixture', execution_platform='fixture/fixture')
         oracle.args.binary.write_bytes(b'candidate')
         oracle.binary_digest = checksum(oracle.args.binary)
@@ -334,16 +336,19 @@ class FaultOracleTest(unittest.TestCase):
                     oracle.command(dict(command='finish', writers_stopped=True,
                         writer_observations=[dict(pid=1, exit_code=1, observation='process exited')]))
 
-    def complete_case(self, path):
+    def complete_case(self, path, id='recovery/kill'):
         oracle = self.oracle(path, source=[record(0)])
+        oracle.args.case = id
+        oracle.timeout_basis = {name: ms/1000 for name, ms in fault_timeout_catalog()[id].items()}
+        recovery = sum(oracle.timeout_basis.values())
         with patch('tools.qualification.fault_oracle.time.time', return_value=10):
             window = oracle.command(dict(command='fault-start', kind='kill', target=dict(worker='fixture'),
-                recovery_seconds=9, timeout_basis={'session.timeout.ms': 6, 'shutdown_timeout': 3}, observation='prefix 1'))['window']
+                recovery_seconds=recovery, timeout_basis=oracle.timeout_basis, observation='prefix 1'))['window']
         with patch('tools.qualification.fault_oracle.time.time', return_value=11):
             oracle.command(dict(command='fault-injected', window=window, kind='kill', target=dict(worker='fixture'), observation='process exited'))
         with patch('tools.qualification.fault_oracle.time.time', return_value=12):
             oracle.command(dict(command='fault-healed', window=window, observation='replacement owns partition 0'))
-        with patch('tools.qualification.fault_oracle.time.time', return_value=22):
+        with patch('tools.qualification.fault_oracle.time.time', return_value=13+recovery):
             oracle.command(dict(command='finish', writers_stopped=True,
                 writer_observations=[dict(pid=1, exit_code=1, observation='process exited')]))
         return path/'case.json'
@@ -356,11 +361,53 @@ class FaultOracleTest(unittest.TestCase):
             # full recovery horizon plus healthy post-recovery observations.
             case = validate_case(path)
             event = case['fault_events'][0]
-            self.assertEqual(21, event['recovery_until'])
+            self.assertEqual(51, event['recovery_until'])
             self.assertTrue(event['recovery_observation_complete'])
-            self.assertEqual(22, case['writers_stopped_at'])
+            self.assertEqual(52, case['writers_stopped_at'])
             self.assertEqual(5, case['safety']['partitions'][0]['samples'])
-            self.assertEqual((10, 22), (case['safety']['first_observed_at'], case['safety']['last_observed_at']))
+            self.assertEqual((10, 52), (case['safety']['first_observed_at'], case['safety']['last_observed_at']))
+
+    def test_exact_registered_budgets_are_required_even_when_the_sum_is_consistent(self):
+        # Given a valid recovery/kill receipt with its configured 6+30+3 seconds.
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.complete_case(Path(temporary))
+            original = json.loads(path.read_text())
+            budgets = [
+                {'session.timeout.ms': 6, 'shutdown_timeout': 3},
+                {'session.timeout.ms': 6, 'delivery_timeout': 29, 'shutdown_timeout': 3},
+                {'session.timeout.ms': 6, 'delivery_timeout': 31, 'shutdown_timeout': 3},
+                {'session.timeout.ms': 36, 'shutdown_timeout': 3},
+                {'session.timeout.ms': 6, 'delivery_timeout': 30, 'shutdown_timeout': 3, 'extra': 1},
+            ]
+            for basis in budgets:
+                with self.subTest(basis=basis):
+                    altered = json.loads(json.dumps(original))
+                    event = altered['fault_events'][0]
+                    event.update(timeout_basis=basis, recovery_seconds=sum(basis.values()),
+                                 recovery_until=event['healed_at']+sum(basis.values()))
+                    path.write_text(json.dumps(altered))
+                    # When keys are omitted/changed or values shrink/grow with
+                    # a matching sum, then exact scenario binding still rejects.
+                    with self.assertRaisesRegex(ValueError, 'registered scenario'):
+                        validate_case(path)
+            altered = dict(original, id='unregistered-case')
+            path.write_text(json.dumps(altered))
+            with self.assertRaisesRegex(ValueError, 'not registered'):
+                validate_case(path)
+
+    def test_producer_rejects_unregistered_budget_before_sampling_or_injection(self):
+        # Given a known case and a shortened but internally consistent budget.
+        with tempfile.TemporaryDirectory() as temporary:
+            oracle = self.oracle(Path(temporary))
+            with patch.object(oracle, 'sample') as sample:
+                # When starting its window, then fail before reading a baseline
+                # or permitting a fault under the incorrect recovery allowance.
+                with self.assertRaisesRegex(ValueError, 'registered scenario'):
+                    oracle.command(dict(command='fault-start', kind='kill', target=dict(worker='fixture'),
+                        recovery_seconds=9, timeout_basis={'session.timeout.ms': 6, 'shutdown_timeout': 3},
+                        observation='prefix 1'))
+            sample.assert_not_called()
+            self.assertEqual([], oracle.windows)
 
     def reject_mutations(self, root, section, mutations):
         path = self.complete_case(root)
@@ -419,19 +466,12 @@ class FaultOracleTest(unittest.TestCase):
         # Given every stable recovery case and its independent sample receipt.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            template = root/'template'; template.mkdir()
-            original = json.loads(self.complete_case(template).read_text())
-            sample = (template/'samples.jsonl').read_text()
-            bootstrap = (template/'bootstrap.jsonl').read_text()
             paths = []
             for id in RECOVERY_CASES:
                 path = root/'fault-oracle'/id.replace('/', '-')/'observations'
                 path.mkdir(parents=True)
-                value = dict(original, id=id)
-                (path/'samples.jsonl').write_text(sample)
-                (path/'bootstrap.jsonl').write_text(bootstrap)
-                (path/'case.json').write_text(json.dumps(value))
-                paths.append(path/'case.json')
+                paths.append(self.complete_case(path, id))
+            original = json.loads(paths[0].read_text())
             (root/'recovery.json').write_text(json.dumps(dict(passed=True, completed_cycles=1)))
             identity = dict(source_commit=original['source_commit'], binary_sha256=original['binary_sha256'],
                             binary_platform='fixture/fixture', execution_platform='fixture/fixture')
@@ -470,7 +510,7 @@ class FaultOracleTest(unittest.TestCase):
                 lambda c, r: r[0]['partitions'][0].update(saved=0, confirmed_prefix=0),
                 lambda c, r: r[-1].update(reason='periodic'),
                 lambda c, r: c['safety'].update(interval_seconds=2),
-                lambda c, r: c.update(writers_stopped_at=23),
+                lambda c, r: c.update(writers_stopped_at=c['finished_at']+1),
             ])
 
     def test_checker_prerequisites_fail_without_running_brokers(self):

@@ -169,10 +169,15 @@ class KafkaReader:
 class Oracle:
     def __init__(self, args):
         from confluent_kafka import Consumer, TopicPartition
+        from tools.ci.suites import fault_timeout_catalog
         from tools.qualification.qualify import identity_platforms
         self.args = args
         self.directory = args.output
         self.directory.mkdir(parents=True, exist_ok=False)
+        registered = fault_timeout_catalog().get(args.case)
+        if registered is None:
+            raise ValueError('fault case is not registered in the timeout catalog')
+        self.timeout_basis = {key: milliseconds/1000 for key, milliseconds in registered.items()}
         self.binary_digest = checksum(args.binary)
         self.platforms = identity_platforms(str(args.binary), os.environ.get('GO', 'go'))
         self.source_commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
@@ -287,6 +292,8 @@ class Oracle:
     def command(self, command):
         kind = command['command']
         if kind == 'fault-start':
+            if command['timeout_basis'] != self.timeout_basis or command['recovery_seconds'] != sum(self.timeout_basis.values()):
+                raise ValueError('fault recovery timeout budgets differ from its registered scenario')
             self.sample()
             window = dict(id=len(self.windows), kind=command['kind'], target=command['target'],
                           destination_start=self.destination.ends(), started_at=time.time(),
