@@ -75,6 +75,8 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: go test -run '^$' -tags=integration,load,fault,qualification,migration ./src/tests/system ./src/tests/compatibility
+      - name: Run broker-free replicated helper regressions
+        run: make replicated-helpers
       - run: make build
         env:
           CGO_ENABLED: "0"

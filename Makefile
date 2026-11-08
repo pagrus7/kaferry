@@ -12,6 +12,17 @@ KAFKA_TEST_BROKERS ?= 127.0.0.1:39092
 KAFKA_TEST_DEST_BROKERS ?= 127.0.0.1:40092
 KAFERRY_TEST_OUTPUT ?= -v
 SOAK_TEST_TIMEOUT ?= 1h
+REPLICATED_HELPER_TESTS := \
+	TestReplicatedPublisherAcknowledgesAllPartitionsAndStops \
+	TestReplicatedPublisherStopsAfterRejectedBatch \
+	TestReplicatedAuditFailureCleanupRetainsDiagnostics \
+	TestReplicatedAuditFailureCleanupSkipsPassingCases \
+	TestReplicatedAuditFailureCaptureSharesDeadline \
+	TestReplicatedAuditFailureOutputIsBounded \
+	TestReplicatedAuditArmsOnlyAfterCurrentGenerationAcceptedProgress \
+	TestReplicatedAuditPreservesDecodedConfigurationAndOriginalDigest \
+	TestReplicatedZombieRSSStopsAtProcessExit \
+	TestReplicatedZombieExposureSpansSessionWithinSaveDeadline
 ifeq ($(KAFERRY_TEST_BINARY),)
 TEST_BINARY_PREREQUISITE = build
 # A leading "load " is a GNU Make plugin directive.
@@ -19,7 +30,7 @@ qualification load soak smoke fault: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/
 endif
 export KAFERRY_TEST_OUTPUT
 
-.PHONY: build test check fast wording fmt vet race vulnerabilities smoke integration fault load soak qualification fuzz benchmark metrics duplicates lint broker broker-down
+.PHONY: build test check fast wording fmt vet race vulnerabilities smoke replicated-helpers integration fault load soak qualification fuzz benchmark metrics duplicates lint broker broker-down
 build:
 	mkdir -p bin
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags='-s -w -buildid= -X github.com/pagrus7/kaferry/src/internal/app.version=$(KAFERRY_VERSION) -X github.com/pagrus7/kaferry/src/internal/app.revision=$(KAFERRY_REVISION)' -o bin/kaferry ./src/cmd/kaferry
@@ -50,6 +61,7 @@ fast: wording fmt lint duplicates vulnerabilities race
 	$(PYTHON) -m unittest discover -s tools -t . -p 'test_*.py'
 	$(PYTHON) -m tools.docs.docs
 	$(GO) test -run '^$$' -tags=integration,load,fault,qualification,migration ./src/tests/system ./src/tests/compatibility
+	$(MAKE) replicated-helpers
 	$(MAKE) build
 	$(PYTHON) -m tools.release.notices bin/kaferry bin/THIRD_PARTY_NOTICES.txt
 	$(PYTHON) -m tools.release.install_smoke
@@ -57,6 +69,11 @@ fast: wording fmt lint duplicates vulnerabilities race
 smoke: $(TEST_BINARY_PREREQUISITE)
 	$(PYTHON) -m tools.ci.ci smoke $(GO) test -count=1 -json -tags=integration,load -run '^(TestArchiveTutorial(Cancellation)?|TestLoadObservability)$$/^round-0$$/^disabled$$' ./src/tests/system
 	$(PYTHON) -m tools.ci.ci verify-tests smoke 'TestLoadObservability/round-0/disabled' 'TestArchiveTutorial' 'TestArchiveTutorialCancellation'
+replicated-helpers:
+	test -n "$(strip $(REPLICATED_HELPER_TESTS))"
+	pattern=$$(printf '%s|' $(REPLICATED_HELPER_TESTS)); \
+	CGO_ENABLED=1 $(PYTHON) -m tools.ci.ci replicated-helpers $(GO) test -count=1 -json -race -tags=integration,fault,load -run "^($${pattern%|})$$" ./src/tests/system
+	$(PYTHON) -m tools.ci.ci verify-tests replicated-helpers $(REPLICATED_HELPER_TESTS)
 broker:
 	docker compose -f src/tests/compose.yaml -p kaferry-compat --profile cross-cluster up -d --wait --wait-timeout 60
 	# Listening sockets precede cold group-coordinator readiness.
