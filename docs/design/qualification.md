@@ -37,7 +37,7 @@ Complete [preparation](#prepare), including the independent checker. The runner 
 
 The readiness CLI checks use 16–64 MiB Java heaps and set the JVM processor count to one. Broker JVM heaps remain capped at 512 MiB. Readiness requires a topic-list response from Kafka's API within five seconds.
 
-The independent librdkafka checker requires distinct three-broker clusters, three in-sync replicas per created partition and the topic minimum ISR of two. It then checks 96 records through preserved/key routing, capture, clone and replay, including partial completion, resume and completed reruns. A passing receipt covers healthy replicated copying for the recorded executable; it does not establish broker/network fault recovery, multi-worker behavior or continuous uptime. Only the newest catalog version is accepted.
+The independent librdkafka checker requires distinct three-broker clusters, three in-sync replicas per created partition and the topic minimum ISR of two. After creation is acknowledged, each topic has a 30-second setup window for that metadata and configuration to become visible. It then checks 96 records through preserved/key routing, capture, clone and replay, including partial completion, resume and completed reruns. A passing receipt covers healthy replicated copying for the recorded executable; it does not establish broker/network fault recovery, multi-worker behavior or continuous uptime. Only the newest catalog version is accepted.
 
 By default the fixture owns a disposable Docker volume. To use an existing volume, provision it with the label `kaferry.lab.storage=true`, then pass its name:
 
