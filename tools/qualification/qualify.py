@@ -197,6 +197,7 @@ def suite_command(args, env):
         return go_suite('recovery', go=prefix[0], timeout=f'{args.duration+600}s'), EXPECTED['recovery']
     if args.suite == 'auth':
         env['KAFERRY_AUTH_IMAGE'] = IMAGES[args.source]
+        env['KAFERRY_QUAL_PYTHON'] = sys.executable
         return ['sh', 'src/tests/qualification/run.sh'], EXPECTED['qualification']
     if args.suite == 'migration':
         if not args.previous_binary or not args.previous_binary.is_file():
@@ -393,15 +394,60 @@ def cleanup_container_state(output, compose, env):
     write_json(output / 'cleanup-container-state.json', snapshot)
 
 
-def paired_storage_admission(output, env, parallel):
+def external_storage_admission(output, env, parallel, *, auth=False):
     count = 2 if parallel else 1
-    capacity = fixture_capacity(output, dict(required_cpus=2 * count, required_runtime_memory_bytes=4 * count * 1024**3,
+    capacity = fixture_capacity(output, dict(required_cpus=2 * count, required_runtime_memory_bytes=(8 if auth else 4 * count) * 1024**3,
         required_broker_bytes=4 * 1024**3, required_evidence_bytes=1024**3))
     labels = json.loads(capture(['docker', 'volume', 'inspect', '--format', '{{json .Labels}}',
                                  env['KAFERRY_BROKER_VOLUME']]) or 'null')
     if not labels or labels.get('kaferry.lab.storage') != 'true':
         raise ValueError('external broker volume must exist with label kaferry.lab.storage=true')
     return capacity
+
+
+def validate_auth_storage(default, external, env):
+    services = default.get('services', {})
+    selected = external.get('services', {})
+    volume = external.get('volumes', {}).get('broker-data', {})
+    if default.get('volumes') or 'storage' in services:
+        raise ValueError('default authentication fixture must not select broker storage')
+    if volume.get('external') is not True or volume.get('name') != env['KAFERRY_BROKER_VOLUME']:
+        raise ValueError('authentication broker storage must use the selected external volume')
+    for name in ('kdc', 'kafka-secure-1', 'kafka-secure-2', 'kafka-secure-3'):
+        before, after = services.get(name, {}), dict(selected.get(name, {}))
+        certificates = [mount for mount in before.get('volumes', []) if mount.get('target') == '/mnt/certs']
+        if (len(certificates) != 1 or certificates[0].get('type') != 'bind' or
+                certificates[0].get('source') != env['KAFERRY_QUAL_CERT_DIR'] or
+                bool(certificates[0].get('read_only')) != (name != 'kdc')):
+            raise ValueError('authentication certificate and KDC mounts must retain their host paths and access')
+        if name != 'kdc':
+            logs = ('KAFKA_LOG_DIRS', 'KAFKA_METADATA_LOG_DIR')
+            expected = '/tmp/kaferry-logs/kaferry-auth/kaferry-qualification/' + env['KAFERRY_BROKER_RUN_ID'] + '/' + name
+            settings = after.get('environment', {})
+            if any(settings.get(key) != expected for key in logs):
+                raise ValueError('authentication data and metadata logs must use their owned broker directory')
+            mounts = [mount for mount in after.get('volumes', []) if mount.get('target') == '/tmp/kaferry-logs']
+            if (len(mounts) != 1 or mounts[0].get('type') != 'volume' or
+                    mounts[0].get('source') != 'broker-data' or mounts[0].get('read_only')):
+                raise ValueError('authentication broker log paths must be backed by the selected writable volume')
+            if after.pop('user', None) != '1000:1000':
+                raise ValueError('authentication broker storage requires its fixture owner')
+            if (any(key in before.get('environment', {}) for key in logs) or
+                    before.get('environment', {}).get('KAFKA_HEAP_OPTS') != '-Xms128m -Xmx512m'):
+                raise ValueError('default authentication broker logs and heap must remain unchanged')
+            after['environment'] = {key: value for key, value in settings.items() if key not in logs}
+            after['volumes'] = [mount for mount in after['volumes'] if mount not in mounts]
+        if after != before:
+            raise ValueError('external authentication storage must preserve the broker and KDC configuration')
+
+
+def check_auth_storage(version):
+    env = dict(os.environ, KAFERRY_AUTH_IMAGE=IMAGES[version], KAFERRY_QUAL_CERT_DIR='/tmp',
+               KAFERRY_BROKER_VOLUME='LAB_VOLUME', KAFERRY_BROKER_RUN_ID='a' * 32)
+    compose = ['docker', 'compose', '-p', 'kaferry-qualification', '-f', 'src/tests/qualification/compose.yaml']
+    documents = [json.loads(subprocess.check_output(compose + overlay + ['config', '--format', 'json'],
+        env=env, cwd=ROOT, text=True, timeout=10)) for overlay in ([], ['-f', 'src/tests/qualification/broker-storage.compose.yaml'])]
+    validate_auth_storage(*documents, env)
 
 
 def parallel_run(args):
@@ -479,13 +525,26 @@ def resolve_run(args, receipt, fixture):
         receipt['case_selection'] = ['ownership/zombie-worker']
     paired = not replicated_fixture(args) and (args.suite in PAIRED_SUITES or
         args.suite == 'migration' and args.state_contract == 'resume')
-    if volume is not None and (not (replicated_fixture(args) or paired) or
+    auth = args.suite == 'auth' and volume is not None
+    if volume is not None and (not (replicated_fixture(args) or args.suite == 'auth' or paired) or
                                not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', volume)):
-        raise ValueError('--broker-volume requires a paired or replicated broker fixture and a Docker volume name')
-    if volume and paired:
+        raise ValueError('--broker-volume requires a local broker fixture and a Docker volume name')
+    for name in ('KAFERRY_BROKER_VOLUME', 'KAFERRY_BROKER_RUN_ID'):
+        env.pop(name, None)
+    if volume and (paired or auth):
         env.update(KAFERRY_BROKER_VOLUME=volume, KAFERRY_BROKER_RUN_ID=uuid.uuid4().hex)
-        compose[4:4] = ['-f', 'src/tests/broker-storage.compose.yaml']
-        receipt['fixture_storage'] = dict(mode='external-volume', run_id=env['KAFERRY_BROKER_RUN_ID'], layout='paired')
+        if paired:
+            compose[4:4] = ['-f', 'src/tests/broker-storage.compose.yaml']
+        receipt['fixture_storage'] = dict(mode='external-volume', run_id=env['KAFERRY_BROKER_RUN_ID'], layout='auth' if auth else 'paired')
+    if auth:
+        project = 'kaferry-qualification'
+        brokers = '127.0.0.1:41092,127.0.0.1:42092,127.0.0.1:43092'
+        # run.sh generates the actual private certificate directory before startup.
+        # Other Compose operations only need an existing interpolation placeholder.
+        env.update(KAFERRY_FIXTURE_PROJECT=project, KAFERRY_QUAL_CERT_DIR='/tmp',
+                   KAFKA_TEST_BROKERS=brokers, KAFKA_TEST_DEST_BROKERS=brokers)
+        compose = ['docker', 'compose', '-f', 'src/tests/qualification/compose.yaml',
+                   '-f', 'src/tests/qualification/broker-storage.compose.yaml', '-p', project]
     if replicated_fixture(args):
         if fixture is not None or args.source != VERSIONS[-1] or args.destination != VERSIONS[-1]:
             raise ValueError('replicated uses the newest catalog image and its dedicated fixture')
@@ -506,7 +565,7 @@ def resolve_run(args, receipt, fixture):
                                      replication_factor=3, min_insync_replicas=2, client_paths=4)
         receipt['fixture_storage'] = dict(mode='external-volume' if volume else 'disposable-volume',
                                          run_id=env['KAFERRY_REPLICATED_RUN_ID'])
-    fixtures = paired or replicated_fixture(args)
+    fixtures = paired or replicated_fixture(args) or auth
     if not Path(args.binary).is_file():
         raise ValueError('binary is missing; run make build or pass --binary')
     receipt['binary_sha256'] = hashlib.sha256(Path(args.binary).read_bytes()).hexdigest()
@@ -520,6 +579,8 @@ def resolve_run(args, receipt, fixture):
     env.update(KAFERRY_TEST_BINARY=args.binary, KAFERRY_EXPECT_BINARY_SHA256=receipt['binary_sha256'],
                KAFERRY_SOURCE_IMAGE=IMAGES[args.source], KAFERRY_DESTINATION_IMAGE=IMAGES[args.destination])
     receipt['requested_images'] = [env['KAFERRY_SOURCE_IMAGE'], env['KAFERRY_DESTINATION_IMAGE']] if fixtures else []
+    if auth:
+        receipt['requested_images'] = [IMAGES[args.source]]
     if replicated_fixture(args):
         receipt['requested_images'].append(network.IMAGE)
     if args.config and args.suite != 'cloud':
@@ -568,7 +629,12 @@ def startup_health(output, compose, env):
 
 def fixture_images(spec):
     images = subprocess.check_output(spec.compose + ['images', '--format', 'json'],
-        env=spec.env, cwd=ROOT, text=True, timeout=10).strip()
+        env=spec.env, cwd=ROOT, text=True, timeout=10)
+    return validate_fixture_images(images)
+
+
+def validate_fixture_images(images):
+    images = images.strip()
     if not images:
         raise ValueError('fixture did not report its broker images')
     rows = json.loads(images)
@@ -597,11 +663,12 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
                        'proxy-up', spec.env, timeout=90, cancelled=cancelled)
                 logged([sys.executable, '-m', 'tools.qualification.network', '--output', str(args.output)],
                        args.output, 'proxy-configure', spec.env, timeout=60, cancelled=cancelled)
-            elif receipt.get('fixture_storage', {}).get('layout') == 'paired':
-                receipt['storage_capacity'] = paired_storage_admission(args.output, spec.env, fixture is not None)
+            elif receipt.get('fixture_storage', {}).get('layout') in ('paired', 'auth'):
+                receipt['storage_capacity'] = external_storage_admission(args.output, spec.env, fixture is not None,
+                                                                        auth=args.suite == 'auth')
                 owns_fixture = True
                 replicated_storage(args.output, spec.compose, spec.env, receipt['storage_capacity'], cancelled)
-            if spec.compose:
+            if spec.compose and args.suite != 'auth':
                 owns_fixture = True
                 startup_attempted = True
                 logged(spec.compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output,
@@ -640,7 +707,7 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
                 except (OSError, subprocess.SubprocessError) as error:
                     errors.append({'phase': 'logs', 'error': str(error)})
                 finally:
-                    owned_storage = replicated_fixture(args) or receipt.get('fixture_storage', {}).get('layout') == 'paired'
+                    owned_storage = replicated_fixture(args) or receipt.get('fixture_storage', {}).get('layout') in ('paired', 'auth')
                     if owned_storage:
                         errors.extend(cleanup_replicated(args.output, spec.compose, spec.env))
                     try:
@@ -675,8 +742,6 @@ def verify_run(args, spec, receipt):
                 source_brokers=3, destination_brokers=3, replication_factor=3, min_insync_replicas=2):
             raise ValueError('independent reconciliation did not verify the replicated topology')
         receipt['reconciliation'] = probe
-    if args.suite == 'auth':
-        receipt['broker_images'] = (args.output / 'qualification.broker-images.json').read_text()
     if args.suite in ('fault', 'recovery'):
         from tools.qualification.fault_results import collect
         receipt['fault_results'] = collect(args.output, args.suite, receipt, spec.env.get('KAFERRY_ORACLE_RUN'))
@@ -718,7 +783,18 @@ def run_suite(args, *, fixture=None, cancelled=None):
         spec = resolve_run(args, receipt, fixture)
         write_json(args.output / 'manifest.json', receipt)
         with broker_fixture(args, spec, receipt, fixture, cancelled):
-            logged(spec.command, args.output, 'suite', spec.env, timeout=spec.timeout, cancelled=cancelled)
+            try:
+                logged(spec.command, args.output, 'suite', spec.env, timeout=spec.timeout, cancelled=cancelled)
+            finally:
+                if args.suite == 'auth':
+                    suite_failed = sys.exc_info()[0] is not None
+                    try:
+                        receipt['broker_images'] = validate_fixture_images(
+                            (args.output / 'qualification.broker-images.json').read_text())
+                    except (OSError, ValueError) as error:
+                        if not suite_failed:
+                            raise
+                        receipt['image_error'] = str(error)
             verify_run(args, spec, receipt)
         receipt['status'] = 'passed'
     except (Exception, KeyboardInterrupt) as error:
@@ -824,7 +900,7 @@ def main(argv=None):
         running = sub.add_parser(name, help='run one suite' if name == 'run' else 'run every planned case sequentially')
         if name == 'run':
             running.add_argument('suite', choices=SUITES)
-            running.add_argument('--broker-volume', help='existing labeled external volume for paired or replicated brokers')
+            running.add_argument('--broker-volume', help='existing labeled external volume for local brokers')
             running.add_argument('--topology', choices=('single', 'replicated'), help='endurance topology (default: single)')
             running.add_argument('--case', choices=('ownership/zombie-worker',), help='case within fault-replicated')
         elif name == 'matrix':
