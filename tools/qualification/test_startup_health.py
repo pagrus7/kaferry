@@ -108,7 +108,7 @@ class StartupHealthTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             args, spec = self.fixture(Path(temporary))
             with patch('tools.qualification.qualify.logged') as logged, \
-                 patch('tools.qualification.qualify.capture', return_value='[]'), \
+                 patch('tools.qualification.qualify.fixture_images', return_value='fixture'), \
                  patch('tools.qualification.qualify.startup_health') as health, \
                  patch('tools.qualification.qualify.subprocess.run'):
                 with broker_fixture(args, spec, {}, None, None):

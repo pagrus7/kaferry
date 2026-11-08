@@ -45,11 +45,7 @@ By default the fixture owns a disposable Docker volume. To use an existing volum
 python3 -m tools.qualification.qualify run replicated --broker-volume LAB_VOLUME --output /path/to/fresh/evidence
 ```
 
-`--broker-volume` is supported by `run replicated`, `run fault-replicated` and `run endurance --topology replicated`; other suite combinations fail. The volume must allow the fixture initializer to create directories and set broker ownership to UID/GID 1000. Each run gets a fresh UUID directory beneath `kaferry-replicated/<project>/`.
-
-Cleanup stops writers and removes only that directory after checking its ownership marker. The external volume and unrelated files remain. Failed ownership validation or writer shutdown preserves the run directory. Data deletion keeps the marker until the run's other files are removed; a failed deletion leaves the marker and remaining data, without undoing earlier deletions. If final directory removal fails, cleanup attempts to restore the marker and still fails qualification. There is no automatic cleanup retry.
-
-The volume driver selects its filesystem; this command does not change host storage settings or establish shared-filesystem durability. Archive output still needs the [archive filesystem guarantees](archive.md#layout-and-ownership).
+`run replicated`, `run fault-replicated` and `run endurance --topology replicated` share this storage layout. Each run gets a fresh UUID directory beneath `kaferry-replicated/<project>/`. See [broker storage](#broker-storage) for external-volume requirements and cleanup guarantees.
 
 `--output` selects evidence and the smoke's archive/checkpoint output; it does not select broker storage. Keep private driver options, server addresses and access configuration outside receipts intended for publication.
 
@@ -94,6 +90,21 @@ Worker 2 must remain alive and finish successfully. Worker 1 may exit 1 after he
 
 Final librdkafka reconciliation checks full retained input and output, including permitted replay duplicates and saved progress. Each CLI must also stay within 512 MiB sampled RSS and its configured 1,024-record/128 MiB uncommitted caps. The output retains `manifest.json`, `replicated-ownership.json`, `ownership-proof.json`, raw broker/CLI logs and the shared observer's checksummed bootstrap and safety samples. Failure or Ctrl-C retains failed evidence and attempts fixture cleanup. A command or source test alone does not qualify an executable; qualification requires its completed passing receipt.
 
+## Broker storage
+
+`run --broker-volume NAME` also supports the paired fixtures for `broker`, `fault`, `load`, `soak`, `capture`, `endurance`, `recovery`, `integration` and `migration --state-contract resume`. `parallel --broker-volume NAME` places both jobs' brokers on that volume. Authentication owns a separate fixture lifecycle and does not support this option; cloud, migration rejection and suites without local brokers reject it too. Default broker storage is unchanged.
+
+```sh
+python3 -m tools.qualification.qualify run endurance --duration 1m --broker-volume LAB_VOLUME --output build-results/external-rehearsal
+python3 -m tools.qualification.qualify parallel --duration 1m --companion-duration 1m --broker-volume LAB_VOLUME --output build-results/external-pair
+```
+
+The volume must already exist with label `kaferry.lab.storage=true` and permit directory creation and broker ownership changes to UID/GID 1000. The runner checks the label before starting the initializer or brokers. Paired runs use fresh UUID directories beneath `kaferry-paired/<project>/`, with separate source/destination directories. The volume is mounted at `/tmp/kaferry-logs`, so existing endurance and combined parallel disk checks measure the selected broker filesystem. `--output` still selects evidence and archive/checkpoint output separately; it does not move host temporary files.
+
+For paired external storage, preflight additionally requires two Docker CPUs and 4 GiB of runtime memory, or four CPUs and 8 GiB for both parallel jobs together. `manifest.json` records required and observed capacity in `storage_capacity`; rejected checks retain `capacity.json`. These planning allowances include two 512 MiB broker heaps per job plus room for broker native memory and clients; they are not measured capacity guarantees. Default paired storage retains its existing disk checks without this CPU/memory preflight.
+
+Cleanup stops writers, validates the run's project/UUID ownership marker and removes only that run directory. The external volume, peer runs and unrelated files remain. Failed ownership validation or writer shutdown preserves the run directory. Data deletion keeps the marker until the run's other files are removed; a failed deletion leaves the marker and remaining data, without undoing earlier deletions. If final directory removal fails, cleanup attempts to restore the marker and still fails qualification. There is no automatic cleanup retry. The volume driver selects its filesystem; this option does not configure host storage or establish shared-filesystem durability. Archive output still requires the [archive filesystem guarantees](archive.md#layout-and-ownership), including atomic rename without replacement; selecting a broker volume does not relax that contract. Inspect diagnostics before publication and keep private volume names, driver options, addresses and access configuration outside shared evidence.
+
 ## Two concurrent workloads
 
 The `parallel` command holds the host lease for a pair of independent runs. It starts
@@ -123,8 +134,8 @@ Admission checks the **combined** full disk allowance on both jobs' broker files
 the host temporary filesystem and the evidence filesystem. This is deliberately
 conservative when they are separate disks. A 24-hour Kafka run plus recovery needs
 about 278 GiB; the archive alternative reserves additional input/output space. The
-checks cannot reserve space against unrelated disk users. `--output` relocates evidence,
-not Kafka storage; free NAS space does not expand Docker's backing storage. Output must
+checks cannot reserve space against unrelated disk users. `--broker-volume` selects
+[external broker storage](#broker-storage); `--output` relocates evidence separately. Output must
 be writable. A network archive filesystem additionally needs the sync, rename and lock
 semantics described in the [archive contract](archive.md).
 
@@ -235,13 +246,31 @@ For a stopped replicated run, read its project and run ID from its manifest. Whe
 
 If marker validation fails, preserve the volume and investigate; do not continue with volume removal.
 
-For a parallel run, use the exact `fixture_project` from each child manifest. For example,
+For a parallel run without `--broker-volume`, use the exact `fixture_project` from each child manifest. For example,
 clean up the endurance job below, then repeat with the `recovery/manifest.json` or
 `capture/manifest.json` from that same run. Check that the run has stopped first.
 
 ```sh
 project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixture_project"])' build-results/parallel-24h/endurance/manifest.json)
 docker compose -f src/tests/compose.yaml -p "$project" --profile cross-cluster down -v --remove-orphans
+```
+
+For paired brokers started with `--broker-volume`, restore that volume name and the run identity before cleanup. Use the child manifest for each parallel job. Stop writers before deleting the owned directory, and preserve storage if any command fails:
+
+```sh
+(
+  set -eu
+  manifest=build-results/external-rehearsal/manifest.json
+  export KAFERRY_BROKER_VOLUME=LAB_VOLUME
+  project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixture_project"])' "$manifest")
+  KAFERRY_BROKER_RUN_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixture_storage"]["run_id"])' "$manifest")
+  KAFERRY_SOURCE_IMAGE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["requested_images"][0])' "$manifest")
+  export KAFERRY_BROKER_RUN_ID KAFERRY_SOURCE_IMAGE
+  storage_script=$(cat src/tests/replicated/storage.sh)
+  docker compose -f src/tests/compose.yaml -f src/tests/broker-storage.compose.yaml -p "$project" --profile cross-cluster stop --timeout 10
+  docker compose -f src/tests/compose.yaml -f src/tests/broker-storage.compose.yaml -p "$project" --profile cross-cluster run --rm --no-deps --entrypoint /bin/sh storage -ec "$storage_script" storage clean
+  docker compose -f src/tests/compose.yaml -f src/tests/broker-storage.compose.yaml -p "$project" --profile cross-cluster down --remove-orphans
+)
 ```
 
 ## Paired performance
