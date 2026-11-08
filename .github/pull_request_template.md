@@ -15,7 +15,3 @@ Pending
 ## Tests review
 
 Pending
-
-## Simplicity review
-
-Pending
