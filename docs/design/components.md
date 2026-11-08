@@ -82,6 +82,8 @@ The shared Go setup caches modules and compiled packages by runner architecture,
 
 PR and main checks run `TestKafkaQuickStart` in the load job after bounded measurements finish, using the built binary and a fresh broker on port 9092. Both the integration job and the load job verify their required tests ran and upload Go coverage; Codecov combines their profiles with the unit results. The shared integration suite also enables and verifies the quick start for releases; ordinary local integration runs skip it unless `KAFERRY_QUICKSTART=1` is set.
 
+Kafka and KDC fixtures poll every second during a startup grace period, then use their normal healthcheck intervals. Existing fixture wait timeouts remain in force.
+
 ### Local reviews
 
 Follow [docs/development/reviews/](../development/reviews/README.md) for required reviewers, formatting-only exceptions and follow-ups.

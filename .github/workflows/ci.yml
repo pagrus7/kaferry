@@ -120,6 +120,11 @@ jobs:
         with:
           cache-name: checks-kafka
       - run: python3 -m tools.ci.ci broker make broker
+      - name: Record fixture healthcheck settings
+        run: |
+          docker version --format '{{.Server.Version}}'
+          docker compose version
+          docker inspect kaferry-compat-kafka-1 --format '{{json .Config.Healthcheck}}'
       - run: python3 -m tools.ci.ci integration go test -count=1 -json -race -tags=integration -coverpkg=./... -coverprofile=build-results/coverage.out ./src/tests/system
         env:
           CGO_ENABLED: "1"

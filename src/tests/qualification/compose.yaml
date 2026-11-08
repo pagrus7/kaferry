@@ -7,6 +7,8 @@ x-broker: &broker
       condition: service_healthy
   healthcheck:
     test: [CMD, /opt/kafka/bin/kafka-topics.sh, --bootstrap-server, "localhost:9092", --list]
+    start_period: 30s
+    start_interval: 1s
     interval: 5s
     timeout: 5s
     retries: 18
@@ -73,6 +75,8 @@ services:
       - ${KAFERRY_QUAL_CERT_DIR:?generate fixture certificates}:/mnt/certs
     healthcheck:
       test: [CMD, sh, -c, "test -s /mnt/certs/copier.keytab && kadmin.local -q 'getprinc copier@KAFERRY.TEST'"]
+      start_period: 10s
+      start_interval: 1s
       interval: 2s
       timeout: 5s
       retries: 15
