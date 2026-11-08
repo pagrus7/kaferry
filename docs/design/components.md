@@ -87,7 +87,7 @@ Run from the repository root with Python 3 available. [Makefile](../../Makefile)
 | Command | Scope / prerequisite | CI owner |
 | --- | --- | --- |
 | `make check` | Vet and race-enabled unit/mock/component tests, kfake and shutdown subprocesses; no broker | Every PR/main; all release platforms |
-| `make fast` | Local fast checks: formatting, check, script/docs checks, build/licenses and file-copy smoke | Optional before push; CI runs these entrypoints |
+| `make fast` | Wording, formatting, Go lint, Python duplication, vulnerabilities, race/script/docs checks, build/licenses and file-copy smoke; golangci-lint and jscpd required | Optional before push; CI runs these entrypoints |
 | `make broker` | Start disposable source/destination Kafka clusters | Fixture setup |
 | `make integration` | Broker/CLI paths, fidelity, resume and rebalances; start brokers first | Every PR/main; release |
 | `make fault` | Outages and ownership loss; start brokers first | Code PRs, nightly, weekly, release |
