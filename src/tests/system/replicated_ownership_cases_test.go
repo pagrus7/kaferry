@@ -39,6 +39,7 @@ type ownershipCaseObservation struct {
 	Publishing      replicatedPublishing `json:"publishing"`
 	Alive           map[int]bool         `json:"processes_alive"`
 	Error           string               `json:"error,omitempty"`
+	SourceTopology  []faults.Partition   `json:"source_topology,omitempty"`
 }
 
 type ownershipCaseWorker struct {
@@ -121,7 +122,9 @@ func replicatedOwnershipCase(t *testing.T, name string) {
 		strings.Join(faults.Endpoints("destination", 0), ","), s.src, s.dst, s.group, replicatedPartitions, false)
 	s.audit = startReplicatedAudit(ctx, t, s.lab, directory)
 	s.audit.capture(ctx, t, "baseline")
-	s.config = configuration(t, zombieWorkerSettings(timeouts))
+	settings := zombieWorkerSettings(timeouts)
+	s.config = configuration(t, settings)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "worker-settings.toml"), []byte("[worker]\n"+settings), 0600))
 	t.Cleanup(s.retain)
 	s.start(1)
 	producer := fixtureClient(t, strings.Join(faults.Endpoints("source", 0), ","), kgo.RecordPartitioner(kgo.ManualPartitioner()),
@@ -168,6 +171,13 @@ func (s *ownershipCase) start(route int) *ownershipCaseWorker {
 	marker := fmt.Sprintf("%s-worker%d", s.prefix, route)
 	statement := zombieWorkerSQL(s.timeouts, route, marker, s.src, s.dst, s.group)
 	statement = strings.Replace(statement, "'heartbeat.interval.ms'='1000'", fmt.Sprintf("'heartbeat.interval.ms'='1000','max.poll.interval.ms'='%d'", s.timeouts["max.poll.interval.ms"].Milliseconds()), 1)
+	path := filepath.Join(s.directory, fmt.Sprintf("worker-route-%d.sql", route))
+	if previous, err := os.ReadFile(path); err == nil {
+		require.Equal(s.t, statement, string(previous), "restart must use the exact same SQL")
+	} else {
+		require.ErrorIs(s.t, err, os.ErrNotExist)
+		require.NoError(s.t, os.WriteFile(path, []byte(statement), 0600))
+	}
 	worker := &ownershipCaseWorker{route: route, started: time.Now().UTC()}
 	worker.process = startCLI(s.t, s.ctx, testBinary(s.t), "", "run", "-e", statement, "-c", s.config)
 	worker.exited, worker.memory = observeReplicatedExit(worker.process), watchReplicatedRSS(s.t, worker.process)
@@ -242,6 +252,7 @@ func (s *ownershipCase) poll(label string, allowFaultExit bool, condition func(c
 		ready := state.Error == "" && condition(query, state)
 		done()
 		if ready {
+			state.Finished = time.Now().UTC()
 			return state
 		}
 		select {
@@ -309,6 +320,7 @@ func (s *ownershipCase) stable(label string, routes []int, before []int64, gener
 		if before != nil && !allAbove(state.Publishing.Acknowledged, s.states["baseline"].Publishing.Acknowledged, 2) {
 			return false
 		}
+		state.Finished = time.Now().UTC()
 		accepted = state
 		return true
 	})
@@ -362,6 +374,7 @@ func (s *ownershipCase) killDuringRebalance(coordinator bool) {
 			return false
 		}
 		s.events = append(s.events, map[string]any{"pid": old.process.pid(), "route": old.route,
+			"command": []string{"ps", "-o", "state=", "-p", fmt.Sprint(old.process.pid())}, "stdout": string(state),
 			"os_process_state": strings.TrimSpace(string(state)), "observed_at": time.Now().UTC(), "reason": "OS confirms held worker"})
 		return true
 	})
@@ -411,7 +424,11 @@ func (s *ownershipCase) killCoordinator(window int, old *ownershipCaseWorker) {
 			s.journal(atKill)
 			s.failedAfter = time.Now().UTC()
 		}
-		return faults.Docker(ctx, args...)
+		data, err := faults.Docker(ctx, args...)
+		if len(args) > 0 && args[0] == "kill" && err == nil {
+			s.events = append(s.events, map[string]any{"coordinator_kill_started": s.failedAfter, "coordinator_kill_finished": time.Now().UTC(), "container": args[len(args)-1]})
+		}
+		return data, err
 	}
 	injection, err := s.lab.Inject(s.ctx, faults.Role{Kind: "coordinator", Cluster: "source", Group: s.group}, faults.Fault{Kind: "kill"})
 	if injection != nil {
@@ -431,11 +448,20 @@ func (s *ownershipCase) killCoordinator(window int, old *ownershipCaseWorker) {
 	killed := injection.Event.Targets[0]
 	s.states["coordinator_replacement"] = s.poll("different coordinator while the original broker remains stopped", true,
 		func(query context.Context, state ownershipCaseObservation) bool {
-			data, err := faults.Docker(query, "inspect", "--format", "{{.State.Running}}", killed.Container)
-			return err == nil && strings.TrimSpace(string(data)) == "false" && state.Coordinator != killed.Broker && state.Coordinator > 0 &&
-				allAbove(state.Publishing.Acknowledged, s.states["at_kill"].Publishing.Acknowledged, 2)
+			return state.Coordinator != killed.Broker && state.Coordinator > 0 &&
+				allAbove(state.Publishing.Acknowledged, s.states["at_kill"].Publishing.Acknowledged, 2) &&
+				s.brokerInspection(query, killed, false, "coordinator-stopped.inspect.json")
 		})
 	require.NoError(s.t, injection.Heal(s.ctx))
+	s.poll("restored broker API readiness before scoped logging", true, func(query context.Context, _ ownershipCaseObservation) bool {
+		return (&brokerCopy{}).healthy(query, killed)
+	})
+	// Reapply scoped logging before the metadata used for recovery proof, as
+	// well as the accepted post-recovery generations and final capture guards.
+	require.NoError(s.t, s.audit.level(s.ctx, killed.Broker, requestLogger, "DEBUG"))
+	require.NoError(s.t, s.audit.level(s.ctx, killed.Broker, receivedLogger, "TRACE"))
+	s.events = append(s.events, map[string]any{"broker": killed.Broker, "audit_logging_reenabled_at": time.Now().UTC()})
+	var restoredTopology []faults.Partition
 	s.states["broker_restored"] = s.poll("restored coordinator broker health and all 24 ISR sets", true,
 		func(query context.Context, _ ownershipCaseObservation) bool {
 			probe := &brokerCopy{metadata: s.metadata, src: s.src, dst: s.dst}
@@ -448,13 +474,12 @@ func (s *ownershipCase) killCoordinator(window int, old *ownershipCaseWorker) {
 					return false
 				}
 			}
-			return true
+			restoredTopology = parts
+			return s.brokerInspection(query, killed, true, "coordinator-restored.inspect.json")
 		})
-	// Reapply scoped logging on the restarted broker before requiring accepted
-	// post-recovery generations and the final capture guards.
-	require.NoError(s.t, s.audit.level(s.ctx, killed.Broker, requestLogger, "DEBUG"))
-	require.NoError(s.t, s.audit.level(s.ctx, killed.Broker, receivedLogger, "TRACE"))
-	s.events = append(s.events, map[string]any{"broker": killed.Broker, "audit_logging_reenabled_at": time.Now().UTC()})
+	restored := s.states["broker_restored"]
+	restored.SourceTopology = restoredTopology
+	s.states["broker_restored"] = restored
 	// A coordinator error may terminate a periodic save under the existing
 	// product contract. Restart each affected route at most once, after health
 	// and ISR recovery, with its exact binary, SQL, configuration and group.
@@ -467,10 +492,34 @@ func (s *ownershipCase) killCoordinator(window int, old *ownershipCaseWorker) {
 	for _, route := range restart {
 		s.start(route)
 	}
-	s.stable("recovered", []int{1, 2}, s.states["baseline"].Saved, ownershipCaseGeneration(s.states["baseline"]))
+	s.poll("new source publication after broker restoration", false, func(_ context.Context, state ownershipCaseObservation) bool {
+		return allAbove(state.Publishing.Acknowledged, restored.Publishing.Acknowledged, 2)
+	})
+	s.stable("recovered", []int{1, 2}, restored.Saved, ownershipCaseGeneration(s.states["baseline"]))
 	s.events = append(s.events, map[string]any{"restart_routes": restart,
 		"restart_scope": "one restart per affected route after broker health and ISR3; same selected executable, SQL, group and configuration"})
 	s.oracle.healed(s.t, window, "original broker restored with ISR3; both selected routes own and save in a later accepted generation")
+}
+
+func (s *ownershipCase) brokerInspection(ctx context.Context, target faults.Target, running bool, name string) bool {
+	format := `{"id":{{json .Id}},"running":{{json .State.Running}},"health":{{json .State.Health.Status}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}}}`
+	started := time.Now().UTC()
+	data, err := faults.Docker(ctx, "inspect", "--format", format, target.Container)
+	if err != nil {
+		return false
+	}
+	var observed struct {
+		ID, Health, Project, Service string
+		Running                      bool
+	}
+	require.NoError(s.t, json.Unmarshal(data, &observed))
+	if observed.ID != target.Container || observed.Project != s.lab.Project || observed.Service != target.Service ||
+		observed.Running != running || running && observed.Health != "healthy" {
+		return false
+	}
+	require.NoError(s.t, os.WriteFile(filepath.Join(s.directory, name), data, 0600))
+	s.events = append(s.events, map[string]any{"broker_inspection": name, "started": started, "finished": time.Now().UTC(), "container": target.Container})
+	return true
 }
 
 func (s *ownershipCase) scale() {
@@ -500,7 +549,7 @@ func (s *ownershipCase) signal(worker *ownershipCaseWorker, signal os.Signal, re
 	require.False(s.t, worker.process.finished(), "worker exited before expected signal")
 	started := time.Now().UTC()
 	require.NoError(s.t, worker.process.signal(signal))
-	s.events = append(s.events, map[string]any{"signal": signal.String(), "pid": worker.process.pid(), "route": worker.route,
+	s.events = append(s.events, map[string]any{"signal": signal.String(), "signal_number": int(signal.(syscall.Signal)), "pid": worker.process.pid(), "route": worker.route,
 		"started": started, "finished": time.Now().UTC(), "reason": reason})
 }
 
@@ -619,12 +668,15 @@ func (s *ownershipCase) measure(worker *ownershipCaseWorker, killed bool) {
 	peak, samples, summary, err := ownershipCaseWork(logs)
 	require.NoError(s.t, err)
 	require.Positive(s.t, samples, "every selected worker needs cap measurements")
-	if !killed {
+	if killed {
+		require.False(s.t, summary, "killed worker had already ended its copy loop")
+	} else {
 		require.True(s.t, summary, "worker needs its final copy summary")
 	}
 	require.LessOrEqual(s.t, peak.PeakRecords, 1024)
 	require.LessOrEqual(s.t, peak.PeakBytes, int64(134217728))
 	worker.measurement = map[string]any{"pid": worker.process.pid(), "route": worker.route, "started_at": worker.started, "stopped_at": <-worker.exited,
+		"wait_status":   int(worker.process.command.ProcessState.Sys().(syscall.WaitStatus)),
 		"binary_sha256": os.Getenv("KAFERRY_EXPECT_BINARY_SHA256"), "exit_code": worker.process.command.ProcessState.ExitCode(), "reason": worker.reason, "terminal_error": worker.terminal,
 		"sampled_peak_rss_bytes": memory.peak * 1024, "rss_samples": memory.samples, "rss_failures": memory.failures,
 		"record_cap": 1024, "byte_cap": 134217728, "peak_uncommitted_records": peak.PeakRecords, "peak_uncommitted_bytes": peak.PeakBytes,
@@ -659,17 +711,35 @@ func (s *ownershipCase) retain() {
 				"exit_code": worker.process.command.ProcessState.ExitCode(), "measurement_incomplete": true}
 		}
 		measurements = append(measurements, worker.measurement)
+		worker.measurement["log"] = fmt.Sprintf("worker-%d-route-%d.cli.log", index+1, worker.route)
 	}
 	var publishing replicatedPublishing
 	if s.publisher != nil {
 		publishing = s.publisher.snapshot()
+	}
+	var artifacts []map[string]string
+	entries, err := os.ReadDir(s.directory)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() || entry.Name() == "replicated-ownership-case.json" {
+				continue
+			}
+			data, readErr := os.ReadFile(filepath.Join(s.directory, entry.Name()))
+			if readErr != nil {
+				s.t.Error("checksum ownership evidence: ", readErr)
+				continue
+			}
+			artifacts = append(artifacts, map[string]string{"observations": entry.Name(), "sha256": fmt.Sprintf("%x", sha256.Sum256(data))})
+		}
+	} else {
+		s.t.Error("list ownership evidence: ", err)
 	}
 	data, err := json.MarshalIndent(map[string]any{"schema": 1, "id": s.id, "complete": s.complete && !s.t.Failed(), "case_failed": s.t.Failed(),
 		"source_partitions": replicatedPartitions, "source_topic": s.src, "destination_topic": s.dst, "group": s.group,
 		"binary_sha256": os.Getenv("KAFERRY_EXPECT_BINARY_SHA256"), "states": s.states, "events": s.events, "publishing": publishing,
 		"timeout_milliseconds": durationMilliseconds(s.timeouts), "required_recovery_seconds": s.oracle.recovery.Seconds(),
 		"worker_measurements": measurements, "safety_case": s.safety, "audit_guard": s.audit.guard, "audit_marks": s.audit.marks,
-		"observations": "ownership-observations.jsonl"}, "", "  ")
+		"fixture_project": s.lab.Project, "artifacts": artifacts, "observations": "ownership-observations.jsonl"}, "", "  ")
 	if err == nil {
 		err = os.WriteFile(filepath.Join(s.directory, "replicated-ownership-case.json"), append(data, '\n'), 0600)
 	}
