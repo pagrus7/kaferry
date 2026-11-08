@@ -87,11 +87,11 @@ jobs:
           go-version: '1.27.3'
           cache: true
       - run: python3 -m tools.ci.ci broker make broker
-      - run: python3 -m tools.ci.ci integration go test -count=1 -json -race -tags=integration -coverpkg=./... -coverprofile=build-results/coverage.out ./...
+      - run: python3 -m tools.ci.ci integration go test -count=1 -json -race -tags=integration -coverpkg=./... -coverprofile=build-results/coverage.out ./src/tests/system
         env:
           CGO_ENABLED: "1"
           KAFERRY_QUICKSTART: "1"
-      - run: python3 -m tools.ci.ci verify-tests integration 'TestKafkaQuickStart'
+      - run: python3 -m tools.ci.ci verify-tests integration 'TestKafkaQuickStart' 'TestCLIInterruptCommitsAndResumeDoesNotRecopy' 'TestAllFileDirectionsAndResume' 'TestTopicToTopicSlice'
       - name: Check progress and archives against the PR base
         if: github.event_name == 'pull_request'
         env:
@@ -130,8 +130,6 @@ jobs:
           fi
           export KAFERRY_TEST_BINARY="$PWD/bin/kaferry"
           python3 -m tools.ci.ci migration go test -count=1 -race -tags=integration,migration -run TestPreviousBinary -v ./src/tests/system
-      - name: Capture bounded load measurements
-        run: python3 -m tools.ci.ci load make load
       - name: Coverage reports
         run: |
           go tool cover -func=build-results/coverage.out > build-results/coverage.txt
@@ -157,5 +155,33 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: checks-kafka
+          path: build-results/
+          retention-days: 30
+  load:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      KAFKA_TEST_BROKERS: 127.0.0.1:39092
+      KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - run: python3 -m tools.ci.ci broker make broker
+      - name: Capture bounded load measurements
+        run: python3 -m tools.ci.ci load make load
+      - if: always()
+        run: |
+          mkdir -p build-results
+          docker compose -f src/tests/compose.yaml -p kaferry-compat --profile cross-cluster logs --no-color > build-results/brokers.log
+          make broker-down
+      - if: always()
+        run: python3 -m tools.ci.ci summary
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checks-load
           path: build-results/
           retention-days: 30
