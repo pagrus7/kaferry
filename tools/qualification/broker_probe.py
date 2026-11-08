@@ -78,6 +78,59 @@ def topic_ready(metadata, partitions, replicated=False):
         for part in metadata.partitions.values())
 
 
+def wait_topic_ready(admin, name, partitions, replicated, observations):
+    from confluent_kafka import KafkaError, KafkaException
+    from confluent_kafka.admin import ConfigResource
+
+    started = time.monotonic()
+    deadline = started + 30
+    observed = dict(topic=name, partitions=partitions, replicated=replicated,
+                    budget_seconds=30, status='failed', attempts=[])
+    observations.append(observed)
+    resource = ConfigResource(ConfigResource.Type.TOPIC, name) if replicated else None
+
+    def remaining():
+        seconds = deadline - time.monotonic()
+        if seconds <= 0:
+            raise ValueError('fixture topic metadata and required configuration did not become ready within 30s')
+        return seconds
+
+    while True:
+        metadata_timeout = min(10, remaining())
+        attempt = dict(number=len(observed['attempts'])+1, elapsed_seconds=time.monotonic()-started,
+                       state='metadata-pending')
+        observed['attempts'].append(attempt)
+        metadata = admin.list_topics(name, timeout=metadata_timeout).topics.get(name)
+        errors = [metadata.error, *(part.error for part in metadata.partitions.values())] if metadata else []
+        for error in filter(None, errors):
+            attempt.setdefault('metadata_error_codes', []).append(error.code())
+            if error.code() not in (KafkaError.UNKNOWN_TOPIC_OR_PART, KafkaError.LEADER_NOT_AVAILABLE):
+                raise KafkaException(error)
+        ready = topic_ready(metadata, partitions, replicated)
+        if ready and replicated:
+            attempt['state'] = 'config-query'
+            try:
+                futures = admin.describe_configs([resource], request_timeout=remaining())
+                described = futures[resource].result(timeout=remaining())
+            except KafkaException as error:
+                attempt.update(state='config-error', error_code=error.args[0].code())
+                # CreateTopics success does not imply every broker has observed it.
+                if error.args[0].code() != KafkaError.UNKNOWN_TOPIC_OR_PART:
+                    raise
+                attempt['state'] = 'config-not-visible'
+                ready = False
+            else:
+                attempt['min_insync_replicas'] = described['min.insync.replicas'].value
+                if attempt['min_insync_replicas'] != '2':
+                    raise ValueError('replicated fixture topic does not require min.insync.replicas=2')
+        if ready:
+            remaining()
+            attempt['state'] = 'ready'
+            observed.update(status='ready', elapsed_seconds=time.monotonic()-started)
+            return
+        time.sleep(min(0.1, remaining()))
+
+
 def client_properties(properties, region):
     result = dict(properties)
     if result.get('sasl.mechanism') == 'AWS_MSK_IAM':
@@ -148,7 +201,7 @@ def run_probe(args):
         import confluent_kafka as kafka
         import fastavro
         import cramjam
-        from confluent_kafka.admin import AdminClient, ConfigResource, NewTopic
+        from confluent_kafka.admin import AdminClient, NewTopic
     except ImportError:
         raise ValueError('run python3 -m tools.qualification.qualify setup before broker/cloud qualification')
     config = json.loads(args.config.read_text()) if args.config else {}
@@ -173,7 +226,7 @@ def run_probe(args):
         '[worker]\ncheckpoint_dir=' + json.dumps(str(output / 'checkpoints')) + '\n')
     report = {'schema': 1, 'status': 'running', 'checker': 'confluent-kafka ' + kafka.__version__,
               'librdkafka': kafka.libversion()[0], 'archive_checker': 'fastavro ' + fastavro.__version__, 'binary_sha256': hashlib.sha256(args.binary.read_bytes()).hexdigest(),
-              'cases': []}
+              'cases': [], 'topic_readiness': []}
     created = [[], []]
 
     def topic(side, suffix, partitions):
@@ -182,19 +235,7 @@ def run_probe(args):
         futures = admins[side].create_topics([NewTopic(name, num_partitions=partitions, replication_factor=factor)], request_timeout=60)
         futures[name].result(timeout=70)
         created[side].append(name)
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            metadata = admins[side].list_topics(name, timeout=10).topics.get(name)
-            if topic_ready(metadata, partitions, args.replicated):
-                break
-            time.sleep(0.1)
-        else:
-            raise ValueError('fixture topic leaders and required replicas did not become ready')
-        if args.replicated:
-            resource = ConfigResource(ConfigResource.Type.TOPIC, name)
-            described = admins[side].describe_configs([resource], request_timeout=30)[resource].result(timeout=40)
-            if described['min.insync.replicas'].value != '2':
-                raise ValueError('replicated fixture topic does not require min.insync.replicas=2')
+        wait_topic_ready(admins[side], name, partitions, args.replicated, report['topic_readiness'])
         return name
 
     def copy(label, query):
