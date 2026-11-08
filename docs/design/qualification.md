@@ -82,7 +82,7 @@ After [preparation](#prepare), use an existing candidate executable and a fresh 
 python3 -m tools.qualification.qualify run fault-replicated --case ownership/zombie-worker --binary bin/kaferry --output build-results/ownership-zombie
 ```
 
-`ownership/zombie-worker` starts two instances of that exact executable in one group, using separate worker routes. Both clusters have 24 partitions with three replicas and minimum ISR two. An independent publisher submits one record per source partition every 100 milliseconds; acknowledgement gaps over two seconds fail. Fault timing follows observed group ownership and accepted commits.
+`ownership/zombie-worker` starts two instances of that exact executable in one group, using separate worker routes. Source and destination topics each have 24 partitions, three replicas and a minimum of two in-sync replicas for writes. After both workers hold their initial assignments, an independent publisher submits one record per source partition every 100 milliseconds; acknowledgement gaps over two seconds fail. Fault timing follows observed group ownership and accepted commits.
 
 A passing receipt requires the coordinator's actual session-expiry observation, independent transfer of worker 1's partitions to worker 2, and accepted peer progress on every transferred partition while worker 1's coordinator route remains cut. After healing, publishing and saved progress must advance again on every partition. Configured session, delivery and shutdown timeouts are six, two and five seconds; the independent observer covers their full 13-second recovery horizon and a healthy observation afterward. The Go case has a four-minute test deadline.
 
