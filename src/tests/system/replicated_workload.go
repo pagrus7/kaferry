@@ -25,6 +25,7 @@ type replicatedPublisher struct {
 }
 
 type replicatedPublishing struct {
+	Observed      time.Time `json:"observed"`
 	Started       time.Time `json:"started"`
 	Stopped       time.Time `json:"stopped"`
 	Acknowledged  []int64   `json:"acknowledged_by_partition"`
@@ -95,6 +96,7 @@ func (p *replicatedPublisher) snapshot() replicatedPublishing {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	state := p.state
+	state.Observed = time.Now().UTC()
 	state.Acknowledged = append([]int64(nil), state.Acknowledged...)
 	return state
 }

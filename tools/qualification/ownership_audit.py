@@ -1,0 +1,316 @@
+"""Validate the selected CLI's correlated Kafka 4.4 request log for one case.
+
+The pinned upstream contracts are Request.updateRequestMetrics,
+RequestConvertToJson.requestDescMetrics and SocketServer.processDisconnected:
+https://github.com/apache/kafka/tree/4.4.0/server/src/main/java/org/apache/kafka/network
+https://github.com/apache/kafka/blob/4.4.0/core/src/main/scala/kafka/network/SocketServer.scala
+The accepted logging configuration uses synchronous hourly RollingFile output.
+Unknown configurations or incomplete observations cannot establish fencing.
+"""
+
+import argparse
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+import posixpath
+import re
+
+from tools.qualification.fault_results import observation_path, validate_case
+
+
+PREFIX = 'KAFERRY_AUDIT_FILE '
+LINE = re.compile(r'^\[([^]]+)\] (DEBUG|INFO) Completed request:')
+
+
+def integer(value):
+    if type(value) is int:
+        return value
+    if isinstance(value, str) and re.fullmatch(r'-?[0-9]+', value):
+        return int(value)
+    raise ValueError('audit contains a non-integer protocol field')
+
+
+def stamp(value):
+    return datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
+
+
+def logging_configuration(raw, normalized):
+    decoded = json.loads(normalized.read_text())
+    if decoded['raw_sha256'] != hashlib.sha256(raw.read_bytes()).hexdigest():
+        raise ValueError('decoded logging configuration differs from captured YAML')
+    configuration = decoded['configuration']['Configuration']
+    if set(configuration) != {'Properties', 'Appenders', 'Loggers'}:
+        raise ValueError('unknown broker logging configuration attributes')
+    properties = configuration['Properties']['Property']
+    patterns = [prop['value'] for prop in properties if prop['name'] == 'logPattern']
+    appenders = configuration['Appenders']
+    loggers = configuration['Loggers']
+    if patterns != ['[%d] %p %m (%c)%n'] or set(appenders) != {'Console', 'RollingFile'} or set(loggers) != {'Root', 'Logger'}:
+        raise ValueError('broker request log format or synchronous logging is unverified')
+    request = [appender for appender in appenders['RollingFile'] if appender['name'] == 'RequestAppender']
+    selected = [logger for logger in loggers['Logger'] if logger['name'] == 'kafka.request.logger']
+    expected = dict(name='RequestAppender', fileName='${sys:kafka.logs.dir}/kafka-request.log',
+                    filePattern='${sys:kafka.logs.dir}/kafka-request.log.%d{yyyy-MM-dd-HH}',
+                    PatternLayout=dict(pattern='${logPattern}'), TimeBasedTriggeringPolicy=dict(modulate=True, interval=1))
+    if request != [expected] or len(selected) != 1 or set(selected[0]) != {'name', 'level', 'additivity', 'AppenderRef'} or \
+            selected[0]['additivity'] is not False or selected[0]['AppenderRef'] != dict(ref='RequestAppender'):
+        raise ValueError('request audit must use synchronous unfiltered hourly logging without deletion or size rotation')
+
+
+def segments(path):
+    result = {}
+    name = None
+    for line in path.read_bytes().splitlines(keepends=True):
+        if line.startswith(PREFIX.encode()):
+            name = line.decode().strip()[len(PREFIX):]
+            if not re.fullmatch(r'kafka-request\.log(?:\.[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2})?', name) or name in result:
+                raise ValueError('unknown or repeated broker request log segment')
+            result[name] = bytearray()
+        elif name is None:
+            raise ValueError('broker audit lacks segment boundaries')
+        else:
+            result[name].extend(line)
+    if not result or any(data and not data.endswith(b'\n') for data in result.values()):
+        raise ValueError('broker audit is empty or ends with an incomplete line')
+    return {name: bytes(data) for name, data in result.items()}
+
+
+def records(parts):
+    result = []
+    keys = set()
+    for data in parts.values():
+        for line in data.decode().splitlines():
+            match = LINE.match(line)
+            if not match:
+                raise ValueError('broker request log contains an unknown record')
+            value, end = json.JSONDecoder().raw_decode(line[match.end():])
+            if line[match.end()+end:].strip() != '(kafka.request.logger)':
+                raise ValueError('broker request audit has an unknown suffix')
+            when = datetime.strptime(match[1], '%Y-%m-%d %H:%M:%S,%f').replace(tzinfo=timezone.utc).timestamp()
+            header = value['requestHeader']
+            key = (value['connection'], integer(header['correlationId']))
+            if key in keys:
+                raise ValueError('duplicate broker audit correlation')
+            keys.add(key)
+            value['completed_at'] = when
+            # The completion log includes total request time. A request already
+            # accepted before transfer can finish sending its response afterward.
+            value['received_at'] = when - value['totalTimeMs']/1000
+            result.append(value)
+    return result
+
+
+def commits(record):
+    request, response = record['request'], record['response']
+    if request is None or response is None:
+        raise ValueError('selected CLI commit omitted a full request or response')
+    wanted = {}
+    for topic in request['topics']:
+        for partition in topic['partitions']:
+            key = integer(partition['partitionIndex'])
+            if key in wanted:
+                raise ValueError('selected CLI commit repeated a partition')
+            wanted[key] = integer(partition['committedOffset'])
+    observed = {}
+    for topic in response['topics']:
+        for partition in topic['partitions']:
+            key = integer(partition['partitionIndex'])
+            if key in observed:
+                raise ValueError('commit response repeated a partition')
+            observed[key] = integer(partition['errorCode'])
+    if wanted.keys() != observed.keys() or not wanted:
+        raise ValueError('commit response omitted requested partitions')
+    return [(part, offset, observed[part]) for part, offset in wanted.items()]
+
+
+def _validate(directory, identity=None):
+    directory = Path(directory)
+    case = json.loads((directory/'replicated-ownership.json').read_text())
+    if case['id'] != 'ownership/zombie-worker' or case['source_partitions'] != 24:
+        raise ValueError('unknown replicated ownership case')
+    safety = validate_case(observation_path(directory, case['safety_case'], 'case.json'))
+    if (safety['id'] != case['id'] or safety['execution'] != 'candidate CLI' or
+            safety['parameters'] != dict(source_partitions=24, routing='PRESERVE') or identity and any(safety[key] != identity[key] for key in
+            ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform'))):
+        raise ValueError('ownership proof differs from the selected case or executable identity')
+    baseline, transfer = case['baseline'], case['transfer']
+    worker1, worker2 = case['workers']
+    first = {member['client_id']: member for member in baseline['members']}
+    if set(first) != {worker1, worker2}:
+        raise ValueError('baseline lacks both selected CLI workers')
+    old_member = first[worker1]['member_id']
+    old_parts = set(first[worker1]['partitions'])
+    if (not old_parts or not first[worker2]['partitions'] or
+            old_parts.intersection(first[worker2]['partitions']) or
+            old_parts.union(first[worker2]['partitions']) != set(range(24))):
+        raise ValueError('baseline does not assign all partitions exactly once')
+    if (len(transfer['members']) != 1 or transfer['members'][0]['client_id'] != worker2 or
+            set(transfer['members'][0]['partitions']) != set(range(24)) or
+            stamp(transfer['started']) <= stamp(case['fault']['start']) or
+            stamp(case['fault']['heal']) <= stamp(transfer['finished'])):
+        raise ValueError('independent group state does not prove expiry and peer transfer before healing')
+    peer = case['peer_progress']
+    if (len(peer['members']) != 1 or peer['members'][0]['client_id'] != worker2 or
+            set(peer['members'][0]['partitions']) != set(range(24)) or
+            not stamp(transfer['finished']) <= stamp(peer['started']) <= stamp(peer['finished']) < stamp(case['fault']['heal']) or
+            len(case['baseline_saved']) != 24 or len(case['peer_saved']) != 24 or
+            any(before < 1 or after <= before+2 for before, after in zip(case['baseline_saved'], case['peer_saved']))):
+        raise ValueError('peer progress was not independently observed while the route remained cut')
+    targets = case['fault']['targets']
+    if (len(targets) != 1 or targets[0]['cluster'] != 'source' or targets[0]['listener'] != 'worker1' or
+            case['fault']['role']['kind'] != 'worker-coordinator' or case['fault']['fault']['kind'] != 'cut' or
+            case['fault']['role']['group'] != case['group']):
+        raise ValueError('fault did not isolate only worker1 coordinator route')
+    windows = safety['fault_events']
+    if len(windows) != 1 or len(windows[0]['injections']) != 1:
+        raise ValueError('ownership proof requires exactly one fully observed coordinator cut')
+    window = windows[0]
+    injected = window['injections'][0]
+    actual = injected['target']
+    if (window['target'] != case['fault']['role'] or injected['kind'] != 'cut' or
+            any(actual[key] != case['fault'][key] for key in ('role', 'fault', 'targets', 'start')) or
+            not window['started_at'] <= stamp(case['fault']['start']) <= injected['at'] <= stamp(transfer['finished']) or
+            stamp(case['fault']['heal']) > window['healed_at'] or
+            window['timeout_basis'] != {'session.timeout.ms': 6, 'delivery_timeout': 2, 'shutdown_timeout': 5} or
+            window['recovery_seconds'] != 13):
+        raise ValueError('ownership fault target, timing or configured recovery window differs from independent safety evidence')
+    rows = []
+    files = [dict(path='replicated-ownership.json', sha256=hashlib.sha256((directory/'replicated-ownership.json').read_bytes()).hexdigest())]
+    for broker in range(1, 4):
+        config = directory/f'source-{broker}.log4j2.yaml'
+        normalized = directory/f'source-{broker}.log4j2.json'
+        logging_configuration(config, normalized)
+        flags = directory/f'source-{broker}.jvm-logging.txt'
+        options = dict(line.split('=', 1) for line in flags.read_text().splitlines())
+        if (set(options) != {'-Dlog4j2.configurationFile', '-Dkafka.logs.dir'} or
+                posixpath.normpath(options['-Dlog4j2.configurationFile']) != '/opt/kafka/config/log4j2.yaml' or
+                posixpath.normpath(options['-Dkafka.logs.dir']) != '/opt/kafka/logs'):
+            raise ValueError('broker JVM does not use the captured synchronous log configuration and directory')
+        console = directory/f'source-{broker}.console.log'
+        diagnostics = console.read_text()
+        if not diagnostics or re.search(r'(?im)(ERROR.*(?:StatusLogger|StatusConsoleListener)|'
+                r'(?:StatusLogger|StatusConsoleListener).*ERROR|AppenderLoggingException|'
+                r'Unable to write to stream|Unable to create file|Error writing to stream)', diagnostics):
+            raise ValueError('broker logging diagnostics are missing or report a logging failure')
+        before = directory/f'source-{broker}.baseline.requests.log'
+        after = directory/f'source-{broker}.final.requests.log'
+        start, finish = segments(before), segments(after)
+        for data in start.values():
+            if data and sum(part.startswith(data) for part in finish.values()) != 1:
+                raise ValueError('broker request audit was truncated, lost or duplicated during rotation')
+        initial, final = records(start), records(finish)
+        guards = lambda items: sum(row['requestHeader']['clientId'] == case['audit_guard'] and
+                                  row['requestHeader']['requestApiKeyName'] == 'API_VERSIONS' for row in items)
+        if guards(initial) < 1 or guards(final) <= guards(initial):
+            raise ValueError('broker audit lacks independent start and finish guards')
+        for phase, items in (('baseline', initial), ('final', final)):
+            mark = case['audit_marks'][phase]
+            # Kafka's default timestamp rounds down to milliseconds. The guard
+            # bounds also check that the broker used UTC and the host clock.
+            lower = int(stamp(mark['started'])*1000)/1000
+            if not any(row['requestHeader']['clientId'] == case['audit_guard'] and
+                       row['requestHeader']['requestApiKeyName'] == 'API_VERSIONS' and
+                       lower <= row['completed_at'] <= stamp(mark['finished']) for row in items):
+                raise ValueError('broker audit clock or guard observation bounds differ')
+        for row in final:
+            row['broker'] = broker
+        rows += final
+        for path in (config, normalized, flags, console, before, after):
+            files.append(dict(path=path.name, sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
+    selected = [row for row in rows if row['requestHeader']['clientId'] in case['workers']]
+    if any(row['request'] is None or row['response'] is None for row in selected):
+        raise ValueError('selected CLI traffic lacks correlated request/response observations')
+    if any(row['listener'] != 'WORKER'+str(case['workers'].index(row['requestHeader']['clientId'])+1) for row in selected):
+        raise ValueError('selected CLI traffic bypassed its isolated worker route')
+    if any(row['requestHeader']['clientId'] == worker1 and row['requestHeader']['requestApiKeyName'] == 'LEAVE_GROUP' and
+           row['response']['errorCode'] == 0 and stamp(case['fault']['start']) <= row['received_at'] <= stamp(transfer['finished'])
+           for row in selected):
+        raise ValueError('worker1 left the group rather than expiring behind its cut route')
+    commit_rows = [row for row in selected if row['requestHeader']['requestApiKeyName'] == 'OFFSET_COMMIT']
+    joins = [row for row in selected if row['requestHeader']['requestApiKeyName'] == 'JOIN_GROUP' and
+             integer(row['response'].get('errorCode')) == 0]
+    baseline_joins = [row for row in joins if row['requestHeader']['clientId'] == worker1 and
+                      row['response']['memberId'] == old_member and row['completed_at'] < stamp(case['fault']['start'])]
+    if not baseline_joins:
+        raise ValueError('broker audit lacks the actual selected CLI join generation')
+    generation = max(integer(row['response']['generationId']) for row in baseline_joins)
+    if generation != case['baseline_generation']:
+        raise ValueError('fault was not armed against the actual selected CLI generation')
+    before = [row for row in commit_rows if row['completed_at'] < stamp(case['fault']['start']) and
+              row['requestHeader']['clientId'] == worker1 and row['request']['memberId'] == old_member and
+              integer(row['request']['generationIdOrMemberEpoch']) == generation]
+    if not old_parts.issubset({part for row in before for part, offset, error in commits(row) if error == 0 and offset > 0}):
+        raise ValueError('broker audit lacks accepted worker1 baseline commits')
+    post = [row for row in commit_rows if row['received_at'] >= stamp(transfer['finished'])]
+    stale, peer_progress, rejoined = [], set(), []
+    for row in post:
+        request = row['request']
+        if request['groupId'] != case['group']:
+            raise ValueError('selected CLI committed another group')
+        epoch = integer(request['generationIdOrMemberEpoch'])
+        accepted = [(part, offset) for part, offset, error in commits(row) if error == 0]
+        if row['requestHeader']['clientId'] == worker1:
+            if request['memberId'] == old_member and epoch == generation:
+                stale.append(row)
+                if accepted:
+                    raise ValueError('selected CLI stale generation committed progress after peer transfer')
+            elif accepted:
+                if not any(join['response']['memberId'] == request['memberId'] and
+                           integer(join['response']['generationId']) == epoch and epoch > generation and
+                           join['requestHeader']['clientId'] == worker1 and
+                           stamp(case['fault']['heal']) <= join['completed_at'] <= row['completed_at'] for join in joins):
+                    raise ValueError('worker1 accepted progress lacks an independently observed legitimate rejoin')
+                rejoined.append(row)
+        elif (epoch > generation and request['memberId'] == peer['members'][0]['member_id'] and
+              row['completed_at'] < stamp(case['fault']['heal'])):
+            peer_progress.update(part for part, offset in accepted if part in old_parts and offset > case['baseline_saved'][part]+2)
+    if peer_progress != old_parts:
+        raise ValueError('broker audit lacks accepted peer progress on every transferred partition')
+    if not all(case['processes_alive_after_transfer']) or not all(case['processes_alive_after_heal']):
+        raise ValueError('zombie interval lacks both live selected CLI processes')
+    after_heal, final = case['publishing_after_heal'], case['publishing']
+    if (stamp(after_heal['observed']) < stamp(case['fault']['heal']) or
+            stamp(case['healed']['started']) < stamp(after_heal['observed']) or
+            stamp(final['stopped']) < stamp(case['healed']['finished']) or
+            len(after_heal['acknowledged_by_partition']) != 24 or len(final['acknowledged_by_partition']) != 24 or
+            any(end <= start+24 for start, end in zip(after_heal['acknowledged_by_partition'], final['acknowledged_by_partition'])) or
+            not 0 < final['max_acknowledgement_gap_seconds'] <= 2):
+        raise ValueError('a distinct steady-publishing interval after healing was not observed')
+    measurements = case['worker_measurements']
+    if len(measurements) != 2 or any(not (0 < row['sampled_peak_rss_bytes'] <= 512*1024**2 and
+            row['rss_samples'] > 0 and row['rss_failures'] == 0 and
+            0 < row['peak_uncommitted_records'] <= row['record_cap'] == 1024 and
+            0 < row['peak_uncommitted_bytes'] <= row['byte_cap'] == 134217728) for row in measurements):
+        raise ValueError('selected CLI resource measurements are incomplete or exceed the configured caps')
+    if ({row['pid'] for row in measurements} != {row['pid'] for row in safety['writer_observations']} or
+            any(row['exit_code'] != 0 for row in safety['writer_observations']) or
+            any(not stamp(case['audit_marks']['baseline']['finished']) < stamp(row['started_at']) <
+                    stamp(case['fault']['start']) < stamp(case['fault']['heal']) < stamp(row['stopped_at']) <
+                    stamp(case['audit_marks']['final']['started']) for row in measurements)):
+        raise ValueError('complete broker audit does not surround both observed selected CLI processes')
+    proof = dict(implementation='Kafka 4.4 correlated broker request log',
+                stale_member=old_member, stale_generation=generation, stale_requests=len(stale),
+                stale_rejections=sum(any(error in (22, 25, 82) for _, _, error in commits(row)) for row in stale), accepted_stale_commits=0,
+                accepted_peer_partitions=sorted(peer_progress), accepted_rejoin_commits=len(rejoined),
+                post_transfer_commits=len(post), source_partitions=24, audit_files=files,
+                scope='complete synchronous broker completion log while both selected CLIs run; local suppression and broker rejection are distinguished')
+    return dict(safety, ownership_fencing=proof)
+
+
+def validate(directory, identity=None):
+    try:
+        return _validate(directory, identity)
+    except (KeyError, TypeError, IndexError, AttributeError) as error:
+        raise ValueError('malformed replicated ownership evidence') from error
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('directory', type=Path)
+    args = parser.parse_args()
+    print(json.dumps(validate(args.directory), sort_keys=True))
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,274 @@
+//go:build integration && fault
+
+package compat
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/pagrus7/kaferry/src/tests/system/faults"
+	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
+	"go.yaml.in/yaml/v3"
+)
+
+const requestLogger = "kafka.request.logger"
+
+const requestLogFiles = `
+for f in /opt/kafka/logs/kafka-request.log*; do
+  test -f "$f" || continue
+  printf 'KAFERRY_AUDIT_FILE %s\n' "${f##*/}"
+  head -c 16777217 "$f"
+done`
+
+type replicatedAudit struct {
+	client  *kgo.Client
+	targets []faults.Target
+	levels  map[int32]string
+	output  string
+	guard   string
+	guards  map[int32]int
+	marks   map[string]auditMark
+}
+
+type auditMark struct {
+	Started  time.Time `json:"started"`
+	Finished time.Time `json:"finished"`
+}
+
+// startReplicatedAudit enables the pinned broker's synchronous request log
+// before starting either selected CLI. The independent validator requires full
+// request/response JSON, including actual CLI member IDs and generations.
+func startReplicatedAudit(t *testing.T, ctx context.Context, lab *faults.Lab, output string) *replicatedAudit {
+	t.Helper()
+	targets, err := lab.Resolve(ctx, faults.Role{Kind: "cluster", Cluster: "source", Listener: "admin"})
+	require.NoError(t, err)
+	guard := fmt.Sprintf("kaferry-audit-%d", time.Now().UnixNano())
+	client := fixtureClient(t, strings.Join(faults.Endpoints("source", 0), ","), kgo.ClientID(guard))
+	audit := &replicatedAudit{client: client, targets: targets, levels: make(map[int32]string), output: output, guard: guard,
+		guards: make(map[int32]int), marks: make(map[string]auditMark)}
+	t.Cleanup(func() {
+		cleanup, done := context.WithTimeout(context.Background(), 15*time.Second)
+		defer done()
+		for broker, level := range audit.levels {
+			if err := audit.level(cleanup, broker, level); err != nil {
+				t.Error("restore broker request logger:", err)
+			}
+		}
+	})
+	for _, target := range targets {
+		broker := target.Broker
+		request := kmsg.NewPtrDescribeConfigsRequest()
+		request.Resources = []kmsg.DescribeConfigsRequestResource{{ResourceType: kmsg.ConfigResourceTypeBrokerLogger,
+			ResourceName: fmt.Sprint(broker), ConfigNames: []string{requestLogger}}}
+		result, err := client.Broker(int(broker)).Request(ctx, request)
+		require.NoError(t, err)
+		response := result.(*kmsg.DescribeConfigsResponse)
+		require.Len(t, response.Resources, 1)
+		require.NoError(t, kerr.ErrorForCode(response.Resources[0].ErrorCode))
+		require.Len(t, response.Resources[0].Configs, 1)
+		require.NotNil(t, response.Resources[0].Configs[0].Value)
+		audit.levels[broker] = *response.Resources[0].Configs[0].Value
+		config, err := faults.Docker(ctx, "exec", target.Container, "cat", "/opt/kafka/config/log4j2.yaml")
+		require.NoError(t, err, "pinned broker logging configuration must be inspectable")
+		require.NoError(t, os.WriteFile(filepath.Join(output, fmt.Sprintf("source-%d.log4j2.yaml", broker)), config, 0600))
+		normalized, err := requestLogConfiguration(config)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(output, fmt.Sprintf("source-%d.log4j2.json", broker)), normalized, 0600))
+		flags, err := faults.Docker(ctx, "exec", target.Container, "sh", "-ec", `
+test -z "${JAVA_TOOL_OPTIONS:-}${_JAVA_OPTIONS:-}${JDK_JAVA_OPTIONS:-}${LOG4J_CONTEXT_SELECTOR:-}${LOG4J2_CONTEXT_SELECTOR:-}"
+tr '\000' '\n' </proc/1/cmdline | sed -n '/^-D[Ll]og4j/p;/^-Dkafka.logs.dir=/p'`)
+		require.NoError(t, err, "unaccounted JVM logging options prevent a complete synchronous audit")
+		require.NoError(t, os.WriteFile(filepath.Join(output, fmt.Sprintf("source-%d.jvm-logging.txt", broker)), flags, 0600))
+		require.NoError(t, audit.level(ctx, broker, "DEBUG"))
+	}
+	audit.mark(t, ctx, "baseline")
+	return audit
+}
+
+// KafkaDockerWrapper rewrites YAML on every container start, including logger
+// order. Preserve the original bytes and their decoded meaning without relying
+// on a hash of the distribution's differently formatted source YAML.
+func requestLogConfiguration(data []byte) ([]byte, error) {
+	var configuration map[string]any
+	if err := yaml.Unmarshal(data, &configuration); err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{"raw_sha256": fmt.Sprintf("%x", sha256.Sum256(data)), "configuration": configuration})
+}
+
+func (a *replicatedAudit) level(ctx context.Context, broker int32, level string) error {
+	request := kmsg.NewPtrIncrementalAlterConfigsRequest()
+	request.Resources = []kmsg.IncrementalAlterConfigsRequestResource{{ResourceType: kmsg.ConfigResourceTypeBrokerLogger,
+		ResourceName: fmt.Sprint(broker), Configs: []kmsg.IncrementalAlterConfigsRequestResourceConfig{{Name: requestLogger, Value: &level}}}}
+	result, err := a.client.Broker(int(broker)).Request(ctx, request)
+	if err != nil {
+		return err
+	}
+	response := result.(*kmsg.IncrementalAlterConfigsResponse)
+	if len(response.Resources) != 1 {
+		return fmt.Errorf("logger alteration returned %d resources", len(response.Resources))
+	}
+	return kerr.ErrorForCode(response.Resources[0].ErrorCode)
+}
+
+func (a *replicatedAudit) mark(t *testing.T, ctx context.Context, phase string) {
+	t.Helper()
+	a.marks[phase] = auditMark{Started: time.Now().UTC()}
+	for _, target := range a.targets {
+		_, err := a.client.Broker(int(target.Broker)).Request(ctx, kmsg.NewPtrApiVersionsRequest())
+		require.NoError(t, err, "audit guard request")
+	}
+}
+
+type ownershipAuditRecord struct {
+	Header  struct{ ClientID, RequestAPIKeyName string } `json:"requestHeader"`
+	Request struct {
+		GroupID, MemberID string
+		Generation        int32 `json:"generationIdOrMemberEpoch"`
+		Topics            []struct {
+			Partitions []struct {
+				PartitionIndex  int32
+				CommittedOffset json.Number
+			}
+		}
+	} `json:"request"`
+	Response *struct {
+		ErrorCode    int16
+		MemberID     string
+		GenerationID int32
+		Topics       []struct {
+			Partitions []struct {
+				PartitionIndex int32
+				ErrorCode      int16
+			}
+		}
+	} `json:"response"`
+}
+
+// currentGenerationSaved gates injection on actual accepted commits in the
+// worker's latest successful join generation. Old committed group offsets alone
+// cannot show that the worker has saved in its current generation.
+func currentGenerationSaved(data []byte, client, group, member string, owned []int32) (int32, bool, error) {
+	var rows []ownershipAuditRecord
+	generation := int32(-1)
+	for _, line := range strings.Split(string(data), "\n") {
+		_, payload, ok := strings.Cut(line, "Completed request:")
+		if !ok {
+			continue
+		}
+		var row ownershipAuditRecord
+		if err := json.NewDecoder(strings.NewReader(payload)).Decode(&row); err != nil {
+			return 0, false, err
+		}
+		if row.Header.ClientID != client || row.Request.GroupID != group || row.Response == nil {
+			continue
+		}
+		rows = append(rows, row)
+		if row.Header.RequestAPIKeyName == "JOIN_GROUP" && row.Response.ErrorCode == 0 && row.Response.MemberID == member {
+			generation = max(generation, row.Response.GenerationID)
+		}
+	}
+	accepted := make(map[int32]bool)
+	for _, row := range rows {
+		if row.Header.RequestAPIKeyName != "OFFSET_COMMIT" || row.Request.MemberID != member || row.Request.Generation != generation {
+			continue
+		}
+		positive := make(map[int32]bool)
+		for _, topic := range row.Request.Topics {
+			for _, part := range topic.Partitions {
+				offset, err := part.CommittedOffset.Int64()
+				if err != nil {
+					return 0, false, err
+				}
+				positive[part.PartitionIndex] = offset > 0
+			}
+		}
+		for _, topic := range row.Response.Topics {
+			for _, part := range topic.Partitions {
+				if part.ErrorCode == 0 && positive[part.PartitionIndex] {
+					accepted[part.PartitionIndex] = true
+				}
+			}
+		}
+	}
+	for _, partition := range owned {
+		if !accepted[partition] {
+			return generation, false, nil
+		}
+	}
+	return generation, generation >= 0 && len(owned) > 0, nil
+}
+
+func (a *replicatedAudit) ready(ctx context.Context, client, group, member string, owned []int32) (int32, bool, error) {
+	var all []byte
+	for _, target := range a.targets {
+		data, err := faults.Docker(ctx, "exec", target.Container, "sh", "-ec", requestLogFiles)
+		if err != nil || len(data) > 16<<20 {
+			return 0, false, fmt.Errorf("bounded broker request audit unavailable: %w", err)
+		}
+		all = append(all, data...)
+	}
+	return currentGenerationSaved(all, client, group, member, owned)
+}
+
+// capture preserves every hourly segment; no size rotation is accepted by the
+// validator. A hard byte ceiling fails the case instead of silently dropping
+// observations. A guard in every broker's log is checked independently.
+func (a *replicatedAudit) capture(t *testing.T, ctx context.Context, phase string) {
+	t.Helper()
+	for _, target := range a.targets {
+		poll, cancel := context.WithTimeout(ctx, 5*time.Second)
+		tick := time.NewTicker(50 * time.Millisecond)
+		var data []byte
+		for {
+			var err error
+			data, err = faults.Docker(poll, "exec", target.Container, "sh", "-ec", requestLogFiles)
+			require.NoError(t, err)
+			require.LessOrEqual(t, len(data), 16<<20, "broker request audit exceeds bounded evidence size")
+			count := strings.Count(string(data), `"clientId":"`+a.guard+`"`)
+			if count > a.guards[target.Broker] && len(data) > 0 && data[len(data)-1] == '\n' {
+				a.guards[target.Broker] = count
+				break
+			}
+			select {
+			case <-poll.Done():
+				t.Fatal("broker request audit did not retain its guard within 5s")
+			case <-tick.C:
+			}
+		}
+		tick.Stop()
+		cancel()
+		require.NoError(t, os.WriteFile(filepath.Join(a.output, fmt.Sprintf("source-%d.%s.requests.log", target.Broker, phase)), data, 0600))
+		if phase == "final" {
+			logs, err := exec.CommandContext(ctx, "docker", "logs", target.Container).CombinedOutput()
+			require.NoError(t, err)
+			require.LessOrEqual(t, len(logs), 16<<20, "broker diagnostics exceed bounded evidence size")
+			require.NoError(t, os.WriteFile(filepath.Join(a.output, fmt.Sprintf("source-%d.console.log", target.Broker)), logs, 0600))
+		}
+	}
+	mark := a.marks[phase]
+	mark.Finished = time.Now().UTC()
+	a.marks[phase] = mark
+}
+
+func verifyOwnershipAudit(t *testing.T, ctx context.Context, directory string) {
+	t.Helper()
+	root, err := filepath.Abs("../../..")
+	require.NoError(t, err)
+	command := exec.CommandContext(ctx, os.Getenv("KAFERRY_ORACLE_PYTHON"), "-m", "tools.qualification.ownership_audit", directory)
+	command.Dir = root
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, "independent selected-CLI fencing audit failed: %s", output)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "ownership-proof.json"), output, 0600))
+}
