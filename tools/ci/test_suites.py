@@ -52,6 +52,28 @@ class SuitesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unknown fault timeout tier'):
             suites.fault_timeout_catalog('missing')
 
+    def test_fault_shards_cover_the_exact_full_suite_union(self):
+        # Given two PR fault runners, when selecting their tests and proof cases,
+        # then neither omissions nor duplicate shard ownership can pass.
+        tests = [set(suites.EXPECTED[name]) for name in suites.FAULT_SHARDS]
+        cases = list(suites.FAULT_SHARDS.values())
+        self.assertEqual(set(suites.EXPECTED['fault']), set.union(*tests))
+        self.assertFalse(set.intersection(*tests))
+        self.assertEqual(suites.FAULT_CASES, set.union(*cases))
+        self.assertFalse(set.intersection(*cases))
+        with patch.dict(os.environ, KAFERRY_FAULT_TIER='pr'):
+            self.assertIn('-timeout=634s', suites.command('fault-processes'))
+            self.assertIn('-timeout=667s', suites.command('fault-recovery'))
+        for test in ('TestRebalanceChurnTimeoutCatalogUsesMilliseconds', 'TestRebalanceChurnUsesSelectedBinary'):
+            self.assertRegex(test, suites.GO_SUITES['fault-processes'][1])
+        for name in suites.FAULT_SHARDS:
+            with self.subTest(shard=name), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                (directory/(name+'.log')).write_text('')
+                with patch('tools.ci.suites.Path', return_value=directory), patch('tools.ci.suites.run', return_value=0):
+                    with self.assertRaisesRegex(ValueError, 'Required tests did not pass'):
+                        suites.ci(name)
+
     def test_failed_fault_run_replaces_prior_successful_receipt(self):
         # Given an older successful receipt in the reusable CI report directory.
         with tempfile.TemporaryDirectory() as temporary:

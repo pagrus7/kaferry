@@ -20,6 +20,9 @@ GO_SUITES = {
 RECOVERY_CASES = {'recovery/'+name for name in
                   ('kill', 'signal', 'delivery-timeout', 'source-outage-shutdown', 'ownership-loss')}
 FAULT_CASES = RECOVERY_CASES | {'fault/crash', 'fault/churn', 'fault/blocking-commit'}
+FAULT_SHARDS = {'fault-processes': FAULT_CASES-RECOVERY_CASES, 'fault-recovery': RECOVERY_CASES}
+GO_SUITES['fault-processes'] = ('integration,fault', GO_SUITES['fault'][1].rsplit('|', 1)[0], False)
+GO_SUITES['fault-recovery'] = GO_SUITES['recovery']
 LOAD_PROFILES = ('near-limit-v1', 'hot-keys-v1', 'headers-v1', 'tombstones-v1',
                  'source-none-v1', 'source-gzip-v1', 'source-snappy-v1', 'source-lz4-v1', 'source-zstd-v1')
 EXPECTED = {
@@ -38,6 +41,8 @@ EXPECTED = {
         'TestSaslTlsOAuthRenewalAndKeyRotation', 'TestMutualTlsCopy', 'TestServerTlsCopy',
         'TestReplicatedClusterLeaderFailurePreservesCopy'],
 }
+EXPECTED['fault-processes'] = EXPECTED['fault'][:3]
+EXPECTED['fault-recovery'] = EXPECTED['recovery']
 CI_EXTRA = {
     'integration': ['TestCLIInterruptCommitsAndResumeDoesNotRecopy', 'TestKafkaQuickStart'],
     'load': ['TestLoadObservability/round-0/disabled'],
@@ -57,13 +62,13 @@ def fault_timeout_catalog(tier=None):
     return catalog
 
 
-def fault_execution_seconds():
+def fault_execution_seconds(cases=FAULT_CASES):
     catalog = fault_timeout_catalog()
-    if not FAULT_CASES <= catalog.keys():
+    if not cases <= catalog.keys():
         raise ValueError('fault timeout catalog omitted a selected case')
     # Each case observes the full horizon for its selected fixture budgets.
     # Churn's windows overlap, so its final horizon is counted once.
-    milliseconds = sum(sum(catalog[id].values()) for id in FAULT_CASES)
+    milliseconds = sum(sum(catalog[id].values()) for id in cases)
     return 600 + (milliseconds+999)//1000
 
 
@@ -71,8 +76,8 @@ def command(name, go='go', output='-json', timeout=None, packages='./src/tests/s
     tags, pattern, race = GO_SUITES[name]
     if name == 'soak' and packages == './src/tests/system':
         packages = './src/tests/compatibility'
-    if name == 'fault' and timeout is None:
-        timeout = f'{fault_execution_seconds()}s'
+    if (name == 'fault' or name in FAULT_SHARDS) and timeout is None:
+        timeout = f'{fault_execution_seconds(FAULT_SHARDS.get(name, FAULT_CASES))}s'
     result = [go, 'test', '-count=1']
     if output:
         result.append(output)
@@ -89,6 +94,8 @@ def command(name, go='go', output='-json', timeout=None, packages='./src/tests/s
 def ci(name):
     if name == 'integration':
         cmd = ['env', 'CGO_ENABLED=1', 'KAFERRY_QUICKSTART=1'] + command(name)
+    elif name in FAULT_SHARDS:
+        cmd = ['python3', '-m', 'tools.ci.suites', 'run', name, '--output=-json']
     else:
         cmd = ['make', name, 'KAFERRY_TEST_OUTPUT=-json']
         if name == 'soak':
@@ -110,12 +117,12 @@ def main():
     local.add_argument('--timeout')
     local.add_argument('--packages', default='./src/tests/system')
     remote = sub.add_parser('ci')
-    remote.add_argument('suite', choices=('integration', 'load', 'soak', 'qualification', 'fault', 'fuzz', 'benchmark'))
+    remote.add_argument('suite', choices=('integration', 'load', 'soak', 'qualification', 'fault', 'fault-processes', 'fault-recovery', 'fuzz', 'benchmark'))
     args = parser.parse_args()
     if args.action == 'ci':
         return ci(args.suite)
     cmd = command(args.suite, args.go, args.output, args.timeout, args.packages)
-    if args.suite in ('fault', 'recovery'):
+    if args.suite in ('fault', 'recovery') or args.suite in FAULT_SHARDS:
         from tools.qualification.fault_results import collect, configure
         env = dict(os.environ)
         env['GO'] = args.go

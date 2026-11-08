@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from tools.ci.suites import fault_timeout_catalog
+from tools.ci.suites import fault_timeout_catalog, FAULT_SHARDS
 from tools.qualification.broker_probe import logical
 from tools.qualification.fault_oracle import KafkaReader, Oracle, Reconciliation, checksum
 from tools.qualification.fault_results import RECOVERY_CASES, collect, configure, validate_bootstrap, validate_case
@@ -371,6 +371,14 @@ class FaultOracleTest(unittest.TestCase):
                 writer_observations=[dict(pid=1, exit_code=1, observation='process exited')]))
         return path/'case.json'
 
+    def complete_cases(self, root, cases, tier='full'):
+        paths = []
+        for id in cases:
+            directory = root/'fault-oracle'/id.replace('/', '-')/'observations'
+            directory.mkdir(parents=True)
+            paths.append(self.complete_case(directory, id, tier=tier))
+        return paths
+
     def test_pr_receipt_retains_full_selected_horizon_and_rejects_other_tiers(self):
         # Given shorter actual fixture budgets, when validating the receipt,
         # then require their entire sum and bind proof to the recorded tier.
@@ -544,11 +552,7 @@ class FaultOracleTest(unittest.TestCase):
         # Given every stable recovery case and its independent sample receipt.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            paths = []
-            for id in RECOVERY_CASES:
-                path = root/'fault-oracle'/id.replace('/', '-')/'observations'
-                path.mkdir(parents=True)
-                paths.append(self.complete_case(path, id))
+            paths = self.complete_cases(root, RECOVERY_CASES)
             original = json.loads(paths[0].read_text())
             (root/'recovery.json').write_text(json.dumps(dict(passed=True, completed_cycles=1)))
             identity = dict(source_commit=original['source_commit'], binary_sha256=original['binary_sha256'],
@@ -570,6 +574,20 @@ class FaultOracleTest(unittest.TestCase):
             (root/'recovery.json').write_text(json.dumps(dict(passed=True, completed_cycles=2)))
             with self.assertRaisesRegex(ValueError, 'completed recovery cycles'):
                 collect(root, 'recovery')
+
+    def test_each_fault_shard_requires_all_its_own_case_receipts(self):
+        # Given each shard's independent proof, when collecting it, then require
+        # the exact case set; the process shard needs no recovery-cycle receipt.
+        for shard, cases in FAULT_SHARDS.items():
+            with self.subTest(shard=shard), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                paths = self.complete_cases(root, cases, tier='pr')
+                if shard == 'fault-recovery':
+                    (root/'recovery.json').write_text(json.dumps(dict(passed=True, completed_cycles=1)))
+                self.assertEqual('passed', collect(root, shard)['status'])
+                paths[0].unlink()
+                with self.assertRaisesRegex(ValueError, 'cases missing'):
+                    collect(root, shard)
 
     def test_sample_proof_rejects_invalid_numbers_cuts_and_missing_phases(self):
         # Given a complete case, when numeric or phase proof is altered and its

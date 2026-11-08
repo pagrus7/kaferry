@@ -36,6 +36,7 @@ jobs:
       KAFKA_TEST_BROKERS: 127.0.0.1:39092
       KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
       KAFKA_FAULT_CONTAINER: kaferry-compat-kafka-1
+      KAFKA_FAULT_DEST_CONTAINER: kaferry-compat-kafka-dr-1
       KAFERRY_SOAK_DURATION: ${{ inputs.soak_duration }}
       KAFERRY_SOAK_DEST_STALL_CONTAINER: kaferry-compat-kafka-dr-1
       SUITE: ${{ matrix.suite }}
@@ -66,10 +67,10 @@ jobs:
           python3 -m tools.ci.ci build make build
           echo "KAFERRY_TEST_BINARY=$PWD/bin/kaferry" >> "$GITHUB_ENV"
       - name: Start plain Kafka fixtures
-        if: contains(fromJSON('["integration","load","soak","fault"]'), matrix.suite)
+        if: contains(fromJSON('["integration","load","soak","fault","fault-processes","fault-recovery"]'), matrix.suite)
         run: python3 -m tools.ci.ci broker make broker
       - name: Install independent fault observer
-        if: matrix.suite == 'fault'
+        if: contains(fromJSON('["fault","fault-processes","fault-recovery"]'), matrix.suite)
         run: python3 -m tools.qualification.qualify setup
       - name: Run suite
         run: python3 -m tools.ci.suites ci "$SUITE"
@@ -81,7 +82,7 @@ jobs:
       - name: Reject source rebuilds in archive tests
         if: always() && inputs.artifact != ''
         run: test ! -e bin/kaferry
-      - if: always() && contains(fromJSON('["integration","load","soak","fault"]'), matrix.suite)
+      - if: always() && contains(fromJSON('["integration","load","soak","fault","fault-processes","fault-recovery"]'), matrix.suite)
         run: |
           mkdir -p build-results
           docker compose -f src/tests/compose.yaml -p kaferry-compat --profile cross-cluster logs --no-color > build-results/brokers.log

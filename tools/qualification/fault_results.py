@@ -9,7 +9,7 @@ import sys
 import uuid
 
 from tools.qualification.fault_oracle import INITIALIZATION_ERRORS, checksum
-from tools.ci.suites import FAULT_CASES, RECOVERY_CASES, fault_timeout_catalog
+from tools.ci.suites import FAULT_CASES, RECOVERY_CASES, FAULT_SHARDS, fault_timeout_catalog
 
 
 def nonnegative_int(value):
@@ -286,13 +286,17 @@ def collect(directory, suite, identity=None, run=None):
     for case, path in zip(cases, paths):
         case['safety']['observations'] = (path.parent/'samples.jsonl').relative_to(directory).as_posix()
         case['bootstrap']['observations'] = (path.parent/'bootstrap.jsonl').relative_to(directory).as_posix()
-    expected = RECOVERY_CASES if suite == 'recovery' else FAULT_CASES
+    expected = FAULT_SHARDS[suite] if suite in FAULT_SHARDS else RECOVERY_CASES if suite == 'recovery' else FAULT_CASES
     if {case['id'] for case in cases} != expected:
         raise ValueError('fault cases missing from independent evidence')
-    recovery = json.loads((directory/'recovery.json').read_text())
     counts = Counter(case['id'] for case in cases)
-    if (not recovery.get('passed') or recovery.get('completed_cycles', 0) <= 0 or
-            any(counts[id] != recovery['completed_cycles'] for id in RECOVERY_CASES) or
+    cycles = 0
+    if expected & RECOVERY_CASES:
+        recovery = json.loads((directory/'recovery.json').read_text())
+        cycles = recovery.get('completed_cycles', 0)
+        if not recovery.get('passed') or cycles <= 0:
+            raise ValueError('fault case receipts do not match completed recovery cycles')
+    if (any(counts[id] != cycles for id in expected & RECOVERY_CASES) or
             any(counts[id] != 1 for id in expected-RECOVERY_CASES)):
         raise ValueError('fault case receipts do not match completed recovery cycles')
     identities = {(case['source_commit'], case['binary_sha256']) for case in cases}
