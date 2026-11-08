@@ -505,11 +505,16 @@ func (s *ownershipCase) killCoordinator(window int, old *ownershipCaseWorker) {
 	s.events = append(s.events, map[string]any{"broker": killed.Broker, "audit_logging_reenabled_at": time.Now().UTC()})
 	var restoredTopology []faults.Partition
 	s.states["broker_restored"] = s.poll("restored coordinator broker health and all 24 ISR sets", true,
-		func(query context.Context, _ ownershipCaseObservation) bool {
+		func(query context.Context, state ownershipCaseObservation) bool {
 			probe := &brokerCopy{metadata: s.metadata, src: s.src, dst: s.dst}
-			parts, ok := probe.topology(query, "source", s.src)
+			parts, topologyErr := probe.topology(query, "source", s.src)
+			if topologyErr != nil {
+				state.Error, state.Finished = topologyErr.Error(), time.Now().UTC()
+				s.journal(state)
+				return false
+			}
 			observed := brokerObservation{Topology: map[string][]faults.Partition{"source": parts}}
-			if !ok || !probe.healthy(query, killed) || !fullyReplicated(observed, "source") {
+			if !probe.healthy(query, killed) || !fullyReplicated(observed, "source") {
 				return false
 			}
 			restoredTopology = parts
