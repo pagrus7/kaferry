@@ -12,11 +12,12 @@ import tomllib
 from tools.ci.suites import fault_timeout_catalog
 from tools.qualification.fault_results import observation_path, validate_case
 from tools.qualification.ownership_audit import commits, integer, logging_configuration, records, segments, stamp
-from tools.qualification.replicated_results import advances, vector
+from tools.qualification.replicated_results import EXACT_SCOPE, advances, vector
 
 
 IDENTITY = ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')
 NAMES = ('worker-kill-rebalance', 'coordinator-kill-rebalance', 'worker-scale')
+KILLED_SCOPE = 'sampled progress only; SIGKILL omits final lifetime highwater'
 
 
 def require(condition, message):
@@ -165,8 +166,8 @@ def snapshot(case, state, rows, routes=None, previous=None, progress_before=None
 
 def work(log):
     require(not log or log.endswith('\n'), 'selected CLI log ends with an incomplete row')
-    peak_records = peak_bytes = samples = 0
-    summary = False
+    pending = pending_bytes = samples = 0
+    summary = None
     terminal = []
     for line in log.splitlines():
         if not line.strip():
@@ -180,10 +181,17 @@ def work(log):
         keys = ('peak_uncommitted_records', 'peak_uncommitted_bytes') if row['msg'] == 'copy summary' else ('pending_entries', 'pending_estimated_bytes')
         require(all(type(row[key]) is int and row[key] >= 0 for key in (*keys, 'submitted', 'confirmed')) and
                 row['confirmed'] <= row['submitted'], 'CLI cap measurements are incomplete or inconsistent')
-        peak_records, peak_bytes = max(peak_records, row[keys[0]]), max(peak_bytes, row[keys[1]])
-        samples += 1
-        summary |= row['msg'] == 'copy summary'
-    return peak_records, peak_bytes, samples, summary, '\n'.join(terminal)
+        if row['msg'] == 'progress':
+            pending, pending_bytes = max(pending, row[keys[0]]), max(pending_bytes, row[keys[1]])
+            samples += 1
+        else:
+            require(summary is None, 'CLI repeated its final lifetime summary')
+            summary = {key:row[key] for key in ('msg','submitted','confirmed',*keys)}
+    require(samples > 0 and pending <= 1024 and pending_bytes <= 128*1024**2, 'CLI sampled current work exceeds its configured caps or is missing')
+    if summary is not None:
+        require(pending <= summary['peak_uncommitted_records'] <= 1024 and pending_bytes <= summary['peak_uncommitted_bytes'] <= 128*1024**2,
+                'CLI exact lifetime highwater contradicts observed or configured work caps')
+    return pending, pending_bytes, samples, summary, '\n'.join(terminal)
 
 
 def workers(directory, case, safety, identity):
@@ -201,12 +209,18 @@ def workers(directory, case, safety, identity):
                 type(worker['sampled_peak_rss_bytes']) is int and 0 < worker['sampled_peak_rss_bytes'] <= 512*1024**2 and
                 worker['record_cap'] == 1024 and worker['byte_cap'] == 128*1024**2, 'worker resource observations are invalid')
         counts = work((directory/worker['log']).read_text())
-        require(counts[:4] == (worker['peak_uncommitted_records'], worker['peak_uncommitted_bytes'], worker['progress_observations'], worker['final_summary']) and
-                counts[2] > 0 and counts[0] <= 1024 and counts[1] <= 128*1024**2 and
-                (worker['forced_kill'] is True or counts[3]), 'recorded caps differ from raw CLI measurements')
+        require(counts[:4] == (worker['sampled_max_pending_entries'], worker['sampled_max_pending_estimated_bytes'], worker['progress_observations'], worker['copy_summary']) and
+                type(worker['lifetime_highwater_available']) is bool and worker['lifetime_highwater_available'] is (counts[3] is not None),
+                'recorded current work or lifetime availability differs from raw CLI measurements')
         if worker['forced_kill'] is True:
-            require(not counts[3] and worker['cap_measurement_scope'] == 'live progress observations before SIGKILL; forced exit cannot emit a final summary',
-                    'killed worker was already stopping or omitted its sampled cap scope')
+            require(counts[3] is None and worker['peak_uncommitted_records'] is None and worker['peak_uncommitted_bytes'] is None and
+                    worker['cap_measurement_scope'] == KILLED_SCOPE,
+                    'killed worker fabricated exact lifetime highwater or omitted its sampled-only scope')
+        else:
+            require(counts[3] is not None and worker['cap_measurement_scope'] == EXACT_SCOPE and
+                    worker['peak_uncommitted_records'] == counts[3]['peak_uncommitted_records'] and
+                    worker['peak_uncommitted_bytes'] == counts[3]['peak_uncommitted_bytes'],
+                    'non-killed ownership worker requires its exact lifetime highwater')
         status = worker['wait_status']
         require(type(status) is int and type(worker['exit_code']) is int and
                 ((status == 9 and worker['exit_code'] == -1 and worker['forced_kill'] is True) or
@@ -220,6 +234,8 @@ def workers(directory, case, safety, identity):
                     'restart lacks the exact bounded terminal coordinator cause')
         else:
             require(not counts[4] and not worker['terminal_error'], 'successful or killed worker has an unexplained terminal error')
+    require(case['exact_lifetime_work_caps_qualified'] is all(w['lifetime_highwater_available'] for w in values),
+            'ownership case exact lifetime cap claim differs from available evidence')
     return values
 
 

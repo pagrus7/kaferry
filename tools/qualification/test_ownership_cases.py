@@ -79,15 +79,18 @@ class OwnershipCasesTest(unittest.TestCase):
             values = dict(pid=pid,route=route,binary_sha256=identity['binary_sha256'],started_at=when(start),stopped_at=when(stop),exit_code=code,
                           wait_status=9 if code == -1 else code<<8,forced_kill=code == -1,reason='fault' if code else 'completed',terminal_error='context deadline exceeded' if code == 1 else '',
                           rss_samples=10,rss_failures=0,sampled_peak_rss_bytes=10000,record_cap=1024,byte_cap=128*1024**2,
-                          peak_uncommitted_records=5,peak_uncommitted_bytes=100,progress_observations=1 if code == -1 else 2,final_summary=code != -1,log=log)
+                          peak_uncommitted_records=None if code == -1 else 5,peak_uncommitted_bytes=None if code == -1 else 100,
+                          progress_observations=1,sampled_max_pending_entries=5,sampled_max_pending_estimated_bytes=100,
+                          lifetime_highwater_available=code != -1,copy_summary=None,cap_measurement_scope=ownership.EXACT_SCOPE,log=log)
             progress=dict(msg='progress',submitted=10,confirmed=5,pending_entries=5,pending_estimated_bytes=100)
             lines=[progress]
             if code != -1:
-                lines.append(dict(msg='copy summary',submitted=10,confirmed=10,peak_uncommitted_records=5,peak_uncommitted_bytes=100))
+                values['copy_summary']=dict(msg='copy summary',submitted=10,confirmed=10,peak_uncommitted_records=5,peak_uncommitted_bytes=100)
+                lines.append(values['copy_summary'])
             (directory/log).write_text(''.join(json.dumps(line)+'\n' for line in lines)+(values['terminal_error']+'\n' if code == 1 else ''))
             case['worker_measurements'].append(values)
             if code == -1:
-                values['cap_measurement_scope']='live progress observations before SIGKILL; forced exit cannot emit a final summary'
+                values['cap_measurement_scope']=ownership.KILLED_SCOPE
             return values
         def signal(number,worker,at):
             case['events'].append(dict(signal_number=number,pid=worker['pid'],route=worker['route'],started=when(at),finished=when(at+.05)))
@@ -139,6 +142,7 @@ class OwnershipCasesTest(unittest.TestCase):
                 state('recovered',20,21,[2],30,2)
                 window('held-worker-rebalance',stimulus,8,13.4,22,'worker-sigkill',dict(pid=original['pid'],route=1,state=at_kill))
         safety['writer_observations']=[dict(pid=w['pid'],exit_code=w['exit_code']) for w in case['worker_measurements']]
+        case['exact_lifetime_work_caps_qualified']=all(w['lifetime_highwater_available'] for w in case['worker_measurements'])
         original_fixture=audit_fixture.OwnershipAuditTest()
         original_fixture.setUp()
         self.addCleanup(original_fixture.doCleanups)
@@ -183,10 +187,11 @@ class OwnershipCasesTest(unittest.TestCase):
     def test_all_three_cases_require_raw_group_generations_and_os_observations(self):
         # Given raw broker/CLI/Docker fixtures, when their observations agree,
         # then each supported exposure, including bounded restart, validates.
-        for name,restart in [('worker-kill-rebalance',False),('worker-scale',False),('coordinator-kill-rebalance',False),('coordinator-kill-rebalance',True)]:
-            with self.subTest(name=name,restart=restart):
-                result=self.validate(self.fixture(name,restart))
-                self.assertIn('ownership_exposure',result)
+        for name in ('worker-kill-rebalance','worker-scale','coordinator-kill-rebalance'):
+            result=self.validate(self.fixture(name))
+            self.assertIn('ownership_exposure',result,result['id'])
+        restarted=self.validate(self.fixture('coordinator-kill-rebalance',restart=True))
+        self.assertIn('ownership_exposure',restarted)
 
     def test_self_attested_membership_generation_and_kill_are_insufficient(self):
         # Given otherwise valid checksummed evidence, when a summary invents a
@@ -199,6 +204,9 @@ class OwnershipCasesTest(unittest.TestCase):
             lambda c:c['worker_measurements'][0].update(wait_status=15),
             lambda c:c['timeout_milliseconds'].update(**{'max.poll.interval.ms':1}),
             lambda c:c['worker_measurements'][1].update(binary_sha256='other'),
+            lambda c:c['worker_measurements'][0].update(peak_uncommitted_records=5),
+            lambda c:c['worker_measurements'][0].update(lifetime_highwater_available=True),
+            lambda c:c.update(exact_lifetime_work_caps_qualified=True),
         ]
         for mutation in mutations:
             fixture=self.fixture('worker-kill-rebalance')
@@ -256,7 +264,7 @@ class OwnershipCasesTest(unittest.TestCase):
                 self.validate(fixture)
         fixture=self.fixture('worker-kill-rebalance')
         worker=fixture[2]['worker_measurements'][0]
-        worker['peak_uncommitted_records']=1025
+        worker['sampled_max_pending_entries']=1025
         log=fixture[1]/worker['log']
         log.write_text(log.read_text().replace('"pending_entries": 5','"pending_entries": 1025'))
         with self.assertRaises(ValueError):
@@ -286,6 +294,7 @@ class OwnershipCasesTest(unittest.TestCase):
             lambda c:c['states']['scaled_down']['accepted_generations'].update({'kaferry-group-selected-worker1':2}),
             lambda c:c['worker_measurements'].append(copy.deepcopy(c['worker_measurements'][0])),
             lambda c:c['states']['scaled_down']['publishing'].update(acknowledged_by_partition=[40]*24),
+            lambda c:c['worker_measurements'][0].update(lifetime_highwater_available=False,peak_uncommitted_records=None,peak_uncommitted_bytes=None),
         ):
             fixture=self.fixture('worker-scale')
             mutation(fixture[2])

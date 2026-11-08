@@ -18,8 +18,9 @@ import (
 
 	"github.com/pagrus7/kaferry/src/tests/system/faults"
 	"github.com/stretchr/testify/require"
-	"github.com/twmb/franz-go/pkg/kgo"
 )
+
+const ownershipKilledWorkScope = "sampled progress only; SIGKILL omits final lifetime highwater"
 
 func TestReplicatedOwnershipCases(t *testing.T) {
 	for _, name := range []string{"worker-kill-rebalance", "coordinator-kill-rebalance", "worker-scale"} {
@@ -46,7 +47,6 @@ type ownershipCaseWorker struct {
 	route       int
 	process     *cliProcess
 	started     time.Time
-	exited      <-chan time.Time
 	memory      func() rssPeak
 	reason      string
 	terminal    string
@@ -110,8 +110,8 @@ func replicatedOwnershipCase(t *testing.T, name string) {
 	replicatedTopic(ctx, t, metadata["source"], s.src)
 	replicatedTopic(ctx, t, metadata["destination"], s.dst)
 	if name == "coordinator-kill-rebalance" {
-		configs, err := metadata["source"].DescribeBrokerConfigs(ctx, 1, 2, 3)
-		require.NoError(t, err)
+		configs, configErr := metadata["source"].DescribeBrokerConfigs(ctx, 1, 2, 3)
+		require.NoError(t, configErr)
 		require.Len(t, configs, 3)
 		for _, broker := range configs {
 			require.NoError(t, broker.Err)
@@ -127,8 +127,7 @@ func replicatedOwnershipCase(t *testing.T, name string) {
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "worker-settings.toml"), []byte("[worker]\n"+settings), 0600))
 	t.Cleanup(s.retain)
 	s.start(1)
-	producer := fixtureClient(t, strings.Join(faults.Endpoints("source", 0), ","), kgo.RecordPartitioner(kgo.ManualPartitioner()),
-		kgo.MaxBufferedRecords(2*replicatedPartitions), kgo.RecordDeliveryTimeout(timeouts["delivery_timeout"]), kgo.AllowIdempotentProduceCancellation())
+	producer := replicatedBrokerProducer(t, strings.Join(faults.Endpoints("source", 0), ","), timeouts["delivery_timeout"])
 	s.publisher = startReplicatedBrokerPublisher(ctx, producer, s.src, timeouts["delivery_timeout"])
 	t.Cleanup(func() { s.publisher.stop() })
 	s.stable("baseline", []int{1}, nil, 0)
@@ -167,7 +166,7 @@ func replicatedOwnershipCase(t *testing.T, name string) {
 	s.complete = true
 }
 
-func (s *ownershipCase) start(route int) *ownershipCaseWorker {
+func (s *ownershipCase) start(route int) {
 	marker := fmt.Sprintf("%s-worker%d", s.prefix, route)
 	statement := zombieWorkerSQL(s.timeouts, route, marker, s.src, s.dst, s.group)
 	statement = strings.Replace(statement, "'heartbeat.interval.ms'='1000'", fmt.Sprintf("'heartbeat.interval.ms'='1000','max.poll.interval.ms'='%d'", s.timeouts["max.poll.interval.ms"].Milliseconds()), 1)
@@ -180,10 +179,9 @@ func (s *ownershipCase) start(route int) *ownershipCaseWorker {
 	}
 	worker := &ownershipCaseWorker{route: route, started: time.Now().UTC()}
 	worker.process = startCLI(s.t, s.ctx, testBinary(s.t), "", "run", "-e", statement, "-c", s.config)
-	worker.exited, worker.memory = observeReplicatedExit(worker.process), watchReplicatedRSS(s.t, worker.process)
+	worker.memory = watchReplicatedRSS(s.t, worker.process)
 	s.workers = append(s.workers, worker)
 	s.oracle.writer(worker.process)
-	return worker
 }
 
 func (s *ownershipCase) observe(ctx context.Context) ownershipCaseObservation {
@@ -191,51 +189,69 @@ func (s *ownershipCase) observe(ctx context.Context) ownershipCaseObservation {
 	for _, worker := range s.workers {
 		state.Alive[worker.process.pid()] = !worker.process.finished()
 	}
-	groups, err := s.metadata["source"].DescribeGroups(ctx, s.group)
-	if err == nil {
-		group, ok := groups[s.group]
-		if !ok {
-			err = fmt.Errorf("independent group describe omitted the selected group")
-		} else if group.Err != nil {
-			err = group.Err
-		} else {
-			state.State = group.State
-			for _, member := range group.Members {
-				owned := ownershipMember{ClientID: member.ClientID, MemberID: member.MemberID}
-				if assignment, ok := member.Assigned.AsConsumer(); ok {
-					for _, topic := range assignment.Topics {
-						if topic.Topic != s.src {
-							err = fmt.Errorf("group member owns unexpected topic %q", topic.Topic)
-						}
-						owned.Partitions = append(owned.Partitions, topic.Partitions...)
-					}
-				}
-				slices.Sort(owned.Partitions)
-				state.Members = append(state.Members, owned)
-			}
-		}
-	}
+	var err error
+	state.State, state.Members, err = s.groupMembers(ctx)
 	if err == nil {
 		state.Coordinator, err = s.metadata.Coordinator(ctx, "source", s.group)
 	}
 	if err == nil {
-		parts, queryErr := s.metadata["source"].FetchOffsetsForTopics(ctx, s.group, s.src)
-		err = queryErr
-		if err == nil {
-			err = parts.Error()
-		}
-		if err == nil && len(parts[s.src]) == replicatedPartitions {
-			state.Saved = make([]int64, replicatedPartitions)
-			for partition, part := range parts[s.src] {
-				state.Saved[partition] = part.At
-			}
-		}
+		state.Saved, err = s.savedOffsets(ctx)
 	}
 	if err != nil {
 		state.Error = err.Error()
 	}
 	state.Finished = time.Now().UTC()
 	return state
+}
+
+func (s *ownershipCase) groupMembers(ctx context.Context) (string, []ownershipMember, error) {
+	groups, err := s.metadata["source"].DescribeGroups(ctx, s.group)
+	if err != nil {
+		return "", nil, err
+	}
+	group, ok := groups[s.group]
+	if !ok {
+		return "", nil, fmt.Errorf("independent group describe omitted the selected group")
+	}
+	if group.Err != nil {
+		return "", nil, group.Err
+	}
+	var members []ownershipMember
+	for _, member := range group.Members {
+		owned := ownershipMember{ClientID: member.ClientID, MemberID: member.MemberID}
+		assignment, assigned := member.Assigned.AsConsumer()
+		if !assigned {
+			members = append(members, owned)
+			continue
+		}
+		for _, topic := range assignment.Topics {
+			if topic.Topic != s.src {
+				return "", nil, fmt.Errorf("group member owns unexpected topic %q", topic.Topic)
+			}
+			owned.Partitions = append(owned.Partitions, topic.Partitions...)
+		}
+		slices.Sort(owned.Partitions)
+		members = append(members, owned)
+	}
+	return group.State, members, nil
+}
+
+func (s *ownershipCase) savedOffsets(ctx context.Context) ([]int64, error) {
+	parts, err := s.metadata["source"].FetchOffsetsForTopics(ctx, s.group, s.src)
+	if err != nil {
+		return nil, err
+	}
+	if offsetsErr := parts.Error(); offsetsErr != nil {
+		return nil, offsetsErr
+	}
+	if len(parts[s.src]) != replicatedPartitions {
+		return nil, nil
+	}
+	saved := make([]int64, replicatedPartitions)
+	for partition, part := range parts[s.src] {
+		saved[partition] = part.At
+	}
+	return saved, nil
 }
 
 func (s *ownershipCase) poll(label string, allowFaultExit bool, condition func(context.Context, ownershipCaseObservation) bool) ownershipCaseObservation {
@@ -269,26 +285,42 @@ func ownershipCaseMembers(state ownershipCaseObservation, markers map[int]string
 	}
 	members, partitions := make(map[int]ownershipMember), make(map[int32]bool)
 	for _, member := range state.Members {
-		matched := 0
-		for route, marker := range markers {
-			if strings.HasSuffix(member.ClientID, marker) {
-				if _, exists := members[route]; exists {
-					return nil, false
-				}
-				members[route], matched = member, route
-			}
-		}
+		matched := ownershipMemberRoute(member.ClientID, markers)
 		if matched == 0 || member.MemberID == "" || len(member.Partitions) == 0 {
 			return nil, false
 		}
-		for _, partition := range member.Partitions {
-			if partition < 0 || partition >= replicatedPartitions || partitions[partition] {
-				return nil, false
-			}
-			partitions[partition] = true
+		if _, exists := members[matched]; exists {
+			return nil, false
+		}
+		members[matched] = member
+		if !ownershipDistinctParts(member.Partitions, partitions) {
+			return nil, false
 		}
 	}
 	return members, len(partitions) == replicatedPartitions
+}
+
+func ownershipMemberRoute(client string, markers map[int]string) int {
+	matched := 0
+	for route, marker := range markers {
+		if strings.HasSuffix(client, marker) {
+			if matched != 0 {
+				return 0
+			}
+			matched = route
+		}
+	}
+	return matched
+}
+
+func ownershipDistinctParts(parts []int32, seen map[int32]bool) bool {
+	for _, partition := range parts {
+		if partition < 0 || partition >= replicatedPartitions || seen[partition] {
+			return false
+		}
+		seen[partition] = true
+	}
+	return true
 }
 
 func (s *ownershipCase) stable(label string, routes []int, before []int64, generation int32) ownershipCaseObservation {
@@ -302,20 +334,9 @@ func (s *ownershipCase) stable(label string, routes []int, before []int64, gener
 		if !ok || !allAbove(state.Saved, ownershipCaseMinimum(before), 2) {
 			return false
 		}
-		state.Generations = make(map[string]int32)
-		minimum := make(map[int32]int64)
-		for partition, offset := range ownershipCaseMinimum(before) {
-			minimum[int32(partition)] = offset + 2
-		}
-		var current int32
-		for _, member := range members {
-			observed, ready, err := s.audit.ready(query, member.ClientID, s.group, member.MemberID, member.Partitions, minimum)
-			require.NoError(s.t, err, "actual accepted generation audit unavailable")
-			if !ready || observed <= generation || current != 0 && current != observed {
-				return false
-			}
-			current = observed
-			state.Generations[member.ClientID] = observed
+		state.Generations = s.acceptedGenerations(query, members, before, generation)
+		if state.Generations == nil {
+			return false
 		}
 		if before != nil && !allAbove(state.Publishing.Acknowledged, s.states["baseline"].Publishing.Acknowledged, 2) {
 			return false
@@ -327,6 +348,25 @@ func (s *ownershipCase) stable(label string, routes []int, before []int64, gener
 	s.states[label] = accepted
 	s.journal(accepted)
 	return accepted
+}
+
+func (s *ownershipCase) acceptedGenerations(ctx context.Context, members map[int]ownershipMember, before []int64, generation int32) map[string]int32 {
+	minimum := make(map[int32]int64)
+	for partition, offset := range ownershipCaseMinimum(before) {
+		minimum[int32(partition)] = offset + 2
+	}
+	generations := make(map[string]int32)
+	var current int32
+	for _, member := range members {
+		observed, ready, err := s.audit.ready(ctx, member.ClientID, s.group, member.MemberID, member.Partitions, minimum)
+		require.NoError(s.t, err, "actual accepted generation audit unavailable")
+		if !ready || observed <= generation || current != 0 && current != observed {
+			return nil
+		}
+		current = observed
+		generations[member.ClientID] = observed
+	}
+	return generations
 }
 
 func ownershipCaseMinimum(before []int64) []int64 {
@@ -406,38 +446,40 @@ func (s *ownershipCase) killDuringRebalance(coordinator bool) {
 	}
 }
 
+func (s *ownershipCase) coordinatorCommand(ctx context.Context, args ...string) ([]byte, error) {
+	if len(args) > 0 && args[0] == "kill" {
+		atKill, ready := s.rebalance(ctx)
+		if !ready {
+			return nil, fmt.Errorf("coordinator kill lost required rebalance: %+v", atKill)
+		}
+		data, err := faults.Docker(ctx, "inspect", "--format", `{{index .Config.Labels "com.docker.compose.service"}}`, args[len(args)-1])
+		if err != nil || strings.TrimSpace(string(data)) != fmt.Sprintf("source-%d", atKill.Coordinator) {
+			return nil, fmt.Errorf("resolved target is no longer the independently observed coordinator: %w", err)
+		}
+		s.live(false)
+		s.states["at_kill"] = atKill
+		s.journal(atKill)
+		s.failedAfter = time.Now().UTC()
+	}
+	data, err := faults.Docker(ctx, args...)
+	if len(args) > 0 && args[0] == "kill" && err == nil {
+		s.events = append(s.events, map[string]any{"coordinator_kill_started": s.failedAfter, "coordinator_kill_finished": time.Now().UTC(), "container": args[len(args)-1]})
+	}
+	return data, err
+}
+
 func (s *ownershipCase) killCoordinator(window int, old *ownershipCaseWorker) {
 	// The native injector resolves the live coordinator. Intercept only its
 	// final kill command to prove the same coordinator and rebalance still hold.
-	s.lab.Docker = func(ctx context.Context, args ...string) ([]byte, error) {
-		if len(args) > 0 && args[0] == "kill" {
-			atKill, ready := s.rebalance(ctx)
-			if !ready {
-				return nil, fmt.Errorf("coordinator kill lost required rebalance: %+v", atKill)
-			}
-			data, err := faults.Docker(ctx, "inspect", "--format", `{{index .Config.Labels "com.docker.compose.service"}}`, args[len(args)-1])
-			if err != nil || strings.TrimSpace(string(data)) != fmt.Sprintf("source-%d", atKill.Coordinator) {
-				return nil, fmt.Errorf("resolved target is no longer the independently observed coordinator: %w", err)
-			}
-			s.live(false)
-			s.states["at_kill"] = atKill
-			s.journal(atKill)
-			s.failedAfter = time.Now().UTC()
-		}
-		data, err := faults.Docker(ctx, args...)
-		if len(args) > 0 && args[0] == "kill" && err == nil {
-			s.events = append(s.events, map[string]any{"coordinator_kill_started": s.failedAfter, "coordinator_kill_finished": time.Now().UTC(), "container": args[len(args)-1]})
-		}
-		return data, err
-	}
+	s.lab.Docker = s.coordinatorCommand
 	injection, err := s.lab.Inject(s.ctx, faults.Role{Kind: "coordinator", Cluster: "source", Group: s.group}, faults.Fault{Kind: "kill"})
 	if injection != nil {
 		s.events = append(s.events, map[string]any{"fault": &injection.Event})
 		s.t.Cleanup(func() {
 			cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
 			defer done()
-			if err := injection.Heal(cleanup); err != nil {
-				s.t.Error("restore original resolved coordinator: ", err)
+			if healErr := injection.Heal(cleanup); healErr != nil {
+				s.t.Error("restore original resolved coordinator: ", healErr)
 			}
 		})
 	}
@@ -466,13 +508,9 @@ func (s *ownershipCase) killCoordinator(window int, old *ownershipCaseWorker) {
 		func(query context.Context, _ ownershipCaseObservation) bool {
 			probe := &brokerCopy{metadata: s.metadata, src: s.src, dst: s.dst}
 			parts, ok := probe.topology(query, "source", s.src)
-			if !ok || !probe.healthy(query, killed) {
+			observed := brokerObservation{Topology: map[string][]faults.Partition{"source": parts}}
+			if !ok || !probe.healthy(query, killed) || !fullyReplicated(observed, "source") {
 				return false
-			}
-			for _, partition := range parts {
-				if len(partition.ISR) != 3 {
-					return false
-				}
 			}
 			restoredTopology = parts
 			return s.brokerInspection(query, killed, true, "coordinator-restored.inspect.json")
@@ -593,10 +631,12 @@ func (s *ownershipCase) live(allowFaultExit bool) {
 		if worker.reason == "" {
 			logs, err := worker.process.currentLogs()
 			require.NoError(s.t, err)
-			progress, _, _, err := ownershipCaseWork(logs)
+			work, ready, err := ownershipCaseWork(logs)
 			require.NoError(s.t, err)
-			require.LessOrEqual(s.t, progress.PeakRecords, 1024)
-			require.LessOrEqual(s.t, progress.PeakBytes, int64(134217728))
+			if ready {
+				require.LessOrEqual(s.t, work.SampledPending, 1024)
+				require.LessOrEqual(s.t, work.SampledPendingBytes, int64(134217728))
+			}
 		}
 	}
 }
@@ -620,42 +660,29 @@ func ownershipCoordinatorFailure(logs string) (string, bool) {
 	return strings.Join(terminal, "\n"), len(terminal) > 0
 }
 
-func ownershipCaseWork(logs string) (copySummary, int, bool, error) {
-	var peak copySummary
-	observations, summary := 0, false
+func ownershipCaseWork(logs string) (brokerWorkEvidence, bool, error) {
 	complete := logs[:strings.LastIndexByte(logs, '\n')+1]
-	for _, line := range strings.Split(complete, "\n") {
-		if !strings.HasPrefix(strings.TrimSpace(line), "{") {
-			continue
-		}
-		var row struct {
-			Message        string `json:"msg"`
-			Submitted      *int   `json:"submitted"`
-			Confirmed      *int   `json:"confirmed"`
-			PeakRecords    *int   `json:"peak_uncommitted_records"`
-			PeakBytes      *int64 `json:"peak_uncommitted_bytes"`
-			PendingRecords *int   `json:"pending_entries"`
-			PendingBytes   *int64 `json:"pending_estimated_bytes"`
-		}
-		if err := json.Unmarshal([]byte(line), &row); err != nil {
-			return copySummary{}, 0, false, fmt.Errorf("decode complete CLI measurement: %w", err)
-		}
-		if row.Message != "progress" && row.Message != "copy summary" {
-			continue
-		}
-		records, bytes := row.PeakRecords, row.PeakBytes
-		if row.Message == "progress" {
-			records, bytes = row.PendingRecords, row.PendingBytes
-		}
-		if row.Submitted == nil || row.Confirmed == nil || records == nil || bytes == nil ||
-			*row.Submitted < 0 || *row.Confirmed < 0 || *row.Confirmed > *row.Submitted || *records < 0 || *bytes < 0 {
-			return copySummary{}, 0, false, fmt.Errorf("CLI cap evidence requires complete nonnegative counts")
-		}
-		observations++
-		peak.PeakRecords, peak.PeakBytes = max(peak.PeakRecords, *records), max(peak.PeakBytes, *bytes)
-		summary = summary || row.Message == "copy summary"
+	_, ready, err := latestCopyProgress(complete)
+	if err != nil || !ready {
+		return brokerWorkEvidence{}, false, err
 	}
-	return peak, observations, summary, nil
+	work, err := brokerWork(complete)
+	return work, true, err
+}
+
+func ownershipWorkMeasurement(work brokerWorkEvidence, killed bool) (map[string]any, error) {
+	if work.ProgressSamples == 0 || killed && work.Summary != nil || !killed && work.Summary == nil {
+		return nil, fmt.Errorf("ownership cap evidence requires live samples and a final summary unless SIGKILL prevented it")
+	}
+	evidence := map[string]any{"lifetime_highwater_available": work.Summary != nil, "copy_summary": work.Summary,
+		"peak_uncommitted_records": nil, "peak_uncommitted_bytes": nil, "progress_observations": work.ProgressSamples,
+		"sampled_max_pending_entries": work.SampledPending, "sampled_max_pending_estimated_bytes": work.SampledPendingBytes,
+		"cap_measurement_scope": ownershipKilledWorkScope}
+	if work.Summary != nil {
+		evidence["peak_uncommitted_records"], evidence["peak_uncommitted_bytes"] = work.Summary.PeakRecords, work.Summary.PeakBytes
+		evidence["cap_measurement_scope"] = brokerExactWorkScope
+	}
+	return evidence, nil
 }
 
 func (s *ownershipCase) measure(worker *ownershipCaseWorker, killed bool) {
@@ -665,24 +692,18 @@ func (s *ownershipCase) measure(worker *ownershipCaseWorker, killed bool) {
 	require.Positive(s.t, memory.samples)
 	require.Zero(s.t, memory.failures)
 	require.LessOrEqual(s.t, memory.peak*1024, int64(512<<20))
-	peak, samples, summary, err := ownershipCaseWork(logs)
+	work, ready, err := ownershipCaseWork(logs)
 	require.NoError(s.t, err)
-	require.Positive(s.t, samples, "every selected worker needs cap measurements")
-	if killed {
-		require.False(s.t, summary, "killed worker had already ended its copy loop")
-	} else {
-		require.True(s.t, summary, "worker needs its final copy summary")
-	}
-	require.LessOrEqual(s.t, peak.PeakRecords, 1024)
-	require.LessOrEqual(s.t, peak.PeakBytes, int64(134217728))
-	worker.measurement = map[string]any{"pid": worker.process.pid(), "route": worker.route, "started_at": worker.started, "stopped_at": <-worker.exited,
+	require.True(s.t, ready, "every selected worker needs live cap measurements")
+	evidence, err := ownershipWorkMeasurement(work, killed)
+	require.NoError(s.t, err)
+	worker.measurement = map[string]any{"pid": worker.process.pid(), "route": worker.route, "started_at": worker.started, "stopped_at": worker.process.stopped,
 		"wait_status":   int(worker.process.command.ProcessState.Sys().(syscall.WaitStatus)),
 		"binary_sha256": os.Getenv("KAFERRY_EXPECT_BINARY_SHA256"), "exit_code": worker.process.command.ProcessState.ExitCode(), "reason": worker.reason, "terminal_error": worker.terminal,
 		"sampled_peak_rss_bytes": memory.peak * 1024, "rss_samples": memory.samples, "rss_failures": memory.failures,
-		"record_cap": 1024, "byte_cap": 134217728, "peak_uncommitted_records": peak.PeakRecords, "peak_uncommitted_bytes": peak.PeakBytes,
-		"progress_observations": samples, "final_summary": summary, "forced_kill": killed}
-	if killed {
-		worker.measurement["cap_measurement_scope"] = "live progress observations before SIGKILL; forced exit cannot emit a final summary"
+		"record_cap": 1024, "byte_cap": 134217728, "forced_kill": killed}
+	for key, value := range evidence {
+		worker.measurement[key] = value
 	}
 }
 
@@ -697,7 +718,30 @@ func (s *ownershipCase) journal(state ownershipCaseObservation) {
 }
 
 func (s *ownershipCase) retain() {
+	measurements, exactCaps := s.retainWorkers()
+	var publishing replicatedPublishing
+	if s.publisher != nil {
+		publishing = s.publisher.snapshot()
+	}
+	artifacts := s.artifactChecksums()
+	data, err := json.MarshalIndent(map[string]any{"schema": 1, "id": s.id, "complete": s.complete && !s.t.Failed(), "case_failed": s.t.Failed(),
+		"source_partitions": replicatedPartitions, "source_topic": s.src, "destination_topic": s.dst, "group": s.group,
+		"binary_sha256": os.Getenv("KAFERRY_EXPECT_BINARY_SHA256"), "states": s.states, "events": s.events, "publishing": publishing,
+		"timeout_milliseconds": durationMilliseconds(s.timeouts), "required_recovery_seconds": s.oracle.recovery.Seconds(),
+		"worker_measurements": measurements, "safety_case": s.safety, "audit_guard": s.audit.guard, "audit_marks": s.audit.marks,
+		"exact_lifetime_work_caps_qualified": exactCaps,
+		"fixture_project":                    s.lab.Project, "artifacts": artifacts, "observations": "ownership-observations.jsonl"}, "", "  ")
+	if err == nil {
+		err = os.WriteFile(filepath.Join(s.directory, "replicated-ownership-case.json"), append(data, '\n'), 0600)
+	}
+	if err != nil {
+		s.t.Error("retain ownership case: ", err)
+	}
+}
+
+func (s *ownershipCase) retainWorkers() ([]map[string]any, bool) {
 	measurements := make([]map[string]any, 0, len(s.workers))
+	exactCaps := true
 	for index, worker := range s.workers {
 		if !worker.process.finished() {
 			_ = worker.process.command.Process.Kill()
@@ -711,41 +755,31 @@ func (s *ownershipCase) retain() {
 				"exit_code": worker.process.command.ProcessState.ExitCode(), "measurement_incomplete": true}
 		}
 		measurements = append(measurements, worker.measurement)
+		exactCaps = exactCaps && worker.measurement["lifetime_highwater_available"] == true
 		worker.measurement["log"] = fmt.Sprintf("worker-%d-route-%d.cli.log", index+1, worker.route)
 	}
-	var publishing replicatedPublishing
-	if s.publisher != nil {
-		publishing = s.publisher.snapshot()
-	}
+	return measurements, exactCaps
+}
+
+func (s *ownershipCase) artifactChecksums() []map[string]string {
 	var artifacts []map[string]string
 	entries, err := os.ReadDir(s.directory)
-	if err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() || entry.Name() == "replicated-ownership-case.json" {
-				continue
-			}
-			data, readErr := os.ReadFile(filepath.Join(s.directory, entry.Name()))
-			if readErr != nil {
-				s.t.Error("checksum ownership evidence: ", readErr)
-				continue
-			}
-			artifacts = append(artifacts, map[string]string{"observations": entry.Name(), "sha256": fmt.Sprintf("%x", sha256.Sum256(data))})
-		}
-	} else {
-		s.t.Error("list ownership evidence: ", err)
-	}
-	data, err := json.MarshalIndent(map[string]any{"schema": 1, "id": s.id, "complete": s.complete && !s.t.Failed(), "case_failed": s.t.Failed(),
-		"source_partitions": replicatedPartitions, "source_topic": s.src, "destination_topic": s.dst, "group": s.group,
-		"binary_sha256": os.Getenv("KAFERRY_EXPECT_BINARY_SHA256"), "states": s.states, "events": s.events, "publishing": publishing,
-		"timeout_milliseconds": durationMilliseconds(s.timeouts), "required_recovery_seconds": s.oracle.recovery.Seconds(),
-		"worker_measurements": measurements, "safety_case": s.safety, "audit_guard": s.audit.guard, "audit_marks": s.audit.marks,
-		"fixture_project": s.lab.Project, "artifacts": artifacts, "observations": "ownership-observations.jsonl"}, "", "  ")
-	if err == nil {
-		err = os.WriteFile(filepath.Join(s.directory, "replicated-ownership-case.json"), append(data, '\n'), 0600)
-	}
 	if err != nil {
-		s.t.Error("retain ownership case: ", err)
+		s.t.Error("list ownership evidence: ", err)
+		return nil
 	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() == "replicated-ownership-case.json" {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(s.directory, entry.Name()))
+		if readErr != nil {
+			s.t.Error("checksum ownership evidence: ", readErr)
+			continue
+		}
+		artifacts = append(artifacts, map[string]string{"observations": entry.Name(), "sha256": fmt.Sprintf("%x", sha256.Sum256(data))})
+	}
+	return artifacts
 }
 
 func TestOwnershipCaseRejectsUnprovedMembership(t *testing.T) {
@@ -769,8 +803,8 @@ func TestOwnershipCaseRejectsUnprovedMembership(t *testing.T) {
 		candidate.Members = slices.Clone(state.Members)
 		candidate.Members[0].Partitions = slices.Clone(parts)
 		change(&candidate)
-		_, valid := ownershipCaseMembers(candidate, map[int]string{1: "worker1"})
-		require.False(t, valid, "%+v", candidate)
+		_, candidateValid := ownershipCaseMembers(candidate, map[int]string{1: "worker1"})
+		require.False(t, candidateValid, "%+v", candidate)
 	}
 	// When two selected workers divide the same 24 partitions, then only
 	// disjoint complete ownership passes; counts cannot hide overlap or loss.
@@ -787,7 +821,7 @@ func TestOwnershipCoordinatorRestartRequiresTerminalCause(t *testing.T) {
 	// Given structured coordinator warnings, when the terminal failure is
 	// unrelated or absent, then a warning cannot authorize a worker restart.
 	warning := `{"msg":"source warning","error":"NOT_COORDINATOR"}` + "\n"
-	for _, terminal := range []string{"", "unexpected invariant failure", "context deadline exceeded\nunexpected invariant failure", "EOF"} {
+	for _, terminal := range []string{"", "unexpected invariant failure", "context deadline exceeded\nunexpected invariant failure", "EOF", brokerForcedSaveExit, brokerNegotiationEOF} {
 		_, known := ownershipCoordinatorFailure(warning + terminal)
 		require.False(t, known, terminal)
 	}
@@ -798,22 +832,37 @@ func TestOwnershipCoordinatorRestartRequiresTerminalCause(t *testing.T) {
 
 func TestOwnershipKilledWorkerKeepsEarlierPeak(t *testing.T) {
 	// Given live progress before an abrupt kill, when later progress is lower,
-	// then cap evidence retains the highest observed values without a summary.
-	logs := `{"msg":"progress","submitted":2000,"confirmed":975,"pending_entries":1025,"pending_estimated_bytes":134217729}` + "\n" +
+	// then sampled maxima stay separate from unavailable exact lifetime peaks.
+	logs := `{"msg":"progress","submitted":2000,"confirmed":1995,"pending_entries":5,"pending_estimated_bytes":100}` + "\n" +
 		`{"msg":"progress","submitted":2000,"confirmed":1998,"pending_entries":2,"pending_estimated_bytes":10}` + "\n"
-	peak, samples, summary, err := ownershipCaseWork(logs)
+	work, ready, err := ownershipCaseWork(logs)
 	require.NoError(t, err)
-	require.Equal(t, 1025, peak.PeakRecords)
-	require.Equal(t, int64(134217729), peak.PeakBytes)
-	require.Equal(t, 2, samples)
-	require.False(t, summary)
-	_, _, summary, err = ownershipCaseWork(logs + `{"msg":"copy summary","submitted":2000,"confirmed":2000,"peak_uncommitted_records":1025,"peak_uncommitted_bytes":134217729}` + "\n")
+	require.True(t, ready)
+	require.Equal(t, 5, work.SampledPending)
+	require.EqualValues(t, 100, work.SampledPendingBytes)
+	require.Equal(t, 2, work.ProgressSamples)
+	require.Nil(t, work.Summary)
+	evidence, err := ownershipWorkMeasurement(work, true)
 	require.NoError(t, err)
-	require.True(t, summary)
+	require.Equal(t, false, evidence["lifetime_highwater_available"])
+	require.Nil(t, evidence["peak_uncommitted_records"])
+	require.Nil(t, evidence["peak_uncommitted_bytes"])
+	require.Equal(t, ownershipKilledWorkScope, evidence["cap_measurement_scope"])
+	_, err = ownershipWorkMeasurement(work, false)
+	require.Error(t, err, "a normal exit still requires exact lifetime highwater")
+	work, ready, err = ownershipCaseWork(logs + `{"msg":"copy summary","submitted":2000,"confirmed":2000,"peak_uncommitted_records":8,"peak_uncommitted_bytes":200}` + "\n")
+	require.NoError(t, err)
+	require.True(t, ready)
+	evidence, err = ownershipWorkMeasurement(work, false)
+	require.NoError(t, err)
+	require.Equal(t, 8, evidence["peak_uncommitted_records"])
+	require.EqualValues(t, 200, evidence["peak_uncommitted_bytes"])
+	_, err = ownershipWorkMeasurement(work, true)
+	require.Error(t, err, "SIGKILL must not conceal an already completed copy loop")
 	// When a later complete row loses required cap evidence, then earlier
 	// valid observations cannot conceal the missing or malformed measurement.
-	for _, row := range []string{`{"msg":"progress","submitted":2,"confirmed":1}`, `{"msg":"progress","peak_uncommitted_records":-1}`, `{"msg":"progress"`} {
-		_, _, _, err := ownershipCaseWork(logs + row + "\n")
+	for _, row := range []string{`{"msg":"progress","submitted":2,"confirmed":1}`, `{"msg":"progress","peak_uncommitted_records":-1}`, `{"msg":"progress"`, `{"msg":"progress","submitted":2000,"confirmed":975,"pending_entries":1025,"pending_estimated_bytes":100}`} {
+		_, _, err := ownershipCaseWork(logs + row + "\n")
 		require.Error(t, err, row)
 	}
 }
