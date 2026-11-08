@@ -75,7 +75,7 @@ python3 -m tools.qualification.qualify matrix --tier pr
 python3 -m tools.qualification.qualify matrix --tier full --output build-results/full-matrix
 ```
 
-Every tier also runs archive-capture endurance with two minutes of publishing and ten seconds without new input. A matrix runs sequentially locally; CI runs up to six cases in parallel on separate hosted runners. Existing output directories are refused so failed evidence cannot be overwritten. Use a new output path for a follow-up run.
+Every tier also runs archive-capture endurance: the PR tier publishes for one minute; nightly, full and release matrices publish for two minutes. Each adds ten seconds without new input. A matrix runs sequentially locally; CI runs up to six cases in parallel on separate hosted runners. Existing output directories are refused so failed evidence cannot be overwritten. Use a new output path for a follow-up run.
 
 The broker-version and security Go tests live in `src/tests/compatibility`. They import shared helpers from regular Go files in `src/tests/system`; unrelated system test files are not compiled into the compatibility package. On a PR, the workflow skips the matrix only when the diff is nonempty and every changed path is unrelated documentation, reviewer configuration or an excluded test file. Changes to application code, compatibility tests, shared helpers, broker fixtures, qualification tools, dependencies or workflow configuration run the matrix; unknown paths run it too. The fast PR check compiles the system and compatibility tests with the matrix tags; container-tag tests have their own CI workflow. PR path selection does not affect scheduled, manual or release invocations; scheduled runs may reuse evidence as described below.
 

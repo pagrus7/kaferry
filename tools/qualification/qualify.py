@@ -46,6 +46,8 @@ def plan(tier):
               for v in (VERSIONS if tier == 'full' else [VERSIONS[-1]])]
     cases.append({'id': f'capture-{VERSIONS[0]}-{VERSIONS[0]}', 'suite': 'capture',
                   'source': VERSIONS[0], 'destination': VERSIONS[0]})
+    if tier == 'pr':
+        cases[-1]['duration'] = 60
     return cases
 
 
@@ -535,6 +537,7 @@ def main(argv=None):
     reporting.add_argument('directory', type=Path)
     reporting.add_argument('--tier', choices=('pr', 'nightly', 'full'), default='pr')
     args = parser.parse_args(argv)
+    requested_duration = getattr(args, 'duration', None)
     if args.action in ('run', 'matrix', 'releases'):
         endurance = getattr(args, 'suite', None) == 'endurance'
         args.duration = args.duration if args.duration is not None else (86400 if endurance else 7200 if getattr(args, 'suite', None) == 'recovery' else 120)
@@ -567,7 +570,10 @@ def main(argv=None):
         directory = args.output.resolve()
         directory.mkdir(parents=True, exist_ok=False)
         for case in plan(args.tier):
-            case_args = argparse.Namespace(**dict(vars(args), **case, output=directory / case['id']))
+            settings = dict(case)
+            if requested_duration is not None:
+                settings['duration'] = requested_duration
+            case_args = argparse.Namespace(**dict(vars(args), **settings, output=directory / case['id']))
             try:
                 run_suite(case_args)
             except (OSError, ValueError, RuntimeError) as error:
