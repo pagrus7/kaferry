@@ -19,9 +19,9 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/src/internal/app"
-	"github.com/pagrus7/kaferry/src/internal/commitmeta"
 	core "github.com/pagrus7/kaferry/src/internal/copy"
-	adapter "github.com/pagrus7/kaferry/src/internal/franz"
+	"github.com/pagrus7/kaferry/src/internal/kafka/commitmeta"
+	adapter "github.com/pagrus7/kaferry/src/internal/kafka/franz"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"

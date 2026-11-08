@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pagrus7/kaferry/src/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,7 +48,7 @@ func TestFlowAdmissionHonorsEveryCapAndAllowsOversizedAlone(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given independent worker/partition counts provided through the narrow port.
-			limits := config.Worker{RecordCap: 4, ByteCap: 4 * size, PartitionRecordCap: 2, PartitionByteCap: 2 * size}
+			limits := Settings{RecordCap: 4, ByteCap: 4 * size, PartitionRecordCap: 2, PartitionByteCap: 2 * size}
 			work := mockWorkCounts{total: tc.total, partitions: map[int32]workCount{3: tc.partition}}
 			f := flow{}
 
@@ -91,7 +90,7 @@ func TestFlowCommitCadenceAndPauseReasons(t *testing.T) {
 			if tc.deferred {
 				f.deferred = &deferredInput{}
 			}
-			limits := config.Worker{RecordCap: 10, ByteCap: 1000, PartitionRecordCap: 8, PartitionByteCap: 800}
+			limits := Settings{RecordCap: 10, ByteCap: 1000, PartitionRecordCap: 8, PartitionByteCap: 800}
 			work := mockWorkCounts{total: tc.total, partitions: map[int32]workCount{3: tc.partition}}
 
 			// When evaluating commit cadence and worker-wide pause independently.

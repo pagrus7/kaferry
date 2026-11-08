@@ -167,7 +167,7 @@ def suite_command(args, env):
     if args.suite == 'integration':
         return go_suite('integration', go=prefix[0], timeout='20m'), EXPECTED['integration']
     if args.suite == 'resources':
-        return prefix + ['-race', './src/internal/copy', './src/internal/archive/capture', './src/internal/checkpoint', './src/internal/archiveio'], [
+        return prefix + ['-race', './src/internal/copy', './src/internal/archive/capture', './src/internal/checkpoint', './src/internal/archive/io'], [
             'TestCheckpointReplacementFailuresPreserveAtomicPublication',
             'TestEveryCaptureIOCutPreservesAcknowledgedRecords', 'TestEveryRecoveryIOCutCanBeRetriedByANewOwner']
     if args.suite == 'model':

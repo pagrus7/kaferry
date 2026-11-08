@@ -4,10 +4,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/pagrus7/kaferry/src/internal/archiveio"
+	"github.com/pagrus7/kaferry/src/internal/archive/io"
 	"github.com/pagrus7/kaferry/src/internal/config"
 	core "github.com/pagrus7/kaferry/src/internal/copy"
-	"github.com/pagrus7/kaferry/src/internal/kafkaport"
+	"github.com/pagrus7/kaferry/src/internal/kafka"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -80,13 +80,13 @@ func TestStatusExposesIncompatibleProgressAndActivity(t *testing.T) {
 			service, p, factory, _ := fixture()
 			p.Partitions = &plan.PartitionFilter{IDs: []int32{0}}
 			source := factory.connections["input"]
-			source.saved = map[int32]kafkaport.SavedProgress{
-				0: {Position: 3, Progress: kafkaport.Progress{Fingerprint: "old-a", End: new(int64(3)), Stop: &core.Stop{Reason: "tip", At: 3}}},
-				1: {Position: 7, Progress: kafkaport.Progress{Fingerprint: "old-b", End: new(int64(7)), Stop: &core.Stop{Reason: "tip", At: 7}}},
+			source.saved = map[int32]kafka.SavedProgress{
+				0: {Position: 3, Progress: kafka.Progress{Fingerprint: "old-a", End: new(int64(3)), Stop: &core.Stop{Reason: "tip", At: 3}}},
+				1: {Position: 7, Progress: kafka.Progress{Fingerprint: "old-b", End: new(int64(7)), Stop: &core.Stop{Reason: "tip", At: 7}}},
 			}
-			source.fail, source.failure = "saved", &kafkaport.Conflict{Err: plan.ErrFingerprintMismatch}
+			source.fail, source.failure = "saved", &kafka.Conflict{Err: plan.ErrFingerprintMismatch}
 			if activity != "idle" {
-				source.memberships = []kafkaport.Membership{{Foreign: activity == "foreign"}}
+				source.memberships = []kafka.Membership{{Foreign: activity == "foreign"}}
 			}
 			// When status observes incompatible progress without joining or committing.
 			report, err := service.Status(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
@@ -116,10 +116,10 @@ func TestStatusExposesIncompatibleProgressAndActivity(t *testing.T) {
 
 func TestStatusExposesIncompatibleArchiveCursor(t *testing.T) {
 	// Given source-validated archive progress whose fingerprint differs from the inspected query.
-	service, p, _, files := fixture()
+	service, p, _, archives := fixture()
 	p.Source.Kind, p.Source.Format = "ARCHIVE", "avro"
-	files.source = archiveio.SourceInspection{Saved: true, Position: 7, Fingerprint: "old", Stop: &core.Stop{Reason: "worker_record_cap", At: 7}}
-	files.failSource = &archiveio.Conflict{Err: plan.ErrFingerprintMismatch}
+	archives.source = archiveio.SourceInspection{Saved: true, Position: 7, Fingerprint: "old", Stop: &core.Stop{Reason: "worker_record_cap", At: 7}}
+	archives.failSource = &archiveio.Conflict{Err: plan.ErrFingerprintMismatch}
 	// When checking status, then the cursor remains inspectable without claiming completion or compatibility.
 	report, err := service.Status(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
 	require.NoError(t, err)
@@ -128,7 +128,7 @@ func TestStatusExposesIncompatibleArchiveCursor(t *testing.T) {
 	require.Equal(t, 5, report.ExitCode())
 	require.Equal(t, new(int64(7)), report.Partitions[0].Position)
 	require.Equal(t, "old", report.Partitions[0].Fingerprint)
-	require.Equal(t, files.source.Stop, report.Partitions[0].Stop)
+	require.Equal(t, archives.source.Stop, report.Partitions[0].Stop)
 }
 
 func TestStatusPreservesOperationalFailuresAndRejectsOneOff(t *testing.T) {
@@ -162,7 +162,7 @@ func TestStatusRejectsStaleStopsAfterFinalObservationFailure(t *testing.T) {
 			service, p, factory, _ := fixture()
 			source, destination := factory.connections["input"], factory.connections["output"]
 			for _, id := range source.info.Partitions {
-				source.saved[id] = kafkaport.SavedProgress{Position: int64(id), Progress: kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: int64(id)}}}
+				source.saved[id] = kafka.SavedProgress{Position: int64(id), Progress: kafka.Progress{Stop: &core.Stop{Reason: "tip", At: int64(id)}}}
 			}
 			source.afterSaved = func() {
 				switch failure {
@@ -203,7 +203,7 @@ func kafkaStatusVerdict(t *testing.T, name, verdict string, code int) {
 	s, p, f, _ := fixture()
 	source := f.connections["input"]
 	for _, id := range []int32{0, 1} {
-		source.saved[id] = kafkaport.SavedProgress{Position: int64(id), Progress: kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: int64(id)}, End: new(int64(id))}}
+		source.saved[id] = kafka.SavedProgress{Position: int64(id), Progress: kafka.Progress{Stop: &core.Stop{Reason: "tip", At: int64(id)}, End: new(int64(id))}}
 	}
 	switch name {
 	case "worker threshold", "active after worker stop", "partial worker stops", "mixed stops":
@@ -212,31 +212,31 @@ func kafkaStatusVerdict(t *testing.T, name, verdict string, code int) {
 		case "mixed stops":
 			source.saved[1].Stop.Reason = "timestamp"
 		case "partial worker stops":
-			source.saved[1] = kafkaport.SavedProgress{Position: 1}
+			source.saved[1] = kafka.SavedProgress{Position: 1}
 		default:
 			source.saved[1].Stop.Reason = "worker_record_cap"
 		}
 		if name == "active after worker stop" {
-			source.memberships = []kafkaport.Membership{{Idle: false}}
+			source.memberships = []kafka.Membership{{Idle: false}}
 		}
 	case "no progress":
 		clear(source.saved)
 	case "partial progress":
 		delete(source.saved, 1)
 	case "no stop":
-		source.saved[1] = kafkaport.SavedProgress{Position: 1}
+		source.saved[1] = kafka.SavedProgress{Position: 1}
 	case "active":
-		source.memberships = []kafkaport.Membership{{Idle: true}, {Idle: false}}
+		source.memberships = []kafka.Membership{{Idle: true}, {Idle: false}}
 	case "changed empty group state":
-		source.memberships = []kafkaport.Membership{{Idle: true, State: "Empty"}, {Idle: true, State: "Dead"}}
+		source.memberships = []kafka.Membership{{Idle: true, State: "Empty"}, {Idle: true, State: "Dead"}}
 	case "rebalance without members":
-		source.memberships = []kafkaport.Membership{{Idle: false}}
+		source.memberships = []kafka.Membership{{Idle: false}}
 	case "foreign member":
-		source.memberships = []kafkaport.Membership{{Foreign: true, Idle: false}}
+		source.memberships = []kafka.Membership{{Foreign: true, Idle: false}}
 	case "identity conflict while active":
 		source.fail = "saved"
-		source.failure = &kafkaport.Conflict{Err: errors.New("different query")}
-		source.memberships = []kafkaport.Membership{{Idle: false}}
+		source.failure = &kafka.Conflict{Err: errors.New("different query")}
+		source.memberships = []kafka.Membership{{Idle: false}}
 	}
 	// When observing without joining, consuming, positioning or committing.
 	r, err := s.Status(t.Context(), p, config.Defaults("home").Worker, core.NoopStopObserver{})

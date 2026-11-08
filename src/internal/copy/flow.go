@@ -3,8 +3,6 @@ package copy
 import (
 	"context"
 	"time"
-
-	"github.com/pagrus7/kaferry/src/internal/config"
 )
 
 // workCounts is the progress information needed to enforce flow limits.
@@ -39,7 +37,7 @@ func (f *flow) revoke(id int32) {
 	}
 }
 
-func (f *flow) admits(input Input, work workCounts, limits config.Worker) bool {
+func (f *flow) admits(input Input, work workCounts, limits Settings) bool {
 	n, b := work.Total()
 	if n == 0 {
 		return true // One oversized record is admitted alone.
@@ -49,12 +47,12 @@ func (f *flow) admits(input Input, work workCounts, limits config.Worker) bool {
 	return n < limits.RecordCap && pn < limits.PartitionRecordCap && size <= limits.ByteCap-b && size <= limits.PartitionByteCap-pb
 }
 
-func (f *flow) full(work workCounts, limits config.Worker) bool {
+func (f *flow) full(work workCounts, limits Settings) bool {
 	n, b := work.Total()
 	return n >= limits.RecordCap || b >= limits.ByteCap || f.deferred != nil
 }
 
-func (f *flow) commitDue(now time.Time, work workCounts, partitions map[int32]*partition, limits config.Worker) bool {
+func (f *flow) commitDue(now time.Time, work workCounts, partitions map[int32]*partition, limits Settings) bool {
 	if f.deferred != nil || now.Sub(f.lastCommit) >= time.Second {
 		return true
 	}
@@ -104,7 +102,7 @@ func (f *flow) deferEOF(cursor Cursor) bool {
 }
 
 // takeDeferred releases input and its EOF together, only when the input fits.
-func (f *flow) takeDeferred(work workCounts, limits config.Worker) *deferredInput {
+func (f *flow) takeDeferred(work workCounts, limits Settings) *deferredInput {
 	if f.deferred == nil || !f.admits(f.deferred.input, work, limits) {
 		return nil
 	}

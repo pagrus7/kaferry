@@ -41,7 +41,7 @@ When Kaferry reads Kafka, its client, franz-go v1.22.2, misreads record timestam
 
 ## Kafka requests
 
-[Factory.Open](../../src/internal/franz/factory.go) creates one control client per Kafka endpoint. Files create none. [Inspector](../../src/internal/franz/metadata.go) uses 10 s deadlines for startup and assignment, 2 s for input tip checks and 1 s for output partition checks.
+[Factory.Open](../../src/internal/kafka/franz/factory.go) creates one control client per Kafka endpoint. Files create none. [Inspector](../../src/internal/kafka/franz/metadata.go) uses 10 s deadlines for startup and assignment, 2 s for input tip checks and 1 s for output partition checks.
 
 Group descriptions retry unavailable, loading or changed coordinators within one 10 s deadline. Authorization failures, incompatible members and invalid responses still fail inspection.
 

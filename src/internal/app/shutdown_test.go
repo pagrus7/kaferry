@@ -140,7 +140,7 @@ func TestShutdownDeadlineCoversSummaryAfterStartupFailure(t *testing.T) {
 	if os.Getenv("KAFERRY_SHUTDOWN_HELPER") == "summary" {
 		budget := newShutdownBudget(context.Background(), 40*time.Millisecond, forceShutdown)
 		logger := slog.New(slog.NewTextHandler(blockingErrorOutput{}, nil))
-		runner := core.NewRunner(failedStartupSource{}, nil, nil, core.RealClock{}, logger, plan.Plan{}, config.Worker{}, nil, budget, nil)
+		runner := core.NewRunner(failedStartupSource{}, nil, nil, core.RealClock{}, logger, plan.Plan{}, core.Settings{}, nil, budget, nil)
 		_ = runner.Run(context.Background())
 		t.Fatal("blocked summary writer returned")
 	}

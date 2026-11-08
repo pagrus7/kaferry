@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/pagrus7/kaferry/src/internal/app"
-	"github.com/pagrus7/kaferry/src/internal/commitmeta"
+	"github.com/pagrus7/kaferry/src/internal/kafka/commitmeta"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"

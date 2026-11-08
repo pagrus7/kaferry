@@ -19,5 +19,15 @@ func newRunnerFactory(clock copy.Clock, logger *slog.Logger, progress copy.Progr
 }
 
 func (f *runnerFactory) New(source copy.Source, sink copy.Sink, store copy.ProgressStore, p plan.Plan, limits config.Worker, stop copy.StopObserver, observer copy.Observer) Execution {
-	return copy.NewRunner(source, sink, store, f.clock, f.logger, p, limits, f.progress.New(), stop, observer)
+	settings := copy.Settings{
+		PartitionRecordCap: limits.PartitionRecordCap,
+		PartitionByteCap:   limits.PartitionByteCap,
+		RecordCap:          limits.RecordCap,
+		ByteCap:            limits.ByteCap,
+		DeliveryTimeout:    limits.DeliveryTimeout.Duration,
+		IdleExit:           limits.IdleExit.Duration,
+		TipWait:            limits.TipWait.Duration,
+		ProgressInterval:   limits.ProgressInterval.Duration,
+	}
+	return copy.NewRunner(source, sink, store, f.clock, f.logger, p, settings, f.progress.New(), stop, observer)
 }

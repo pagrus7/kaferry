@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pagrus7/kaferry/src/internal/commitmeta"
 	"github.com/pagrus7/kaferry/src/internal/config"
 	core "github.com/pagrus7/kaferry/src/internal/copy"
-	adapter "github.com/pagrus7/kaferry/src/internal/franz"
-	"github.com/pagrus7/kaferry/src/internal/kafkaport"
+	"github.com/pagrus7/kaferry/src/internal/kafka"
+	"github.com/pagrus7/kaferry/src/internal/kafka/commitmeta"
+	adapter "github.com/pagrus7/kaferry/src/internal/kafka/franz"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 	"github.com/pagrus7/kaferry/src/internal/sql"
 	"github.com/stretchr/testify/require"
@@ -108,8 +108,8 @@ func probeSourceProgress(t *testing.T, name, group string) (*adapter.Source, cor
 	require.NoError(t, err)
 	clients := adapter.NewClients()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	lookups := kafkaport.NewOffsetLookupFactory()
-	factory := adapter.NewFactory(commitmeta.NewCodec(), clients, kafkaport.NewPositionerFactory(core.RealClock{}, logger, lookups), core.RealClock{}, logger, lookups)
+	lookups := kafka.NewOffsetLookupFactory()
+	factory := adapter.NewFactory(commitmeta.NewCodec(), clients, kafka.NewPositionerFactory(core.RealClock{}, logger, lookups), core.RealClock{}, logger, lookups)
 	connection, err := factory.Open(context.Background(), p.Source)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = connection.Close(context.Background()) })

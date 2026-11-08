@@ -4,17 +4,17 @@ import (
 	"context"
 	"time"
 
-	"github.com/pagrus7/kaferry/src/internal/archiveio"
+	"github.com/pagrus7/kaferry/src/internal/archive/io"
 	"github.com/pagrus7/kaferry/src/internal/config"
 	core "github.com/pagrus7/kaferry/src/internal/copy"
-	"github.com/pagrus7/kaferry/src/internal/kafkaport"
+	"github.com/pagrus7/kaferry/src/internal/kafka"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 )
 
 type KafkaFactory interface {
-	OpenInspection(context.Context, plan.Endpoint) (kafkaport.InspectionConnection, error)
+	OpenInspection(context.Context, plan.Endpoint) (kafka.InspectionConnection, error)
 }
-type Files interface {
+type Archives interface {
 	Source(plan.Plan, string, config.Worker) (archiveio.SourceInspection, error)
 	Destination(string) (archiveio.ArchiveInspection, error)
 }
@@ -23,12 +23,12 @@ type Explainer interface {
 }
 type Service struct {
 	kafka       KafkaFactory
-	files       Files
-	positioning kafkaport.PositionerFactory
+	archives    Archives
+	positioning kafka.PositionerFactory
 }
 
-func NewExplainer(kafka KafkaFactory, files Files, positioning kafkaport.PositionerFactory) *Service {
-	return &Service{kafka: kafka, files: files, positioning: positioning}
+func NewExplainer(kafkaFactory KafkaFactory, archives Archives, positioning kafka.PositionerFactory) *Service {
+	return &Service{kafka: kafkaFactory, archives: archives, positioning: positioning}
 }
 
 func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker, stop core.StopObserver) (report Report, result error) {
@@ -60,7 +60,7 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 	report.Destination = destinationInfo
 	report.Fingerprint, err = p.Fingerprint(sourceInfo.ClusterID, destinationInfo.ClusterID, destinationInfo.TopicID)
 	if err != nil {
-		return report, &kafkaport.Conflict{Err: err}
+		return report, &kafka.Conflict{Err: err}
 	}
 	stop.Stage("inspecting saved progress")
 	ids, err := s.source(ctx, p, limits, source, &report)
@@ -69,22 +69,22 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 	}
 	if p.Destination.PreservesPartitions() {
 		if err = plan.CheckPartitions(ids, report.Destination.PartitionCount); err != nil {
-			return report, &kafkaport.Conflict{Err: err}
+			return report, &kafka.Conflict{Err: err}
 		}
 	}
 	stop.Stage("inspecting destination archive")
 	if p.Destination.Kind == "ARCHIVE" {
-		info, err := s.files.Destination(p.Destination.Name)
+		info, err := s.archives.Destination(p.Destination.Name)
 		if err != nil {
 			return report, err
 		}
-		report.Destination.File = fileSummary(info)
+		report.Destination.File = archiveSummary(info)
 	}
 	addWarnings(&report)
 	return report, ctx.Err()
 }
 
-func (s *Service) open(ctx context.Context, endpoint plan.Endpoint, configuration bool, filter *plan.PartitionFilter, stop core.StopObserver) (kafkaport.InspectionConnection, Endpoint, error) {
+func (s *Service) open(ctx context.Context, endpoint plan.Endpoint, configuration bool, filter *plan.PartitionFilter, stop core.StopObserver) (kafka.InspectionConnection, Endpoint, error) {
 	info := Endpoint{Kind: endpoint.Kind, Name: endpoint.Name, Format: endpoint.Format, Connection: endpoint.Alias}
 	if endpoint.Kind != "TOPIC" {
 		return nil, info, nil
@@ -96,7 +96,7 @@ func (s *Service) open(ctx context.Context, endpoint plan.Endpoint, configuratio
 	topic, err := connection.Describe(ctx, configuration)
 	if err == nil && filter != nil {
 		if _, selectionErr := filter.Select(topic.Partitions); selectionErr != nil {
-			err = &kafkaport.Conflict{Err: selectionErr}
+			err = &kafka.Conflict{Err: selectionErr}
 		}
 	}
 	if err != nil {
@@ -113,7 +113,7 @@ func (s *Service) open(ctx context.Context, endpoint plan.Endpoint, configuratio
 	return connection, info, nil
 }
 
-func closeConnection(connection kafkaport.InspectionConnection, stop core.StopObserver, result *error) {
+func closeConnection(connection kafka.InspectionConnection, stop core.StopObserver, result *error) {
 	if connection == nil {
 		return
 	}
@@ -124,8 +124,8 @@ func closeConnection(connection kafkaport.InspectionConnection, stop core.StopOb
 	*result = core.CleanupResult(*result, "close inspection connection", connection.Close(ctx))
 }
 
-func fileSummary(info archiveio.ArchiveInspection) *FileSummary {
-	return &FileSummary{Exists: info.Exists, SizeBytes: info.Size, FileCount: info.FileCount}
+func archiveSummary(info archiveio.ArchiveInspection) *ArchiveSummary {
+	return &ArchiveSummary{Exists: info.Exists, SizeBytes: info.Size, FileCount: info.FileCount}
 }
 
 func addWarnings(r *Report) {

@@ -62,7 +62,7 @@ func TestStatusTextIsBoundedAndJSONRetainsAllPartitions(t *testing.T) {
 
 func TestArchiveStatusTextReportsSavedSnapshot(t *testing.T) {
 	// Given an Avro group's selected files, which may differ from current directory contents.
-	report := inspect.StatusReport{Source: inspect.Endpoint{Kind: "ARCHIVE", File: &inspect.FileSummary{FileCount: 3, SizeBytes: 150}}}
+	report := inspect.StatusReport{Source: inspect.Endpoint{Kind: "ARCHIVE", File: &inspect.ArchiveSummary{FileCount: 3, SizeBytes: 150}}}
 	var output bytes.Buffer
 	// When rendering status, then bytes describe that snapshot rather than the current directory.
 	require.NoError(t, renderStatus(&output, report, false))

@@ -108,8 +108,12 @@ jobs:
           git archive "$BASE_SHA" | tar -x -C .cache/previous-version
           previous_source=.
           if [ -d .cache/previous-version/src/cmd/kaferry ]; then previous_source=src; fi
+          previous_codec=".cache/previous-version/$previous_source/internal/kafka/commitmeta/codec.go"
+          if [ ! -f "$previous_codec" ]; then
+            previous_codec=".cache/previous-version/$previous_source/internal/commitmeta/codec.go"
+          fi
           progress_format_status=0
-          grep -Fq 'const prefix = "kaferry:4;"' ".cache/previous-version/$previous_source/internal/commitmeta/codec.go" || progress_format_status=$?
+          grep -Fq 'const prefix = "kaferry:4;"' "$previous_codec" || progress_format_status=$?
           if [ "$progress_format_status" -eq 0 ]; then
             echo 'Skipping cross-version resume: kaferry:4 progress is unsupported.'
             exit 0

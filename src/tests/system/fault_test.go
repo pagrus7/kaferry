@@ -10,7 +10,7 @@ import (
 	"time"
 
 	core "github.com/pagrus7/kaferry/src/internal/copy"
-	adapter "github.com/pagrus7/kaferry/src/internal/franz"
+	adapter "github.com/pagrus7/kaferry/src/internal/kafka/franz"
 	"github.com/stretchr/testify/require"
 )
 

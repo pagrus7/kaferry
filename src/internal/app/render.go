@@ -82,7 +82,7 @@ func renderProgress(output io.Writer, report inspect.Report) {
 		fmt.Fprintln(output, "  ONE_OFF: each run starts fresh. Resume an unfinished run with its logged generated group name.")
 	}
 	if file := report.Source.File; file != nil {
-		renderFileProgress(output, file)
+		renderArchiveProgress(output, file)
 	} else {
 		renderTopicProgress(output, report)
 	}
@@ -92,7 +92,7 @@ func renderProgress(output io.Writer, report inspect.Report) {
 	}
 }
 
-func renderFileProgress(output io.Writer, file *inspect.FileSummary) {
+func renderArchiveProgress(output io.Writer, file *inspect.ArchiveSummary) {
 
 	if *file.CheckpointExists {
 		fmt.Fprintln(output, "  Resume: saved file checkpoint.")
