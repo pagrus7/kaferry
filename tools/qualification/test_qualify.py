@@ -572,6 +572,7 @@ class MatrixTest(unittest.TestCase):
                 receipt = json.loads((args.output / 'manifest.json').read_text())
                 self.assertEqual('interrupted' if interruption else 'failed', receipt['status'])
                 if suite == 'endurance':
+                    self.assertNotIn('proxy_path_check', receipt, 'endurance must not run the cut/heal proxy proof')
                     self.assertEqual('replicated', receipt['workload']['topology'])
                     self.assertEqual((3, 2), (receipt['workload']['replication_factor'], receipt['workload']['min_insync_replicas']))
                 self.assertNotIn('dedicated-storage', json.dumps(receipt), 'keep private resource names out of receipts')

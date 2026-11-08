@@ -112,6 +112,7 @@ func TestReplicatedEnduranceStallsAndRestoresEveryDestinationBroker(t *testing.T
 		stalls.next = time.Now()
 		stalls.step(t, stalls.next, true)
 		require.Equal(t, 2, stalls.count)
+		require.Nil(t, states[4].NotBefore, "a new stall must not report the previous hold deadline")
 		// Registered cleanup must restore all three after an early return.
 	})
 	require.Equal(t, []string{"pause destination-1", "pause destination-2", "pause destination-3",

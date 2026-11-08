@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from tools.qualification import network
 from tools.qualification.qualify import (endurance_allowance, main, replicated_admission,
                                          replicated_storage, resolve_run)
 
@@ -41,6 +42,12 @@ class ReplicatedEnduranceTest(unittest.TestCase):
             self.assertEqual(['TestStreamingSoakFidelityCommitLagMemoryAndShutdown'], spec.expected)
             self.assertEqual('true', spec.env['KAFERRY_REPLICATED_VOLUME_EXTERNAL'])
             self.assertEqual('external-volume', receipt['fixture_storage']['mode'])
+            self.assertIn(network.IMAGE, receipt['requested_images'])
+            self.assertEqual(network.API, spec.env['KAFERRY_TOXIPROXY_API'])
+            for side, key in [('source', 'KAFKA_TEST_BROKERS'), ('destination', 'KAFKA_TEST_DEST_BROKERS')]:
+                self.assertEqual(network.endpoints(side), spec.env[key])
+                for worker in range(1, 4):
+                    self.assertEqual(network.endpoints(side, worker), spec.env[f'KAFERRY_WORKER{worker}_{side.upper()}_BROKERS'])
             self.assertNotIn('private-lab-volume', json.dumps(receipt))
 
     def test_rejects_other_suite_topologies_old_images_and_parallel_replicated_selection(self):

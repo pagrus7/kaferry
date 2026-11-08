@@ -427,7 +427,7 @@ def resolve_run(args, receipt, fixture):
     env.update(KAFERRY_TEST_BINARY=args.binary, KAFERRY_EXPECT_BINARY_SHA256=receipt['binary_sha256'],
                KAFERRY_SOURCE_IMAGE=IMAGES[args.source], KAFERRY_DESTINATION_IMAGE=IMAGES[args.destination])
     receipt['requested_images'] = [env['KAFERRY_SOURCE_IMAGE'], env['KAFERRY_DESTINATION_IMAGE']] if fixtures else []
-    if args.suite == 'replicated':
+    if replicated_fixture(args):
         receipt['requested_images'].append(network.IMAGE)
     if args.config and args.suite != 'cloud':
         raise ValueError('--config is only accepted by the external cloud suite')

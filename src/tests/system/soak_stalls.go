@@ -72,7 +72,7 @@ func (s *destinationStalls) state(operation string, observed time.Time) {
 	if s.record != nil {
 		paused := s.paused()
 		var until *time.Time
-		if !s.until.IsZero() {
+		if operation != "before pause" && !s.until.IsZero() {
 			value := s.until
 			until = &value
 		}

@@ -366,9 +366,11 @@ make build
 python3 -m tools.qualification.qualify run endurance --output build-results/endurance-24h
 # Optional short rehearsal; this does not qualify 24 hours of uptime.
 python3 -m tools.qualification.qualify run endurance --duration 1m --output build-results/endurance-rehearsal
-# Change topology only: newest catalog image, RF=3 and minimum ISR=2.
+# Replicated topology: newest catalog image, RF=3 and minimum ISR=2.
 python3 -m tools.qualification.qualify run endurance --topology replicated --output build-results/replicated-endurance-24h
 ```
+
+For a topology comparison, hold broker versions constant as well: run the single-broker baseline with `--source 4.4.0 --destination 4.4.0`. The replicated fixture accepts only the newest catalog entry; the default single-broker run uses the oldest.
 
 The dedicated `endurance` suite uses the following fixed application workload. Full-duration runs stay out of PR, nightly and weekly matrices; the replicated fixture workflow runs a one-minute variant rehearsal when its relevant paths change. Short `soak` and `capture` settings remain available. Use a fresh output directory for each run. The runner preserves evidence on failure and removes its disposable brokers in cleanup. Interrupt with Ctrl-C; an interrupted run cannot qualify. A fresh run starts fresh topics and progress rather than resuming an interrupted qualification.
 
@@ -392,6 +394,8 @@ The rate checks make producer/verifier backpressure visible. The fixture uses no
 Endurance disables topic age/size retention until reconciliation. Default preflight reserves three times the record count times 5,376 bytes, plus 4 GiB on **each** broker data filesystem: two full maximum-size copies with 50% overhead, with no compression credit and allowance for a shared Docker disk. The replicated variant reserves nine times the same record bytes, plus 4 GiB on its shared broker volume, before starting brokers. The 24-hour workload schedules 17,856,000 records and requires about 272 GiB for the default topology or 809 GiB for RF=3. Evidence needs at least 1 GiB or 8 KiB per publishing second, whichever is greater. These are planning allowances, not guarantees against other disk users; monitor host/Docker capacity during the run. The runner does not prune active records. Record-ID overflow is rejected before intake.
 
 This is application endurance under the recorded topology and load. The replicated variant requires all three replicas in sync and minimum ISR=2 before copying, with the same workload, process and gates as the default. It is neither a saturation benchmark nor evidence of resilience to broker failures or ISR loss. Use `load` for bounded throughput comparisons and `auth` for replicated leader-failure scenarios; neither substitutes for long continuous uptime. A passing rehearsal, an underloaded run or several short runs cannot support a multi-day uptime claim. Claims exclude multiple Kaferry processes, network partitions, ownership changes, authentication overhead and arbitrary payload/key distributions. `parallel` retains its default topology; the replicated variant runs separately. Match a real deployment with separately measured workloads before generalizing these results.
+
+Replicated endurance configures every proxy route enabled and retains only the existing one-second broker stalls. The separate smoke suite's cut/heal proof runs only under `run replicated`.
 
 Archive capture and the smaller Kafka soak remain available:
 

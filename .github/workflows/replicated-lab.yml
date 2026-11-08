@@ -66,6 +66,8 @@ jobs:
           PY
       - name: Install the independent checker and build candidate
         run: make qualification-setup
+      - name: Check endurance gates and diagnostic retention without brokers
+        run: go test -race -tags=integration,load -run '^(TestLoadReport|TestReplicatedEndurance|TestOwnedBroker|TestStallTrace|TestEndurance|TestSoak)' ./src/tests/system
       - name: Copy and independently reconcile the replicated fixture
         run: python3 -m tools.qualification.qualify run replicated --output build-results/replicated
       - name: Verify fixture teardown
