@@ -184,9 +184,10 @@ func TestExplainUsesOnlyReadOnlyKafkaRequests(t *testing.T) {
 			})
 			directory := t.TempDir()
 			destination := "TOPIC 'output'"
-			if output == "ARCHIVE" {
+			switch output {
+			case "ARCHIVE":
 				destination = fmt.Sprintf("ARCHIVE '%s'", filepath.Join(directory, "archive.avro"))
-			} else if output == "SELF-COPY" {
+			case "SELF-COPY":
 				destination = "TOPIC 'input'"
 			}
 			query := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='secret_SENTINEL_415') INSERT INTO %s SELECT * FROM TOPIC 'input' WITH (GROUP='preview', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS (ON_ERROR=SKIP)", strings.Join(cluster.ListenAddrs(), ","), destination, stamp.Format(time.RFC3339Nano), stamp.Add(time.Minute).Format(time.RFC3339Nano))

@@ -26,7 +26,7 @@ func runComponentCopy(ctx context.Context, p plan.Plan, limits config.Worker) (e
 	if err != nil {
 		return err
 	}
-	defer sourceConnection.Close(context.Background())
+	defer func() { err = errors.Join(err, sourceConnection.Close(context.Background())) }()
 	if _, err = sourceConnection.Describe(ctx, false); err != nil {
 		return err
 	}
@@ -34,7 +34,7 @@ func runComponentCopy(ctx context.Context, p plan.Plan, limits config.Worker) (e
 	if err != nil {
 		return err
 	}
-	defer destination.Close(context.Background())
+	defer func() { err = errors.Join(err, destination.Close(context.Background())) }()
 	if _, err = destination.Describe(ctx, false); err != nil {
 		return err
 	}

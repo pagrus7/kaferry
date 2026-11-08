@@ -102,9 +102,9 @@ func (r *Reader) Next() (entry Entry, err error) {
 		r.pending = -1
 		p := r.files[i]
 		if !p.ended() {
-			record, _, err := readAt(r.blocks, p)
-			if err != nil {
-				return entry, err
+			record, _, checkErr := readAt(r.blocks, p)
+			if checkErr != nil {
+				return entry, checkErr
 			}
 			r.push(i, record.Offset)
 		}

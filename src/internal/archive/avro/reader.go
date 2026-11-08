@@ -115,12 +115,12 @@ func (r *Reader) Block(position int64) (*Block, error) {
 		return nil, errors.New("invalid or incomplete Avro block length")
 	}
 	compressed := make([]byte, int(size))
-	if _, err := io.ReadFull(input, compressed); err != nil {
-		return nil, fmt.Errorf("archive block data: %w", incomplete(err))
+	if _, checkErr := io.ReadFull(input, compressed); checkErr != nil {
+		return nil, fmt.Errorf("archive block data: %w", incomplete(checkErr))
 	}
 	var sync [16]byte
-	if _, err := io.ReadFull(input, sync[:]); err != nil {
-		return nil, fmt.Errorf("archive block sync: %w", incomplete(err))
+	if _, checkErr := io.ReadFull(input, sync[:]); checkErr != nil {
+		return nil, fmt.Errorf("archive block sync: %w", incomplete(checkErr))
 	}
 	if input.failure != nil {
 		return nil, fmt.Errorf("archive block: %w", input.failure)

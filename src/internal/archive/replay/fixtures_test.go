@@ -109,7 +109,7 @@ func session(t testing.TB, store Checkpoints, inputs Snapshot, blocks Blocks, li
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	return s
 }
-func drain(t testing.TB, s *Session, confirm bool) []avro.Record {
+func drain(t testing.TB, s *Session) []avro.Record {
 	t.Helper()
 	var result []avro.Record
 	for {
@@ -119,9 +119,7 @@ func drain(t testing.TB, s *Session, confirm bool) []avro.Record {
 		}
 		require.NoError(t, err)
 		result = append(result, item.Record)
-		if confirm {
-			require.NoError(t, s.Checkpoint(item.Next))
-		}
+		require.NoError(t, s.Checkpoint(item.Next))
 	}
 	return result
 }
@@ -150,21 +148,21 @@ func writeFile(t testing.TB, root string, id int, values []avro.Record, blockRec
 	require.NoError(t, err)
 	return result
 }
-func diskSession(t testing.TB, root, checkpoints string, q Query, limits Limits, pending int) (*Session, *Pool) {
+func diskSession(t testing.TB, root, checkpoints string, q Query, limits Limits) *Session {
 	t.Helper()
 	catalog := NewCatalog(root, codec(t), NativeFiles{})
 	pool, err := NewPool(catalog, limits)
 	require.NoError(t, err)
 	journal, err := NewJournal(checkpoints, q.Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 	require.NoError(t, err)
-	s, err := NewSession(q, clock{}, journal, catalog, pool, pending)
+	s, err := NewSession(q, clock{}, journal, catalog, pool, 10)
 	if err != nil {
 		require.NoError(t, pool.Close())
 		require.NoError(t, journal.Close())
 	}
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
-	return s, pool
+	return s
 }
 
 func partialState() State {

@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"testing"
@@ -39,7 +40,7 @@ func BenchmarkReplayOverlap(b *testing.B) {
 				count := 0
 				for {
 					_, err := r.Next()
-					if err == io.EOF {
+					if errors.Is(err, io.EOF) {
 						break
 					}
 					if err != nil {

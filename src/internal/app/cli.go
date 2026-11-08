@@ -23,7 +23,7 @@ func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, st
 	if len(args) == 1 && args[0] == "--version" {
 		budget.Stage("printing version")
 		if _, err := fmt.Fprintln(stdout, versionString()); err != nil {
-			fmt.Fprintln(stderr, err)
+			_, _ = fmt.Fprintln(stderr, err)
 			return 1
 		}
 		return 0
@@ -39,37 +39,17 @@ func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, st
 	budget.Stage("reading SQL input")
 	statement, err := readStatement(options, stdin)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return 2
 	}
-	code := 0
 	var command Command
 	budget.Stage("composing components")
 	graph := fx.New(fx.NopLogger, RuntimeModules, fx.Populate(&command))
-	if err := graph.Err(); err != nil {
-		fmt.Fprintln(stderr, "component composition failed")
+	if checkErr := graph.Err(); checkErr != nil {
+		_, _ = fmt.Fprintln(stderr, "component composition failed")
 		return 2
 	}
-	if options.command == "status" {
-		var report inspect.StatusReport
-		report, err = command.Status(ctx, statement, options.configPath, budget)
-		if err == nil {
-			budget.Begin()
-			budget.Stage("printing status")
-			err = renderStatus(stdout, report, options.json)
-			code = report.ExitCode()
-		}
-	} else if options.command == "explain" {
-		var report inspect.Report
-		report, err = command.Explain(ctx, statement, options.configPath, budget)
-		if err == nil {
-			budget.Begin()
-			budget.Stage("printing explanation")
-			err = renderExplanation(stdout, report, options.json)
-		}
-	} else {
-		err = command.Run(ctx, statement, options.configPath, budget)
-	}
+	code, err := executeCommand(ctx, command, options, statement, stdout, budget)
 	if err != nil {
 		budget.Begin()
 		budget.Stage("printing error")
@@ -83,16 +63,44 @@ func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, st
 	return code
 }
 
+func executeCommand(ctx context.Context, command Command, options commandOptions, statement string, stdout io.Writer, budget Shutdown) (int, error) {
+	code := 0
+	var err error
+	switch options.command {
+	case "status":
+		var report inspect.StatusReport
+		report, err = command.Status(ctx, statement, options.configPath, budget)
+		if err == nil {
+			budget.Begin()
+			budget.Stage("printing status")
+			err = renderStatus(stdout, report, options.json)
+			code = report.ExitCode()
+		}
+	case "explain":
+		var report inspect.Report
+		report, err = command.Explain(ctx, statement, options.configPath, budget)
+		if err == nil {
+			budget.Begin()
+			budget.Stage("printing explanation")
+			err = renderExplanation(stdout, report, options.json)
+		}
+	default:
+		err = command.Run(ctx, statement, options.configPath, budget)
+	}
+	return code, err
+}
+
+// Error diagnostics are best effort when the error stream itself fails.
 func printCommandError(output io.Writer, source string, err error) {
 	var diagnostic *sql.Diagnostic
 	if source != "" && errors.As(err, &diagnostic) && diagnostic.Position.Line != 0 {
 		if source == "-" {
 			source = "<stdin>"
 		}
-		fmt.Fprintf(output, "%q: %v\n", source, err)
+		_, _ = fmt.Fprintf(output, "%q: %v\n", source, err)
 		return
 	}
-	fmt.Fprintln(output, err)
+	_, _ = fmt.Fprintln(output, err)
 }
 
 type commandOptions struct {
@@ -107,7 +115,7 @@ func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 	var options commandOptions
 	if len(args) == 0 || (args[0] != "run" && args[0] != "explain" && args[0] != "status") {
 		err := fmt.Errorf("usage: kaferry --version | run|explain|status (--sql statement | --file path | --file -) [--config path]; explain and status accept --json")
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return options, err
 	}
 	options.command = args[0]
@@ -134,7 +142,7 @@ func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 	})
 	if inputs != 1 || flags.NArg() != 0 {
 		err := fmt.Errorf("exactly one statement input is required")
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return options, err
 	}
 	return options, nil
@@ -152,7 +160,8 @@ func readStatement(options commandOptions, stdin io.Reader) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			defer opened.Close()
+			// Reading cannot leave buffered writes to flush.
+			defer func() { _ = opened.Close() }()
 			reader = opened
 		}
 		data, err := io.ReadAll(io.LimitReader(reader, (1<<20)+1))

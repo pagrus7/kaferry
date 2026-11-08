@@ -97,8 +97,8 @@ func TestInspectionRejectsRelativeDisorderOverflowWithoutWriting(t *testing.T) {
 			require.NoError(t, err)
 			if saved {
 				state := replay.State{Version: 1, Group: p.Group, Fingerprint: fp, Window: plan.Window{Upper: new(int64(math.MaxInt64 - 807))}, Complete: true, Files: []replay.Progress{}}
-				encoded, err := checkpoint.Encode(state, 64<<20)
-				require.NoError(t, err)
+				encoded, checkErr := checkpoint.Encode(state, 64<<20)
+				require.NoError(t, checkErr)
 				require.NoError(t, os.WriteFile(checkpoint.Path(directory, p.Group), encoded, 0600))
 			}
 			before, err := os.ReadDir(directory)
@@ -145,11 +145,11 @@ func TestInspectionPreservesIncompatibleReplayProgressAfterSourceValidation(t *t
 			require.NoError(t, err)
 			require.NoError(t, source.Start(&lifecycleMock{}, nil))
 			for range count {
-				event, err := source.Poll(0)
-				require.NoError(t, err)
+				event, checkErr := source.Poll(0)
+				require.NoError(t, checkErr)
 				require.NotNil(t, event.Input)
-				_, err = source.Save(t.Context(), []core.Cursor{{Position: event.Input.Next}})
-				require.NoError(t, err)
+				_, checkErr = source.Save(t.Context(), []core.Cursor{{Position: event.Input.Next}})
+				require.NoError(t, checkErr)
 			}
 			require.NoError(t, source.Close())
 			path := checkpoint.Path(directory, p.Group)

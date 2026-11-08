@@ -40,12 +40,12 @@ func recoverFile(root string, boundary Boundary, codec *avro.Codec, files Filesy
 	f, err := files.OpenFile(completed, os.O_RDONLY, 0)
 	if err == nil {
 		defer func() { result = errors.Join(result, f.Close()) }()
-		if err := validatePrefix(f, boundary, true, codec); err != nil {
-			return err
+		if checkErr := validatePrefix(f, boundary, true, codec); checkErr != nil {
+			return checkErr
 		}
-		if _, err := files.Lstat(dataPath(root, boundary.Identity, true)); !errors.Is(err, os.ErrNotExist) {
-			if err != nil {
-				return err
+		if _, checkErr := files.Lstat(dataPath(root, boundary.Identity, true)); !errors.Is(checkErr, os.ErrNotExist) {
+			if checkErr != nil {
+				return checkErr
 			}
 			return errors.New("both private and completed archive files exist")
 		}

@@ -74,7 +74,7 @@ func tlsFixture(t *testing.T, certificate tls.Certificate, roots *x509.CertPool)
 			workers.Add(1)
 			go func(connection net.Conn) {
 				defer workers.Done()
-				defer connection.Close()
+				defer func() { require.NoError(t, connection.Close()) }()
 				_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
 				if connection.(*tls.Conn).Handshake() == nil {
 					_, _ = connection.Write([]byte{1})
@@ -82,7 +82,7 @@ func tlsFixture(t *testing.T, certificate tls.Certificate, roots *x509.CertPool)
 			}(connection)
 		}
 	}()
-	t.Cleanup(func() { listener.Close(); <-done; workers.Wait() })
+	t.Cleanup(func() { require.NoError(t, listener.Close()); <-done; workers.Wait() })
 	return listener.Addr().String()
 }
 func TestTLSHostnameOverrideKeepsTrustAndClientCertificateChecks(t *testing.T) {
@@ -118,14 +118,14 @@ func TestTLSHostnameOverrideKeepsTrustAndClientCertificateChecks(t *testing.T) {
 		{"missing client certificate rejected", "localhost", "none", false, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			settings := settings{ca: caPath, certificate: certPath, key: keyPath, hostname: tc.algorithm}
+			connectionSettings := settings{ca: caPath, certificate: certPath, key: keyPath, hostname: tc.algorithm}
 			if tc.wrongCA {
-				settings.ca = wrongPath
+				connectionSettings.ca = wrongPath
 			}
 			if tc.noClient {
-				settings.certificate, settings.key = "", ""
+				connectionSettings.certificate, connectionSettings.key = "", ""
 			}
-			cfg, err := settings.tlsConfig()
+			cfg, err := connectionSettings.tlsConfig()
 			require.NoError(t, err)
 			cfg.ServerName = tc.host
 			// When performing a real handshake and authenticated application read.
@@ -133,7 +133,7 @@ func TestTLSHostnameOverrideKeepsTrustAndClientCertificateChecks(t *testing.T) {
 			defer cancel()
 			connection, err := (&tls.Dialer{Config: cfg}).DialContext(ctx, "tcp", address)
 			if err == nil {
-				defer connection.Close()
+				defer func() { require.NoError(t, connection.Close()) }()
 				_ = connection.SetReadDeadline(time.Now().Add(time.Second))
 				var b [1]byte
 				_, err = connection.Read(b[:])

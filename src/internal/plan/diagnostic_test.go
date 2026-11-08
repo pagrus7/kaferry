@@ -149,10 +149,10 @@ func TestConnectionErrorsDistinguishUndefinedAndMissingSettings(t *testing.T) {
 		profiles Profiles
 		message  string
 	}{{Profiles{"empty": {}}, "connection requires bootstrap.servers"}, {Profiles{"empty": {"bootstrap.servers": ""}}, "bootstrap.servers is empty"}, {nil, "connection alias is not defined"}} {
-		_, err := NewPlanner(environment{}).Build(statement, tc.profiles)
+		_, checkErr := NewPlanner(environment{}).Build(statement, tc.profiles)
 		// Then the corrective action matches the actual missing configuration.
-		require.Error(t, err)
-		require.Contains(t, err.Error(), tc.message)
+		require.Error(t, checkErr)
+		require.Contains(t, checkErr.Error(), tc.message)
 	}
 	// Given a caller-created AST without source locations, then omit false coordinates.
 	statement.Source.Position = sql.Position{}

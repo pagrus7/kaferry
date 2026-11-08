@@ -52,7 +52,7 @@ func renderJSON(output io.Writer, report any) error {
 	return err
 }
 
-func renderEndpoint(output io.Writer, label string, endpoint inspect.Endpoint) {
+func renderEndpoint(output *bytes.Buffer, label string, endpoint inspect.Endpoint) {
 	fmt.Fprintf(output, "  %s: %s %q", label, endpoint.Kind, endpoint.Name)
 	if endpoint.Kind == "TOPIC" {
 		fmt.Fprintf(output, " (connection %q; %d partitions)\n", endpoint.Connection, endpoint.PartitionCount)
@@ -76,46 +76,56 @@ func renderEndpoint(output io.Writer, label string, endpoint inspect.Endpoint) {
 	}
 }
 
-func renderProgress(output io.Writer, report inspect.Report) {
+func renderProgress(output *bytes.Buffer, report inspect.Report) {
 	fmt.Fprintf(output, "\nProgress\n  Group: %q\n", report.Group)
 	if report.OneOff {
 		fmt.Fprintln(output, "  ONE_OFF: each run starts fresh. Resume an unfinished run with its logged generated group name.")
 	}
 	if file := report.Source.File; file != nil {
-		if *file.CheckpointExists {
-			fmt.Fprintln(output, "  Resume: saved file checkpoint.")
-		} else {
-			fmt.Fprintln(output, "  Start: current completed files; no saved checkpoint.")
-		}
-		fmt.Fprintf(output, "  Input position: %d records; snapshot: %d completed files, %d encoded bytes.\n", *file.PositionRecords, file.FileCount, file.SizeBytes)
-		if file.Checkpoint != "" {
-			fmt.Fprintf(output, "  Checkpoint: %q\n", file.Checkpoint)
-		}
+		renderFileProgress(output, file)
 	} else {
-		saved := 0
-		for _, partition := range report.Partitions {
-			if partition.Saved {
-				saved++
-			}
-		}
-		fmt.Fprintf(output, "  Resume: %d of %d partitions have saved offsets.\n", saved, len(report.Partitions))
-		for _, partition := range report.Partitions[:min(8, len(report.Partitions))] {
-			if report.Offsets != nil || len(report.PartitionOffsets) > 0 {
-				fmt.Fprintf(output, "  Partition %d: start %d", partition.ID, partition.Start)
-				if partition.End != nil {
-					fmt.Fprintf(output, "; exclusive end %d (%s)", *partition.End, partition.EndOrigin)
-				}
-				fmt.Fprintln(output)
-			} else if partition.End != nil {
-				fmt.Fprintf(output, "  Partition %d: saved captured end %d.\n", partition.ID, *partition.End)
-			}
-		}
-		if fresh := len(report.Partitions) - saved; fresh > 0 {
-			fmt.Fprintf(output, "  Without saved offsets: %d partitions; %s\n", fresh, startRule(report.StartRule))
-		}
+		renderTopicProgress(output, report)
 	}
+
 	if report.Destination.File != nil {
 		fmt.Fprintln(output, "  Output: Kaferry archive files; worker completion publishes remaining files.")
+	}
+}
+
+func renderFileProgress(output *bytes.Buffer, file *inspect.FileSummary) {
+
+	if *file.CheckpointExists {
+		fmt.Fprintln(output, "  Resume: saved file checkpoint.")
+	} else {
+		fmt.Fprintln(output, "  Start: current completed files; no saved checkpoint.")
+	}
+	fmt.Fprintf(output, "  Input position: %d records; snapshot: %d completed files, %d encoded bytes.\n", *file.PositionRecords, file.FileCount, file.SizeBytes)
+	if file.Checkpoint != "" {
+		fmt.Fprintf(output, "  Checkpoint: %q\n", file.Checkpoint)
+	}
+}
+func renderTopicProgress(output *bytes.Buffer, report inspect.Report) {
+
+	saved := 0
+	for _, partition := range report.Partitions {
+		if partition.Saved {
+			saved++
+		}
+	}
+	fmt.Fprintf(output, "  Resume: %d of %d partitions have saved offsets.\n", saved, len(report.Partitions))
+	for _, partition := range report.Partitions[:min(8, len(report.Partitions))] {
+		if report.Offsets != nil || len(report.PartitionOffsets) > 0 {
+			fmt.Fprintf(output, "  Partition %d: start %d", partition.ID, partition.Start)
+			if partition.End != nil {
+				fmt.Fprintf(output, "; exclusive end %d (%s)", *partition.End, partition.EndOrigin)
+			}
+			fmt.Fprintln(output)
+		} else if partition.End != nil {
+			fmt.Fprintf(output, "  Partition %d: saved captured end %d.\n", partition.ID, *partition.End)
+		}
+	}
+	if fresh := len(report.Partitions) - saved; fresh > 0 {
+		fmt.Fprintf(output, "  Without saved offsets: %d partitions; %s\n", fresh, startRule(report.StartRule))
 	}
 }
 
@@ -132,23 +142,12 @@ func startRule(rule string) string {
 	}
 }
 
-func renderBehavior(output io.Writer, report inspect.Report) {
+func renderBehavior(output *bytes.Buffer, report inspect.Report) {
 	fmt.Fprintln(output, "\nBehavior")
 	if report.WorkerStopAfterRecords > 0 {
 		fmt.Fprintf(output, "  Worker stop: after %d records accepted for writing. Resuming gets a fresh allowance.\n", report.WorkerStopAfterRecords)
 	}
-	if report.Destination.Kind == "TOPIC" {
-		if report.Destination.Partitioning == "KEY" {
-			fmt.Fprintln(output, "  Routing: original key bytes; destination key partitioner.")
-		} else {
-			fmt.Fprintln(output, "  Routing: preserve original partition numbers; missing partitions fail.")
-		}
-		if report.Destination.TimestampType != "" {
-			fmt.Fprintf(output, "  Destination timestamp policy: %q.\n", report.Destination.TimestampType)
-		} else {
-			fmt.Fprintln(output, "  Destination timestamp policy: unknown.")
-		}
-	}
+	renderDestinationBehavior(output, report)
 	var skips []string
 	for _, policy := range []struct {
 		value, label string
@@ -167,5 +166,21 @@ func renderBehavior(output io.Writer, report inspect.Report) {
 	} else {
 		fmt.Fprintf(output, "  Skip before writing: %s (records dropped).\n", strings.Join(skips, ", "))
 		fmt.Fprintln(output, "  Delivery and unclassified errors: stop.")
+	}
+}
+
+func renderDestinationBehavior(output *bytes.Buffer, report inspect.Report) {
+	if report.Destination.Kind != "TOPIC" {
+		return
+	}
+	if report.Destination.Partitioning == "KEY" {
+		fmt.Fprintln(output, "  Routing: original key bytes; destination key partitioner.")
+	} else {
+		fmt.Fprintln(output, "  Routing: preserve original partition numbers; missing partitions fail.")
+	}
+	if report.Destination.TimestampType != "" {
+		fmt.Fprintf(output, "  Destination timestamp policy: %q.\n", report.Destination.TimestampType)
+	} else {
+		fmt.Fprintln(output, "  Destination timestamp policy: unknown.")
 	}
 }

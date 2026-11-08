@@ -27,14 +27,14 @@ func TestGroupLockSurvivesCheckpointReplacementAndReleasesOnClose(t *testing.T) 
 	directory := t.TempDir()
 	j, err := NewJournal(directory, query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 	require.NoError(t, err)
-	defer j.Close()
+	defer func() { require.NoError(t, j.Close()) }()
 	before, err := os.Stat(j.path + ".lock")
 	require.NoError(t, err)
 	// When repeated atomic saves replace the checkpoint, then the same stable lock excludes another owner.
 	for range 2 {
 		require.NoError(t, j.Save(emptyState()))
-		_, err := NewJournal(directory, query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
-		require.ErrorIs(t, err, ErrGroupBusy)
+		_, checkErr := NewJournal(directory, query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
+		require.ErrorIs(t, checkErr, ErrGroupBusy)
 	}
 	after, err := os.Stat(j.path + ".lock")
 	require.NoError(t, err)
@@ -44,7 +44,7 @@ func TestGroupLockSurvivesCheckpointReplacementAndReleasesOnClose(t *testing.T) 
 	// Then a new owner can acquire and load the pinned state.
 	next, err := NewJournal(directory, query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 	require.NoError(t, err)
-	defer next.Close()
+	defer func() { require.NoError(t, next.Close()) }()
 	got, err := next.Load()
 	require.NoError(t, err)
 	require.Equal(t, emptyState(), *got)
@@ -61,7 +61,7 @@ func TestCheckpointRejectsCorruptionAmbiguityAndInvalidState(t *testing.T) {
 			// Given a corrupt or semantically invalid replay checkpoint.
 			j, err := NewJournal(t.TempDir(), query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 			require.NoError(t, err)
-			defer j.Close()
+			defer func() { require.NoError(t, j.Close()) }()
 			state := emptyState()
 			data := append([]byte(nil), good...)
 			switch kind {
@@ -122,7 +122,7 @@ func TestCheckpointReadSizeLimitAndSafeNames(t *testing.T) {
 	group := "../../orders/" + strings.Repeat("x", 100)
 	j, err := NewJournal(dir, group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 	require.NoError(t, err)
-	defer j.Close()
+	defer func() { require.NoError(t, j.Close()) }()
 	require.Equal(t, dir, filepath.Dir(j.path))
 	f, err := os.Create(j.path)
 	require.NoError(t, err)
@@ -155,7 +155,7 @@ func TestGroupRefusesSymlinkedCheckpointAndLock(t *testing.T) {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				defer j.Close()
+				defer func() { require.NoError(t, j.Close()) }()
 				_, err = j.Load()
 				require.Error(t, err)
 			}

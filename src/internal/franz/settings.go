@@ -181,7 +181,7 @@ func unsupportedProperty(key string, rules map[string]propertyRule) error {
 	}
 	keys := slices.Sorted(maps.Keys(rules))
 	// Property names are input too; do not print arbitrary bytes in diagnostics.
-	if strings.IndexFunc(key, func(c rune) bool { return !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '.' || c == '_') }) >= 0 {
+	if strings.IndexFunc(key, func(c rune) bool { return (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '.' && c != '_' }) >= 0 {
 		key = "(invalid property name)"
 	}
 	return invalidProperty(key, "unsupported; supported properties: "+strings.Join(keys, ", "))

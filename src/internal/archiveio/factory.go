@@ -92,7 +92,7 @@ func checkpointDirectory(w config.Worker) (string, error) {
 		directory = filepath.Join(home, ".kaferry", "checkpoints")
 	}
 	info, err := os.Stat(directory)
-	if err != nil && !(w.CheckpointDir == nil && errors.Is(err, os.ErrNotExist)) {
+	if err != nil && (w.CheckpointDir != nil || !errors.Is(err, os.ErrNotExist)) {
 		return "", &Conflict{Err: fmt.Errorf("checkpoint directory must exist; create it for a new job or configure the existing directory to resume: %w", err)}
 	}
 	if err == nil && !info.IsDir() {
@@ -107,9 +107,9 @@ func resolvedPath(path string) (string, error) {
 	}
 	resolved, err := filepath.EvalSymlinks(absolute)
 	if errors.Is(err, os.ErrNotExist) {
-		parent, err := resolvedPath(filepath.Dir(absolute))
-		if err != nil {
-			return "", err
+		parent, checkErr := resolvedPath(filepath.Dir(absolute))
+		if checkErr != nil {
+			return "", checkErr
 		}
 		return filepath.Join(parent, filepath.Base(absolute)), nil
 	}

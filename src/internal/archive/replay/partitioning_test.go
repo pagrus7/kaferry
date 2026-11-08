@@ -26,7 +26,7 @@ func TestReplayValidatesOriginalPartitionsBeforeSavingSelection(t *testing.T) {
 	q.PartitionCount = 8
 	s, err := NewSession(q, clock{}, store, inputs, blocks, 0)
 	require.NoError(t, err)
-	defer s.Close()
+	defer func() { require.NoError(t, s.Close()) }()
 	item, err := s.Next()
 	require.NoError(t, err)
 	require.EqualValues(t, 5, item.Record.Source.Partition)

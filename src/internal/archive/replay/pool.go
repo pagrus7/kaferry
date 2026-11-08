@@ -104,7 +104,7 @@ func (p *Pool) load(key blockKey) (*blockEntry, error) {
 	delete(p.blocks, key)
 	if len(p.blocks) >= p.limits.Blocks {
 		var oldest blockKey
-		var age uint64 = ^uint64(0)
+		var age = ^uint64(0)
 		for key, entry := range p.blocks {
 			if entry.touched < age {
 				oldest, age = key, entry.touched
@@ -133,7 +133,7 @@ func (p *Pool) handle(file File) (Handle, error) {
 	}
 	if len(p.handles) >= p.limits.OpenFiles {
 		var oldest File
-		var age uint64 = ^uint64(0)
+		var age = ^uint64(0)
 		for key, entry := range p.handles {
 			if entry.touched < age {
 				oldest, age = key, entry.touched

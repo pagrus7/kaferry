@@ -106,7 +106,7 @@ func TestCommandPlansBeforeExecutingAndStopsOnFailure(t *testing.T) {
 					require.ErrorAs(t, err, &coded)
 					require.Equal(t, 2, coded.ExitCode())
 				} else {
-					require.True(t, err == m.failure, "execution error identity changed")
+					require.Same(t, m.failure, err, "execution error identity changed")
 				}
 			} else {
 				require.NoError(t, err)

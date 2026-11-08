@@ -38,7 +38,7 @@ func TestProducerBoundaryRefusesOversizeBeforeAsyncSubmission(t *testing.T) {
 	factory := componentFactory()
 	connection, err := factory.Open(t.Context(), p.Destination)
 	require.NoError(t, err)
-	defer connection.Close(context.Background())
+	defer func() { require.NoError(t, connection.Close(context.Background())) }()
 	if _, err = connection.Describe(t.Context(), false); err != nil {
 		t.Fatal(err)
 	}

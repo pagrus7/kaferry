@@ -2,6 +2,7 @@ package replay
 
 import (
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/pagrus7/kaferry/src/internal/checkpoint"
@@ -51,7 +52,7 @@ func BenchmarkCheckpointSaving(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			defer journal.Close()
+			defer func() { require.NoError(b, journal.Close()) }()
 			if err = journal.Save(state); err != nil {
 				b.Fatal(err)
 			}

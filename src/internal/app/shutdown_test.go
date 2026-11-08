@@ -200,8 +200,8 @@ func TestForcedShutdownExitsWithAFullUndrainedStderrPipe(t *testing.T) {
 	// Given the subprocess's actual stderr pipe filled to capacity and left undrained.
 	reader, writer, err := os.Pipe()
 	require.NoError(t, err)
-	defer reader.Close()
-	defer writer.Close()
+	defer func() { require.NoError(t, reader.Close()) }()
+	defer func() { require.NoError(t, writer.Close()) }()
 	fd := int(writer.Fd())
 	require.NoError(t, syscall.SetNonblock(fd, true))
 	for {

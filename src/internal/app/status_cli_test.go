@@ -50,11 +50,12 @@ func TestStatusRejectsOneOffAndCorruptFileProgress(t *testing.T) {
 			f := filePreview(t)
 			query := f.query
 			want := 2
-			if mode == "ONE_OFF" {
+			switch mode {
+			case "ONE_OFF":
 				query = strings.Replace(query, "'preview'", "ONE_OFF", 1)
-			} else if mode == "default" {
+			case "default":
 				query = strings.Replace(query, " WITH (GROUP='preview')", "", 1)
-			} else {
+			default:
 				var diagnostics bytes.Buffer
 				require.Zero(t, Execute(t.Context(), []string{"run", "-e", query, "-c", f.config}, nil, io.Discard, &diagnostics))
 				files, err := filepath.Glob(filepath.Join(f.directory, "*.json"))

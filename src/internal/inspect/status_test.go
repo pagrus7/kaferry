@@ -78,11 +78,12 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 			switch tc.name {
 			case "worker threshold", "active after worker stop", "partial worker stops", "mixed stops":
 				source.saved[0].Stop.Reason = "worker_record_cap"
-				if tc.name == "mixed stops" {
+				switch tc.name {
+				case "mixed stops":
 					source.saved[1].Stop.Reason = "timestamp"
-				} else if tc.name == "partial worker stops" {
+				case "partial worker stops":
 					source.saved[1] = kafkaport.SavedProgress{Position: 1}
-				} else {
+				default:
 					source.saved[1].Stop.Reason = "worker_record_cap"
 				}
 				if tc.name == "active after worker stop" {
@@ -113,9 +114,10 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.verdict, r.Verdict)
 			require.Equal(t, tc.code, r.ExitCode())
-			if tc.name == "worker threshold" {
+			switch tc.name {
+			case "worker threshold":
 				require.Equal(t, "worker record threshold reached", r.Reason)
-			} else if tc.name == "mixed stops" {
+			case "mixed stops":
 				require.Equal(t, "timestamp disorder threshold reached; worker record threshold reached", r.Reason)
 			}
 			require.EqualValues(t, 1, source.closed)
@@ -163,11 +165,12 @@ func TestStatusExposesIncompatibleProgressAndActivity(t *testing.T) {
 			require.Equal(t, source.saved[1].Stop, report.Partitions[1].Stop)
 			require.Equal(t, 2, source.membershipReads)
 			require.Contains(t, report.Reason, "saved positions are for inspection")
-			if activity == "foreign" {
+			switch activity {
+			case "foreign":
 				require.Contains(t, report.Reason, "incompatible active member")
-			} else if activity == "active" {
+			case "active":
 				require.Contains(t, report.Reason, "group activity")
-			} else {
+			default:
 				require.Contains(t, report.Activity, "idle twice")
 			}
 		})

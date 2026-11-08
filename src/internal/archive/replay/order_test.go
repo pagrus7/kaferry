@@ -21,13 +21,13 @@ func TestReplayRejectsOffsetsDecreasingBetweenBlocks(t *testing.T) {
 	require.NoError(t, err)
 	pool, err := NewPool(catalog, Limits{})
 	require.NoError(t, err)
-	defer pool.Close()
+	defer func() { require.NoError(t, pool.Close()) }()
 	// When reading across blocks, then each offset must follow the previous block's last offset.
 	selectedFile := selected.Files[0]
 	pos := initial(selectedFile)
 	for _, offset := range []int64{42, 44} {
-		r, next, err := pool.Read(selectedFile, pos)
-		require.NoError(t, err)
+		r, next, checkErr := pool.Read(selectedFile, pos)
+		require.NoError(t, checkErr)
 		require.Equal(t, offset, r.Offset)
 		pos = next
 	}
@@ -59,9 +59,9 @@ func TestDifferentSourceIdentitiesDoNotMergeTheirOffsets(t *testing.T) {
 		writeFile(t, root, i+1, values, 0)
 		expected = append(expected, values...)
 	}
-	s, _ := diskSession(t, root, t.TempDir(), query(), Limits{OpenFiles: 1, Blocks: 1}, 10)
+	s := diskSession(t, root, t.TempDir(), query(), Limits{OpenFiles: 1, Blocks: 1})
 	// When replayed, then each original identity retains its records and own offset order.
-	require.Equal(t, expected, drain(t, s, true))
+	require.Equal(t, expected, drain(t, s))
 }
 
 func TestBadCursorAndChangedHandleFailBeforeReturningRecords(t *testing.T) {
@@ -79,7 +79,7 @@ func TestBadCursorAndChangedHandleFailBeforeReturningRecords(t *testing.T) {
 	require.ErrorContains(t, err, "changed")
 	pool, err := NewPool(catalog, Limits{})
 	require.NoError(t, err)
-	defer pool.Close()
+	defer func() { require.NoError(t, pool.Close()) }()
 	_, _, err = pool.Read(f, Position{Block: f.Start, Record: 10, Previous: 42})
 	require.ErrorContains(t, err, "count")
 }
@@ -110,7 +110,8 @@ func writeForeign(t *testing.T, root string, meta File, source avro.Source, offs
 	t.Helper()
 	f, err := os.Create(filepath.Join(root, meta.name()))
 	require.NoError(t, err)
-	defer f.Close()
+	// Close on assertion failure; the successful close is checked below.
+	defer func() { _ = f.Close() }()
 	metadata, err := json.Marshal(meta.Identity)
 	require.NoError(t, err)
 	w, err := goavro.NewOCFWriter(goavro.OCFConfig{W: f, Schema: avro.Schema(), CompressionName: "snappy", MetaData: map[string][]byte{"kaferry": metadata}})
@@ -138,11 +139,11 @@ func TestReplayRejectsRecordHeaderDisagreementBeforeOutput(t *testing.T) {
 			catalog := NewCatalog(root, codec(t), NativeFiles{})
 			pool, err := NewPool(catalog, Limits{})
 			require.NoError(t, err)
-			defer pool.Close()
+			defer func() { require.NoError(t, pool.Close()) }()
 			store := &memoryCheckpoints{}
 			s, err := NewSession(query(), clock{}, store, catalog, pool, 10)
 			require.NoError(t, err)
-			defer s.Close()
+			defer func() { require.NoError(t, s.Close()) }()
 			// When reading, then the specific mismatch fails before output or progress advancement.
 			_, err = s.Next()
 			require.ErrorContains(t, err, kind)

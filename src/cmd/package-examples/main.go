@@ -32,8 +32,8 @@ func build(path string) error {
 		return err
 	}
 	var values []string
-	if err := json.Unmarshal(data, &values); err != nil {
-		return err
+	if checkErr := json.Unmarshal(data, &values); checkErr != nil {
+		return checkErr
 	}
 	codec, err := avro.New(64 << 20)
 	if err != nil {
@@ -51,21 +51,22 @@ func build(path string) error {
 		record := avro.Record{Source: identity.Source, Offset: int64(offset), TimestampMS: &stamp,
 			TimestampKind: "create_time", Key: []byte("customer-1"), Value: []byte(value),
 			Headers: []avro.Header{{Key: []byte("example"), Value: []byte("archive-demo")}}}
-		if err := writer.Append(record); err != nil {
-			return err
+		if checkErr := writer.Append(record); checkErr != nil {
+			return checkErr
 		}
 	}
-	if err := writer.Flush(); err != nil {
-		return err
+	if checkErr := writer.Flush(); checkErr != nil {
+		return checkErr
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	if checkErr := os.MkdirAll(filepath.Dir(path), 0o755); checkErr != nil {
+		return checkErr
 	}
 	output, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	defer output.Close()
+	// Close on early failure; the completed archive close is checked below.
+	defer func() { _ = output.Close() }()
 	compressed := gzip.NewWriter(output)
 	archive := tar.NewWriter(compressed)
 	add := func(name string, data []byte) error {

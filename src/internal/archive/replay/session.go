@@ -64,30 +64,30 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 		return nil, err
 	}
 	if saved == nil {
-		window, err := query.Window.Resolve(clock.Now())
-		if err != nil {
-			return nil, err
+		window, checkErr := query.Window.Resolve(clock.Now())
+		if checkErr != nil {
+			return nil, checkErr
 		}
-		if err = query.Window.ValidateStored(window, query.disorderAllowance()); err != nil {
-			return nil, err
+		if checkErr = query.Window.ValidateStored(window, query.disorderAllowance()); checkErr != nil {
+			return nil, checkErr
 		}
-		selection, err := inputs.Select(query.Partitions)
-		if err != nil {
-			return nil, err
+		selection, checkErr := inputs.Select(query.Partitions)
+		if checkErr != nil {
+			return nil, checkErr
 		}
 		s.PrivateFiles = selection.PrivateFiles
 		s.saved = State{Version: 1, Group: query.Group, Fingerprint: query.Fingerprint, Window: window, Complete: len(selection.Files) == 0, Files: make([]Progress, 0, len(selection.Files))}
 		for _, file := range selection.Files {
 			s.saved.Files = append(s.saved.Files, Progress{File: file, Next: initial(file)})
 		}
-		if err = s.saved.validate(); err != nil {
-			return nil, err
+		if checkErr = s.saved.validate(); checkErr != nil {
+			return nil, checkErr
 		}
-		if err = query.validatePartitions(s.saved.Files); err != nil {
-			return nil, err
+		if checkErr = query.validatePartitions(s.saved.Files); checkErr != nil {
+			return nil, checkErr
 		}
-		if err = store.Save(s.saved.clone()); err != nil {
-			return nil, err
+		if checkErr = store.Save(s.saved.clone()); checkErr != nil {
+			return nil, checkErr
 		}
 	} else {
 		s.saved = saved.clone()

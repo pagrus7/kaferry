@@ -37,8 +37,8 @@ func (g *fetchGap) Next(ctx context.Context, id int32, position int64) (int64, e
 		return position, fmt.Errorf("source topic unavailable")
 	}
 	topic := metadata.Topics[0]
-	if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
-		return position, transientFailure(err)
+	if checkErr := kerr.ErrorForCode(topic.ErrorCode); checkErr != nil {
+		return position, transientFailure(checkErr)
 	}
 	if topicID(topic.TopicID) != g.topicID {
 		return position, fmt.Errorf("source topic identity changed")
@@ -53,8 +53,8 @@ func (g *fetchGap) Next(ctx context.Context, id int32, position int64) (int64, e
 	if partition == nil {
 		return position, fmt.Errorf("source partition %d is missing from metadata", id)
 	}
-	if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-		return position, transientFailure(err)
+	if checkErr := kerr.ErrorForCode(partition.ErrorCode); checkErr != nil {
+		return position, transientFailure(checkErr)
 	}
 	if partition.Leader < 0 {
 		return position, &core.Recoverable{Err: fmt.Errorf("source partition %d leader is being elected", id)}

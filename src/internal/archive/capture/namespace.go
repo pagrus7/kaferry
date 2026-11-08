@@ -23,8 +23,8 @@ func Open(root string, codec *avro.Codec, files Filesystem, states StateStore) (
 	}
 	writers := filepath.Join(root, ".kaferry", "writers")
 	for _, directory := range []string{root, filepath.Dir(writers), writers} {
-		if err := ensureDirectory(files, directory); err != nil {
-			return nil, err
+		if checkErr := ensureDirectory(files, directory); checkErr != nil {
+			return nil, checkErr
 		}
 	}
 	owners, err := acquireNamespaces(writers, files)

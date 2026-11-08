@@ -30,7 +30,7 @@ func TestCaptureSavesChecksummedStatePerChangedBatch(t *testing.T) {
 	require.NoError(t, err)
 	writer, err := capture.New(store, core.RealClock{}, capture.Policy{})
 	require.NoError(t, err)
-	defer writer.Close()
+	defer func() { require.NoError(t, writer.Close()) }()
 	initialized := atomic.writes
 	source := avro.Source{Cluster: "cluster", Topic: "orders", TopicID: avro.TopicID{1}}
 	// When appending a hundred records, then no JSON state is saved until their durability flush.

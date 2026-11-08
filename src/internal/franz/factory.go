@@ -152,22 +152,22 @@ func (c *connection) Source(query context.Context, p plan.Plan, fp string, limit
 	if _, err := p.Partitions.Select(c.inspector.parts); err != nil {
 		return nil, nil, &kafkaport.Conflict{Err: err}
 	}
-	settings, err := c.settings.bounded(limits)
+	connectionSettings, err := c.settings.bounded(limits)
 	if err != nil {
 		return nil, nil, err
 	}
-	options, err := settings.commonOptions()
+	options, err := connectionSettings.commonOptions()
 	if err != nil {
 		return nil, nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	clientCtx, clientCancel := context.WithCancel(context.Background())
 	bridge := newRebalanceBridge(ctx, p.Source.Name)
-	options = append(options, settings.consumerOptions()...)
+	options = append(options, connectionSettings.consumerOptions()...)
 	options = append(options, bridge.options()...)
 	clientID := "kaferry-" + p.Group
-	if settings.clientID != "" {
-		clientID += "-" + settings.clientID
+	if connectionSettings.clientID != "" {
+		clientID += "-" + connectionSettings.clientID
 	}
 	options = append(options, kgo.WithContext(clientCtx), kgo.ClientID(clientID), kgo.ConsumerGroup(p.Group), kgo.DisableAutoCommit(), kgo.ConsumeResetOffset(kgo.NoResetOffset()), kgo.FetchIsolationLevel(kgo.ReadCommitted()), kgo.FetchMaxWait(500*time.Millisecond), kgo.KeepControlRecords(), kgo.BlockRebalanceOnPoll(), kgo.Balancers(sourceBalancer(p, fp)))
 	client, err := c.factory.clients.Consumer(options...)
@@ -189,16 +189,16 @@ func (c *connection) Sink(query context.Context, limits config.Worker) (core.Sin
 	if err := query.Err(); err != nil {
 		return nil, err
 	}
-	settings, err := c.settings.withTopicLimit(configuration).bounded(limits)
+	connectionSettings, err := c.settings.withTopicLimit(configuration).bounded(limits)
 	if err != nil {
 		return nil, err
 	}
-	options, err := settings.commonOptions()
+	options, err := connectionSettings.commonOptions()
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	options = append(options, settings.producerOptions()...)
+	options = append(options, connectionSettings.producerOptions()...)
 	if c.endpoint.PreservesPartitions() {
 		options = append(options, kgo.RecordPartitioner(kgo.ManualPartitioner()))
 	}
@@ -207,5 +207,5 @@ func (c *connection) Sink(query context.Context, limits config.Worker) (core.Sin
 		cancel()
 		return nil, conflict("invalid Kafka producer configuration")
 	}
-	return &Sink{preserve: c.endpoint.PreservesPartitions(), client: client, topic: c.endpoint.Name, settings: settings, configuration: configuration, inspector: c.inspector, clock: c.factory.clock, log: c.factory.log, reports: make(chan core.Delivery, limits.RecordCap+int(settings.queueRecords)+1), ctx: ctx, cancel: cancel, partitionCount: len(c.inspector.parts), lastMetadata: c.factory.clock.Now()}, nil
+	return &Sink{preserve: c.endpoint.PreservesPartitions(), client: client, topic: c.endpoint.Name, settings: connectionSettings, configuration: configuration, inspector: c.inspector, clock: c.factory.clock, log: c.factory.log, reports: make(chan core.Delivery, limits.RecordCap+int(connectionSettings.queueRecords)+1), ctx: ctx, cancel: cancel, partitionCount: len(c.inspector.parts), lastMetadata: c.factory.clock.Now()}, nil
 }

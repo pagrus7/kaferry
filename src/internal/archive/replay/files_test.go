@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -95,7 +96,7 @@ func TestMergePreservesDuplicatesFullRecordsAndPhysicalTiesWithBoundedResources(
 	var got []avro.Record
 	for {
 		entry, err := r.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -122,7 +123,7 @@ func TestRestartUsesPhysicalCursorsAndIgnoresNewFiles(t *testing.T) {
 	}
 	writeFile(t, root, 1, a, 0)
 	writeFile(t, root, 2, b, 1)
-	s, _ := diskSession(t, root, checkpoints, query(), Limits{OpenFiles: 1, Blocks: 1}, 10)
+	s := diskSession(t, root, checkpoints, query(), Limits{OpenFiles: 1, Blocks: 1})
 	for range 3 {
 		_, err := s.Next()
 		require.NoError(t, err)
@@ -131,15 +132,15 @@ func TestRestartUsesPhysicalCursorsAndIgnoresNewFiles(t *testing.T) {
 	require.NoError(t, s.Close())
 	writeFile(t, root, 3, records(41), 0)
 	// When restarting the same group, then only the first confirmed physical record is excluded.
-	resumed, _ := diskSession(t, root, checkpoints, query(), Limits{OpenFiles: 1, Blocks: 1}, 10)
-	require.Equal(t, []avro.Record{a[1], b[0], a[2], b[1]}, drain(t, resumed, true))
+	resumed := diskSession(t, root, checkpoints, query(), Limits{OpenFiles: 1, Blocks: 1})
+	require.Equal(t, []avro.Record{a[1], b[0], a[2], b[1]}, drain(t, resumed))
 	require.True(t, resumed.Saved().Complete)
 	require.NoError(t, resumed.Close())
 	// A new group sees the additional completed file too.
 	q := query()
 	q.Group = "new-replay-group"
-	fresh, _ := diskSession(t, root, checkpoints, q, Limits{}, 10)
-	got := drain(t, fresh, true)
+	fresh := diskSession(t, root, checkpoints, q, Limits{})
+	got := drain(t, fresh)
 	require.Len(t, got, 6)
 	require.EqualValues(t, 41, got[0].Offset)
 }
@@ -153,7 +154,7 @@ func TestIncompleteRestartRejectsMissingResizedOrModifiedSelectedInput(t *testin
 			later := records(50)
 			later[0].Source.Partition = 1
 			writeFile(t, root, 2, later, 0)
-			s, _ := diskSession(t, root, checkpoints, query(), Limits{}, 10)
+			s := diskSession(t, root, checkpoints, query(), Limits{})
 			item, err := s.Next()
 			require.NoError(t, err)
 			require.NoError(t, s.Checkpoint(item.Next))
@@ -165,8 +166,8 @@ func TestIncompleteRestartRejectsMissingResizedOrModifiedSelectedInput(t *testin
 			case "shortened":
 				require.NoError(t, os.Truncate(path, a.Size-1))
 			case "same length":
-				data, err := os.ReadFile(path)
-				require.NoError(t, err)
+				data, checkErr := os.ReadFile(path)
+				require.NoError(t, checkErr)
 				data[len(data)-1] ^= 1
 				require.NoError(t, os.WriteFile(path, data, 0600))
 			}
@@ -174,10 +175,10 @@ func TestIncompleteRestartRejectsMissingResizedOrModifiedSelectedInput(t *testin
 			catalog := NewCatalog(root, codec(t), NativeFiles{})
 			pool, err := NewPool(catalog, Limits{})
 			require.NoError(t, err)
-			defer pool.Close()
+			defer func() { require.NoError(t, pool.Close()) }()
 			journal, err := NewJournal(checkpoints, query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 			require.NoError(t, err)
-			defer journal.Close()
+			defer func() { require.NoError(t, journal.Close()) }()
 			_, err = NewSession(query(), clock{}, journal, catalog, pool, 10)
 			require.Error(t, err)
 			require.ErrorContains(t, err, a.name())
@@ -193,8 +194,8 @@ func TestReplayWritesOnlyToExternalCheckpointDirectory(t *testing.T) {
 	require.NoError(t, os.Chmod(root, 0500))
 	t.Cleanup(func() { require.NoError(t, os.Chmod(root, 0700)) })
 	// When replaying and saving, then the input archive remains unchanged.
-	s, _ := diskSession(t, root, checkpoints, query(), Limits{}, 10)
-	require.Equal(t, records(42, 43), drain(t, s, true))
+	s := diskSession(t, root, checkpoints, query(), Limits{})
+	require.Equal(t, records(42, 43), drain(t, s))
 	after, err := NewCatalog(root, codec(t), NativeFiles{}).describe(f.name(), true, nil)
 	require.NoError(t, err)
 	require.Equal(t, f, after)
@@ -275,7 +276,7 @@ func TestRestartSkipsConsumedFilesAndResumesAtNextBlock(t *testing.T) {
 	root, checkpoints := t.TempDir(), t.TempDir()
 	writeFile(t, root, 1, records(42), 0)
 	writeFile(t, root, 2, records(43, 44, 45, 46), 2)
-	s, _ := diskSession(t, root, checkpoints, query(), Limits{}, 10)
+	s := diskSession(t, root, checkpoints, query(), Limits{})
 	for range 4 {
 		_, err := s.Next()
 		require.NoError(t, err)
@@ -283,8 +284,8 @@ func TestRestartSkipsConsumedFilesAndResumesAtNextBlock(t *testing.T) {
 	require.NoError(t, s.Checkpoint(3))
 	require.NoError(t, s.Close())
 	// When restarting, then only the second block is returned and the group completes.
-	resumed, _ := diskSession(t, root, checkpoints, query(), Limits{}, 10)
-	require.Equal(t, records(45, 46), drain(t, resumed, true))
+	resumed := diskSession(t, root, checkpoints, query(), Limits{})
+	require.Equal(t, records(45, 46), drain(t, resumed))
 	require.True(t, resumed.Saved().Complete)
 }
 
@@ -316,7 +317,7 @@ func TestMalformedCompletedInputFailsBeforeOutputOrProgress(t *testing.T) {
 			meter := &measuredOpener{Opener: catalog}
 			pool, err := NewPool(meter, Limits{})
 			require.NoError(t, err)
-			defer pool.Close()
+			defer func() { require.NoError(t, pool.Close()) }()
 			// When selecting or reading, then malformed input cannot produce records or advance progress.
 			s, err := NewSession(query(), clock{}, store, catalog, pool, 10)
 			if damage != "corrupt block" {
@@ -325,7 +326,7 @@ func TestMalformedCompletedInputFailsBeforeOutputOrProgress(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			defer s.Close()
+			defer func() { require.NoError(t, s.Close()) }()
 			_, first := s.Next()
 			require.Error(t, first)
 			_, second := s.Next()

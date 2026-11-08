@@ -124,7 +124,7 @@ func TestSavedSelectionIgnoresNewFilesAndACompletedGroupStaysCompleted(t *testin
 	inputs.files = append(inputs.files, other)
 	// When the same group resumes, then its selection remains fixed.
 	resumed := session(t, store, inputs, &memoryBlocks{values: map[string][]avro.Record{f.Identity.FileID: values}}, 10)
-	require.Equal(t, records(43), drain(t, resumed, true))
+	require.Equal(t, records(43), drain(t, resumed))
 	require.Equal(t, 1, inputs.selects)
 	require.Equal(t, 1, inputs.validates)
 	require.True(t, store.saved.Complete)
@@ -144,7 +144,7 @@ func TestSavedSelectionIgnoresNewFilesAndACompletedGroupStaysCompleted(t *testin
 	fresh, err := NewSession(q, clock{}, &memoryCheckpoints{}, &memorySnapshots{files: []File{f, other}}, &memoryBlocks{values: map[string][]avro.Record{f.Identity.FileID: values, other.Identity.FileID: records(44)}}, 10)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
-	require.Equal(t, records(42, 43, 44), drain(t, fresh, true))
+	require.Equal(t, records(42, 43, 44), drain(t, fresh))
 }
 
 func TestResolvedWindowSurvivesRestartAndOutOfOrderTimestamps(t *testing.T) {
@@ -169,7 +169,7 @@ func TestResolvedWindowSurvivesRestartAndOutOfOrderTimestamps(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	require.EqualValues(t, 9000, *s.Saved().Window.Lower)
 	require.EqualValues(t, 10000, *s.Saved().Window.Upper)
-	got := drain(t, s, true)
+	got := drain(t, s)
 	require.Equal(t, values, got)
 	require.True(t, s.Saved().Window.Contains(*got[1].TimestampMS), "a later in-range timestamp is not lost after an out-of-range record")
 }

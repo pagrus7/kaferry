@@ -61,20 +61,20 @@ func (i *Inspector) Source(p plan.Plan, fp string, w config.Worker) (result Sour
 			}
 		}
 	} else {
-		selection, err := catalog.Inspect(p.Partitions)
-		if err != nil {
-			if errors.Is(err, plan.ErrMissingPartition) {
-				return result, &core.Exit{Code: 2, Err: err}
+		selection, checkErr := catalog.Inspect(p.Partitions)
+		if checkErr != nil {
+			if errors.Is(checkErr, plan.ErrMissingPartition) {
+				return result, &core.Exit{Code: 2, Err: checkErr}
 			}
-			return result, err
+			return result, checkErr
 		}
 		files = selection.Files
 		if selection.PrivateFiles > 0 {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("Snapshot excludes %d unfinished files.", selection.PrivateFiles))
 		}
-		result.Window, err = p.Window.Resolve(i.clock.Now())
-		if err != nil {
-			return result, &Conflict{Err: err}
+		result.Window, checkErr = p.Window.Resolve(i.clock.Now())
+		if checkErr != nil {
+			return result, &Conflict{Err: checkErr}
 		}
 	}
 	if saved == nil || saved.Fingerprint == fp {

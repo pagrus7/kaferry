@@ -71,7 +71,7 @@ func (b *partitionBalancer) Balance(consumer *kgo.ConsumerBalancer, topics map[s
 				owned[b.topic] = append(owned[b.topic], int32(index))
 			}
 		}
-		members[i].ProtocolMetadata = b.GroupBalancer.JoinGroupMetadata(meta.Topics, owned, meta.Generation)
+		members[i].ProtocolMetadata = b.JoinGroupMetadata(meta.Topics, owned, meta.Generation)
 	}
 	delegate, _, err := b.GroupBalancer.MemberBalancer(members)
 	if err != nil {

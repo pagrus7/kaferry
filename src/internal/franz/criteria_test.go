@@ -69,13 +69,13 @@ func TestNewPartitionAssignmentInitializesFromQueryAndSavedWindow(t *testing.T) 
 			_, connection := componentConnection(t, p)
 			source, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker, nil)
 			require.NoError(t, err)
-			defer source.Close()
+			defer func() { require.NoError(t, source.Close()) }()
 			life := &lifecycleMock{}
 			require.NoError(t, source.Start(life, nil))
 			ctx := componentContext(t)
 			for len(life.assignments) == 0 && ctx.Err() == nil {
-				_, err := source.Poll(20 * time.Millisecond)
-				require.NoError(t, err)
+				_, checkErr := source.Poll(20 * time.Millisecond)
+				require.NoError(t, checkErr)
 			}
 			require.NotEmpty(t, life.assignments)
 			first := life.assignments[0]
@@ -87,8 +87,8 @@ func TestNewPartitionAssignmentInitializesFromQueryAndSavedWindow(t *testing.T) 
 			require.NoError(t, newProducer.ProduceSync(ctx, &kgo.Record{Topic: "input", Partition: 1, Value: []byte("new partition first"), Timestamp: time.Now().Add(-time.Minute)}).FirstErr())
 			var position int64 = -1
 			for position < 0 && ctx.Err() == nil {
-				event, err := source.Poll(20 * time.Millisecond)
-				require.NoError(t, err)
+				event, checkErr := source.Poll(20 * time.Millisecond)
+				require.NoError(t, checkErr)
 				if event.Input != nil && event.Input.Cursor.Partition == 1 {
 					position = event.Input.Cursor.Position
 					require.Equal(t, "new partition first", string(event.Input.Record.Value))

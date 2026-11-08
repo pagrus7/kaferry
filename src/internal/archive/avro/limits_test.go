@@ -3,6 +3,7 @@ package avro
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"testing"
 
@@ -173,7 +174,7 @@ func TestStorageReadErrorsAreNotEndOfFile(t *testing.T) {
 			r.input = failingReaderAt{ReaderAt: bytes.NewReader(data), failAt: failAt, err: failure}
 			// When scanned, then the I/O failure is preserved rather than treated as completion.
 			_, err = r.Scan()
-			if failure == io.EOF {
+			if errors.Is(failure, io.EOF) {
 				require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 			} else {
 				require.ErrorIs(t, err, failure)

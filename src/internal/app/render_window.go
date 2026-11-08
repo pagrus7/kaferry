@@ -1,8 +1,8 @@
 package app
 
 import (
+	"bytes"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/pagrus7/kaferry/src/internal/inspect"
@@ -56,7 +56,7 @@ func groupWindows(partitions []inspect.Partition) []windowGroup {
 	return groups
 }
 
-func renderWindows(output io.Writer, report inspect.Report) {
+func renderWindows(output *bytes.Buffer, report inspect.Report) {
 	fmt.Fprintln(output, "\nTime window")
 	fmt.Fprintln(output, "  Uses: record timestamps, not payload event time.")
 	groups := groupWindows(report.Partitions)
@@ -89,7 +89,7 @@ func renderWindows(output io.Writer, report inspect.Report) {
 	}
 }
 
-func renderBounds(output io.Writer, window plan.Window, origin string) {
+func renderBounds(output *bytes.Buffer, window plan.Window, origin string) {
 	if window.Lower == nil && window.Upper == nil {
 		fmt.Fprintln(output, "  Filter: none.")
 		return
@@ -116,7 +116,7 @@ func formatBound(value *int64) string {
 }
 
 // Inspection validates completion arithmetic before rendering the report.
-func renderCompletion(output io.Writer, report inspect.Report, window plan.Window) {
+func renderCompletion(output *bytes.Buffer, report inspect.Report, window plan.Window) {
 	if report.Offsets != nil && report.Offsets.HasEnd() || len(report.PartitionOffsets) > 0 {
 		if report.Source.Kind == "ARCHIVE" {
 			fmt.Fprintln(output, "  Stop: selected archive EOF or the original source offset ends; timestamps filter records.")

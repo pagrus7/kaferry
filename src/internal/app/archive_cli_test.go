@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -64,7 +65,7 @@ func archiveRecords(t *testing.T, root string) []avro.Record {
 	require.NoError(t, err)
 	pool, err := replay.NewPool(catalog, replay.Limits{})
 	require.NoError(t, err)
-	defer pool.Close()
+	defer func() { require.NoError(t, pool.Close()) }()
 	progress := make([]replay.Progress, len(selection.Files))
 	for i, f := range selection.Files {
 		progress[i] = replay.Progress{File: f, Next: replay.Position{Block: f.Start, Previous: -1}}
@@ -74,7 +75,7 @@ func archiveRecords(t *testing.T, root string) []avro.Record {
 	var result []avro.Record
 	for {
 		entry, err := reader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
