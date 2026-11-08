@@ -174,24 +174,7 @@ func replicatedNetworkFault(t *testing.T, name string) {
 		duration += s.timeouts["delivery_timeout"]
 	}
 	during := s.networkSpan(injected, duration, allowFailure)
-	require.True(t, allAbove(during.After.Publishing.Acknowledged, during.Before.Publishing.Acknowledged, 2))
-	for _, partition := range affected {
-		if name != "latency" && name != "bandwidth" {
-			require.Equal(t, during.Before.Ends[partition], during.After.Ends[partition], "blocked destination partition acknowledged new output")
-			require.LessOrEqual(t, during.After.Saved[partition], during.After.Ends[partition])
-		}
-	}
-	for _, partition := range unaffected {
-		require.Greater(t, during.After.Ends[partition], during.Before.Ends[partition]+2)
-		require.Greater(t, during.After.Saved[partition], during.Before.Saved[partition]+2, "unaffected partition made no independently observed saved progress")
-	}
-	if name == "latency" || name == "bandwidth" {
-		require.Greater(t, networkBacklog(during.After), networkBacklog(healthy.After)+replicatedPartitions, "toxic did not measurably increase output backlog")
-		require.Greater(t, during.After.Pending.Submitted, during.After.Pending.Confirmed)
-	}
-	if name == "bandwidth" {
-		require.Less(t, during.rate(), .75*healthy.rate(), "bandwidth toxic did not reduce actual output throughput")
-	}
+	s.requireNetworkEffect(name, healthy, during, affected, unaffected)
 	if closeRead != nil {
 		err := <-closeRead
 		var timeout net.Error
@@ -239,4 +222,26 @@ func replicatedNetworkFault(t *testing.T, name string) {
 	// The shared finalizer stops all publishers/workers and requires the complete
 	// registered oracle horizon, final librdkafka reconciliation and duplicate cuts.
 	s.finishReplicatedFault("network/"+name, baseline, "replicated-network.json")
+}
+
+func (s *brokerCopy) requireNetworkEffect(name string, healthy, during networkInterval, affected, unaffected []int) {
+	t := s.t
+	require.True(t, allAbove(during.After.Publishing.Acknowledged, during.Before.Publishing.Acknowledged, 2))
+	for _, partition := range affected {
+		if name != "latency" && name != "bandwidth" {
+			require.Equal(t, during.Before.Ends[partition], during.After.Ends[partition], "blocked destination partition acknowledged new output")
+			require.LessOrEqual(t, during.After.Saved[partition], during.After.Ends[partition])
+		}
+	}
+	for _, partition := range unaffected {
+		require.Greater(t, during.After.Ends[partition], during.Before.Ends[partition]+2)
+		require.Greater(t, during.After.Saved[partition], during.Before.Saved[partition]+2, "unaffected partition made no independently observed saved progress")
+	}
+	if name == "latency" || name == "bandwidth" {
+		require.Greater(t, networkBacklog(during.After), networkBacklog(healthy.After)+replicatedPartitions, "toxic did not measurably increase output backlog")
+		require.Greater(t, during.After.Pending.Submitted, during.After.Pending.Confirmed)
+	}
+	if name == "bandwidth" {
+		require.Less(t, during.rate(), .75*healthy.rate(), "bandwidth toxic did not reduce actual output throughput")
+	}
 }

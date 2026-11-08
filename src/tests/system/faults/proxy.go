@@ -133,20 +133,8 @@ func (l *Lab) CloseWorkerConnections(ctx context.Context, slow *Injection) (*Inj
 		seen[target.Broker] = true
 	}
 	for _, target := range injection.Event.Targets {
-		if err := l.ownedProxy(ctx, target, false); err != nil {
+		if err := l.checkSlowClose(ctx, target, slow.Event.Fault.Value); err != nil {
 			return injection, errors.Join(err, injection.Heal(ctx))
-		}
-		var current proxy
-		if err := l.request(ctx, http.MethodGet, "/proxies/"+target.Proxy, nil, &current); err != nil {
-			return injection, errors.Join(err, injection.Heal(ctx))
-		}
-		var toxic struct {
-			Type, Stream string
-			Attributes   struct{ Delay int64 }
-		}
-		if len(current.Toxics) != 1 || json.Unmarshal(current.Toxics[0], &toxic) != nil ||
-			toxic.Type != "slow_close" || toxic.Stream != "downstream" || toxic.Attributes.Delay != slow.Event.Fault.Value {
-			return injection, errors.Join(errors.New("slow-close route has an unrelated or missing toxic"), injection.Heal(ctx))
 		}
 		undo, err := l.addToxic(ctx, target, injection.Event.Fault)
 		if undo != nil {
@@ -157,6 +145,25 @@ func (l *Lab) CloseWorkerConnections(ctx context.Context, slow *Injection) (*Inj
 		}
 	}
 	return injection, nil
+}
+
+func (l *Lab) checkSlowClose(ctx context.Context, target Target, delay int64) error {
+	if err := l.ownedProxy(ctx, target, false); err != nil {
+		return err
+	}
+	var current proxy
+	if err := l.request(ctx, http.MethodGet, "/proxies/"+target.Proxy, nil, &current); err != nil {
+		return err
+	}
+	var toxic struct {
+		Type, Stream string
+		Attributes   struct{ Delay int64 }
+	}
+	if len(current.Toxics) != 1 || json.Unmarshal(current.Toxics[0], &toxic) != nil ||
+		toxic.Type != "slow_close" || toxic.Stream != "downstream" || toxic.Attributes.Delay != delay {
+		return errors.New("slow-close route has an unrelated or missing toxic")
+	}
+	return nil
 }
 
 func (l *Lab) removeToxic(ctx context.Context, target Target, path, name string) error {
