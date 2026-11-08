@@ -174,7 +174,8 @@ class Oracle:
         self.args = args
         self.directory = args.output
         self.directory.mkdir(parents=True, exist_ok=False)
-        registered = fault_timeout_catalog().get(args.case)
+        self.timeout_tier = os.environ.get('KAFERRY_FAULT_TIER', 'full')
+        registered = fault_timeout_catalog(self.timeout_tier).get(args.case)
         if registered is None:
             raise ValueError('fault case is not registered in the timeout catalog')
         self.timeout_basis = {key: milliseconds/1000 for key, milliseconds in registered.items()}
@@ -347,7 +348,7 @@ class Oracle:
                 **self.platforms,
                 bootstrap=self.bootstrap,
                 execution='checkout adapter probe' if self.args.allow_empty else 'candidate CLI',
-                writers_stopped_at=writers_stopped_at,
+                timeout_tier=self.timeout_tier, writers_stopped_at=writers_stopped_at,
                 writer_observations=command.get('writer_observations', []),
                 parameters=dict(source_partitions=self.args.partitions, routing='PRESERVE'),
                 safety=dict(interval_seconds=1, ordering='saved-before-destination-snapshot',

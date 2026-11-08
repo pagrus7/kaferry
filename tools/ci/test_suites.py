@@ -19,7 +19,8 @@ class SuitesTest(unittest.TestCase):
     def test_fault_outer_budget_accounts_for_the_same_catalog_as_windows(self):
         # Given the fixture's actual per-case timeout catalog, with churn's
         # overlapping windows sharing one maximum extension of its case.
-        catalog = json.loads((Path(__file__).resolve().parents[2]/'src/tests/qualification/fault-timeouts-ms.json').read_text())
+        tiers = json.loads((Path(__file__).resolve().parents[2]/'src/tests/qualification/fault-timeouts-ms.json').read_text())
+        catalog = tiers['full']
         self.assertLessEqual(FAULT_CASES, set(catalog))
         self.assertEqual(473000, sum(sum(catalog[id].values()) for id in FAULT_CASES))
         # When selecting the suite, then preserve the existing 600s execution
@@ -30,12 +31,26 @@ class SuitesTest(unittest.TestCase):
         self.assertIn('-timeout=12m', suites.command('fault', timeout='12m'))
         catalog['fault/churn']['delivery_timeout'] += 1000
         catalog['another-suite/registered-case'] = {'session.timeout.ms': 6000}
-        with patch('tools.ci.suites.json.loads', return_value=catalog):
+        with patch('tools.ci.suites.json.loads', return_value=tiers):
             self.assertEqual(1074, suites.fault_execution_seconds())
         catalog.pop('fault/crash')
-        with patch('tools.ci.suites.json.loads', return_value=catalog):
+        with patch('tools.ci.suites.json.loads', return_value=tiers):
             with self.assertRaisesRegex(ValueError, 'omitted a selected case'):
                 suites.fault_execution_seconds()
+
+    def test_pr_outer_budget_uses_actual_shorter_fixture_budgets(self):
+        # Given the PR tier, when selecting fixture and outer budgets,
+        # then every case retains a full horizon using the same actual settings.
+        with patch.dict(os.environ, KAFERRY_FAULT_TIER='pr'):
+            catalog = suites.fault_timeout_catalog()
+            self.assertEqual(6000, catalog['fault/churn']['session.timeout.ms'])
+            self.assertEqual(5000, catalog['fault/churn']['delivery_timeout'])
+            self.assertEqual(3000, catalog['fault/churn']['shutdown_timeout'])
+            self.assertEqual(2000, catalog['recovery/delivery-timeout']['delivery_timeout'])
+            self.assertEqual(701, suites.fault_execution_seconds())
+            self.assertIn('-timeout=701s', suites.command('fault'))
+        with self.assertRaisesRegex(ValueError, 'unknown fault timeout tier'):
+            suites.fault_timeout_catalog('missing')
 
     def test_failed_fault_run_replaces_prior_successful_receipt(self):
         # Given an older successful receipt in the reusable CI report directory.

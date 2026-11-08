@@ -96,11 +96,12 @@ class FaultOracleTest(unittest.TestCase):
         self.addCleanup(index.db.close)
         return index
 
-    def oracle(self, path, saved=1, source=None, destination=None):
+    def oracle(self, path, saved=1, source=None, destination=None, tier='full'):
         oracle = Oracle.__new__(Oracle)
         oracle.directory = path
         oracle.args = SimpleNamespace(case='recovery/kill', partitions=1, allow_empty=False, binary=path/'binary')
-        oracle.timeout_basis = {name: ms/1000 for name, ms in fault_timeout_catalog()[oracle.args.case].items()}
+        oracle.timeout_tier = tier
+        oracle.timeout_basis = {name: ms/1000 for name, ms in fault_timeout_catalog(oracle.timeout_tier)[oracle.args.case].items()}
         oracle.platforms = dict(binary_platform='fixture/fixture', execution_platform='fixture/fixture')
         oracle.args.binary.write_bytes(b'candidate')
         oracle.binary_digest = checksum(oracle.args.binary)
@@ -353,10 +354,10 @@ class FaultOracleTest(unittest.TestCase):
                     oracle.command(dict(command='finish', writers_stopped=True,
                         writer_observations=[dict(pid=1, exit_code=1, observation='process exited')]))
 
-    def complete_case(self, path, id='recovery/kill'):
-        oracle = self.oracle(path, source=[record(0)])
+    def complete_case(self, path, id='recovery/kill', tier='full'):
+        oracle = self.oracle(path, source=[record(0)], tier=tier)
         oracle.args.case = id
-        oracle.timeout_basis = {name: ms/1000 for name, ms in fault_timeout_catalog()[id].items()}
+        oracle.timeout_basis = {name: ms/1000 for name, ms in fault_timeout_catalog(tier)[id].items()}
         recovery = sum(oracle.timeout_basis.values())
         with patch('tools.qualification.fault_oracle.time.time', return_value=10):
             window = oracle.command(dict(command='fault-start', kind='kill', target=dict(worker='fixture'),
@@ -369,6 +370,66 @@ class FaultOracleTest(unittest.TestCase):
             oracle.command(dict(command='finish', writers_stopped=True,
                 writer_observations=[dict(pid=1, exit_code=1, observation='process exited')]))
         return path/'case.json'
+
+    def test_pr_receipt_retains_full_selected_horizon_and_rejects_other_tiers(self):
+        # Given shorter actual fixture budgets, when validating the receipt,
+        # then require their entire sum and bind proof to the recorded tier.
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.complete_case(Path(directory), tier='pr')
+            case = validate_case(path)
+            self.assertEqual('pr', case['timeout_tier'])
+            self.assertEqual(14, case['fault_events'][0]['recovery_seconds'])
+            case['timeout_tier'] = 'full'
+            path.write_text(json.dumps(case))
+            with self.assertRaisesRegex(ValueError, 'registered scenario'):
+                validate_case(path)
+            case['timeout_tier'] = 'missing'
+            path.write_text(json.dumps(case))
+            with self.assertRaisesRegex(ValueError, 'unknown fault timeout tier'):
+                validate_case(path)
+
+    def test_receipt_requires_an_explicit_registered_tier_string(self):
+        # Given a valid full receipt, when its tier is removed or malformed,
+        # then ambient configuration cannot supply the missing identity.
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.complete_case(Path(directory))
+            original = json.loads(path.read_text())
+            for tier in (None, '', False, True, 0, 1, [], {}, 'missing'):
+                with self.subTest(tier=tier):
+                    path.write_text(json.dumps(dict(original, timeout_tier=tier)))
+                    with self.assertRaisesRegex(ValueError, 'unknown fault timeout tier'):
+                        validate_case(path)
+
+    def test_stopped_writers_still_observe_the_complete_pr_horizon(self):
+        # Given healed brokers and stopped writers before the PR horizon ends.
+        with tempfile.TemporaryDirectory() as directory:
+            oracle = self.oracle(Path(directory), source=[record(0)], tier='pr')
+            clock = [10.0]
+            with patch('tools.qualification.fault_oracle.time.time', side_effect=lambda: clock[0]), \
+                 patch('tools.qualification.fault_oracle.time.sleep', side_effect=lambda delay: clock.__setitem__(0, clock[0]+delay)):
+                window = oracle.command(dict(command='fault-start', kind='kill', target=dict(worker='fixture'),
+                    recovery_seconds=14, timeout_basis=oracle.timeout_basis, observation='healthy'))['window']
+                clock[0] = 11
+                oracle.command(dict(command='fault-injected', window=window, kind='kill', target=dict(worker='fixture'), observation='exited'))
+                clock[0] = 12
+                oracle.command(dict(command='fault-healed', window=window, observation='replacement owns partition'))
+                clock[0] = 13
+                oracle.command(dict(command='finish', writers_stopped=True,
+                    writer_observations=[dict(pid=1, exit_code=1, observation='process exited')]))
+            self.assertEqual(26, clock[0])
+            self.assertEqual(13, validate_case(Path(directory)/'case.json')['writers_stopped_at'])
+
+    def test_late_corrupt_output_after_heal_before_writer_exit_fails(self):
+        # Given a healthy prefix after heal, before the caller stops its writer.
+        with tempfile.TemporaryDirectory() as directory:
+            oracle = self.oracle(Path(directory), source=[record(0)], tier='pr')
+            oracle.sample()
+            oracle.windows = [dict(injections=[dict(at=10)], healed_at=11, recovery_until=25)]
+            oracle.destination.records.append(record(99))
+            oracle.destination.snapshot = 2
+            # When queued output arrives, then independent observation still rejects it.
+            with self.assertRaises(ValueError):
+                oracle.sample()
 
     def test_receipt_contains_event_derived_proof_and_checked_partition_coverage(self):
         # Given an observed injection and heal with configured timeout budgets.

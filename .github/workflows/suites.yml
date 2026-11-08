@@ -5,6 +5,10 @@ on:
       suites:
         type: string
         required: true
+      fault_tier:
+        description: Fault fixture timeout tier (full or pr)
+        type: string
+        default: full
       artifact:
         description: 'Release archive artifact; empty builds source'
         type: string
@@ -35,6 +39,7 @@ jobs:
       KAFERRY_SOAK_DURATION: ${{ inputs.soak_duration }}
       KAFERRY_SOAK_DEST_STALL_CONTAINER: kaferry-compat-kafka-dr-1
       SUITE: ${{ matrix.suite }}
+      KAFERRY_FAULT_TIER: ${{ inputs.fault_tier }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-go

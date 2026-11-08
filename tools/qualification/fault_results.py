@@ -123,7 +123,10 @@ def _validate_observations(case, root):
     events = case['fault_events']
     if not events:
         raise ValueError('fault case has no observed fault')
-    registered = fault_timeout_catalog().get(case['id'])
+    tier = case['timeout_tier']
+    if not isinstance(tier, str) or not tier:
+        raise ValueError('unknown fault timeout tier in receipt')
+    registered = fault_timeout_catalog(tier).get(case['id'])
     if registered is None:
         raise ValueError('fault case is not registered in the timeout catalog')
     required_timeouts = {key: milliseconds/1000 for key, milliseconds in registered.items()}

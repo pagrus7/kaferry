@@ -316,14 +316,9 @@ receipt validation both require that case's exact timeout keys and values. Addin
 scenario requires registering the budgets used by its actual fixture configuration.
 `make fault` retains this evidence under `build-results/`; standalone runs use `--output`.
 
-The `fault` Go process allowance preserves its existing 600 seconds for execution and
-adds 473 seconds for the required recovery horizons. The shared fixture timeout catalog
-supplies both actual scenario settings and observation windows: churn 135 seconds,
-crash 96, blocking commit 45, and the five recovery cases 39, 39, 11, 69 and 39. Churn's
-three ownership windows overlap, so only its final 135-second horizon extends the case.
-The resulting outer budget is 1,073 seconds; individual CLI, fault and query deadlines
-stay unchanged. Repeated `recovery` keeps its requested duration plus the existing
-600-second allowance for completing its final cycle.
+The shared fixture timeout catalog selects actual scenario settings and observation windows. Integrity PR jobs use the `pr` tier: a six-second session budget, at most five seconds for delivery and three seconds for shutdown. The delivery-timeout case uses two seconds for delivery; the adapter-only probe uses only its session budget. Scheduled and standalone qualification use the `full` tier, with `KAFERRY_FAULT_TIER=pr` available for a local PR run. Every receipt identifies its tier and must match that tier's exact registered budgets.
+
+The `fault` Go process allowance is 600 seconds plus one complete recovery horizon per selected case. Churn's ownership windows overlap, so only its final horizon extends the case. CLI, fault and query deadlines remain separate from this outer execution allowance. Repeated `recovery` allows its requested duration plus 600 seconds to complete its final cycle.
 
 Run repeated recovery separately from uninterrupted uptime:
 

@@ -36,8 +36,14 @@ func faultTimeouts(t *testing.T, id string) map[string]time.Duration {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "qualification", "fault-timeouts-ms.json"))
 	require.NoError(t, err)
-	var catalog map[string]map[string]int64
-	require.NoError(t, json.Unmarshal(data, &catalog))
+	var tiers map[string]map[string]map[string]int64
+	require.NoError(t, json.Unmarshal(data, &tiers))
+	tier := os.Getenv("KAFERRY_FAULT_TIER")
+	if tier == "" {
+		tier = "full"
+	}
+	require.Contains(t, tiers, tier, "select a registered fault timeout tier")
+	catalog := tiers[tier]
 	require.Contains(t, catalog, id, "register a scenario before generating fault proof")
 	result := make(map[string]time.Duration)
 	for name, milliseconds := range catalog[id] {

@@ -44,8 +44,12 @@ CI_EXTRA = {
 }
 
 
-def fault_timeout_catalog():
+def fault_timeout_catalog(tier=None):
     catalog = json.loads((Path(__file__).resolve().parents[2]/'src/tests/qualification/fault-timeouts-ms.json').read_text())
+    tier = tier or os.environ.get('KAFERRY_FAULT_TIER', 'full')
+    if tier not in catalog:
+        raise ValueError('unknown fault timeout tier: ' + tier)
+    catalog = catalog[tier]
     if not catalog or any(not budgets or set(budgets)-{'session.timeout.ms', 'delivery_timeout', 'shutdown_timeout'} or
                           any(type(ms) is not int or ms <= 0 for ms in budgets.values())
                           for budgets in catalog.values()):
@@ -57,9 +61,8 @@ def fault_execution_seconds():
     catalog = fault_timeout_catalog()
     if not FAULT_CASES <= catalog.keys():
         raise ValueError('fault timeout catalog omitted a selected case')
-    # Preserve the existing 600s execution allowance and account for every added
-    # full recovery horizon. Churn's three windows overlap: only their last 135s
-    # horizon extends the case, so its catalog entry is counted once.
+    # Each case observes the full horizon for its selected fixture budgets.
+    # Churn's windows overlap, so its final horizon is counted once.
     milliseconds = sum(sum(catalog[id].values()) for id in FAULT_CASES)
     return 600 + (milliseconds+999)//1000
 
