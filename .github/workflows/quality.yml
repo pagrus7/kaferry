@@ -35,7 +35,8 @@ jobs:
           gh api -H 'Accept: application/octet-stream' repos/golangci/golangci-lint/releases/assets/647132535 > .cache/quality-tools/golangci-lint.tar.gz
           echo '9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea  .cache/quality-tools/golangci-lint.tar.gz' | sha256sum --check
           tar -xzf .cache/quality-tools/golangci-lint.tar.gz -C .cache/quality-tools
-          curl --fail --location --retry 3 https://github.com/kucherenko/jscpd/releases/download/v5.4.2/jscpd-linux-x64-gnu.tar.gz -o .cache/quality-tools/jscpd.tar.gz
+          # jscpd v5.4.2, linux-x64-gnu; verify the pinned bytes below.
+          gh api -H 'Accept: application/octet-stream' repos/kucherenko/jscpd/releases/assets/659819461 > .cache/quality-tools/jscpd.tar.gz
           echo '216bae5de2b30c57f893286585c7a348e8af7cd36810949831f569d29f495a3b  .cache/quality-tools/jscpd.tar.gz' | sha256sum --check
           tar -xzf .cache/quality-tools/jscpd.tar.gz -C .cache/quality-tools
       - name: Script tests
