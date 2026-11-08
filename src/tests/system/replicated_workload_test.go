@@ -1,0 +1,99 @@
+//go:build integration && fault
+
+package compat
+
+import (
+	"context"
+	"encoding/binary"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
+)
+
+func TestReplicatedPublisherAcknowledgesAllPartitionsAndStops(t *testing.T) {
+	// Given a bounded publisher and 24 independently observable source partitions.
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(replicatedPartitions, "source"))
+	defer cluster.Close()
+	client := fixtureClient(t, cluster.ListenAddrs()[0], kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.AllowIdempotentProduceCancellation(), kgo.RecordDeliveryTimeout(time.Second), kgo.MaxBufferedRecords(48))
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	publisher := startReplicatedPublisher(ctx, client, "source")
+	t.Cleanup(func() { publisher.stop() })
+
+	// When two complete batches are acknowledged, stop and join the publisher.
+	require.Eventually(t, func() bool { return publisher.snapshot().Batches >= 2 }, 5*time.Second, 10*time.Millisecond)
+	state := publisher.stop()
+	require.NoError(t, state.err)
+	require.False(t, state.Stopped.IsZero())
+	require.Zero(t, client.BufferedProduceRecords())
+	ends, err := kadm.NewClient(client).ListEndOffsets(ctx, "source")
+	require.NoError(t, err)
+	require.NoError(t, ends.Error())
+	assign(t, client, "source", replicatedPartitions)
+	seen := make([]int64, replicatedPartitions)
+	total := int64(state.Batches * replicatedPartitions)
+
+	// Then each acknowledgement corresponds to an actual complete unique record
+	// on its intended partition, and shutdown leaves no buffered publication.
+	for received := int64(0); received < total; {
+		fetches := client.PollFetches(ctx)
+		require.Empty(t, fetches.Errors())
+		for _, record := range fetches.Records() {
+			require.Len(t, record.Value, 2048)
+			require.EqualValues(t, seen[record.Partition], binary.BigEndian.Uint64(record.Value))
+			require.EqualValues(t, record.Partition, binary.BigEndian.Uint32(record.Value[8:]))
+			require.Equal(t, []kgo.RecordHeader{{Key: "duplicate", Value: nil}, {Key: "duplicate", Value: []byte{}}}, record.Headers)
+			seen[record.Partition]++
+			received++
+		}
+		require.NoError(t, ctx.Err())
+	}
+	for partition, count := range state.Acknowledged {
+		require.EqualValues(t, state.Batches, count)
+		require.Equal(t, count, ends["source"][int32(partition)].Offset)
+		require.Equal(t, count, seen[partition])
+	}
+}
+
+func TestReplicatedPublisherStopsAfterRejectedBatch(t *testing.T) {
+	// Given a broker that rejects publication rather than acknowledging input.
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(replicatedPartitions, "source"))
+	defer cluster.Close()
+	cluster.ControlKey(int16(kmsg.Produce), func(request kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
+		produce := request.(*kmsg.ProduceRequest)
+		response := kmsg.NewPtrProduceResponse()
+		response.SetVersion(produce.Version)
+		for _, topic := range produce.Topics {
+			result := kmsg.ProduceResponseTopic{Topic: topic.Topic, TopicID: topic.TopicID}
+			for _, partition := range topic.Partitions {
+				result.Partitions = append(result.Partitions, kmsg.ProduceResponseTopicPartition{Partition: partition.Partition, ErrorCode: 29})
+			}
+			response.Topics = append(response.Topics, result)
+		}
+		return response, nil, true
+	})
+	client := fixtureClient(t, cluster.ListenAddrs()[0], kgo.RecordPartitioner(kgo.ManualPartitioner()), kgo.AllowIdempotentProduceCancellation())
+	publisher := startReplicatedPublisher(t.Context(), client, "source")
+	t.Cleanup(func() { publisher.stop() })
+
+	// When the first batch is rejected, then the error is retained and no later
+	// scheduled batch can make the fixture appear to have maintained input.
+	select {
+	case <-publisher.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("publisher did not stop after a permanent source rejection")
+	}
+	state := publisher.stop()
+	require.Error(t, state.err)
+	require.Equal(t, 1, state.Batches)
+	for _, count := range state.Acknowledged {
+		require.Zero(t, count)
+	}
+}

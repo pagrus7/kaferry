@@ -6,5 +6,6 @@
   "recovery/signal": {"session.timeout.ms": 6000, "delivery_timeout": 30000, "shutdown_timeout": 3000},
   "recovery/delivery-timeout": {"session.timeout.ms": 6000, "delivery_timeout": 2000, "shutdown_timeout": 3000},
   "recovery/source-outage-shutdown": {"session.timeout.ms": 6000, "delivery_timeout": 60000, "shutdown_timeout": 3000},
-  "recovery/ownership-loss": {"session.timeout.ms": 6000, "delivery_timeout": 30000, "shutdown_timeout": 3000}
+  "recovery/ownership-loss": {"session.timeout.ms": 6000, "delivery_timeout": 30000, "shutdown_timeout": 3000},
+  "ownership/zombie-worker": {"session.timeout.ms": 6000, "socket.timeout.ms": 8000, "progress_save_timeout": 10000, "delivery_timeout": 2000, "shutdown_timeout": 5000}
 }

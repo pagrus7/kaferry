@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[2]
 IMAGES = json.loads((ROOT / 'src/tests/qualification/matrix.json').read_text())
 VERSIONS = list(IMAGES)
 RELEASES = json.loads((ROOT / 'src/tests/qualification/releases.json').read_text())
-SUITES = ('broker', 'replicated', 'auth', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'migration',
+SUITES = ('broker', 'replicated', 'fault-replicated', 'auth', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'migration',
           'model', 'resources', 'integration', 'fuzz', 'benchmark', 'smoke', 'cloud')
 STOP_GRACE = 5
 SOAK_DRAIN_SECONDS = 10
@@ -41,10 +41,11 @@ LAB_LOCK = Path('/tmp/kaferry-qualification.lock')
 VENV = ROOT / ('.cache/qualification/venv-' + str(sys.version_info.major) + '.' + str(sys.version_info.minor))
 REPLICATED_SOURCE_PORTS = (46092, 46093, 46094)
 REPLICATED_DESTINATION_PORTS = (47092, 47093, 47094)
+REPLICATED_SUITES = ('replicated', 'fault-replicated')
 
 
 def replicated_fixture(args):
-    return (getattr(args, 'suite', None) == 'replicated' or
+    return (getattr(args, 'suite', None) in REPLICATED_SUITES or
             getattr(args, 'suite', None) == 'endurance' and getattr(args, 'topology', None) == 'replicated')
 
 
@@ -162,6 +163,8 @@ def suite_command(args, env):
     if args.suite != 'recovery':
         env.pop('KAFERRY_RECOVERY_DURATION', None)
     prefix = [env.get('GO', 'go'), 'test', '-count=1', '-json']
+    if args.suite == 'fault-replicated':
+        return go_suite(args.suite, go=prefix[0], timeout='4m'), EXPECTED[args.suite]
     if args.suite in ('broker', 'replicated', 'cloud'):
         python = str(VENV / 'bin/python') if VENV.exists() else sys.executable
         return [python, '-m', 'tools.qualification.broker_probe', '--binary', args.binary, '--output', str(args.output),
@@ -391,6 +394,13 @@ def resolve_run(args, receipt, fixture):
                KAFKA_FAULT_CONTAINER=project+'-kafka-1', KAFKA_FAULT_DEST_CONTAINER=project+'-kafka-dr-1', KAFERRY_FIXTURE_PROJECT=project, CGO_ENABLED='1')
     compose = ['docker', 'compose', '-f', 'src/tests/compose.yaml', '-p', project, '--profile', 'cross-cluster']
     volume = getattr(args, 'broker_volume', None)
+    selected_case = getattr(args, 'case', None)
+    if selected_case and args.suite != 'fault-replicated':
+        raise ValueError('--case requires run fault-replicated')
+    if args.suite == 'fault-replicated':
+        if selected_case not in (None, 'ownership/zombie-worker'):
+            raise ValueError('unknown replicated fault case')
+        receipt['case_selection'] = ['ownership/zombie-worker']
     if volume and (not replicated_fixture(args) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', volume)):
         raise ValueError('--broker-volume requires a replicated fixture and a Docker volume name')
     if replicated_fixture(args):
@@ -413,7 +423,7 @@ def resolve_run(args, receipt, fixture):
                                      replication_factor=3, min_insync_replicas=2, client_paths=4)
         receipt['fixture_storage'] = dict(mode='external-volume' if volume else 'disposable-volume',
                                          run_id=env['KAFERRY_REPLICATED_RUN_ID'])
-    fixtures = args.suite in ('broker', 'replicated', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration') or (args.suite == 'migration' and args.state_contract == 'resume')
+    fixtures = args.suite in ('broker', *REPLICATED_SUITES, 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration') or (args.suite == 'migration' and args.state_contract == 'resume')
     if not Path(args.binary).is_file():
         raise ValueError('binary is missing; run make build or pass --binary')
     receipt['binary_sha256'] = hashlib.sha256(Path(args.binary).read_bytes()).hexdigest()
@@ -433,7 +443,7 @@ def resolve_run(args, receipt, fixture):
         raise ValueError('--config is only accepted by the external cloud suite')
     if args.suite == 'cloud' and not args.config:
         raise ValueError('cloud requires --config; this command never provisions a service')
-    if args.suite in ('fault', 'recovery'):
+    if args.suite in ('fault', 'recovery', 'fault-replicated'):
         from tools.qualification.fault_results import configure
         configure(env)
         receipt['fault_oracle_run'] = env['KAFERRY_ORACLE_RUN']
@@ -446,6 +456,8 @@ def resolve_run(args, receipt, fixture):
         timeout = args.duration + SOAK_DRAIN_SECONDS + 300
     elif args.suite == 'recovery':
         timeout = args.duration + 600
+    elif args.suite == 'fault-replicated':
+        timeout = 300
     return RunSpec(command, expected, env, compose if fixtures else [], timeout)
 
 
@@ -495,7 +507,7 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
                        'brokers-up', spec.env, timeout=180, cancelled=cancelled)
                 startup_complete = True
                 receipt['broker_images'] = capture(spec.compose + ['images', '--format', 'json'])
-            if args.suite == 'replicated':
+            if args.suite in REPLICATED_SUITES:
                 logged([spec.env.get('GO', 'go'), 'test', '-count=1', '-json', '-tags=integration',
                         '-timeout=3m', '-run', '^TestReplicatedProxyRoutes$', './src/tests/system/faults'],
                        args.output, 'proxy-proof', spec.env, timeout=210, cancelled=cancelled)
@@ -566,6 +578,11 @@ def verify_run(args, spec, receipt):
     if args.suite in ('fault', 'recovery'):
         from tools.qualification.fault_results import collect
         receipt['fault_results'] = collect(args.output, args.suite, receipt, spec.env.get('KAFERRY_ORACLE_RUN'))
+    if args.suite == 'fault-replicated':
+        from tools.qualification.ownership_audit import validate
+        case = validate(args.output, receipt)
+        receipt['fault_results'] = dict(schema=1, status='passed', cases=[case], oracle_run=spec.env['KAFERRY_ORACLE_RUN'],
+            **{key: receipt[key] for key in ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')})
 
 
 def run_suite(args, *, fixture=None, cancelled=None):
@@ -707,6 +724,7 @@ def main(argv=None):
             running.add_argument('suite', choices=SUITES)
             running.add_argument('--broker-volume', help='existing labeled external volume; replicated fixtures only')
             running.add_argument('--topology', choices=('single', 'replicated'), help='endurance topology (default: single)')
+            running.add_argument('--case', choices=('ownership/zombie-worker',), help='case within fault-replicated')
         elif name == 'matrix':
             running.add_argument('--tier', choices=('pr', 'nightly', 'full'), default='pr')
         running.add_argument('--source', choices=VERSIONS)

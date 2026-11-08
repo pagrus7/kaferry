@@ -16,6 +16,7 @@ GO_SUITES = {
     'soak': ('integration,load', '^TestStreamingSoak', False),
     'fault': ('integration,fault', '^TestBlockingCommit|^TestRebalanceChurn|^TestCrashResume|^TestRecoveryBlockedOutput', False),
     'recovery': ('integration,fault', '^TestRecoveryBlockedOutput$', False),
+    'fault-replicated': ('integration,fault,load', '^TestReplicatedZombieWorker$', False),
 }
 RECOVERY_CASES = {'recovery/'+name for name in
                   ('kill', 'signal', 'delivery-timeout', 'source-outage-shutdown', 'ownership-loss')}
@@ -31,6 +32,7 @@ EXPECTED = {
     'fault': ['TestBlockingCommitAcrossBrokerOutage', 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits',
               'TestCrashResumeReconcilesRetainedRecords', 'TestRecoveryBlockedOutput'],
     'recovery': ['TestRecoveryBlockedOutput'],
+    'fault-replicated': ['TestReplicatedZombieWorker'],
     'qualification': [
         'TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight', 'TestSaslTlsScramMechanisms/SCRAM-SHA-256',
         'TestSaslTlsScramMechanisms/SCRAM-SHA-512', 'TestSaslTlsExternalAuthentication/OAUTHBEARER',
@@ -46,9 +48,11 @@ CI_EXTRA = {
 
 def fault_timeout_catalog():
     catalog = json.loads((Path(__file__).resolve().parents[2]/'src/tests/qualification/fault-timeouts-ms.json').read_text())
-    if not catalog or any(not budgets or set(budgets)-{'session.timeout.ms', 'delivery_timeout', 'shutdown_timeout'} or
+    standard = {'session.timeout.ms', 'delivery_timeout', 'shutdown_timeout'}
+    ownership = standard | {'socket.timeout.ms', 'progress_save_timeout'}
+    if not catalog or any(not budgets or set(budgets)-(ownership if id == 'ownership/zombie-worker' else standard) or
                           any(type(ms) is not int or ms <= 0 for ms in budgets.values())
-                          for budgets in catalog.values()):
+                          for id, budgets in catalog.items()):
         raise ValueError('fault observation timeout catalog must contain positive milliseconds')
     return catalog
 
