@@ -197,22 +197,27 @@ def _validate(directory, identity=None):
             any(before < 1 or after <= before+2 for before, after in zip(case['baseline_saved'], case['peer_saved']))):
         raise ValueError('peer progress was not independently observed while the route remained cut')
     targets = case['fault']['targets']
+    fault = case['fault']['fault']
     if (len(targets) != 1 or targets[0]['cluster'] != 'source' or targets[0]['listener'] != 'worker1' or
-            case['fault']['role']['kind'] != 'worker-coordinator' or case['fault']['fault']['kind'] != 'cut' or
+            case['fault']['role']['kind'] != 'worker-coordinator' or
+            case['fault']['role']['cluster'] != 'source' or case['fault']['role']['worker'] != 1 or
+            set(fault)-{'kind', 'stream', 'value'} or fault['kind'] != 'timeout' or
+            fault['stream'] != 'upstream' or integer(fault.get('value', 0)) != 0 or
             case['fault']['role']['group'] != case['group']):
-        raise ValueError('fault did not isolate only worker1 coordinator route')
+        raise ValueError('fault did not blackhole only worker1 coordinator upstream without immediate close')
     windows = safety['fault_events']
     if len(windows) != 1 or len(windows[0]['injections']) != 1:
-        raise ValueError('ownership proof requires exactly one fully observed coordinator cut')
+        raise ValueError('ownership proof requires exactly one fully observed coordinator blackhole')
     window = windows[0]
     injected = window['injections'][0]
     actual = injected['target']
-    if (window['target'] != case['fault']['role'] or injected['kind'] != 'cut' or
+    if (window['target'] != case['fault']['role'] or injected['kind'] != 'timeout' or
             any(actual[key] != case['fault'][key] for key in ('role', 'fault', 'targets', 'start')) or
             not window['started_at'] <= stamp(case['fault']['start']) <= injected['at'] <= stamp(transfer['finished']) or
             stamp(case['fault']['heal']) > window['healed_at'] or
-            window['timeout_basis'] != {'session.timeout.ms': 6, 'delivery_timeout': 2, 'shutdown_timeout': 5} or
-            window['recovery_seconds'] != 13):
+            window['timeout_basis'] != {'session.timeout.ms': 6, 'socket.timeout.ms': 8, 'progress_save_timeout': 10,
+                                        'delivery_timeout': 2, 'shutdown_timeout': 5} or
+            window['recovery_seconds'] != 31):
         raise ValueError('ownership fault target, timing or configured recovery window differs from independent safety evidence')
     rows = []
     expiries = []
@@ -326,8 +331,11 @@ def _validate(directory, identity=None):
             peer_progress.update(part for part, offset in accepted if part in old_parts and offset > case['baseline_saved'][part]+2)
     if peer_progress != old_parts:
         raise ValueError('broker audit lacks accepted peer progress on every transferred partition')
-    if not all(case['processes_alive_after_transfer']) or not all(case['processes_alive_after_heal']):
-        raise ValueError('zombie interval lacks both live selected CLI processes')
+    if any(len(case[key]) != 2 or any(value is not True for value in case[key])
+           for key in ('processes_alive_after_transfer', 'processes_alive_before_heal')):
+        raise ValueError('zombie interval lacks both live selected CLI processes through accepted peer progress before heal')
+    if len(case['processes_alive_after_heal']) != 2 or case['processes_alive_after_heal'][1] is not True:
+        raise ValueError('peer did not remain alive after heal')
     after_heal, final = case['publishing_after_heal'], case['publishing']
     if (stamp(after_heal['observed']) < stamp(case['fault']['heal']) or
             stamp(case['healed']['started']) < stamp(after_heal['observed']) or
@@ -342,17 +350,39 @@ def _validate(directory, identity=None):
             0 < row['peak_uncommitted_records'] <= row['record_cap'] == 1024 and
             0 < row['peak_uncommitted_bytes'] <= row['byte_cap'] == 134217728) for row in measurements):
         raise ValueError('selected CLI resource measurements are incomplete or exceed the configured caps')
-    if ({row['pid'] for row in measurements} != {row['pid'] for row in safety['writer_observations']} or
-            any(row['exit_code'] != 0 for row in safety['writer_observations']) or
+    exits = {row['pid']: row['exit_code'] for row in safety['writer_observations']}
+    if (len(exits) != 2 or {row['pid'] for row in measurements} != exits.keys() or
+            any(type(row['exit_code']) is not int or row['exit_code'] != exits[row['pid']] for row in measurements) or
+            measurements[1]['exit_code'] != 0 or measurements[0]['exit_code'] not in (0, 1) or
             any(not stamp(case['audit_marks']['baseline']['finished']) < stamp(row['started_at']) <
-                    stamp(case['fault']['start']) < stamp(case['fault']['heal']) < stamp(row['stopped_at']) <
+                    stamp(case['fault']['start']) < stamp(case['heal_started']) < stamp(row['stopped_at']) <
                     stamp(case['audit_marks']['final']['started']) for row in measurements)):
         raise ValueError('complete broker audit does not surround both observed selected CLI processes')
+    # The product deliberately fails a periodic save on a fenced generation.
+    # A nonzero exit qualifies only with its actual selected-CLI rejection,
+    # observed after healing begins and before the OS exit observation. A
+    # transport-only failure or traffic absence is never fencing evidence.
+    rejected = [row for row in stale if all(error in (22, 25, 82) for _, _, error in commits(row)) and
+                stamp(case['heal_started']) <= row['received_at'] <= row['completed_at'] <= stamp(measurements[0]['stopped_at'])]
+    fenced_parts = {part for row in rejected for part, _, _ in commits(row)}
+    rejected_owner = old_parts.issubset(fenced_parts)
+    healed_worker = [member for member in case['healed']['members'] if member['client_id'] == worker1]
+    current_parts = set(healed_worker[0]['partitions']) if len(healed_worker) == 1 else set()
+    rejoin_parts = {part for row in rejoined if healed_worker and row['request']['memberId'] == healed_worker[0]['member_id'] and
+                    stamp(case['heal_started']) <= row['received_at'] <= row['completed_at'] <= stamp(measurements[0]['stopped_at'])
+                    for part, offset, error in commits(row) if error == 0 and offset > case['peer_saved'][part]}
+    local_fenced_rejoin = bool(current_parts) and current_parts.issubset(rejoin_parts)
+    if measurements[0]['exit_code'] == 1 and not rejected_owner:
+        raise ValueError('worker1 failed without an independently audited stale-generation rejection before exit')
+    if not rejected_owner and not local_fenced_rejoin:
+        raise ValueError('traffic absence alone lacks positive fencing or legitimate current-generation progress')
     proof = dict(implementation='Kafka 4.4 correlated broker request log',
                 session_expiry_observations=len(expiries), expiry_before_transfer_observed=True,
                 received_commits=sum(received.values()), completed_commits=sum(completed.values()),
                 stale_member=old_member, stale_generation=generation, stale_requests=len(stale),
-                stale_rejections=sum(any(error in (22, 25, 82) for _, _, error in commits(row)) for row in stale), accepted_stale_commits=0,
+                stale_rejections=len(rejected), accepted_stale_commits=0,
+                fencing_mode='stale-generation-rejected' if rejected_owner else 'current-generation-rejoin',
+                stale_fenced_partitions=sorted(fenced_parts), worker1_exit_code=measurements[0]['exit_code'],
                 accepted_peer_partitions=sorted(peer_progress), accepted_rejoin_commits=len(rejoined),
                 post_transfer_commits=len(post), source_partitions=24, audit_files=files,
                 scope='network receipts and correlated broker completions around both selected CLI lifetimes; no rejection is inferred when a stale request is absent')

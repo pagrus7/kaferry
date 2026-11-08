@@ -16,6 +16,30 @@ from tools.qualification.fault_results import FAULT_CASES
 
 
 class SuitesTest(unittest.TestCase):
+    def test_registered_ownership_bounds_extend_only_the_catalog_key_allowlist(self):
+        # Given the new exposure's actual bounds, when loading the catalog,
+        # then its31s horizon is exact and legacy eight-case budgets stay473s.
+        catalog = suites.fault_timeout_catalog()
+        self.assertEqual(dict(zip(('session.timeout.ms', 'socket.timeout.ms', 'progress_save_timeout',
+                                  'delivery_timeout', 'shutdown_timeout'), (6000, 8000, 10000, 2000, 5000))),
+                         catalog['ownership/zombie-worker'])
+        self.assertEqual(31000, sum(catalog['ownership/zombie-worker'].values()))
+        self.assertEqual(473000, sum(sum(catalog[id].values()) for id in suites.FAULT_CASES))
+        self.assertEqual(1073, suites.fault_execution_seconds())
+        # Unknown or invalid fields must still fail closed before any suite.
+        for key, value in (('arbitrary_timeout', 1), ('socket.timeout.ms', 0), ('progress_save_timeout', True)):
+            with self.subTest(key=key, value=value):
+                changed = json.loads(json.dumps(catalog))
+                changed['ownership/zombie-worker'][key] = value
+                with patch('tools.ci.suites.json.loads', return_value=changed), \
+                     self.assertRaisesRegex(ValueError, 'positive milliseconds'):
+                    suites.fault_timeout_catalog()
+        for key in ('socket.timeout.ms', 'progress_save_timeout'):
+            changed = json.loads(json.dumps(catalog))
+            changed['fault/churn'][key] = 1000
+            with patch('tools.ci.suites.json.loads', return_value=changed), self.assertRaises(ValueError):
+                suites.fault_timeout_catalog()
+
     def test_fault_outer_budget_accounts_for_the_same_catalog_as_windows(self):
         # Given the fixture's actual per-case timeout catalog, with churn's
         # overlapping windows sharing one maximum extension of its case.

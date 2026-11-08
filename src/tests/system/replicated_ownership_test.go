@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -147,30 +148,32 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	replicatedTopic(t, ctx, source, src)
 	replicatedTopic(t, ctx, destination, dst)
 	timeouts := faultTimeouts(t, "ownership/zombie-worker")
+	fault, err := zombieCoordinatorFault(timeouts)
+	require.NoError(t, err)
 	oracle := startFaultOracle(t, "ownership/zombie-worker", strings.Join(faults.Endpoints("source", 0), ","),
 		strings.Join(faults.Endpoints("destination", 0), ","), src, dst, group, replicatedPartitions, false)
 	audit := startReplicatedAudit(t, ctx, lab, directory)
 	audit.capture(t, ctx, "baseline")
 	producer := fixtureClient(t, strings.Join(faults.Endpoints("source", 0), ","), kgo.RecordPartitioner(kgo.ManualPartitioner()),
-		kgo.MaxBufferedRecords(2*replicatedPartitions), kgo.RecordDeliveryTimeout(2*time.Second),
+		kgo.MaxBufferedRecords(2*replicatedPartitions), kgo.RecordDeliveryTimeout(timeouts["delivery_timeout"]),
 		kgo.AllowIdempotentProduceCancellation())
-	config := configuration(t, fmt.Sprintf("record_cap=1024\npartition_record_cap=128\nbyte_cap=134217728\npartition_byte_cap=8388608\nprogress_interval='100ms'\ndelivery_timeout=%q\nshutdown_timeout=%q\n",
-		timeouts["delivery_timeout"], timeouts["shutdown_timeout"]))
+	config := configuration(t, zombieWorkerSettings(timeouts))
 	binary := testBinary(t)
 	markers := []string{prefix + "-worker1", prefix + "-worker2"}
 	clients := make([]string, 2)
 	workers := make([]*cliProcess, 0, 2)
 	memories := make([]func() rssPeak, 0, 2)
 	starts := make([]time.Time, 0, 2)
+	exits := make([]<-chan time.Time, 0, 2)
 	for index, marker := range markers {
 		worker := index + 1
-		statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='%s','session.timeout.ms'='%d','heartbeat.interval.ms'='1000','socket.timeout.ms'='3000'), CONNECTION destination AS ('bootstrap.servers'='%s','client.id'='%s') INSERT INTO TOPIC '%s@destination' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST)",
-			strings.Join(faults.Endpoints("source", worker), ","), marker, timeouts["session.timeout.ms"].Milliseconds(), strings.Join(faults.Endpoints("destination", worker), ","), marker, dst, src, group)
+		statement := zombieWorkerSQL(timeouts, worker, marker, src, dst, group)
 		starts = append(starts, time.Now().UTC())
 		process := launchCLI(t, ctx, binary, "run", "--file", "-", "--config", config)
 		workers = append(workers, process)
 		oracle.writer(process)
-		memories = append(memories, watchRSS(t, process))
+		memories = append(memories, watchReplicatedRSS(t, process))
+		exits = append(exits, observeReplicatedExit(process))
 		require.NoError(t, process.send(statement))
 		waitMembers(t, source, group, worker, replicatedPartitions, nil)
 		waitReplicated(t, ctx, "broker-observed worker client identity", nil, workers, func(query context.Context) bool {
@@ -225,13 +228,13 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	})
 	before := publisher.snapshot()
 	role := faults.Role{Kind: "worker-coordinator", Cluster: "source", Group: group, Worker: 1}
-	window := oracle.begin(t, "worker-coordinator-cut", role, false,
+	window := oracle.begin(t, "worker-coordinator-blackhole", role, false,
 		timeouts,
 		"independent broker group describes two workers; every partition has saved nonempty progress")
 
-	// When only worker1's current coordinator route is cut, wait for the broker
-	// to remove its member and assign all its partitions to the surviving peer.
-	injection, err := lab.Inject(ctx, role, faults.Fault{Kind: "cut"})
+	// When worker1's coordinator upstream drops packets, keep the live pending
+	// owner exposed until the broker expires it and the peer actually saves.
+	injection, err := lab.Inject(ctx, role, fault)
 	if injection != nil {
 		audit.faultAttempted = true
 		t.Cleanup(func() {
@@ -254,7 +257,7 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	}
 	require.NoError(t, err)
 	require.Len(t, injection.Event.Targets, 1)
-	oracle.injected(t, window, "cut", injection.Event, "owned worker1 coordinator proxy disabled")
+	oracle.injected(t, window, "timeout", injection.Event, "owned worker1 coordinator upstream drops packets without immediate TCP close")
 	var transfer ownershipSnapshot
 	waitReplicated(t, ctx, "expired worker1 member and complete peer ownership", publisher, workers, func(query context.Context) bool {
 		transfer, err = observeOwnership(query, source, group, src)
@@ -290,12 +293,17 @@ func TestReplicatedZombieWorker(t *testing.T) {
 		require.NoError(t, err)
 		return ready && peerGeneration > generation
 	})
+	aliveBeforeHeal := []bool{!workers[0].finished(), !workers[1].finished()}
+	require.Equal(t, []bool{true, true}, aliveTransfer, "both workers must live through independently observed expiry")
+	require.Equal(t, []bool{true, true}, aliveBeforeHeal, "both workers must live through accepted peer progress before heal")
 	healStarted := time.Now().UTC()
 	require.NoError(t, injection.Heal(ctx))
 	oracle.healed(t, window, "original resolved coordinator route restored after independently observed expiry and peer assignment")
 	atHeal := publisher.snapshot()
 	var healed ownershipSnapshot
-	waitReplicated(t, ctx, "post-heal steady input and progress on every partition", publisher, workers, func(query context.Context) bool {
+	// A rejected late periodic save is intentionally fatal to worker1. Its
+	// exit is accepted only by the final independent positive fencing audit.
+	waitReplicated(t, ctx, "post-heal steady input and progress on every partition", publisher, workers[1:], func(query context.Context) bool {
 		state := publisher.snapshot()
 		for partition, count := range state.Acknowledged {
 			if count <= atHeal.Acknowledged[partition]+24 {
@@ -321,7 +329,7 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	publication := publisher.stop()
 	require.NoError(t, publication.err)
 	require.LessOrEqual(t, publication.MaxGapSeconds, 2.0, "source did not keep publishing steadily through the ownership fault")
-	waitReplicated(t, ctx, "all acknowledged input saved before shutdown", nil, workers, func(query context.Context) bool {
+	waitReplicated(t, ctx, "all acknowledged input saved before shutdown", nil, workers[1:], func(query context.Context) bool {
 		parts, err := source.FetchOffsetsForTopics(query, group, src)
 		if err != nil || parts.Error() != nil || len(parts[src]) != replicatedPartitions {
 			return false
@@ -342,11 +350,20 @@ func TestReplicatedZombieWorker(t *testing.T) {
 		measurements[index] = map[string]any{"sampled_peak_rss_bytes": memory.peak * 1024, "rss_samples": memory.samples,
 			"rss_failures": memory.failures, "record_cap": 1024, "byte_cap": 134217728,
 			"started_at": starts[index], "pid": process.pid()}
-		require.NoError(t, process.signal(os.Interrupt))
+		if !process.finished() {
+			if err := process.signal(os.Interrupt); !errors.Is(err, os.ErrProcessDone) {
+				require.NoError(t, err)
+			}
+		}
 	}
 	for index, process := range workers {
-		require.NoError(t, process.wait(), process.logs())
-		measurements[index]["stopped_at"] = time.Now().UTC()
+		waitErr := process.wait()
+		code := process.command.ProcessState.ExitCode()
+		if index == 1 || code != 1 {
+			require.NoError(t, waitErr, process.logs())
+		}
+		measurements[index]["stopped_at"] = <-exits[index]
+		measurements[index]["exit_code"] = code
 		summary := summaryFrom(t, process.logs())
 		require.LessOrEqual(t, summary.PeakRecords, 1024)
 		require.LessOrEqual(t, summary.PeakBytes, int64(134217728))
@@ -371,7 +388,7 @@ func TestReplicatedZombieWorker(t *testing.T) {
 		"baseline":    baseline, "baseline_generation": generation, "baseline_saved": saved, "transfer": transfer, "peer_progress": peerProgress, "peer_saved": peerSaved,
 		"publishing_before_fault": before, "publishing_after_heal": atHeal, "healed": healed, "fault": injection.Event,
 		"heal_started":                   healStarted,
-		"processes_alive_after_transfer": aliveTransfer, "processes_alive_after_heal": aliveHeal,
+		"processes_alive_after_transfer": aliveTransfer, "processes_alive_before_heal": aliveBeforeHeal, "processes_alive_after_heal": aliveHeal,
 		"safety_case": map[string]string{"observations": safetyRelative, "sha256": fmt.Sprintf("%x", sha256.Sum256(safety))},
 		"publishing":  publication, "worker_measurements": measurements}, "", "  ")
 	require.NoError(t, err)

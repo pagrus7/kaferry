@@ -88,19 +88,20 @@ class OwnershipAuditTest(unittest.TestCase):
                 'baseline': dict(started=when(0), finished=when(1)), 'final': dict(started=when(33), finished=when(34))},
             baseline=snapshot(5, 6, first), baseline_generation=2, baseline_saved=[10]*24,
             transfer=snapshot(17, 18, survivor), peer_progress=snapshot(19, 20, survivor), peer_saved=[20]*24,
-            healed=snapshot(27, 28, first), heal_started=when(20.5), fault=dict(start=when(10), heal=when(21),
-                role=dict(kind='worker-coordinator', group='group'), fault=dict(kind='cut'),
+            healed=snapshot(27, 28, [member('one', 'new', list(range(12))), member('two', 'peer', list(range(12, 24)))]),
+            heal_started=when(20.5), fault=dict(start=when(10), heal=when(21),
+                role=dict(kind='worker-coordinator', cluster='source', worker=1, group='group'), fault=dict(kind='timeout', stream='upstream'),
                 targets=[dict(cluster='source', listener='worker1', broker=2)]),
-            processes_alive_after_transfer=[True, True], processes_alive_after_heal=[True, True],
+            processes_alive_after_transfer=[True, True], processes_alive_before_heal=[True, True], processes_alive_after_heal=[True, True],
             publishing_after_heal=dict(observed=when(22), acknowledged_by_partition=[30]*24),
             publishing=dict(observed=when(30), stopped=when(29), acknowledged_by_partition=[60]*24, max_acknowledgement_gap_seconds=.1),
             worker_measurements=[dict(sampled_peak_rss_bytes=1000000, rss_samples=10, rss_failures=0,
                 peak_uncommitted_records=20, record_cap=1024, peak_uncommitted_bytes=1000, byte_cap=134217728,
-                pid=10+i, started_at=when(3+i), stopped_at=when(31+i)) for i in range(2)],
+                pid=10+i, exit_code=0, started_at=when(3+i), stopped_at=when(31+i)) for i in range(2)],
             safety_case=dict(observations='case.json', sha256=hashlib.sha256(b'{}\n').hexdigest()))
-        self.safety['fault_events'] = [dict(started_at=9, healed_at=21.1, recovery_seconds=13,
-            timeout_basis={'session.timeout.ms': 6, 'delivery_timeout': 2, 'shutdown_timeout': 5},
-            target=self.case['fault']['role'], injections=[dict(at=10.1, kind='cut', target={
+        self.safety['fault_events'] = [dict(started_at=9, healed_at=21.1, recovery_seconds=31,
+            timeout_basis={'session.timeout.ms': 6, 'socket.timeout.ms': 8, 'progress_save_timeout': 10, 'delivery_timeout': 2, 'shutdown_timeout': 5},
+            target=self.case['fault']['role'], injections=[dict(at=10.1, kind='timeout', target={
                 key: self.case['fault'][key] for key in ('role', 'fault', 'targets', 'start')})])]
         self.start = [record(.5, 'guard', 'API_VERSIONS', {}, {}, 0)]
         self.traffic = [commit(7, 'one', 'old', 2, range(12), 10, 0, 1),
@@ -148,7 +149,8 @@ class OwnershipAuditTest(unittest.TestCase):
     def test_case_uses_registered_budget_without_extending_the_legacy_suite(self):
         # Given the registered new case, when selecting its budgets, then they
         # match the actual fixture settings and leave the legacy allowance alone.
-        self.assertEqual({'session.timeout.ms': 6000, 'delivery_timeout': 2000, 'shutdown_timeout': 5000},
+        self.assertEqual({'session.timeout.ms': 6000, 'socket.timeout.ms': 8000, 'progress_save_timeout': 10000,
+                          'delivery_timeout': 2000, 'shutdown_timeout': 5000},
                          fault_timeout_catalog()['ownership/zombie-worker'])
         self.assertEqual(1073, fault_execution_seconds())
 
@@ -172,6 +174,83 @@ class OwnershipAuditTest(unittest.TestCase):
         proof = self.validate()['ownership_fencing']
         self.assertEqual(0, proof['stale_requests'])
         self.assertEqual(0, proof['stale_rejections'])
+        self.assertEqual('current-generation-rejoin', proof['fencing_mode'])
+
+    def test_fatal_periodic_save_exit_requires_actual_rejection_before_exit(self):
+        # Given a live old owner through pre-heal peer progress, whose late save
+        # receives a fenced-generation response and then exits as documented.
+        self.case['processes_alive_after_heal'] = [False, True]
+        self.case['worker_measurements'][0].update(exit_code=1, stopped_at=when(22.5))
+        self.safety['writer_observations'][0]['exit_code'] = 1
+        self.traffic = [row for row in self.traffic if row['at'] not in (23, 24)]
+        self.case['healed']['members'] = [member('two', 'peer', list(range(24)))]
+        # When validated, then the independently observed rejection, rather than
+        # continued in-process recovery, is the positive fencing evidence.
+        proof = self.validate()['ownership_fencing']
+        self.assertEqual('stale-generation-rejected', proof['fencing_mode'])
+        self.assertEqual(1, proof['worker1_exit_code'])
+        self.assertEqual(list(range(12)), proof['stale_fenced_partitions'])
+        self.case['worker_measurements'][0]['stopped_at'] = when(21.5)
+        with self.assertRaisesRegex(ValueError, 'rejection before exit'):
+            self.validate()
+
+    def test_rejoin_without_new_generation_progress_cannot_replace_fencing(self):
+        # Given a successful rejoin without advancing the pre-heal peer prefix.
+        self.traffic = [row for row in self.traffic if row['at'] != 22]
+        for row in self.traffic:
+            if row['at'] == 24:
+                for partition in row['request']['topics'][0]['partitions']:
+                    partition['committedOffset'] = '20'
+        # When no stale rejection exists either, membership alone cannot pass.
+        with self.assertRaisesRegex(ValueError, 'traffic absence alone'):
+            self.validate()
+
+    def test_transport_exit_or_traffic_absence_without_positive_fencing_fails(self):
+        # Given no old-generation rejection, even a later legitimate rejoin
+        # cannot justify a nonzero exit as a documented fatal fenced save.
+        self.traffic = [row for row in self.traffic if row['at'] != 22]
+        self.case['worker_measurements'][0]['exit_code'] = 1
+        self.safety['writer_observations'][0]['exit_code'] = 1
+        with self.assertRaisesRegex(ValueError, 'rejection before exit'):
+            self.validate()
+        # When there are no stale requests or new-generation accepted saves,
+        # then transport blockage alone cannot qualify even a clean exit.
+        self.case['worker_measurements'][0]['exit_code'] = 0
+        self.safety['writer_observations'][0]['exit_code'] = 0
+        self.traffic = [row for row in self.traffic if row['at'] not in (23, 24)]
+        with self.assertRaisesRegex(ValueError, 'traffic absence alone'):
+            self.validate()
+
+    def test_old_close_stimulus_short_rpc_or_old_recovery_receipt_fails(self):
+        # Given historical reset or incomplete-timeout receipts, when checked
+        # against this exposure, then they cannot be reclassified as qualified.
+        for mutation in ('close', 'downstream', 'finite-timeout', 'short-rpc', 'old-horizon'):
+            with self.subTest(mutation=mutation):
+                original_case, original_safety = copy.deepcopy(self.case), copy.deepcopy(self.safety)
+                if mutation == 'close':
+                    self.case['fault']['fault'] = dict(kind='cut')
+                elif mutation == 'downstream':
+                    self.case['fault']['fault']['stream'] = 'downstream'
+                elif mutation == 'finite-timeout':
+                    self.case['fault']['fault']['value'] = 1000
+                elif mutation == 'short-rpc':
+                    self.safety['fault_events'][0]['timeout_basis']['socket.timeout.ms'] = 3
+                else:
+                    self.safety['fault_events'][0]['recovery_seconds'] = 13
+                with self.assertRaises(ValueError):
+                    self.validate()
+                self.case, self.safety = original_case, original_safety
+
+    def test_both_workers_must_live_through_peer_progress_and_peer_must_keep_running(self):
+        for field, value in (('processes_alive_after_transfer', [False, True]),
+                             ('processes_alive_before_heal', [False, True]),
+                             ('processes_alive_after_heal', [True, False])):
+            with self.subTest(field=field):
+                original = self.case[field]
+                self.case[field] = value
+                with self.assertRaises(ValueError):
+                    self.validate()
+                self.case[field] = original
 
     def test_accepted_stale_commit_fails_even_when_final_progress_is_safe(self):
         # Given a real accepted old-generation request after peer transfer.
