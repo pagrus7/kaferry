@@ -24,30 +24,35 @@ func (s settings) securityOptions() ([]kgo.Opt, error) {
 		return nil, invalidProperty("security.protocol", "TLS files require SSL or SASL_SSL")
 	}
 	if strings.HasPrefix(s.protocol, "SASL_") {
-		switch s.mechanism {
-		case "PLAIN":
-			options = append(options, kgo.SASL(plain.Auth{User: s.username, Pass: s.password}.AsMechanism()))
-		case "SCRAM-SHA-256":
-			options = append(options, kgo.SASL(scram.Auth{User: s.username, Pass: s.password}.AsSha256Mechanism()))
-		case "SCRAM-SHA-512":
-			options = append(options, kgo.SASL(scram.Auth{User: s.username, Pass: s.password}.AsSha512Mechanism()))
-		case "OAUTHBEARER":
-			mechanism, err := s.oauth.mechanism()
-			if err != nil {
-				return nil, err
-			}
-			options = append(options, kgo.SASL(mechanism))
-		case "AWS_MSK_IAM":
-			options = append(options, kgo.SASL(defaultAWSMechanism()))
-		case "GSSAPI":
-			mechanism, err := s.kerberos.mechanism()
-			if err != nil {
-				return nil, err
-			}
-			options = append(options, kgo.SASL(mechanism))
-		}
+		return s.addSASLOptions(options)
 	} else if s.username != "" || s.password != "" {
 		return nil, invalidProperty("security.protocol", "SASL credentials require SASL_PLAINTEXT or SASL_SSL")
+	}
+	return options, nil
+}
+
+func (s settings) addSASLOptions(options []kgo.Opt) ([]kgo.Opt, error) {
+	switch s.mechanism {
+	case "PLAIN":
+		options = append(options, kgo.SASL(plain.Auth{User: s.username, Pass: s.password}.AsMechanism()))
+	case "SCRAM-SHA-256":
+		options = append(options, kgo.SASL(scram.Auth{User: s.username, Pass: s.password}.AsSha256Mechanism()))
+	case "SCRAM-SHA-512":
+		options = append(options, kgo.SASL(scram.Auth{User: s.username, Pass: s.password}.AsSha512Mechanism()))
+	case "OAUTHBEARER":
+		mechanism, err := s.oauth.mechanism()
+		if err != nil {
+			return nil, err
+		}
+		options = append(options, kgo.SASL(mechanism))
+	case "AWS_MSK_IAM":
+		options = append(options, kgo.SASL(defaultAWSMechanism()))
+	case "GSSAPI":
+		mechanism, err := s.kerberos.mechanism()
+		if err != nil {
+			return nil, err
+		}
+		options = append(options, kgo.SASL(mechanism))
 	}
 	return options, nil
 }

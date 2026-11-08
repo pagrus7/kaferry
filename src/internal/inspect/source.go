@@ -19,13 +19,7 @@ func (s *Service) source(ctx context.Context, p plan.Plan, limits config.Worker,
 		report.Source.File.PositionRecords = &info.Position
 		report.Warnings = append(report.Warnings, info.Warnings...)
 		report.Source.File.Checkpoint, report.Source.File.CheckpointExists = info.CheckpointPath, &info.Saved
-		report.Source.File.WindowOrigin = "literal"
-		if p.Window.Relative() {
-			report.Source.File.WindowOrigin = "resolved"
-			if info.Saved {
-				report.Source.File.WindowOrigin = "saved"
-			}
-		}
+		report.Source.File.WindowOrigin = windowOrigin(p.Window, info.Saved, false)
 		return info.Partitions, nil
 	}
 	if err := s.topicSource(ctx, p, connection, report); err != nil {
@@ -74,11 +68,18 @@ func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafka
 	var warnings []string
 	report.Partitions, warnings = partitionRows(p, located, saved)
 	report.Warnings = append(report.Warnings, warnings...)
-	for _, row := range report.Partitions {
+	if hasPreviewEnd(report.Partitions) {
+		report.Warnings = append(report.Warnings, "Unsaved LATEST ends are previews; execution resolves and saves them independently.")
+	}
+
+	return nil
+}
+
+func hasPreviewEnd(partitions []Partition) bool {
+	for _, row := range partitions {
 		if row.EndOrigin == "preview" {
-			report.Warnings = append(report.Warnings, "Unsaved LATEST ends are previews; execution resolves and saves them independently.")
-			break
+			return true
 		}
 	}
-	return nil
+	return false
 }

@@ -336,10 +336,10 @@ func TestAuthenticationFilesAreCheckedBeforeOpeningOutput(t *testing.T) {
 			}
 			values[tc.property] = tc.path
 			// When validating before resource acquisition, then identify the setting without revealing its value.
-			err := componentFactory().Validate(testPlan(t, values), config.Defaults("").Worker)
-			require.ErrorContains(t, err, tc.property)
-			require.NotContains(t, err.Error(), "private")
-			require.NotContains(t, err.Error(), directory)
+			checkErr := componentFactory().Validate(testPlan(t, values), config.Defaults("").Worker)
+			require.ErrorContains(t, checkErr, tc.property)
+			require.NotContains(t, checkErr.Error(), "private")
+			require.NotContains(t, checkErr.Error(), directory)
 		})
 	}
 	// Given usable local Kerberos files, when a KDC is unavailable, then redact the principal and network details.

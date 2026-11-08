@@ -301,3 +301,19 @@ func TestEmptyAssignmentDoesNotInspectDestination(t *testing.T) {
 		t.Fatal("empty assignment was not returned to callback")
 	}
 }
+
+func TestPollReturnsTerminalFetchErrorWithoutDelivery(t *testing.T) {
+	// Given a terminal broker failure in the fetch pump.
+	source, _ := sourceFixture(t)
+	done := make(chan struct{})
+	source.pump.fetched <- fetchResult{err: kerr.TopicAuthorizationFailed, done: done}
+	// When polling, then return the same failure without producing an input event.
+	event, err := source.Poll(t.Context(), time.Second)
+	require.Same(t, kerr.TopicAuthorizationFailed, err)
+	require.Empty(t, event)
+	select {
+	case <-done:
+	default:
+		t.Fatal("terminal fetch ownership was not released")
+	}
+}

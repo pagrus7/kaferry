@@ -23,8 +23,8 @@ func Open(root string, codec *avro.Codec, files Filesystem, states StateStore) (
 	}
 	writers := filepath.Join(root, ".kaferry", "writers")
 	for _, directory := range []string{root, filepath.Dir(writers), writers} {
-		if err := ensureDirectory(files, directory); err != nil {
-			return nil, err
+		if checkErr := ensureDirectory(files, directory); checkErr != nil {
+			return nil, checkErr
 		}
 	}
 	owners, err := acquireNamespaces(writers, files)
@@ -43,15 +43,7 @@ func Open(root string, codec *avro.Codec, files Filesystem, states StateStore) (
 		}
 		owners = append(owners, owner{path: path, lock: lock})
 	} else {
-		protected := make(map[string]bool, len(owners))
-		for _, owned := range owners {
-			id := filepath.Base(owned.path)
-			if err := recoverNamespace(root, owned.path, id, codec, files, states); err != nil {
-				return nil, fmt.Errorf("recover archive writer %s: %w", id, err)
-			}
-			protected[id] = true
-		}
-		if err := discardUnacknowledged(root, protected, files); err != nil {
+		if err := recoverOwners(root, owners, codec, files, states); err != nil {
 			return nil, err
 		}
 	}
@@ -61,6 +53,21 @@ func Open(root string, codec *avro.Codec, files Filesystem, states StateStore) (
 	keep := owners[0]
 	return &Store{root: root, namespace: keep.path, lock: keep.lock, files: files, states: states,
 		codec: codec, state: emptyState(filepath.Base(keep.path)), active: make(map[string]*activeFile)}, nil
+}
+
+func recoverOwners(root string, owners []owner, codec *avro.Codec, files Filesystem, states StateStore) error {
+	protected := make(map[string]bool, len(owners))
+	for _, owned := range owners {
+		id := filepath.Base(owned.path)
+		if err := recoverNamespace(root, owned.path, id, codec, files, states); err != nil {
+			return fmt.Errorf("recover archive writer %s: %w", id, err)
+		}
+		protected[id] = true
+	}
+	if err := discardUnacknowledged(root, protected, files); err != nil {
+		return err
+	}
+	return nil
 }
 
 func acquireNamespaces(writers string, files Filesystem) (owners []owner, result error) {

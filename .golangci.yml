@@ -1,0 +1,59 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - ineffassign
+    - staticcheck
+    - errorlint
+    - gocognit
+    - nestif
+    - dupl
+    - funlen
+    - revive
+    - unparam
+    - unused
+  settings:
+    gocognit:
+      min-complexity: 15
+    nestif:
+      min-complexity: 4
+    funlen:
+      lines: 60
+      statements: 40
+      ignore-comments: true
+    dupl:
+      threshold: 100
+    govet:
+      enable:
+        - shadow
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: early-return
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: superfluous-else
+        - name: unexported-return
+        - name: var-declaration
+        - name: var-naming
+  exclusions:
+    rules:
+      - path: '_test\.go$'
+        linters:
+          - funlen
+          - dupl
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false

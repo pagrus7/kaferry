@@ -127,8 +127,8 @@ func TestCorePositioningPrecedesClientOffsetAdjustment(t *testing.T) {
 	var first *core.Input
 	// When the core resolves the assignment before the client's adjust hook runs.
 	for first == nil && ctx.Err() == nil {
-		event, err := input.Poll(context.Background(), 20*time.Millisecond)
-		require.NoError(t, err)
+		event, checkErr := input.Poll(context.Background(), 20*time.Millisecond)
+		require.NoError(t, checkErr)
 		first = event.Input
 	}
 	// Then both the first delivered record and the member's saved initial position are two.

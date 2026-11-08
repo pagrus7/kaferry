@@ -98,10 +98,7 @@ func (s *Store) checkpoint(only map[string]bool) error {
 		if f.writer.Count() == s.state.Files[id].Records {
 			continue
 		}
-		if err := f.writer.Flush(); err != nil {
-			return s.fail(err)
-		}
-		if err := f.file.Sync(); err != nil {
+		if err := f.flush(); err != nil {
 			return s.fail(err)
 		}
 		if next.Files == nil {
@@ -146,34 +143,16 @@ func (s *Store) PublishMany(ids []string) error {
 		return err
 	}
 	for _, id := range ids {
-		f := s.active[id]
-		if f.writer.Count() > 0 {
-			info, err := f.file.Stat()
-			if err != nil {
-				return s.fail(err)
-			}
-			if info.Size() != s.state.Files[id].Extent {
-				return s.fail(errors.New("archive length changed before publication"))
-			}
-		}
-		handle := f.file
-		f.file = nil
-		if err := handle.Close(); err != nil {
-			return s.fail(err)
-		}
-		identity := f.writer.Identity()
-		private := dataPath(s.root, identity, true)
-		if f.writer.Count() == 0 {
-			if err := s.files.Remove(private); err != nil {
-				return s.fail(err)
-			}
-		} else if err := s.files.RenameExclusive(private, dataPath(s.root, identity, false)); err != nil {
-			return s.fail(err)
+		if err := s.publishFile(id); err != nil {
+			return err
 		}
 	}
 	if err := s.files.SyncDirectory(s.root); err != nil {
 		return s.fail(err)
 	}
+	return s.forgetPublished(ids)
+}
+func (s *Store) forgetPublished(ids []string) error {
 	next := s.state
 	next.Files = maps.Clone(s.state.Files)
 	for _, id := range ids {
@@ -187,6 +166,35 @@ func (s *Store) PublishMany(ids []string) error {
 	}
 	for _, id := range ids {
 		delete(s.active, id)
+	}
+	return nil
+}
+
+func (s *Store) publishFile(id string) error {
+
+	f := s.active[id]
+	if f.writer.Count() > 0 {
+		info, err := f.file.Stat()
+		if err != nil {
+			return s.fail(err)
+		}
+		if info.Size() != s.state.Files[id].Extent {
+			return s.fail(errors.New("archive length changed before publication"))
+		}
+	}
+	handle := f.file
+	f.file = nil
+	if err := handle.Close(); err != nil {
+		return s.fail(err)
+	}
+	identity := f.writer.Identity()
+	private := dataPath(s.root, identity, true)
+	if f.writer.Count() == 0 {
+		if err := s.files.Remove(private); err != nil {
+			return s.fail(err)
+		}
+	} else if err := s.files.RenameExclusive(private, dataPath(s.root, identity, false)); err != nil {
+		return s.fail(err)
 	}
 	return nil
 }
@@ -233,4 +241,14 @@ func dataPath(root string, identity avro.Identity, private bool) string {
 		name = "." + identity.WriterID + "." + identity.FileID + ".partial"
 	}
 	return filepath.Join(root, name)
+}
+
+func (f *activeFile) flush() error {
+	if err := f.writer.Flush(); err != nil {
+		return err
+	}
+	if err := f.file.Sync(); err != nil {
+		return err
+	}
+	return nil
 }

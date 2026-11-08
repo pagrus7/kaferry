@@ -61,28 +61,15 @@ func (c *Capture) Append(record avro.Record) error {
 		exists = false
 	}
 	if !exists {
-		if len(c.active) >= c.policy.MaxOpenFiles {
-			if err := c.publish(c.oldest()); err != nil {
-				return err
-			}
-		}
-		segment, err := c.store.Create(record.Source, record.Offset)
+		var err error
+		p, err = c.createPartition(record)
 		if err != nil {
-			return c.fail(err)
+			return err
 		}
-		p = partition{segment: segment, opened: c.clock.Now()}
 	}
 	next, err := c.store.Append(p.segment.ID, record)
 	if err != nil {
-		if !errors.Is(err, avro.ErrInvalidRecord) {
-			return c.fail(err)
-		}
-		if p.segment.Records == 0 {
-			if cleanup := c.store.Publish(p.segment.ID); cleanup != nil {
-				return c.fail(cleanup)
-			}
-		}
-		return err
+		return c.appendFailure(p, err)
 	}
 	p.segment, p.last = next, record.Offset
 	c.sequence++
@@ -92,6 +79,32 @@ func (c *Capture) Append(record avro.Record) error {
 		return c.publish(record.Source)
 	}
 	return nil
+}
+
+func (c *Capture) createPartition(record avro.Record) (partition, error) {
+
+	if len(c.active) >= c.policy.MaxOpenFiles {
+		if err := c.publish(c.oldest()); err != nil {
+			return partition{}, err
+		}
+	}
+	segment, err := c.store.Create(record.Source, record.Offset)
+	if err != nil {
+		return partition{}, c.fail(err)
+	}
+	return partition{segment: segment, opened: c.clock.Now()}, nil
+}
+func (c *Capture) appendFailure(p partition, err error) error {
+
+	if !errors.Is(err, avro.ErrInvalidRecord) {
+		return c.fail(err)
+	}
+	if p.segment.Records == 0 {
+		if cleanup := c.store.Publish(p.segment.ID); cleanup != nil {
+			return c.fail(cleanup)
+		}
+	}
+	return err
 }
 
 // Flush must also be called while input is quiet so elapsed-age rotation runs.

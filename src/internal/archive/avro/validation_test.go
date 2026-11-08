@@ -73,8 +73,8 @@ func TestBlockPositionsAndExactCount(t *testing.T) {
 	_, again := block.Next()
 	require.ErrorIs(t, again, err, "a failed decoder stays failed")
 	for _, position := range []int64{-1, r.Start - 1, int64(len(data)) + 1} {
-		_, err := r.Block(position)
-		require.Error(t, err)
+		_, checkErr := r.Block(position)
+		require.Error(t, checkErr)
 	}
 	_, err = r.Block(int64(len(data)))
 	require.ErrorIs(t, err, io.EOF)

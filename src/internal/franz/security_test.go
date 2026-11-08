@@ -118,14 +118,14 @@ func TestTLSHostnameOverrideKeepsTrustAndClientCertificateChecks(t *testing.T) {
 		{"missing client certificate rejected", "localhost", "none", false, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			settings := settings{ca: caPath, certificate: certPath, key: keyPath, hostname: tc.algorithm}
+			connectionSettings := settings{ca: caPath, certificate: certPath, key: keyPath, hostname: tc.algorithm}
 			if tc.wrongCA {
-				settings.ca = wrongPath
+				connectionSettings.ca = wrongPath
 			}
 			if tc.noClient {
-				settings.certificate, settings.key = "", ""
+				connectionSettings.certificate, connectionSettings.key = "", ""
 			}
-			cfg, err := settings.tlsConfig()
+			cfg, err := connectionSettings.tlsConfig()
 			require.NoError(t, err)
 			cfg.ServerName = tc.host
 			// When performing a real handshake and authenticated application read.
@@ -155,45 +155,7 @@ func TestConnectionOptionsApplyTLSAndSelectedSASLMechanism(t *testing.T) {
 		{"SASL_PLAINTEXT", "SCRAM-SHA-256"},
 	} {
 		t.Run(tc.protocol+"/"+tc.mechanism, func(t *testing.T) {
-			// Given valid connection properties for the selected transport and authentication.
-			properties := map[string]string{"security.protocol": tc.protocol}
-			if strings.HasSuffix(tc.protocol, "SSL") {
-				properties["ssl.ca.location"] = caPath
-			}
-			if tc.mechanism != "" {
-				properties["sasl.mechanism"], properties["sasl.username"], properties["sasl.password"] = tc.mechanism, "user", "password"
-			}
-			s, err := parseSettings(testPlan(t, properties).Source.Properties)
-			require.NoError(t, err)
-			options, err := s.commonOptions()
-			require.NoError(t, err)
-			ctx, cancel := context.WithCancel(t.Context())
-			cancel()
-			// When applying the production options to the real client without connecting.
-			client, err := kgo.NewClient(append(options, kgo.WithContext(ctx))...)
-			require.NoError(t, err)
-			defer client.Close()
-			// Then TLS trust and the chosen authentication mechanism reach the client.
-			tlsConfig := client.OptValue(kgo.DialTLSConfig).(*tls.Config)
-			if strings.HasSuffix(tc.protocol, "SSL") {
-				if tlsConfig == nil || tlsConfig.MinVersion != tls.VersionTLS12 || tlsConfig.RootCAs == nil || !tlsConfig.RootCAs.Equal(roots) || tlsConfig.InsecureSkipVerify {
-					t.Fatal("TLS trust settings were not applied")
-				}
-			} else if tlsConfig != nil {
-				t.Fatal("unexpected TLS transport")
-			}
-			mechanisms := client.OptValue(kgo.SASL).([]sasl.Mechanism)
-			if tc.mechanism == "" {
-				require.Len(t, mechanisms, 0, "unexpected SASL authentication")
-			} else if len(mechanisms) != 1 || mechanisms[0].Name() != tc.mechanism {
-				t.Fatal("wrong SASL mechanism applied")
-			} else {
-				_, first, err := mechanisms[0].Authenticate(t.Context(), "host")
-				if err != nil || (tc.mechanism == "PLAIN" && string(first) != "\x00user\x00password") ||
-					(tc.mechanism != "PLAIN" && !strings.Contains(string(first), "n=user,")) {
-					t.Fatal("SASL credentials were not applied correctly")
-				}
-			}
+			connectionSecurityOptions(t, tc.protocol, tc.mechanism, caPath, roots)
 		})
 	}
 }
@@ -224,4 +186,52 @@ func TestTLSFileErrorsFailValidationWithoutExposingPathsOrContents(t *testing.T)
 			}
 		})
 	}
+}
+
+func connectionSecurityOptions(t *testing.T, protocol, mechanism, caPath string, roots *x509.CertPool) {
+	// Given valid connection properties for the selected transport and authentication.
+	properties := map[string]string{"security.protocol": protocol}
+	if strings.HasSuffix(protocol, "SSL") {
+		properties["ssl.ca.location"] = caPath
+	}
+	if mechanism != "" {
+		properties["sasl.mechanism"], properties["sasl.username"], properties["sasl.password"] = mechanism, "user", "password"
+	}
+	s, err := parseSettings(testPlan(t, properties).Source.Properties)
+	require.NoError(t, err)
+	options, err := s.commonOptions()
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	// When applying the production options to the real client without connecting.
+	client, err := kgo.NewClient(append(options, kgo.WithContext(ctx))...)
+	require.NoError(t, err)
+	defer client.Close()
+	// Then TLS trust and the chosen authentication mechanism reach the client.
+	tlsConfig := client.OptValue(kgo.DialTLSConfig).(*tls.Config)
+	if strings.HasSuffix(protocol, "SSL") {
+		require.NotNil(t, tlsConfig)
+		require.EqualValues(t, tls.VersionTLS12, tlsConfig.MinVersion)
+		require.NotNil(t, tlsConfig.RootCAs)
+		require.True(t, tlsConfig.RootCAs.Equal(roots))
+		require.False(t, tlsConfig.InsecureSkipVerify)
+
+	} else if tlsConfig != nil {
+		t.Fatal("unexpected TLS transport")
+	}
+	mechanisms := client.OptValue(kgo.SASL).([]sasl.Mechanism)
+	if mechanism == "" {
+		require.Empty(t, mechanisms, "unexpected SASL authentication")
+		return
+	}
+	require.Len(t, mechanisms, 1)
+	require.Equal(t, mechanism, mechanisms[0].Name())
+	_, first, err := mechanisms[0].Authenticate(t.Context(), "host")
+	require.NoError(t, err)
+	if mechanism == "PLAIN" {
+		require.Equal(t, "\x00user\x00password", string(first))
+	} else {
+		require.Contains(t, string(first), "n=user,")
+	}
+
 }

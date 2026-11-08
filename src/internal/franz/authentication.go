@@ -30,27 +30,36 @@ func (s settings) validateAuthentication(keys []string) error {
 			return invalidProperty("sasl.username/sasl.password", "both are required for PLAIN or SCRAM")
 		}
 	case "OAUTHBEARER":
-		if s.oauth.tokenFile != "" {
-			if s.oauth.endpoint != "" || s.oauth.clientID != "" || s.oauth.secret != "" || s.oauth.scope != "" || s.oauth.ca != "" {
-				return invalidProperty("sasl.oauthbearer.token.file", "cannot be combined with OAuth client credentials settings")
-			}
-			return nil
-		}
-		endpoint, err := url.Parse(s.oauth.endpoint)
-		if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.Fragment != "" {
-			return invalidProperty("sasl.oauthbearer.token.endpoint.url", "requires an HTTPS URL without embedded credentials or a fragment")
-		}
-		if s.oauth.clientID == "" || s.oauth.secret == "" {
-			return invalidProperty("sasl.oauthbearer.client.id/sasl.oauthbearer.client.secret", "both are required for OAuth client credentials")
-		}
+		return s.oauth.validate()
 	case "GSSAPI":
-		user, realm, ok := strings.Cut(s.kerberos.principal, "@")
-		if !ok || user == "" || realm == "" || strings.Contains(realm, "@") {
-			return invalidProperty("sasl.kerberos.principal", "requires a principal with a realm, such as user@REALM")
+		return s.kerberos.validate()
+	}
+	return nil
+}
+
+func (s oauthSettings) validate() error {
+	if s.tokenFile != "" {
+		if s.endpoint != "" || s.clientID != "" || s.secret != "" || s.scope != "" || s.ca != "" {
+			return invalidProperty("sasl.oauthbearer.token.file", "cannot be combined with OAuth client credentials settings")
 		}
-		if s.kerberos.keytab == "" || s.kerberos.config == "" || s.kerberos.service == "" {
-			return invalidProperty("sasl.kerberos.keytab/config/service.name", "keytab, configuration file and service name must not be empty")
-		}
+		return nil
+	}
+	endpoint, err := url.Parse(s.endpoint)
+	if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.Fragment != "" {
+		return invalidProperty("sasl.oauthbearer.token.endpoint.url", "requires an HTTPS URL without embedded credentials or a fragment")
+	}
+	if s.clientID == "" || s.secret == "" {
+		return invalidProperty("sasl.oauthbearer.client.id/sasl.oauthbearer.client.secret", "both are required for OAuth client credentials")
+	}
+	return nil
+}
+func (s kerberosSettings) validate() error {
+	user, realm, ok := strings.Cut(s.principal, "@")
+	if !ok || user == "" || realm == "" || strings.Contains(realm, "@") {
+		return invalidProperty("sasl.kerberos.principal", "requires a principal with a realm, such as user@REALM")
+	}
+	if s.keytab == "" || s.config == "" || s.service == "" {
+		return invalidProperty("sasl.kerberos.keytab/config/service.name", "keytab, configuration file and service name must not be empty")
 	}
 	return nil
 }

@@ -85,22 +85,8 @@ func (c *Catalog) selectFiles(hashContents bool, filter *plan.PartitionFilter) (
 	defer func() { result = errors.Join(result, dir.Close()) }()
 	for {
 		entries, readErr := dir.ReadDir(256)
-		for _, entry := range entries {
-			if strings.HasSuffix(entry.Name(), ".partial") {
-				selection.PrivateFiles++
-				continue
-			}
-			if !strings.HasSuffix(entry.Name(), ".avro") {
-				continue
-			}
-			if !entry.Type().IsRegular() {
-				return selection, errors.New("completed archive input must be a regular file")
-			}
-			file, err := c.describe(entry.Name(), hashContents, filter)
-			if err != nil {
-				return selection, fmt.Errorf("select archive file %s: %w", entry.Name(), err)
-			}
-			selection.Files = append(selection.Files, file)
+		if err := c.selectEntries(&selection, entries, hashContents, filter); err != nil {
+			return selection, err
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
@@ -109,11 +95,38 @@ func (c *Catalog) selectFiles(hashContents bool, filter *plan.PartitionFilter) (
 			return selection, readErr
 		}
 	}
+	if err := selection.validateAndFilter(filter); err != nil {
+		return selection, err
+	}
+	return selection, nil
+}
+
+func (c *Catalog) selectEntries(selection *Selection, entries []os.DirEntry, hashContents bool, filter *plan.PartitionFilter) error {
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".partial") {
+			selection.PrivateFiles++
+			continue
+		}
+		if !strings.HasSuffix(entry.Name(), ".avro") {
+			continue
+		}
+		if !entry.Type().IsRegular() {
+			return errors.New("completed archive input must be a regular file")
+		}
+		file, err := c.describe(entry.Name(), hashContents, filter)
+		if err != nil {
+			return fmt.Errorf("select archive file %s: %w", entry.Name(), err)
+		}
+		selection.Files = append(selection.Files, file)
+	}
+	return nil
+}
+func (selection *Selection) validateAndFilter(filter *plan.PartitionFilter) error {
 	slices.SortFunc(selection.Files, compareFile)
 	seen := make(map[string]bool, len(selection.Files))
 	for _, file := range selection.Files {
 		if seen[file.Identity.FileID] {
-			return selection, errors.New("duplicate archive file ID")
+			return errors.New("duplicate archive file ID")
 		}
 		seen[file.Identity.FileID] = true
 	}
@@ -123,11 +136,11 @@ func (c *Catalog) selectFiles(hashContents bool, filter *plan.PartitionFilter) (
 			ids = append(ids, file.Identity.Source.Partition)
 		}
 		if _, err := filter.Select(ids); err != nil {
-			return selection, err
+			return err
 		}
 		selection.Files = slices.DeleteFunc(selection.Files, func(f File) bool { return !filter.Matches(f.Identity.Source.Partition) })
 	}
-	return selection, nil
+	return nil
 }
 
 func (c *Catalog) describe(name string, hashContents bool, filter *plan.PartitionFilter) (descriptor File, result error) {

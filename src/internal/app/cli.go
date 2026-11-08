@@ -42,34 +42,14 @@ func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, st
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	code := 0
 	var command Command
 	budget.Stage("composing components")
 	graph := fx.New(fx.NopLogger, RuntimeModules, fx.Populate(&command))
-	if err := graph.Err(); err != nil {
+	if checkErr := graph.Err(); checkErr != nil {
 		fmt.Fprintln(stderr, "component composition failed")
 		return 2
 	}
-	if options.command == "status" {
-		var report inspect.StatusReport
-		report, err = command.Status(ctx, statement, options.configPath, budget)
-		if err == nil {
-			budget.Begin()
-			budget.Stage("printing status")
-			err = renderStatus(stdout, report, options.json)
-			code = report.ExitCode()
-		}
-	} else if options.command == "explain" {
-		var report inspect.Report
-		report, err = command.Explain(ctx, statement, options.configPath, budget)
-		if err == nil {
-			budget.Begin()
-			budget.Stage("printing explanation")
-			err = renderExplanation(stdout, report, options.json)
-		}
-	} else {
-		err = command.Run(ctx, statement, options.configPath, budget)
-	}
+	code, err := executeCommand(ctx, command, options, statement, stdout, budget)
 	if err != nil {
 		budget.Begin()
 		budget.Stage("printing error")
@@ -81,6 +61,33 @@ func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, st
 		return 1
 	}
 	return code
+}
+
+func executeCommand(ctx context.Context, command Command, options commandOptions, statement string, stdout io.Writer, budget Shutdown) (int, error) {
+	code := 0
+	var err error
+	switch options.command {
+	case "status":
+		var report inspect.StatusReport
+		report, err = command.Status(ctx, statement, options.configPath, budget)
+		if err == nil {
+			budget.Begin()
+			budget.Stage("printing status")
+			err = renderStatus(stdout, report, options.json)
+			code = report.ExitCode()
+		}
+	case "explain":
+		var report inspect.Report
+		report, err = command.Explain(ctx, statement, options.configPath, budget)
+		if err == nil {
+			budget.Begin()
+			budget.Stage("printing explanation")
+			err = renderExplanation(stdout, report, options.json)
+		}
+	default:
+		err = command.Run(ctx, statement, options.configPath, budget)
+	}
+	return code, err
 }
 
 func printCommandError(output io.Writer, source string, err error) {
@@ -143,19 +150,7 @@ func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 func readStatement(options commandOptions, stdin io.Reader) (string, error) {
 	statement := options.statement
 	if options.file != "" {
-		reader := stdin
-		if options.file == "-" && reader == nil {
-			return "", fmt.Errorf("stdin is unavailable")
-		}
-		if options.file != "-" {
-			opened, err := os.Open(options.file)
-			if err != nil {
-				return "", err
-			}
-			defer opened.Close()
-			reader = opened
-		}
-		data, err := io.ReadAll(io.LimitReader(reader, (1<<20)+1))
+		data, err := readStatementFile(options.file, stdin)
 		if err != nil {
 			return "", err
 		}
@@ -165,4 +160,24 @@ func readStatement(options commandOptions, stdin io.Reader) (string, error) {
 		return "", fmt.Errorf("statement exceeds 1 MiB")
 	}
 	return statement, nil
+}
+
+func readStatementFile(path string, stdin io.Reader) ([]byte, error) {
+	reader := stdin
+	if path == "-" && reader == nil {
+		return nil, fmt.Errorf("stdin is unavailable")
+	}
+	if path != "-" {
+		opened, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer opened.Close()
+		reader = opened
+	}
+	data, err := io.ReadAll(io.LimitReader(reader, (1<<20)+1))
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }

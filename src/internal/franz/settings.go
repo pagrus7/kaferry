@@ -145,25 +145,13 @@ func (s settings) validate(values map[string]string, keys []string) error {
 	if s.rebalance < s.session || s.rebalance < 30*time.Second {
 		return invalidProperty("max.poll.interval.ms", "must be at least session.timeout.ms and 30000 ms to allow draining and a final commit")
 	}
-	for _, key := range keys {
-		if strings.HasPrefix(key, "ssl.") && !strings.HasSuffix(s.protocol, "SSL") {
-			return invalidProperty(key, "requires SSL or SASL_SSL")
-		}
-		if strings.HasPrefix(key, "sasl.") && !strings.HasPrefix(s.protocol, "SASL_") {
-			return invalidProperty(key, "requires SASL_PLAINTEXT or SASL_SSL")
-		}
+	if err := s.validatePropertyProtocols(keys); err != nil {
+		return err
 	}
-	for _, pair := range [][2]string{{"message.timeout.ms", "delivery.timeout.ms"}, {"metadata.max.age.ms", "topic.metadata.refresh.interval.ms"}} {
-		a, hasA := values[pair[0]]
-		b, hasB := values[pair[1]]
-		if hasA && hasB {
-			left, _ := strconv.ParseInt(a, 10, 64)
-			right, _ := strconv.ParseInt(b, 10, 64)
-			if left != right {
-				return invalidProperty(pair[0], "conflicts with "+pair[1])
-			}
-		}
+	if err := validatePropertyAliases(values); err != nil {
+		return err
 	}
+
 	if strings.HasPrefix(s.protocol, "SASL_") {
 		if err := s.validateAuthentication(keys); err != nil {
 			return err
@@ -175,13 +163,40 @@ func (s settings) validate(values map[string]string, keys []string) error {
 	return nil
 }
 
+func (s settings) validatePropertyProtocols(keys []string) error {
+	for _, key := range keys {
+		if strings.HasPrefix(key, "ssl.") && !strings.HasSuffix(s.protocol, "SSL") {
+			return invalidProperty(key, "requires SSL or SASL_SSL")
+		}
+		if strings.HasPrefix(key, "sasl.") && !strings.HasPrefix(s.protocol, "SASL_") {
+			return invalidProperty(key, "requires SASL_PLAINTEXT or SASL_SSL")
+		}
+	}
+	return nil
+}
+func validatePropertyAliases(values map[string]string) error {
+
+	for _, pair := range [][2]string{{"message.timeout.ms", "delivery.timeout.ms"}, {"metadata.max.age.ms", "topic.metadata.refresh.interval.ms"}} {
+		a, hasA := values[pair[0]]
+		b, hasB := values[pair[1]]
+		if hasA && hasB {
+			left, _ := strconv.ParseInt(a, 10, 64)
+			right, _ := strconv.ParseInt(b, 10, 64)
+			if left != right {
+				return invalidProperty(pair[0], "conflicts with "+pair[1])
+			}
+		}
+	}
+	return nil
+}
+
 func unsupportedProperty(key string, rules map[string]propertyRule) error {
 	if key == "partitioner" {
 		return invalidProperty(key, "unsupported; use WITH (PARTITIONING = PRESERVE) or WITH (PARTITIONING = KEY) after the INTO endpoint")
 	}
 	keys := slices.Sorted(maps.Keys(rules))
 	// Property names are input too; do not print arbitrary bytes in diagnostics.
-	if strings.IndexFunc(key, func(c rune) bool { return !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '.' || c == '_') }) >= 0 {
+	if strings.IndexFunc(key, func(c rune) bool { return (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '.' && c != '_' }) >= 0 {
 		key = "(invalid property name)"
 	}
 	return invalidProperty(key, "unsupported; supported properties: "+strings.Join(keys, ", "))

@@ -1,4 +1,4 @@
-"""Exercise the real local/CI duplication gate with renamed Go and Python copies."""
+"""Check Python clone detection and delegation of Go duplication to golangci-lint."""
 
 import json
 import os
@@ -71,7 +71,7 @@ func original(seed int) int {
             result = subprocess.run(command, cwd=root, capture_output=True, text=True)
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             statistics = json.loads(report.read_text())['statistics']
-            self.assertEqual({'go', 'python'}, set(statistics['formats']))
+            self.assertEqual({'python'}, set(statistics['formats']))
             baseline = statistics['total']
             self.assertGreater(baseline['clones'], 0)
             self.assertEqual(0, baseline['newClones'])
@@ -82,6 +82,11 @@ func original(seed int) int {
                     added.write_text(source.replace('original', 'added').replace('seed', 'sample').replace('10', '30'))
                     # When a new normalized copy is added, then the real gate fails and retains its findings.
                     result = subprocess.run(command, cwd=root, capture_output=True, text=True)
+                    if path.suffix == '.go':
+                        # Go duplication belongs to dupl, including its test exemption.
+                        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                        added.unlink()
+                        continue
                     self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
                     scan = json.loads(report.read_text())
                     self.assertGreater(scan['statistics']['total']['newClones'], 0)

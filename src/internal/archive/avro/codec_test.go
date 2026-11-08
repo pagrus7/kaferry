@@ -66,8 +66,8 @@ func read(t testing.TB, c *Codec, data []byte) []Record {
 		b, err := r.Block(position)
 		require.NoError(t, err)
 		for range b.Count {
-			record, err := b.Next()
-			require.NoError(t, err)
+			record, checkErr := b.Next()
+			require.NoError(t, checkErr)
 			result = append(result, record)
 		}
 		_, err = b.Next()

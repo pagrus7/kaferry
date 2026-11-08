@@ -420,3 +420,20 @@ func TestExplainUsesArchiveProvenanceAndReportsDestinationRouting(t *testing.T) 
 	require.Equal(t, plan.Preserve, report.Destination.Partitioning)
 	require.Empty(t, report.Source.Partitioning)
 }
+
+func TestUnsavedExplicitOffsetEndHasLiteralOrigin(t *testing.T) {
+	// Given an explicit offset upper bound and no saved partition progress.
+	service, p, _, _ := fixture()
+	p.Window = plan.WindowSpec{}
+	p.Offsets = &plan.OffsetRange{Upper: number(8)}
+	// When explaining through the shared positioner, then label the end as a SQL literal.
+	report := preview(t, service, p)
+	require.Equal(t, "OFFSET", report.StartRule)
+	require.Len(t, report.Partitions, 2)
+	for _, partition := range report.Partitions {
+		require.False(t, partition.Saved)
+		require.NotNil(t, partition.End)
+		require.EqualValues(t, 8, *partition.End)
+		require.Equal(t, "literal", partition.EndOrigin)
+	}
+}

@@ -61,7 +61,11 @@ func TestSaveObservationsPreserveStoreResults(t *testing.T) {
 			// Then results and failures are unchanged, and only real nonempty saves are counted.
 			require.Equal(t, 1, calls)
 			require.Equal(t, tc.results, got)
-			require.True(t, err == tc.err, "save must return the exact error: got %v, want %v", err, tc.err)
+			if tc.err == nil {
+				require.NoError(t, err)
+			} else {
+				require.Same(t, tc.err, err, "save must return the exact error")
+			}
 			if tc.outcome == "" {
 				require.Empty(t, o.saves)
 				return

@@ -153,74 +153,7 @@ func TestCompactedOffsetsReachTheBoundedEnd(t *testing.T) {
 	}{{nil, 17}, {[]int32{0}, 17}, {[]int32{0, 5}, 17}, {nil, 12}} {
 		retained := scenario.retained
 		t.Run(fmt.Sprintf("retained=%v_version=%d", retained, scenario.version), func(t *testing.T) {
-			// Given a legal compacted batch whose last offset survives without a record.
-			versions := kversion.V3_9_0()
-			versions.SetMaxKeyVersion(int16(kmsg.Fetch), scenario.version)
-			cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"), kfake.MaxVersions(versions))
-			defer cluster.Close()
-			producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...))
-			require.NoError(t, err)
-			defer producer.Close()
-			for range 10 {
-				require.NoError(t, producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Value: []byte("compacted")}).FirstErr())
-			}
-			batch := compactedBatch(retained...)
-			metadata, err := kadm.NewClient(producer).Metadata(componentContext(t), "input")
-			require.NoError(t, err)
-			id := metadata.Topics["input"].ID
-			cluster.ControlKey(int16(kmsg.Fetch), func(request kmsg.Request) (kmsg.Response, error, bool) {
-				cluster.KeepControl()
-				req := request.(*kmsg.FetchRequest)
-				res := req.ResponseKind().(*kmsg.FetchResponse)
-				for _, topic := range req.Topics {
-					if topic.Topic != "input" && topic.TopicID != id {
-						continue
-					}
-					result := kmsg.FetchResponseTopic{Topic: topic.Topic, TopicID: topic.TopicID}
-					for _, part := range topic.Partitions {
-						p := kmsg.NewFetchResponseTopicPartition()
-						p.Partition, p.HighWatermark, p.LastStableOffset, p.LogStartOffset = part.Partition, 10, 10, 0
-						if part.FetchOffset < 10 {
-							p.RecordBatches = batch
-						}
-						result.Partitions = append(result.Partitions, p)
-					}
-					res.Topics = append(res.Topics, result)
-				}
-				return res, nil, len(res.Topics) > 0
-			})
-			p := boundedComponentPlan(t, cluster)
-			deadline, cancel := context.WithTimeout(componentContext(t), 4*time.Second)
-			defer cancel()
-			// When reading through the compacted tail with a bounded time range.
-			err = runComponentCopy(deadline, p, config.Defaults(t.TempDir()).Worker)
-			// Then the batch's consumed end is saved, and every retained record is copied.
-			if err != nil || deadline.Err() != nil {
-				t.Fatalf("did not complete across compacted offsets: copy=%v context=%v", err, deadline.Err())
-			}
-			saved, err := kadm.NewClient(producer).FetchOffsets(componentContext(t), p.Group)
-			if err != nil || saved["input"][0].At != 10 {
-				t.Fatalf("wrong consumed end: %v %v", saved, err)
-			}
-			want := int64(len(retained))
-			if got := cluster.PartitionInfo("output", 0).HighWatermark; got != want {
-				t.Fatalf("copied %d records, wanted %d", got, want)
-			}
-			producer.AddConsumePartitions(map[string]map[int32]kgo.Offset{"output": {0: kgo.NewOffset().AtStart()}})
-			for index, record := range readN(t, producer, len(retained)) {
-				if got, want := string(record.Value), fmt.Sprintf("retained-%d", retained[index]); got != want {
-					t.Fatalf("retained record %d changed: got %q, wanted %q", index, got, want)
-				}
-			}
-			// When the same query restarts at the verified end.
-			restart := componentContext(t)
-			if err := runComponentCopy(restart, p, config.Defaults(t.TempDir()).Worker); err != nil || restart.Err() != nil {
-				t.Fatalf("restart did not complete: copy=%v context=%v", err, restart.Err())
-			}
-			// Then completed compacted offsets do not produce another write.
-			if got := cluster.PartitionInfo("output", 0).HighWatermark; got != want {
-				t.Fatalf("restart duplicated retained data: %d", got)
-			}
+			compactedOffsetCompletion(t, retained, scenario.version)
 		})
 	}
 }
@@ -257,4 +190,80 @@ func TestProductionCopyClosesBlockedStartupAndFetchRequests(t *testing.T) {
 			}
 		})
 	}
+}
+
+func compactedOffsetCompletion(t *testing.T, retained []int32, version int16) {
+	// Given a legal compacted batch whose last offset survives without a record.
+	versions := kversion.V3_9_0()
+	versions.SetMaxKeyVersion(int16(kmsg.Fetch), version)
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"), kfake.MaxVersions(versions))
+	defer cluster.Close()
+	producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...))
+	require.NoError(t, err)
+	defer producer.Close()
+	for range 10 {
+		require.NoError(t, producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Value: []byte("compacted")}).FirstErr())
+	}
+	batch := compactedBatch(retained...)
+	metadata, err := kadm.NewClient(producer).Metadata(componentContext(t), "input")
+	require.NoError(t, err)
+	id := metadata.Topics["input"].ID
+	cluster.ControlKey(int16(kmsg.Fetch), func(request kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
+		response := compactedFetchResponse(request, id, batch)
+		return response, nil, len(response.Topics) > 0
+	})
+	p := boundedComponentPlan(t, cluster)
+	deadline, cancel := context.WithTimeout(componentContext(t), 4*time.Second)
+	defer cancel()
+	// When reading through the compacted tail with a bounded time range.
+	err = runComponentCopy(deadline, p, config.Defaults(t.TempDir()).Worker)
+	// Then the batch's consumed end is saved, and every retained record is copied.
+	require.NoError(t, err)
+	require.NoError(t, deadline.Err())
+
+	saved, err := kadm.NewClient(producer).FetchOffsets(componentContext(t), p.Group)
+	require.NoError(t, err)
+	require.EqualValues(t, 10, saved["input"][0].At)
+
+	want := int64(len(retained))
+	if got := cluster.PartitionInfo("output", 0).HighWatermark; got != want {
+		t.Fatalf("copied %d records, wanted %d", got, want)
+	}
+	producer.AddConsumePartitions(map[string]map[int32]kgo.Offset{"output": {0: kgo.NewOffset().AtStart()}})
+	for index, record := range readN(t, producer, len(retained)) {
+		if got, want := string(record.Value), fmt.Sprintf("retained-%d", retained[index]); got != want {
+			t.Fatalf("retained record %d changed: got %q, wanted %q", index, got, want)
+		}
+	}
+	// When the same query restarts at the verified end.
+	restart := componentContext(t)
+	if err := runComponentCopy(restart, p, config.Defaults(t.TempDir()).Worker); err != nil || restart.Err() != nil {
+		t.Fatalf("restart did not complete: copy=%v context=%v", err, restart.Err())
+	}
+	// Then completed compacted offsets do not produce another write.
+	if got := cluster.PartitionInfo("output", 0).HighWatermark; got != want {
+		t.Fatalf("restart duplicated retained data: %d", got)
+	}
+}
+
+func compactedFetchResponse(request kmsg.Request, id [16]byte, batch []byte) *kmsg.FetchResponse {
+	req := request.(*kmsg.FetchRequest)
+	res := req.ResponseKind().(*kmsg.FetchResponse)
+	for _, topic := range req.Topics {
+		if topic.Topic != "input" && topic.TopicID != id {
+			continue
+		}
+		result := kmsg.FetchResponseTopic{Topic: topic.Topic, TopicID: topic.TopicID}
+		for _, part := range topic.Partitions {
+			p := kmsg.NewFetchResponseTopicPartition()
+			p.Partition, p.HighWatermark, p.LastStableOffset, p.LogStartOffset = part.Partition, 10, 10, 0
+			if part.FetchOffset < 10 {
+				p.RecordBatches = batch
+			}
+			result.Partitions = append(result.Partitions, p)
+		}
+		res.Topics = append(res.Topics, result)
+	}
+	return res
 }

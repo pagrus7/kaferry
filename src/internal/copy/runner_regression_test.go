@@ -91,41 +91,7 @@ func TestRevokeDiscardsHeldWorkBeforeReassignment(t *testing.T) {
 	for _, held := range []string{"queue-full submission", "deferred input and EOF"} {
 		for _, lost := range []bool{false, true} {
 			t.Run(held+map[bool]string{false: "/revoked", true: "/lost"}[lost], func(t *testing.T) {
-				// Given held work for a partition that is about to change owners.
-				r, _, sink, _, _ := fixture(t)
-				require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
-				if held == "queue-full submission" {
-					sink.submit = func(Record, Token) error { return ErrBusy }
-				} else {
-					r.limits.RecordCap = 1
-				}
-				require.NoError(t, r.input(context.Background(), incoming(0, 0, 1)))
-				var old Token
-				if r.pending != nil {
-					old = r.pending.token
-				} else {
-					old = sink.writes[0]
-					require.NoError(t, r.accept(context.Background(), Event{Input: ptrInput(incoming(0, 1, 1)), EOF: &Cursor{Partition: 0, Position: 2}}))
-					if r.flow.deferred == nil || r.flow.deferred.eof == nil {
-						t.Fatal("fixture did not hold input and EOF")
-					}
-				}
-				before := len(sink.writes)
-
-				// When ownership is revoked and the partition is reassigned for replay.
-				require.NoError(t, r.Revoke([]int32{0}, lost))
-				require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
-				sink.submit = nil
-				require.NoError(t, r.advance(context.Background()))
-
-				// Then held work and EOF cannot leak into the new assignment.
-				if r.pending != nil || r.flow.deferred != nil || len(sink.writes) != before || r.partitions[0].stop != nil {
-					t.Fatal("revoked work survived reassignment")
-				}
-				require.NoError(t, r.input(context.Background(), incoming(0, 0, 1)))
-				if len(sink.writes) != before+1 || sink.writes[before].Generation == old.Generation {
-					t.Fatal("replay did not receive a fresh generation")
-				}
+				revokedHeldWork(t, held, lost)
 			})
 		}
 	}
@@ -258,4 +224,43 @@ func TestWriteRejectedDuringFollowShutdownFailsAndSavesOnlyConfirmedPrefix(t *te
 	if !errors.Is(err, rejected) || exitCode(err) != 1 || len(sink.writes) != 2 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1}}}) {
 		t.Fatal("shutdown hid a write failure or advanced past it", err, store.saves)
 	}
+}
+
+func revokedHeldWork(t *testing.T, held string, lost bool) {
+	// Given held work for a partition that is about to change owners.
+	r, _, sink, _, _ := fixture(t)
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
+	if held == "queue-full submission" {
+		sink.submit = func(Record, Token) error { return ErrBusy }
+	} else {
+		r.limits.RecordCap = 1
+	}
+	require.NoError(t, r.input(context.Background(), incoming(0, 0, 1)))
+	var old Token
+	if r.pending != nil {
+		old = r.pending.token
+	} else {
+		old = sink.writes[0]
+		require.NoError(t, r.accept(context.Background(), Event{Input: ptrInput(incoming(0, 1, 1)), EOF: &Cursor{Partition: 0, Position: 2}}))
+		require.NotNil(t, r.flow.deferred)
+		require.NotNil(t, r.flow.deferred.eof)
+
+	}
+	before := len(sink.writes)
+
+	// When ownership is revoked and the partition is reassigned for replay.
+	require.NoError(t, r.Revoke([]int32{0}, lost))
+	require.NoError(t, r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}))
+	sink.submit = nil
+	require.NoError(t, r.advance(context.Background()))
+	// Then held work and EOF cannot leak into the new assignment.
+	require.Nil(t, r.pending)
+	require.Nil(t, r.flow.deferred)
+	require.Len(t, sink.writes, before)
+	require.Nil(t, r.partitions[0].stop)
+
+	require.NoError(t, r.input(context.Background(), incoming(0, 0, 1)))
+	require.Len(t, sink.writes, before+1)
+	require.NotEqual(t, old.Generation, sink.writes[before].Generation)
+
 }

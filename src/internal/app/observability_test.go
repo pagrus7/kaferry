@@ -16,6 +16,7 @@ import (
 	"github.com/pagrus7/kaferry/src/internal/observability"
 	"github.com/stretchr/testify/require"
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -51,50 +52,7 @@ func (m *metricsMock) Close(ctx context.Context) {
 func TestEngineOwnsMetricsOnlyDuringEnabledExecution(t *testing.T) {
 	for _, mode := range []string{"disabled", "enabled", "invalid", "cancelled during run"} {
 		t.Run(mode, func(t *testing.T) {
-			// Given independent copy and observability factories.
-			f := newEngineFixture()
-			f.store = f.input
-			m := &metricsMock{fixture: f}
-			cfg := config.Defaults("")
-			cfg.Metrics.Enabled = mode != "disabled"
-			if mode == "invalid" {
-				m.err = errors.New("invalid collector settings")
-			}
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			if mode == "cancelled during run" {
-				f.onStage = func(stage string) {
-					if stage == "run" {
-						cancel()
-					}
-				}
-			}
-			// When the engine executes and closes its resources.
-			err := newEngine(f, f, f, engineLogger(), m).Run(ctx, enginePlan("TOPIC", "TOPIC"), cfg, noopShutdown{})
-			// Then disabled metrics acquire nothing, invalid settings prevent endpoint I/O,
-			// and enabled cleanup uses its own bounded context after copy resources close.
-			if mode == "disabled" {
-				require.Zero(t, m.opens)
-				require.False(t, m.closed)
-				require.NoError(t, err)
-				return
-			}
-			if mode == "invalid" {
-				var exit *core.Exit
-				require.ErrorAs(t, err, &exit)
-				require.EqualValues(t, 2, exit.Code)
-				require.Len(t, f.trace, 0)
-				require.False(t, m.closed)
-				return
-			}
-			require.NoError(t, err)
-			require.EqualValues(t, 1, m.opens)
-			require.Equal(t, "group", m.group)
-			require.True(t, m.closed)
-			require.NoError(t, m.closeErr)
-			require.Positive(t, m.allowance)
-			require.LessOrEqual(t, m.allowance, time.Second)
-			require.Equal(t, "close-metrics", f.trace[len(f.trace)-1])
+			engineMetricsOwnership(t, mode)
 		})
 	}
 }
@@ -173,31 +131,94 @@ func TestArchiveCopyExportsTheEOFSave(t *testing.T) {
 	require.Zero(t, code)
 	select {
 	case request := <-received:
-		var saves int64
-		var eof bool
-		for _, rm := range request.ResourceMetrics {
-			for _, scope := range rm.ScopeMetrics {
-				for _, m := range scope.Metrics {
-					if m.Name == "kaferry.progress.saves" {
-						for _, p := range m.GetSum().DataPoints {
-							saves += p.GetAsInt()
-						}
-					}
-					if m.Name == "kaferry.partitions.stopped" {
-						for _, p := range m.GetGauge().DataPoints {
-							for _, a := range p.Attributes {
-								if a.Key == "reason" && a.Value.GetStringValue() == "eof" && p.GetAsInt() == 1 {
-									eof = true
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		require.EqualValues(t, 1, saves)
-		require.True(t, eof)
+		requireEOFProgressMetrics(t, request)
 	case <-time.After(2 * time.Second):
 		t.Fatal("no metrics received")
 	}
+}
+
+func engineMetricsOwnership(t *testing.T, mode string) {
+	// Given independent copy and observability factories.
+	f := newEngineFixture()
+	f.store = f.input
+	m := &metricsMock{fixture: f}
+	cfg := config.Defaults("")
+	cfg.Metrics.Enabled = mode != "disabled"
+	if mode == "invalid" {
+		m.err = errors.New("invalid collector settings")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if mode == "cancelled during run" {
+		f.onStage = func(stage string) {
+			if stage == "run" {
+				cancel()
+			}
+		}
+	}
+	// When the engine executes and closes its resources.
+	err := newEngine(f, f, f, engineLogger(), m).Run(ctx, enginePlan("TOPIC", "TOPIC"), cfg, noopShutdown{})
+	// Then disabled metrics acquire nothing, invalid settings prevent endpoint I/O,
+	// and enabled cleanup uses its own bounded context after copy resources close.
+	if mode == "disabled" {
+		require.Zero(t, m.opens)
+		require.False(t, m.closed)
+		require.NoError(t, err)
+		return
+	}
+	if mode == "invalid" {
+		var exit *core.Exit
+		require.ErrorAs(t, err, &exit)
+		require.EqualValues(t, 2, exit.Code)
+		require.Len(t, f.trace, 0)
+		require.False(t, m.closed)
+		return
+	}
+	require.NoError(t, err)
+	require.EqualValues(t, 1, m.opens)
+	require.Equal(t, "group", m.group)
+	require.True(t, m.closed)
+	require.NoError(t, m.closeErr)
+	require.Positive(t, m.allowance)
+	require.LessOrEqual(t, m.allowance, time.Second)
+	require.Equal(t, "close-metrics", f.trace[len(f.trace)-1])
+}
+
+func exportedMetrics(request *collectormetrics.ExportMetricsServiceRequest) []*metricspb.Metric {
+	var metrics []*metricspb.Metric
+	for _, resource := range request.ResourceMetrics {
+		for _, scope := range resource.ScopeMetrics {
+			metrics = append(metrics, scope.Metrics...)
+		}
+	}
+	return metrics
+}
+func requireEOFProgressMetrics(t *testing.T, request *collectormetrics.ExportMetricsServiceRequest) {
+	t.Helper()
+	var saves int64
+	var eof bool
+	for _, m := range exportedMetrics(request) {
+		switch m.Name {
+		case "kaferry.progress.saves":
+			require.NotNil(t, m.GetSum())
+			for _, point := range m.GetSum().DataPoints {
+				saves += point.GetAsInt()
+			}
+		case "kaferry.partitions.stopped":
+			require.NotNil(t, m.GetGauge())
+			eof = eof || containsEOFStop(m.GetGauge())
+		}
+	}
+	require.EqualValues(t, 1, saves)
+	require.True(t, eof)
+}
+func containsEOFStop(gauge *metricspb.Gauge) bool {
+	for _, point := range gauge.DataPoints {
+		for _, attribute := range point.Attributes {
+			if attribute.Key == "reason" && attribute.Value.GetStringValue() == "eof" && point.GetAsInt() == 1 {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -26,8 +26,8 @@ func TestReplayRejectsOffsetsDecreasingBetweenBlocks(t *testing.T) {
 	selectedFile := selected.Files[0]
 	pos := initial(selectedFile)
 	for _, offset := range []int64{42, 44} {
-		r, next, err := pool.Read(selectedFile, pos)
-		require.NoError(t, err)
+		r, next, checkErr := pool.Read(selectedFile, pos)
+		require.NoError(t, checkErr)
 		require.Equal(t, offset, r.Offset)
 		pos = next
 	}
@@ -59,9 +59,9 @@ func TestDifferentSourceIdentitiesDoNotMergeTheirOffsets(t *testing.T) {
 		writeFile(t, root, i+1, values, 0)
 		expected = append(expected, values...)
 	}
-	s, _ := diskSession(t, root, t.TempDir(), query(), Limits{OpenFiles: 1, Blocks: 1}, 10)
+	s := diskSession(t, root, t.TempDir(), query(), Limits{OpenFiles: 1, Blocks: 1})
 	// When replayed, then each original identity retains its records and own offset order.
-	require.Equal(t, expected, drain(t, s, true))
+	require.Equal(t, expected, drain(t, s))
 }
 
 func TestBadCursorAndChangedHandleFailBeforeReturningRecords(t *testing.T) {

@@ -1,6 +1,7 @@
 GO ?= go
 PYTHON ?= python3
 JSCPD ?= jscpd
+GOLANGCI_LINT ?= golangci-lint
 DUPLICATION_BASE ?= origin/main
 export CGO_ENABLED := 0
 KAFERRY_VERSION ?= dev
@@ -17,7 +18,7 @@ qualification load soak smoke fault: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/
 endif
 export KAFERRY_TEST_OUTPUT
 
-.PHONY: build test check fast smoke integration fault load soak qualification fuzz benchmark metrics duplicates broker broker-down
+.PHONY: build test check fast smoke integration fault load soak qualification fuzz benchmark metrics duplicates lint broker broker-down
 build:
 	mkdir -p bin
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags='-s -w -buildid= -X github.com/pagrus7/kaferry/src/internal/app.version=$(KAFERRY_VERSION) -X github.com/pagrus7/kaferry/src/internal/app.revision=$(KAFERRY_REVISION)' -o bin/kaferry ./src/cmd/kaferry
@@ -67,9 +68,11 @@ benchmark:
 	$(GO) test -run '^$$' -bench "Benchmark(ReplayOverlap|CheckpointEncoding|CheckpointSaving)" -benchmem ./src/internal/archive/replay
 metrics:
 	@rg --files src/cmd src/internal -g '*.go' -g '!**/*_test.go' | xargs wc -l
-	$(GO) run github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0 -top 10 $$(rg --files src/cmd src/internal -g '*.go' -g '!**/*_test.go')
 duplicates:
 	$(JSCPD) --config .jscpd.json --baseline-from-ref "$(DUPLICATION_BASE)" --fail-on-new-clones --no-tips
+lint:
+	$(GOLANGCI_LINT) config verify
+	$(GOLANGCI_LINT) run ./...
 
 # Standalone qualification: Python 3.11+, Go, Docker and Compose; no agent required.
 .PHONY: qualification-setup qualification-pr qualification-full model

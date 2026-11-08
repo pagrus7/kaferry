@@ -39,17 +39,7 @@ func recoverFile(root string, boundary Boundary, codec *avro.Codec, files Filesy
 	completed := dataPath(root, boundary.Identity, false)
 	f, err := files.OpenFile(completed, os.O_RDONLY, 0)
 	if err == nil {
-		defer func() { result = errors.Join(result, f.Close()) }()
-		if err := validatePrefix(f, boundary, true, codec); err != nil {
-			return err
-		}
-		if _, err := files.Lstat(dataPath(root, boundary.Identity, true)); !errors.Is(err, os.ErrNotExist) {
-			if err != nil {
-				return err
-			}
-			return errors.New("both private and completed archive files exist")
-		}
-		return files.SyncDirectory(root)
+		return recoverCompleted(root, boundary, codec, files, f)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -70,6 +60,21 @@ func recoverFile(root string, boundary Boundary, codec *avro.Codec, files Filesy
 	}
 	if err := files.RenameExclusive(private, completed); err != nil {
 		return err
+	}
+	return files.SyncDirectory(root)
+}
+
+func recoverCompleted(root string, boundary Boundary, codec *avro.Codec, files Filesystem, f DataFile) (result error) {
+
+	defer func() { result = errors.Join(result, f.Close()) }()
+	if checkErr := validatePrefix(f, boundary, true, codec); checkErr != nil {
+		return checkErr
+	}
+	if _, checkErr := files.Lstat(dataPath(root, boundary.Identity, true)); !errors.Is(checkErr, os.ErrNotExist) {
+		if checkErr != nil {
+			return checkErr
+		}
+		return errors.New("both private and completed archive files exist")
 	}
 	return files.SyncDirectory(root)
 }
@@ -124,20 +129,12 @@ func unacknowledgedFiles(root string, owners map[string]bool, files Filesystem) 
 	defer func() { result = errors.Join(result, directory.Close()) }()
 	for {
 		entries, readErr := directory.ReadDir(256)
-		for _, entry := range entries {
-			if !strings.HasPrefix(entry.Name(), ".") || !strings.HasSuffix(entry.Name(), ".partial") {
-				continue
-			}
-			name := strings.TrimSuffix(strings.TrimPrefix(entry.Name(), "."), ".partial")
-			owner, id, ok := strings.Cut(name, ".")
-			if !owners[owner] {
-				continue
-			}
-			if !ok || !validID(id) || !entry.Type().IsRegular() {
-				return nil, errors.New("unrecognized private archive file")
-			}
-			names = append(names, entry.Name())
+		batch, err := privateNames(entries, owners)
+		if err != nil {
+			return nil, err
 		}
+		names = append(names, batch...)
+
 		if errors.Is(readErr, io.EOF) {
 			return names, nil
 		}
@@ -145,4 +142,22 @@ func unacknowledgedFiles(root string, owners map[string]bool, files Filesystem) 
 			return nil, readErr
 		}
 	}
+}
+
+func privateNames(entries []os.DirEntry, owners map[string]bool) (names []string, result error) {
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".") || !strings.HasSuffix(entry.Name(), ".partial") {
+			continue
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(entry.Name(), "."), ".partial")
+		owner, id, ok := strings.Cut(name, ".")
+		if !owners[owner] {
+			continue
+		}
+		if !ok || !validID(id) || !entry.Type().IsRegular() {
+			return nil, errors.New("unrecognized private archive file")
+		}
+		names = append(names, entry.Name())
+	}
+	return names, nil
 }

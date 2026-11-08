@@ -70,7 +70,7 @@ func TestPartitionReplayPinsOnlyMatchingFilesAndKeepsThatSnapshotOnResume(t *tes
 	q := query()
 	q.Partitions = &plan.PartitionFilter{Exclude: true, IDs: []int32{5}}
 	q.PartitionCount = 1
-	s, _ := diskSession(t, root, checkpoints, q, Limits{}, 10)
+	s := diskSession(t, root, checkpoints, q, Limits{})
 	require.Len(t, s.Saved().Files, 1)
 	require.Equal(t, selected, s.Saved().Files[0].File)
 	_, err := s.Next()
@@ -82,16 +82,16 @@ func TestPartitionReplayPinsOnlyMatchingFilesAndKeepsThatSnapshotOnResume(t *tes
 	extra := records(3)
 	extra[0].Source.Partition = 1
 	writeFile(t, root, 3, extra, 0)
-	resumed, _ := diskSession(t, root, checkpoints, q, Limits{}, 10)
-	require.Equal(t, want[1:], drain(t, resumed, true))
+	resumed := diskSession(t, root, checkpoints, q, Limits{})
+	require.Equal(t, want[1:], drain(t, resumed))
 	require.True(t, resumed.Saved().Complete)
 	require.EqualValues(t, 3, resumed.Saved().Position)
 	require.NoError(t, resumed.Close())
 	// A new group selects the expanded snapshot, once its listed exclusion is present again.
 	writeFile(t, root, 2, other, 0)
 	q.Group, q.PartitionCount = "fresh", 0
-	fresh, _ := diskSession(t, root, checkpoints, q, Limits{}, 10)
-	require.Equal(t, append(want, extra...), drain(t, fresh, true))
+	fresh := diskSession(t, root, checkpoints, q, Limits{})
+	require.Equal(t, append(want, extra...), drain(t, fresh))
 }
 
 func TestMissingArchivePartitionIDsNeverPinASelection(t *testing.T) {
@@ -119,15 +119,15 @@ func TestExcludingEveryArchivePartitionCompletesAnEmptyFixedSelection(t *testing
 	writeFile(t, root, 1, records(0), 0)
 	q := query()
 	q.Partitions = &plan.PartitionFilter{Exclude: true, IDs: []int32{0}}
-	s, _ := diskSession(t, root, checkpoints, q, Limits{}, 10)
+	s := diskSession(t, root, checkpoints, q, Limits{})
 	// When replaying, then EOF is a fixed empty snapshot and remains complete after additions.
-	require.Empty(t, drain(t, s, true))
+	require.Empty(t, drain(t, s))
 	require.True(t, s.Saved().Complete)
 	require.Empty(t, s.Saved().Files)
 	require.NoError(t, s.Close())
 	extra := records(1)
 	extra[0].Source.Partition = 1
 	writeFile(t, root, 2, extra, 0)
-	resumed, _ := diskSession(t, root, checkpoints, q, Limits{}, 10)
-	require.Empty(t, drain(t, resumed, true))
+	resumed := diskSession(t, root, checkpoints, q, Limits{})
+	require.Empty(t, drain(t, resumed))
 }

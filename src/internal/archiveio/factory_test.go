@@ -101,8 +101,8 @@ func TestInvalidCheckpointDirectoryFailsBeforeCreatingReplayState(t *testing.T) 
 			_, err = os.Stat(p.Destination.Name)
 			require.ErrorIs(t, err, os.ErrNotExist)
 			if tc.regularFile {
-				data, err := os.ReadFile(directory)
-				require.NoError(t, err)
+				data, checkErr := os.ReadFile(directory)
+				require.NoError(t, checkErr)
 				require.Equal(t, original, data)
 			} else {
 				_, err = os.Stat(directory)

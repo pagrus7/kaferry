@@ -153,6 +153,26 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 		selected = topic.Partitions
 		slices.Sort(selected)
 	}
+	r.Partitions = append(r.Partitions, savedPartitionRows(selected, saved)...)
+	r.Activity = "group observed idle twice; observations are not atomic"
+	if before.Foreign || after.Foreign {
+		r.Activity = "group has an incompatible active member"
+	} else if membershipChanged(before, after) {
+		r.Activity = "group activity or a membership change was observed"
+	}
+	if progressErr != nil {
+		r.Reason = "saved query or endpoint fingerprint mismatch; saved positions are for inspection"
+		if before.Foreign || after.Foreign || membershipChanged(before, after) {
+			r.Reason += "; " + r.Activity
+		}
+		return progressErr
+	}
+	r.observed(before, after, p)
+	return nil
+}
+
+func savedPartitionRows(selected []int32, saved map[int32]kafkaport.SavedProgress) []SavedPartition {
+	var rows []SavedPartition
 	for _, id := range selected {
 		row := SavedPartition{ID: id}
 		if progress, ok := saved[id]; ok {
@@ -162,30 +182,19 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 			row.Window = progress.Window
 			row.Fingerprint = progress.Fingerprint
 		}
-		r.Partitions = append(r.Partitions, row)
+		rows = append(rows, row)
 	}
-	r.Activity = "group observed idle twice; observations are not atomic"
-	if before.Foreign || after.Foreign {
-		r.Activity = "group has an incompatible active member"
-	} else if !before.Idle || !after.Idle || before.State != after.State {
-		r.Activity = "group activity or a membership change was observed"
-	}
-	if progressErr != nil {
-		r.Reason = "saved query or endpoint fingerprint mismatch; saved positions are for inspection"
-		if before.Foreign || after.Foreign || !before.Idle || !after.Idle || before.State != after.State {
-			r.Reason += "; " + r.Activity
-		}
-		return progressErr
-	}
-	r.observed(before, after, p)
-	return nil
+	return rows
+}
+func membershipChanged(before, after kafkaport.Membership) bool {
+	return !before.Idle || !after.Idle || before.State != after.State
 }
 
 func (r *StatusReport) observed(before, after kafkaport.Membership, p plan.Plan) {
 	switch {
 	case before.Foreign || after.Foreign:
 		r.Verdict, r.Reason = "unknown", "group has an incompatible active member"
-	case !before.Idle || !after.Idle || before.State != after.State:
+	case membershipChanged(before, after):
 		r.Verdict = "running"
 	default:
 		r.classify(p)

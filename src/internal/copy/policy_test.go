@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -30,52 +29,7 @@ func TestRecordPoliciesCommitSkippedInputsOnly(t *testing.T) {
 		{"unknown failure cannot skip", "unclassified", plan.Policies{OtherRecord: "SKIP"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Given good records surrounding one input rejected before submission.
-			r, source, sink, store, _ := fixture(t)
-			r.plan.Policies = tc.policies
-			failure := errors.New("invalid input")
-			sink.submit = func(record Record, token Token) error {
-				if record.Value[0] == 1 {
-					if tc.class == "unclassified" {
-						return failure
-					}
-					return fmt.Errorf("wrapped: %w", &RecordError{Class: tc.class, Err: failure})
-				}
-				sink.reports <- Delivery{Token: token}
-				return nil
-			}
-			lo, hi, stamp := int64(0), int64(10), int64(5)
-			if tc.class == "missing_timestamp" {
-				source.assignments[0].Window = plan.Window{Lower: &lo, Upper: &hi}
-			}
-			for i := range 3 {
-				input := incoming(0, int64(i), 1)
-				input.Record.Value[0] = byte(i)
-				input.Record.TimestampMS = &stamp
-				if i == 1 && tc.class == "missing_timestamp" {
-					input.Record.TimestampMS = nil
-				}
-				source.events = append(source.events, Event{Input: &input})
-			}
-			source.events = append(source.events, Event{EOF: &Cursor{Partition: 0, Position: 3}})
-
-			// When the copy applies the selected record policy.
-			err := r.Run(context.Background())
-
-			// Then only a safe skip may advance the committed prefix beyond the bad input.
-			wantPosition, wantWrites, wantSkipped := int64(1), 1, uint64(0)
-			if tc.skip {
-				wantPosition, wantWrites, wantSkipped = 3, 2, 1
-			}
-			if (err == nil) != tc.skip || len(sink.writes) != wantWrites || r.skipped != wantSkipped {
-				t.Fatalf("error=%v writes=%d skipped=%d", err, len(sink.writes), r.skipped)
-			}
-			if len(store.saves) == 0 || store.saves[len(store.saves)-1][0].Position != wantPosition {
-				t.Fatalf("unsafe committed prefix: %+v", store.saves)
-			}
-			if !tc.skip && tc.class != "unclassified" && !strings.Contains(err.Error(), "partition 0") {
-				t.Fatal("record failure lost its partition", err)
-			}
+			recordPolicyOutcome(t, tc.class, tc.policies, tc.skip)
 		})
 	}
 }
@@ -199,5 +153,53 @@ func TestDeferredRecordIsValidatedAfterBudgetIsReleased(t *testing.T) {
 	var invalid *RecordError
 	if !acknowledged || !errors.As(err, &invalid) || invalid.Class != "missing_timestamp" || exitCode(err) != 1 || len(sink.writes) != 1 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1}}}) {
 		t.Fatal("held input bypassed validation or failed to stop", err, store.saves, sink.writes)
+	}
+}
+
+func recordPolicyOutcome(t *testing.T, class string, policies plan.Policies, skip bool) {
+	// Given good records surrounding one input rejected before submission.
+	r, source, sink, store, _ := fixture(t)
+	r.plan.Policies = policies
+	failure := errors.New("invalid input")
+	sink.submit = func(record Record, token Token) error {
+		if record.Value[0] == 1 {
+			if class == "unclassified" {
+				return failure
+			}
+			return fmt.Errorf("wrapped: %w", &RecordError{Class: class, Err: failure})
+		}
+		sink.reports <- Delivery{Token: token}
+		return nil
+	}
+	lo, hi, stamp := int64(0), int64(10), int64(5)
+	if class == "missing_timestamp" {
+		source.assignments[0].Window = plan.Window{Lower: &lo, Upper: &hi}
+	}
+	for i := range 3 {
+		input := incoming(0, int64(i), 1)
+		input.Record.Value[0] = byte(i)
+		input.Record.TimestampMS = &stamp
+		if i == 1 && class == "missing_timestamp" {
+			input.Record.TimestampMS = nil
+		}
+		source.events = append(source.events, Event{Input: &input})
+	}
+	source.events = append(source.events, Event{EOF: &Cursor{Partition: 0, Position: 3}})
+
+	// When the copy applies the selected record policy.
+	err := r.Run(context.Background())
+
+	// Then only a safe skip may advance the committed prefix beyond the bad input.
+	wantPosition, wantWrites, wantSkipped := int64(1), 1, uint64(0)
+	if skip {
+		wantPosition, wantWrites, wantSkipped = 3, 2, 1
+	}
+	require.Equal(t, skip, err == nil, "record policy success: %v", err)
+	require.Len(t, sink.writes, wantWrites)
+	require.Equal(t, wantSkipped, r.skipped)
+	require.NotEmpty(t, store.saves)
+	require.Equal(t, wantPosition, store.saves[len(store.saves)-1][0].Position)
+	if !skip && class != "unclassified" {
+		require.ErrorContains(t, err, "partition 0")
 	}
 }

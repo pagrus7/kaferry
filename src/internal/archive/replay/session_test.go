@@ -124,7 +124,7 @@ func TestSavedSelectionIgnoresNewFilesAndACompletedGroupStaysCompleted(t *testin
 	inputs.files = append(inputs.files, other)
 	// When the same group resumes, then its selection remains fixed.
 	resumed := session(t, store, inputs, &memoryBlocks{values: map[string][]avro.Record{f.Identity.FileID: values}}, 10)
-	require.Equal(t, records(43), drain(t, resumed, true))
+	require.Equal(t, records(43), drain(t, resumed))
 	require.Equal(t, 1, inputs.selects)
 	require.Equal(t, 1, inputs.validates)
 	require.True(t, store.saved.Complete)
@@ -144,7 +144,7 @@ func TestSavedSelectionIgnoresNewFilesAndACompletedGroupStaysCompleted(t *testin
 	fresh, err := NewSession(q, clock{}, &memoryCheckpoints{}, &memorySnapshots{files: []File{f, other}}, &memoryBlocks{values: map[string][]avro.Record{f.Identity.FileID: values, other.Identity.FileID: records(44)}}, 10)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
-	require.Equal(t, records(42, 43, 44), drain(t, fresh, true))
+	require.Equal(t, records(42, 43, 44), drain(t, fresh))
 }
 
 func TestResolvedWindowSurvivesRestartAndOutOfOrderTimestamps(t *testing.T) {
@@ -169,7 +169,7 @@ func TestResolvedWindowSurvivesRestartAndOutOfOrderTimestamps(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	require.EqualValues(t, 9000, *s.Saved().Window.Lower)
 	require.EqualValues(t, 10000, *s.Saved().Window.Upper)
-	got := drain(t, s, true)
+	got := drain(t, s)
 	require.Equal(t, values, got)
 	require.True(t, s.Saved().Window.Contains(*got[1].TimestampMS), "a later in-range timestamp is not lost after an out-of-range record")
 }
@@ -177,52 +177,7 @@ func TestResolvedWindowSurvivesRestartAndOutOfOrderTimestamps(t *testing.T) {
 func TestStartupFailureNeverProducesOrChangesSavedProgress(t *testing.T) {
 	for _, stage := range []string{"load", "selection", "initial save", "resume validation", "query identity", "window", "resume read"} {
 		t.Run(stage, func(t *testing.T) {
-			// Given a failure at one startup boundary.
-			values := records(42, 43)
-			f := descriptor(1, values)
-			store := &memoryCheckpoints{}
-			inputs := &memorySnapshots{files: []File{f}}
-			blocks := &memoryBlocks{values: map[string][]avro.Record{f.Identity.FileID: values}}
-			q := query()
-			if stage == "resume validation" || stage == "query identity" || stage == "window" || stage == "resume read" {
-				prior := session(t, store, inputs, blocks, 10)
-				if stage == "resume read" {
-					_, err := prior.Next()
-					require.NoError(t, err)
-					require.NoError(t, prior.Checkpoint(1))
-				}
-				require.NoError(t, prior.Close())
-				blocks = &memoryBlocks{values: blocks.values}
-			}
-			switch stage {
-			case "load":
-				store.loadErr = errDisk
-			case "selection":
-				inputs.selectErr = errDisk
-			case "initial save":
-				store.saveErr = errDisk
-			case "resume validation":
-				inputs.validateErr = errDisk
-			case "query identity":
-				q.Fingerprint = "different"
-			case "window":
-				q.Window = plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 1}}
-			case "resume read":
-				blocks.fail = func(File, Position) error { return errDisk }
-			}
-			before := store.saved
-			reads, closes := blocks.reads, store.closes
-			// When opening fails, then saved progress and caller-owned resources remain unchanged.
-			_, err := NewSession(q, clock{}, store, inputs, blocks, 10)
-			require.Error(t, err)
-			if stage == "resume read" {
-				require.Equal(t, reads+1, blocks.reads)
-			} else {
-				require.Equal(t, reads, blocks.reads)
-			}
-			require.Equal(t, before, store.saved)
-			require.Zero(t, blocks.closes, "failed construction leaves input cleanup to its caller")
-			require.Equal(t, closes, store.closes, "failed construction leaves checkpoint cleanup to its caller")
+			startupFailureOwnership(t, stage)
 		})
 	}
 }
@@ -273,4 +228,53 @@ func TestPrematureEOFCannotFinishOrDropAnUnfinishedFile(t *testing.T) {
 	require.NoError(t, s.Checkpoint(1))
 	require.False(t, store.saved.Complete)
 	require.EqualValues(t, 1, store.saved.Position)
+}
+
+func startupFailureOwnership(t *testing.T, stage string) {
+	// Given a failure at one startup boundary.
+	values := records(42, 43)
+	f := descriptor(1, values)
+	store := &memoryCheckpoints{}
+	inputs := &memorySnapshots{files: []File{f}}
+	blocks := &memoryBlocks{values: map[string][]avro.Record{f.Identity.FileID: values}}
+	q := query()
+	if stage == "resume validation" || stage == "query identity" || stage == "window" || stage == "resume read" {
+		prior := session(t, store, inputs, blocks, 10)
+		if stage == "resume read" {
+			_, err := prior.Next()
+			require.NoError(t, err)
+			require.NoError(t, prior.Checkpoint(1))
+		}
+		require.NoError(t, prior.Close())
+		blocks = &memoryBlocks{values: blocks.values}
+	}
+	switch stage {
+	case "load":
+		store.loadErr = errDisk
+	case "selection":
+		inputs.selectErr = errDisk
+	case "initial save":
+		store.saveErr = errDisk
+	case "resume validation":
+		inputs.validateErr = errDisk
+	case "query identity":
+		q.Fingerprint = "different"
+	case "window":
+		q.Window = plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 1}}
+	case "resume read":
+		blocks.fail = func(File, Position) error { return errDisk }
+	}
+	before := store.saved
+	reads, closes := blocks.reads, store.closes
+	// When opening fails, then saved progress and caller-owned resources remain unchanged.
+	_, err := NewSession(q, clock{}, store, inputs, blocks, 10)
+	require.Error(t, err)
+	if stage == "resume read" {
+		require.Equal(t, reads+1, blocks.reads)
+	} else {
+		require.Equal(t, reads, blocks.reads)
+	}
+	require.Equal(t, before, store.saved)
+	require.Zero(t, blocks.closes, "failed construction leaves input cleanup to its caller")
+	require.Equal(t, closes, store.closes, "failed construction leaves checkpoint cleanup to its caller")
 }

@@ -33,8 +33,8 @@ func TestGroupLockSurvivesCheckpointReplacementAndReleasesOnClose(t *testing.T) 
 	// When repeated atomic saves replace the checkpoint, then the same stable lock excludes another owner.
 	for range 2 {
 		require.NoError(t, j.Save(emptyState()))
-		_, err := NewJournal(directory, query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
-		require.ErrorIs(t, err, ErrGroupBusy)
+		_, checkErr := NewJournal(directory, query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
+		require.ErrorIs(t, checkErr, ErrGroupBusy)
 	}
 	after, err := os.Stat(j.path + ".lock")
 	require.NoError(t, err)

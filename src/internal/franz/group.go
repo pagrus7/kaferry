@@ -123,25 +123,30 @@ func (i *Inspector) offsetParts(r *kmsg.OffsetFetchResponse, group string) (map[
 		if len(r.Groups) != 1 || r.Groups[0].Group != group {
 			return nil, fmt.Errorf("missing group offset result")
 		}
-		g := r.Groups[0]
-		if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
-			return nil, err
-		}
-		for _, t := range g.Topics {
-			if !sameTopic(t.Topic, t.TopicID, i.topicID, i.topic) {
-				continue
-			}
+		return i.groupOffsetParts(r.Groups[0])
+	}
+
+	for _, t := range r.Topics {
+		if t.Topic == i.topic {
 			for _, p := range t.Partitions {
-				result[p.Partition] = kmsg.OffsetFetchResponseTopicPartition{Partition: p.Partition, Offset: p.Offset, Metadata: p.Metadata, ErrorCode: p.ErrorCode}
+				result[p.Partition] = p
 			}
 		}
-	} else {
-		for _, t := range r.Topics {
-			if t.Topic == i.topic {
-				for _, p := range t.Partitions {
-					result[p.Partition] = p
-				}
-			}
+	}
+	return result, nil
+}
+
+func (i *Inspector) groupOffsetParts(g kmsg.OffsetFetchResponseGroup) (map[int32]kmsg.OffsetFetchResponseTopicPartition, error) {
+	result := make(map[int32]kmsg.OffsetFetchResponseTopicPartition)
+	if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
+		return nil, err
+	}
+	for _, t := range g.Topics {
+		if !sameTopic(t.Topic, t.TopicID, i.topicID, i.topic) {
+			continue
+		}
+		for _, p := range t.Partitions {
+			result[p.Partition] = kmsg.OffsetFetchResponseTopicPartition{Partition: p.Partition, Offset: p.Offset, Metadata: p.Metadata, ErrorCode: p.ErrorCode}
 		}
 	}
 	return result, nil
@@ -172,6 +177,9 @@ func (i *Inspector) decodeSaved(parts map[int32]kmsg.OffsetFetchResponseTopicPar
 		}
 		saved[id] = kafkaport.SavedProgress{Position: p.Offset, Progress: progress}
 	}
+	return validateSavedWindows(saved, fp, window, staleness)
+}
+func validateSavedWindows(saved map[int32]kafkaport.SavedProgress, fp string, window plan.WindowSpec, staleness int64) (map[int32]kafkaport.SavedProgress, error) {
 	// Finish validating the source before exposing diagnostic positions. Every
 	// execution caller must stop on the fingerprint error; status can inspect it.
 	mismatch := false

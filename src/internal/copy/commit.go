@@ -49,16 +49,20 @@ func (r *Runner) save(ids []int32, releasing bool) error {
 			}
 			continue
 		}
-		r.tracker.Committed(cursor)
-		if cursor.End != nil {
-			r.partitions[cursor.Partition].endSaved = true
-		}
-		if cursor.Stop != nil {
-			r.partitions[cursor.Partition].stopSaved = true
-		}
-		r.log.Debug("progress committed", "partition", cursor.Partition, "position", cursor.Position)
+		r.markCommitted(cursor)
 	}
 	return failed
+}
+
+func (r *Runner) markCommitted(cursor Cursor) {
+	r.tracker.Committed(cursor)
+	if cursor.End != nil {
+		r.partitions[cursor.Partition].endSaved = true
+	}
+	if cursor.Stop != nil {
+		r.partitions[cursor.Partition].stopSaved = true
+	}
+	r.log.Debug("progress committed", "partition", cursor.Partition, "position", cursor.Position)
 }
 
 func (r *Runner) confirmedCursors(ids []int32) []Cursor {

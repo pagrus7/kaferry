@@ -26,25 +26,7 @@ func partitionFilter(ast *sql.PartitionFilter) (*PartitionFilter, error) {
 		return nil, nil
 	}
 	if ast.Range != nil {
-		lower, err := partitionID(ast.Range.Lower)
-		if err != nil {
-			return nil, err
-		}
-		upper, err := partitionID(ast.Range.Upper)
-		if err != nil {
-			return nil, err
-		}
-		if upper < lower {
-			return nil, sql.At(ast.Range.Upper.Position, fmt.Errorf("PARTITION range upper bound must not precede its lower bound"))
-		}
-		if upper-lower+1 > maxPartitionRangeIDs {
-			return nil, sql.At(ast.Range.Upper.Position, fmt.Errorf("PARTITION BETWEEN predicates may name at most 65536 IDs per statement"))
-		}
-		f := &PartitionFilter{Exclude: ast.Exclude, IDs: make([]int32, upper-lower+1)}
-		for n := range f.IDs {
-			f.IDs[n] = int32(lower + int64(n))
-		}
-		return f, nil
+		return partitionRange(ast)
 	}
 	if len(ast.IDs) == 0 {
 		return nil, sql.At(ast.Position, fmt.Errorf("PARTITION requires a nonempty integer list"))
@@ -59,6 +41,28 @@ func partitionFilter(ast *sql.PartitionFilter) (*PartitionFilter, error) {
 	}
 	slices.Sort(f.IDs)
 	f.IDs = slices.Compact(f.IDs)
+	return f, nil
+}
+
+func partitionRange(ast *sql.PartitionFilter) (*PartitionFilter, error) {
+	lower, err := partitionID(ast.Range.Lower)
+	if err != nil {
+		return nil, err
+	}
+	upper, err := partitionID(ast.Range.Upper)
+	if err != nil {
+		return nil, err
+	}
+	if upper < lower {
+		return nil, sql.At(ast.Range.Upper.Position, fmt.Errorf("PARTITION range upper bound must not precede its lower bound"))
+	}
+	if upper-lower+1 > maxPartitionRangeIDs {
+		return nil, sql.At(ast.Range.Upper.Position, fmt.Errorf("PARTITION BETWEEN predicates may name at most 65536 IDs per statement"))
+	}
+	f := &PartitionFilter{Exclude: ast.Exclude, IDs: make([]int32, upper-lower+1)}
+	for n := range f.IDs {
+		f.IDs[n] = int32(lower + int64(n))
+	}
 	return f, nil
 }
 

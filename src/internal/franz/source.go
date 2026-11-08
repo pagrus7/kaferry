@@ -104,32 +104,36 @@ func (s *Source) poll(ctx context.Context, timeout time.Duration) (core.Event, e
 	case event := <-s.bridge.events:
 		return core.Event{}, s.lifecycle(ctx, event)
 	case fetched := <-s.pump.fetched:
-		defer close(fetched.done)
-		if fetched.err != nil {
-			if !s.transient(fetched.err) {
-				return core.Event{}, fetched.err
-			}
-		} else {
-			s.retrying = false
-		}
-		if len(fetched.records) == 0 {
-			return core.Event{}, nil
-		}
-		record := fetched.records[0]
-		if p := s.partitions[record.Partition]; p != nil && p.paused {
-			if p.held != nil {
-				return core.Event{}, fmt.Errorf("multiple held records for paused partition")
-			}
-			p.held = record
-			return core.Event{}, nil
-		}
-		return s.deliver(record)
+		return s.acceptFetch(fetched)
 	case <-timer.C:
 		return core.Event{}, s.checkTips(ctx)
 	case <-ctx.Done():
 		return core.Event{}, ctx.Err()
 	}
 }
+func (s *Source) acceptFetch(fetched fetchResult) (core.Event, error) {
+	defer close(fetched.done)
+	if fetched.err != nil {
+		if !s.transient(fetched.err) {
+			return core.Event{}, fetched.err
+		}
+	} else {
+		s.retrying = false
+	}
+	if len(fetched.records) == 0 {
+		return core.Event{}, nil
+	}
+	record := fetched.records[0]
+	if p := s.partitions[record.Partition]; p != nil && p.paused {
+		if p.held != nil {
+			return core.Event{}, fmt.Errorf("multiple held records for paused partition")
+		}
+		p.held = record
+		return core.Event{}, nil
+	}
+	return s.deliver(record)
+}
+
 func (s *Source) deliver(r *kgo.Record) (core.Event, error) {
 	p := s.partitions[r.Partition]
 	if p == nil || r.Offset < p.position {

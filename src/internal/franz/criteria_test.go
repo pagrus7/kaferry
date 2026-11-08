@@ -56,58 +56,62 @@ func TestLatestFreezesReadableEndAndKeepsItAfterResume(t *testing.T) {
 func TestNewPartitionAssignmentInitializesFromQueryAndSavedWindow(t *testing.T) {
 	for _, windowed := range []bool{false, true} {
 		t.Run(fmt.Sprint(windowed), func(t *testing.T) {
-			// Given an active subscriber, either bootstrapped at LATEST or using a relative time range.
-			cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"))
-			defer cluster.Close()
-			producer := componentClient(t, cluster, kgo.RecordPartitioner(kgo.ManualPartitioner()))
-			require.NoError(t, producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Partition: 0, Value: []byte("initial"), Timestamp: time.Now().Add(-time.Minute)}).FirstErr())
-			p := testPlan(t, map[string]string{"bootstrap.servers": strings.Join(cluster.ListenAddrs(), ","), "metadata.max.age.ms": "10"})
-			p.Start = "LATEST"
-			if windowed {
-				p.Start = ""
-				p.Window = plan.WindowSpec{Lower: &plan.Expression{Now: true, AdjustmentMS: -3600000}, Upper: &plan.Expression{Now: true, AdjustmentMS: 3600000}}
-			}
-			_, connection := componentConnection(t, p)
-			source, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker, nil)
-			require.NoError(t, err)
-			defer source.Close()
-			life := &lifecycleMock{}
-			require.NoError(t, source.Start(context.Background(), life, nil))
-			ctx := componentContext(t)
-			for len(life.assignments) == 0 && ctx.Err() == nil {
-				_, err := source.Poll(context.Background(), 20*time.Millisecond)
-				require.NoError(t, err)
-			}
-			require.NotEmpty(t, life.assignments)
-			first := life.assignments[0]
-			// When a new partition is created and receives records before discovery.
-			response, err := kadm.NewClient(producer).CreatePartitions(ctx, 1, "input")
-			require.NoError(t, err)
-			require.NoError(t, response.Error())
-			newProducer := componentClient(t, cluster, kgo.RecordPartitioner(kgo.ManualPartitioner()))
-			require.NoError(t, newProducer.ProduceSync(ctx, &kgo.Record{Topic: "input", Partition: 1, Value: []byte("new partition first"), Timestamp: time.Now().Add(-time.Minute)}).FirstErr())
-			var position int64 = -1
-			for position < 0 && ctx.Err() == nil {
-				event, err := source.Poll(context.Background(), 20*time.Millisecond)
-				require.NoError(t, err)
-				if event.Input != nil && event.Input.Cursor.Partition == 1 {
-					position = event.Input.Cursor.Position
-					require.Equal(t, "new partition first", string(event.Input.Record.Value))
-				}
-			}
-			// Then use the assignment path, preserve the resolved window, and start at the new partition's beginning.
-			require.EqualValues(t, 0, position)
-			var found bool
-			for _, a := range life.assignments {
-				if a.Cursor.Partition == 1 {
-					found = true
-					require.Equal(t, first.Window, a.Window)
-				}
-			}
-			require.True(t, found)
-			saved, err := kadm.NewClient(producer).FetchOffsetsForTopics(ctx, p.Group, "input")
-			require.NoError(t, err)
-			require.EqualValues(t, 0, saved["input"][1].At)
+			newPartitionInitialization(t, windowed)
 		})
 	}
+}
+
+func newPartitionInitialization(t *testing.T, windowed bool) {
+	// Given an active subscriber, either bootstrapped at LATEST or using a relative time range.
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"))
+	defer cluster.Close()
+	producer := componentClient(t, cluster, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	require.NoError(t, producer.ProduceSync(componentContext(t), &kgo.Record{Topic: "input", Partition: 0, Value: []byte("initial"), Timestamp: time.Now().Add(-time.Minute)}).FirstErr())
+	p := testPlan(t, map[string]string{"bootstrap.servers": strings.Join(cluster.ListenAddrs(), ","), "metadata.max.age.ms": "10"})
+	p.Start = "LATEST"
+	if windowed {
+		p.Start = ""
+		p.Window = plan.WindowSpec{Lower: &plan.Expression{Now: true, AdjustmentMS: -3600000}, Upper: &plan.Expression{Now: true, AdjustmentMS: 3600000}}
+	}
+	_, connection := componentConnection(t, p)
+	source, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker, nil)
+	require.NoError(t, err)
+	defer source.Close()
+	life := &lifecycleMock{}
+	require.NoError(t, source.Start(context.Background(), life, nil))
+	ctx := componentContext(t)
+	for len(life.assignments) == 0 && ctx.Err() == nil {
+		_, checkErr := source.Poll(context.Background(), 20*time.Millisecond)
+		require.NoError(t, checkErr)
+	}
+	require.NotEmpty(t, life.assignments)
+	first := life.assignments[0]
+	// When a new partition is created and receives records before discovery.
+	response, err := kadm.NewClient(producer).CreatePartitions(ctx, 1, "input")
+	require.NoError(t, err)
+	require.NoError(t, response.Error())
+	newProducer := componentClient(t, cluster, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	require.NoError(t, newProducer.ProduceSync(ctx, &kgo.Record{Topic: "input", Partition: 1, Value: []byte("new partition first"), Timestamp: time.Now().Add(-time.Minute)}).FirstErr())
+	var position int64 = -1
+	for position < 0 && ctx.Err() == nil {
+		event, checkErr := source.Poll(context.Background(), 20*time.Millisecond)
+		require.NoError(t, checkErr)
+		if event.Input != nil && event.Input.Cursor.Partition == 1 {
+			position = event.Input.Cursor.Position
+			require.Equal(t, "new partition first", string(event.Input.Record.Value))
+		}
+	}
+	// Then use the assignment path, preserve the resolved window, and start at the new partition's beginning.
+	require.EqualValues(t, 0, position)
+	var found bool
+	for _, a := range life.assignments {
+		if a.Cursor.Partition == 1 {
+			found = true
+			require.Equal(t, first.Window, a.Window)
+		}
+	}
+	require.True(t, found)
+	saved, err := kadm.NewClient(producer).FetchOffsetsForTopics(ctx, p.Group, "input")
+	require.NoError(t, err)
+	require.EqualValues(t, 0, saved["input"][1].At)
 }

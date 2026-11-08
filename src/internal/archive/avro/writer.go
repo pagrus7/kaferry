@@ -64,23 +64,8 @@ func (w *Writer) Append(record Record) error {
 	if w.failed != nil {
 		return w.failed
 	}
-	if err := record.validate(); err != nil {
+	if err := w.validateRecord(record); err != nil {
 		return err
-	}
-	if record.Source != w.identity.Source {
-		return ErrRotationRequired
-	}
-	if w.count == 0 && record.Offset != w.identity.FirstOffset {
-		return errors.New("first source offset disagrees with file header")
-	}
-	if record.Offset < w.last {
-		return ErrRotationRequired
-	}
-	if len(record.Headers) > w.codec.maxHeaders {
-		return InvalidRecordError(errors.New("record exceeds header count limit"))
-	}
-	if recordBytes(record) > w.codec.limit {
-		return InvalidRecordError(errors.New("record exceeds Avro block limit"))
 	}
 	// Finish encoding before changing the container; format-limit rejections leave valid pending data intact.
 	if w.datum == nil {
@@ -111,6 +96,28 @@ func (w *Writer) Append(record Record) error {
 	w.last, w.count = record.Offset, w.count+1
 	if len(w.pending) >= BlockTarget || w.blockCount >= maxRecords {
 		return w.Flush()
+	}
+	return nil
+}
+
+func (w *Writer) validateRecord(record Record) error {
+	if err := record.validate(); err != nil {
+		return err
+	}
+	if record.Source != w.identity.Source {
+		return ErrRotationRequired
+	}
+	if w.count == 0 && record.Offset != w.identity.FirstOffset {
+		return errors.New("first source offset disagrees with file header")
+	}
+	if record.Offset < w.last {
+		return ErrRotationRequired
+	}
+	if len(record.Headers) > w.codec.maxHeaders {
+		return InvalidRecordError(errors.New("record exceeds header count limit"))
+	}
+	if recordBytes(record) > w.codec.limit {
+		return InvalidRecordError(errors.New("record exceeds Avro block limit"))
 	}
 	return nil
 }

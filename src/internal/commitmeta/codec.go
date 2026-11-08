@@ -154,31 +154,8 @@ func checkObject(data []byte, fields ...string) error {
 	}
 	seen := map[string]bool{}
 	for d.More() {
-		token, err := d.Token()
-		if err != nil {
+		if err := checkField(d, seen, fields); err != nil {
 			return err
-		}
-		name, ok := token.(string)
-		if !ok || !slices.Contains(fields, name) || seen[name] {
-			return fmt.Errorf("invalid field")
-		}
-		seen[name] = true
-		var raw json.RawMessage
-		if err := d.Decode(&raw); err != nil {
-			return err
-		}
-		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) && name != "lower" && name != "upper" {
-			return fmt.Errorf("null field")
-		}
-		switch name {
-		case "win":
-			if err := checkObject(raw, "lower", "upper"); err != nil {
-				return err
-			}
-		case "stop":
-			if err := checkObject(raw, "reason", "at"); err != nil {
-				return err
-			}
 		}
 	}
 	if _, err := d.Token(); err != nil {
@@ -186,6 +163,36 @@ func checkObject(data []byte, fields ...string) error {
 	}
 	if _, err := d.Token(); err != io.EOF {
 		return fmt.Errorf("trailing JSON")
+	}
+	return nil
+}
+
+func checkField(d *json.Decoder, seen map[string]bool, fields []string) error {
+	token, err := d.Token()
+	if err != nil {
+		return err
+	}
+	name, ok := token.(string)
+	if !ok || !slices.Contains(fields, name) || seen[name] {
+		return fmt.Errorf("invalid field")
+	}
+	seen[name] = true
+	var raw json.RawMessage
+	if err := d.Decode(&raw); err != nil {
+		return err
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) && name != "lower" && name != "upper" {
+		return fmt.Errorf("null field")
+	}
+	switch name {
+	case "win":
+		if err := checkObject(raw, "lower", "upper"); err != nil {
+			return err
+		}
+	case "stop":
+		if err := checkObject(raw, "reason", "at"); err != nil {
+			return err
+		}
 	}
 	return nil
 }

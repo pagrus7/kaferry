@@ -85,41 +85,39 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 	if err != nil {
 		return err
 	}
-	input, err := e.prepareSource(ctx, p, fp, limits, sourceEndpoint.connection, partitionCount)
+	return e.runInput(ctx, p, fp, limits, sourceEndpoint.connection, destinationEndpoint.connection, partitionCount, stop, observer)
+}
+func (e *runtimeEngine) runInput(ctx context.Context, p plan.Plan, fp string, limits config.Worker, sourceConnection, destinationConnection kafkaport.Connection, partitionCount int, stop Shutdown, observer copy.Observer) (result error) {
+	input, err := e.prepareSource(ctx, p, fp, limits, sourceConnection, partitionCount)
 	if err != nil {
 		return err
 	}
-	if input != nil {
-		defer func() {
-			stop.Begin()
-			stop.Stage("closing file input")
-			result = copy.CleanupResult(result, "close file input", input.Close())
-		}()
-	}
+
 	var source copy.Source
 	var store copy.ProgressStore
+	sourceLabel := "file input"
 	if input != nil {
 		source, store = input, input
 	} else {
 		if p.Window.Upper != nil && (p.ClockCaptureEnabled() || p.TimestampStopEnabled()) {
 			e.log.Warn("timestamp completion relies on configured arrival-delay and timestamp-disorder assumptions")
 		}
-		var sourceProgress copy.ProgressStore
-		source, sourceProgress, err = sourceEndpoint.connection.Source(ctx, p, fp, limits, routingValidator(p, destinationEndpoint.connection))
+		source, store, err = sourceConnection.Source(ctx, p, fp, limits, routingValidator(p, destinationConnection))
 		if err != nil {
 			return err
 		}
-		defer func() {
-			stop.Begin()
-			stop.Stage("closing Kafka input")
-			result = copy.CleanupResult(result, "close Kafka input", source.Close())
-		}()
-		store = sourceProgress
+		sourceLabel = "Kafka input"
 	}
+	defer func() {
+		stop.Begin()
+		stop.Stage("closing " + sourceLabel)
+		result = copy.CleanupResult(result, "close "+sourceLabel, source.Close())
+	}()
+
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	sink, err := e.openSink(ctx, p, limits, destinationEndpoint.connection)
+	sink, err := e.openSink(ctx, p, limits, destinationConnection)
 	if err != nil {
 		return err
 	}
@@ -128,21 +126,27 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 		stop.Stage("closing output")
 		sink.Close()
 	}()
-	runErr := e.runner.New(source, sink, store, p, limits, stop, observer).Run(ctx)
-	if finalizer, ok := sink.(interface{ Finish() error }); ok {
-		stop.Begin()
-		stop.Stage("publishing archive files")
-		runErr = copy.CleanupResult(runErr, "publish archive files", finalizer.Finish())
+	if err := e.runOutput(ctx, p, limits, sink, source, store, stop, observer); err != nil {
+		return err
 	}
-	if runErr != nil {
-		return runErr
-	}
+
 	if p.OneOff && input != nil && p.WorkerStopAfterRecords == 0 {
 		stop.Begin()
 		stop.Stage("deleting one-off checkpoint")
 		return input.DeleteCheckpoint()
 	}
 	return nil
+}
+
+func (e *runtimeEngine) runOutput(ctx context.Context, p plan.Plan, limits config.Worker, sink copy.Sink, source copy.Source, store copy.ProgressStore, stop Shutdown, observer copy.Observer) error {
+
+	runErr := e.runner.New(source, sink, store, p, limits, stop, observer).Run(ctx)
+	if finalizer, ok := sink.(interface{ Finish() error }); ok {
+		stop.Begin()
+		stop.Stage("publishing archive files")
+		runErr = copy.CleanupResult(runErr, "publish archive files", finalizer.Finish())
+	}
+	return runErr
 }
 
 func closeMetrics(session observability.Session, stop Shutdown) {

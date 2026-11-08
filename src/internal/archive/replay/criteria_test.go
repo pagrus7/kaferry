@@ -47,7 +47,7 @@ func TestFileDisorderFinishesOnlyItsOriginalStreamAndResumes(t *testing.T) {
 			// When restarted from confirmed physical cursors, then the other partition remains eligible.
 			s, err = NewSession(q, clock{}, store, inputs, blocks(), 20)
 			require.NoError(t, err)
-			got := drain(t, s, true)
+			got := drain(t, s)
 			require.NoError(t, s.Close())
 			require.True(t, store.saved.Complete)
 			if enabled {
@@ -77,7 +77,7 @@ func TestFileOffsetEndSkipsAcrossFilesWithoutDroppingOtherPartitions(t *testing.
 	s, err := NewSession(q, clock{}, store, &memorySnapshots{files: []File{fa, fb}}, blocks, 20)
 	require.NoError(t, err)
 	// When the first original stream reaches its end, then finish only that stream and persist its EOF through confirmed progress.
-	got := drain(t, s, true)
+	got := drain(t, s)
 	require.NoError(t, s.Close())
 	require.Len(t, got, 6)
 	require.True(t, store.saved.Complete)

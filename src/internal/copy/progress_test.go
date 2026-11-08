@@ -150,9 +150,9 @@ func TestBackwardsSourceCursorCannotChangeProgressOrWork(t *testing.T) {
 
 		// Then rejection leaves both saved progress and the outstanding work unchanged.
 		require.Error(t, err)
-		records, bytes := tracker.Total()
-		require.Equal(t, 1, records)
-		require.Equal(t, int64(9), bytes)
+		pendingRecords, pendingBytes := tracker.Total()
+		require.Equal(t, 1, pendingRecords)
+		require.Equal(t, int64(9), pendingBytes)
 		require.Equal(t, int64(11), tracker.Saved(0))
 		require.Equal(t, int64(11), tracker.Confirmed(0).Position)
 	}

@@ -82,28 +82,7 @@ func TestGroupInspectionRetriesCoordinatorErrors(t *testing.T) {
 				name = failure.Message + "/response"
 			}
 			t.Run(name, func(t *testing.T) {
-				synctest.Test(t, func(t *testing.T) {
-					// Given a coordinator error followed by compatible group members.
-					requests := 0
-					client := &metadataMock{request: func(_ context.Context, request kmsg.Request) (kmsg.Response, error) {
-						requests++
-						require.Equal(t, []string{"group"}, request.(*kmsg.DescribeGroupsRequest).Groups)
-						group := kmsg.DescribeGroupsResponseGroup{Group: "group", Protocol: "cooperative-sticky", Members: []kmsg.DescribeGroupsResponseGroupMember{{ClientID: "kaferry-worker"}}}
-						if requests == 1 {
-							if !responseError {
-								return nil, failure
-							}
-							group.ErrorCode = failure.Code
-						}
-						return &kmsg.DescribeGroupsResponse{Groups: []kmsg.DescribeGroupsResponseGroup{group}}, nil
-					}}
-					inspector := &Inspector{client: client, topic: "input"}
-					// When inspecting the group before joining.
-					err := inspector.CheckMembers(t.Context(), "group", "cooperative-sticky")
-					// Then retry the request and admit only after the successful description.
-					require.NoError(t, err)
-					require.Equal(t, 2, requests)
-				})
+				coordinatorRetry(t, failure, responseError)
 			})
 		}
 	}
@@ -213,48 +192,7 @@ func TestSavedOffsetsDistinguishAbsentGroupsFromInspectionFailures(t *testing.T)
 		{name: "coordinator unavailable", failure: kerr.CoordinatorNotAvailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Given a retained commit and a legacy or grouped Kafka offset response.
-			id := [16]byte{1}
-			encoded := encodeMetadata(kafkaport.Progress{Fingerprint: "fp", TopicID: topicID(id)})
-			client := &metadataMock{request: func(_ context.Context, r kmsg.Request) (kmsg.Response, error) {
-				if _, ok := r.(*kmsg.MetadataRequest); ok {
-					return metadataResponse(id), nil
-				}
-				req := r.(*kmsg.OffsetFetchRequest)
-				if req.Group != "group" || len(req.Groups) != 1 || req.Groups[0].Group != "group" || !req.RequireStable {
-					t.Fatal("saved offsets did not request the group's stable commits")
-				}
-				group := req.Groups[0]
-				if group.MemberEpoch != -1 || len(group.Topics) != 1 || group.Topics[0].TopicID != id ||
-					!reflect.DeepEqual(group.Topics[0].Partitions, []int32{0, 2}) {
-					t.Fatal("saved offsets did not identify the topic and partitions for a non-member")
-				}
-				if tc.failure != nil && tc.code == 0 {
-					return nil, tc.failure
-				}
-				if tc.grouped {
-					return &kmsg.OffsetFetchResponse{Groups: []kmsg.OffsetFetchResponseGroup{{Group: "group", ErrorCode: tc.code,
-						Topics: []kmsg.OffsetFetchResponseGroupTopic{{TopicID: id, Partitions: []kmsg.OffsetFetchResponseGroupTopicPartition{
-							{Partition: 0, Offset: 42, Metadata: &encoded}, {Partition: 2, Offset: -1},
-						}}},
-					}}}, nil
-				}
-				return &kmsg.OffsetFetchResponse{ErrorCode: tc.code, Topics: []kmsg.OffsetFetchResponseTopic{{Topic: "input",
-					Partitions: []kmsg.OffsetFetchResponseTopicPartition{{Partition: 0, Offset: 42, Metadata: &encoded}, {Partition: 2, Offset: -1}},
-				}}}, nil
-			}}
-			inspector := &Inspector{codec: commitmeta.NewCodec(), client: client, topic: "input", log: quietLogger()}
-			// When loading progress before positioning a source.
-			saved, err := inspector.Saved(t.Context(), "group", "fp", plan.WindowSpec{}, 0)
-			// Then unavailable or unauthorized progress cannot become a fresh start.
-			require.ErrorIs(t, err, tc.failure, "incorrect saved-offset outcome")
-			if tc.failure != nil || tc.code == kerr.GroupIDNotFound.Code {
-				if len(saved) != 0 {
-					t.Fatal("unexpected usable progress", saved)
-				}
-			} else if len(saved) != 1 || saved[0].Position != 42 || encodeMetadata(saved[0].Progress) != encoded {
-				t.Fatal("saved progress changed", saved)
-			}
+			savedOffsetInspection(t, tc.grouped, tc.code, tc.failure)
 		})
 	}
 }
@@ -359,5 +297,77 @@ func TestSavedOffsetsRejectFailedMetadataWithoutChangingCachedIdentity(t *testin
 			require.Equal(t, []int32{0, 2}, inspector.parts)
 			require.Equal(t, 2, requests)
 		})
+	}
+}
+
+func coordinatorRetry(t *testing.T, failure *kerr.Error, responseError bool) {
+	synctest.Test(t, func(t *testing.T) {
+		// Given a coordinator error followed by compatible group members.
+		requests := 0
+		client := &metadataMock{request: func(_ context.Context, request kmsg.Request) (kmsg.Response, error) {
+			requests++
+			require.Equal(t, []string{"group"}, request.(*kmsg.DescribeGroupsRequest).Groups)
+			group := kmsg.DescribeGroupsResponseGroup{Group: "group", Protocol: "cooperative-sticky", Members: []kmsg.DescribeGroupsResponseGroupMember{{ClientID: "kaferry-worker"}}}
+			if requests == 1 {
+				if !responseError {
+					return nil, failure
+				}
+				group.ErrorCode = failure.Code
+			}
+			return &kmsg.DescribeGroupsResponse{Groups: []kmsg.DescribeGroupsResponseGroup{group}}, nil
+		}}
+		inspector := &Inspector{client: client, topic: "input"}
+		// When inspecting the group before joining.
+		err := inspector.CheckMembers(t.Context(), "group", "cooperative-sticky")
+		// Then retry the request and admit only after the successful description.
+		require.NoError(t, err)
+		require.Equal(t, 2, requests)
+	})
+}
+
+func savedOffsetInspection(t *testing.T, grouped bool, code int16, failure error) {
+	// Given a retained commit and a legacy or grouped Kafka offset response.
+	id := [16]byte{1}
+	encoded := encodeMetadata(kafkaport.Progress{Fingerprint: "fp", TopicID: topicID(id)})
+	client := &metadataMock{request: func(_ context.Context, r kmsg.Request) (kmsg.Response, error) {
+		if _, ok := r.(*kmsg.MetadataRequest); ok {
+			return metadataResponse(id), nil
+		}
+		req := r.(*kmsg.OffsetFetchRequest)
+		require.Equal(t, "group", req.Group)
+		require.Len(t, req.Groups, 1)
+		require.Equal(t, "group", req.Groups[0].Group)
+		require.True(t, req.RequireStable)
+
+		group := req.Groups[0]
+		require.EqualValues(t, -1, group.MemberEpoch)
+		require.Len(t, group.Topics, 1)
+		require.Equal(t, id, group.Topics[0].TopicID)
+		require.Equal(t, []int32{0, 2}, group.Topics[0].Partitions)
+
+		if failure != nil && code == 0 {
+			return nil, failure
+		}
+		if grouped {
+			return &kmsg.OffsetFetchResponse{Groups: []kmsg.OffsetFetchResponseGroup{{Group: "group", ErrorCode: code,
+				Topics: []kmsg.OffsetFetchResponseGroupTopic{{TopicID: id, Partitions: []kmsg.OffsetFetchResponseGroupTopicPartition{
+					{Partition: 0, Offset: 42, Metadata: &encoded}, {Partition: 2, Offset: -1},
+				}}},
+			}}}, nil
+		}
+		return &kmsg.OffsetFetchResponse{ErrorCode: code, Topics: []kmsg.OffsetFetchResponseTopic{{Topic: "input",
+			Partitions: []kmsg.OffsetFetchResponseTopicPartition{{Partition: 0, Offset: 42, Metadata: &encoded}, {Partition: 2, Offset: -1}},
+		}}}, nil
+	}}
+	inspector := &Inspector{codec: commitmeta.NewCodec(), client: client, topic: "input", log: quietLogger()}
+	// When loading progress before positioning a source.
+	saved, err := inspector.Saved(t.Context(), "group", "fp", plan.WindowSpec{}, 0)
+	// Then unavailable or unauthorized progress cannot become a fresh start.
+	require.ErrorIs(t, err, failure, "incorrect saved-offset outcome")
+	if failure != nil || code == kerr.GroupIDNotFound.Code {
+		require.Empty(t, saved)
+
+	} else if len(saved) != 1 || saved[0].Position != 42 || encodeMetadata(saved[0].Progress) != encoded {
+		t.Fatal("saved progress changed", saved)
 	}
 }

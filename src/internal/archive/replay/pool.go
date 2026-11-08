@@ -55,15 +55,7 @@ func (p *Pool) Read(file File, pos Position) (record avro.Record, next Position,
 	if p.closed {
 		return record, next, errors.New("archive replay pool is closed")
 	}
-	defer func() {
-		if result != nil {
-			if errors.Is(result, io.EOF) {
-				result = io.ErrUnexpectedEOF
-			}
-			result = fmt.Errorf("read archive file %s at block byte %d, record %d: %w", file.name(), pos.Block, pos.Record, result)
-			p.failed = result
-		}
-	}()
+	defer func() { result = p.readResult(file, pos, result) }()
 	if pos.Record < 0 {
 		return record, next, errors.New("negative archive record cursor")
 	}
@@ -100,11 +92,23 @@ func (p *Pool) Read(file File, pos Position) (record avro.Record, next Position,
 	return record, next, nil
 }
 
+func (p *Pool) readResult(file File, pos Position, result error) error {
+
+	if result != nil {
+		if errors.Is(result, io.EOF) {
+			result = io.ErrUnexpectedEOF
+		}
+		result = fmt.Errorf("read archive file %s at block byte %d, record %d: %w", file.name(), pos.Block, pos.Record, result)
+		p.failed = result
+	}
+	return result
+}
+
 func (p *Pool) load(key blockKey) (*blockEntry, error) {
 	delete(p.blocks, key)
 	if len(p.blocks) >= p.limits.Blocks {
 		var oldest blockKey
-		var age uint64 = ^uint64(0)
+		var age = ^uint64(0)
 		for key, entry := range p.blocks {
 			if entry.touched < age {
 				oldest, age = key, entry.touched
@@ -133,7 +137,7 @@ func (p *Pool) handle(file File) (Handle, error) {
 	}
 	if len(p.handles) >= p.limits.OpenFiles {
 		var oldest File
-		var age uint64 = ^uint64(0)
+		var age = ^uint64(0)
 		for key, entry := range p.handles {
 			if entry.touched < age {
 				oldest, age = key, entry.touched

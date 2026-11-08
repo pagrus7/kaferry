@@ -64,22 +64,7 @@ func renderWindows(output io.Writer, report inspect.Report) {
 		groups = []windowGroup{{window: *file.Window, origin: file.WindowOrigin}}
 	}
 	for _, group := range groups[:min(8, len(groups))] {
-		if len(groups) > 1 {
-			fmt.Fprintf(output, "  Partitions: %v", group.partitions[:min(8, len(group.partitions))])
-			if len(group.partitions) > 8 {
-				fmt.Fprintf(output, " (+%d more; see --json)", len(group.partitions)-8)
-			}
-			fmt.Fprintln(output)
-		}
-		renderBounds(output, group.window, group.origin)
-		if report.StartRule == "WINDOW" && group.fresh {
-			if group.window.Lower != nil && *group.window.Lower > 0 {
-				fmt.Fprintln(output, "    Fresh start: first timestamp lookup match at/after From; otherwise the read-committed end.")
-			} else {
-				fmt.Fprintln(output, "    Fresh start: earliest retained offset; apply the time filter while reading.")
-			}
-		}
-		renderCompletion(output, report, group.window)
+		renderWindowGroup(output, report, group, len(groups) > 1)
 	}
 	if len(groups) > 8 {
 		fmt.Fprintf(output, "  %d more distinct windows; see --json.\n", len(groups)-8)
@@ -87,6 +72,25 @@ func renderWindows(output io.Writer, report inspect.Report) {
 	if report.Source.Kind == "TOPIC" && len(groups) > 0 && groups[0].window.Upper != nil {
 		fmt.Fprintln(output, "  Stops apply to assigned partitions; they do not prove complete coverage of the time range.")
 	}
+}
+
+func renderWindowGroup(output io.Writer, report inspect.Report, group windowGroup, multiple bool) {
+	if multiple {
+		fmt.Fprintf(output, "  Partitions: %v", group.partitions[:min(8, len(group.partitions))])
+		if len(group.partitions) > 8 {
+			fmt.Fprintf(output, " (+%d more; see --json)", len(group.partitions)-8)
+		}
+		fmt.Fprintln(output)
+	}
+	renderBounds(output, group.window, group.origin)
+	if report.StartRule == "WINDOW" && group.fresh {
+		if group.window.Lower != nil && *group.window.Lower > 0 {
+			fmt.Fprintln(output, "    Fresh start: first timestamp lookup match at/after From; otherwise the read-committed end.")
+		} else {
+			fmt.Fprintln(output, "    Fresh start: earliest retained offset; apply the time filter while reading.")
+		}
+	}
+	renderCompletion(output, report, group.window)
 }
 
 func renderBounds(output io.Writer, window plan.Window, origin string) {
@@ -125,22 +129,32 @@ func renderCompletion(output io.Writer, report inspect.Report, window plan.Windo
 		}
 		return
 	}
+	renderWindowStop(output, report, window)
+	renderTimestampCompletion(output, report, window)
+}
+func renderWindowStop(output io.Writer, report inspect.Report, window plan.Window) {
 	if report.Source.Kind == "ARCHIVE" {
 		rule := "end of this group's fixed selection of completed archive files"
 		if report.WorkerStopAfterRecords > 0 {
 			rule = "worker record threshold or " + rule + ", whichever comes first"
 		}
 		fmt.Fprintf(output, "  Stop: %s; the window filters records.\n", rule)
-	} else if window.Upper == nil {
+		return
+	}
+	if window.Upper == nil {
 		if report.WorkerStopAfterRecords > 0 {
 			fmt.Fprintln(output, "  Stop: follow new records until the worker record threshold is reached or interrupted.")
 		} else {
 			fmt.Fprintln(output, "  Stop: no end time; follow new records until stopped.")
 		}
 		return
-	} else if report.WorkerStopAfterRecords > 0 {
+	}
+	if report.WorkerStopAfterRecords > 0 {
 		fmt.Fprintln(output, "  Stop: worker record threshold or all assigned partitions stopping, whichever comes first.")
 	}
+}
+func renderTimestampCompletion(output io.Writer, report inspect.Report, window plan.Window) {
+
 	if window.Upper == nil {
 		return
 	}
