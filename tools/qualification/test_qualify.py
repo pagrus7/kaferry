@@ -588,10 +588,11 @@ class MatrixTest(unittest.TestCase):
 
 
 class ReplicatedStorageTest(unittest.TestCase):
-    def storage(self, root, run, operation):
+    def storage(self, root, run, operation, **overrides):
         script = Path(__file__).resolve().parents[2] / 'src/tests/replicated/storage.sh'
         env = dict(os.environ, KAFERRY_STORAGE_ROOT=str(root), KAFERRY_FIXTURE_PROJECT='kaferry-replicated',
                    KAFERRY_REPLICATED_RUN_ID=run, KAFERRY_STORAGE_UID=str(os.getuid()), KAFERRY_STORAGE_GID=str(os.getgid()))
+        env.update(overrides)
         return subprocess.run(['/bin/sh', str(script), operation], env=env, capture_output=True, text=True)
 
     def run_path(self, root, run):
@@ -629,6 +630,78 @@ class ReplicatedStorageTest(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertIn('ownership', result.stderr)
             self.assertEqual(b'preserve', data.read_bytes())
+
+    def test_partial_data_deletion_retains_ownership_and_reports_failure(self):
+        # Given a marked run, a peer, and deletion that removes a file before failing.
+        with tempfile.TemporaryDirectory() as temporary:
+            root, run, peer = Path(temporary), 'a' * 32, 'b' * 32
+            for id in (run, peer):
+                self.assertEqual(0, self.storage(root, id, 'prepare').returncode)
+                (self.run_path(root, id) / 'source-1/keep').write_bytes(b'preserve')
+            folder = self.run_path(root, run)
+            removed = folder / 'source-1/removed'; removed.write_bytes(b'partial deletion')
+            marker = folder / '.kaferry-owned'; original = marker.read_bytes()
+            tools = root / 'tools'; tools.mkdir()
+            command = tools / 'rm'
+            command.write_text('''#!/bin/sh
+for target do :; done
+case "$target" in
+    "$KAFERRY_TEST_RUN")
+        /bin/rm -f -- "$target/.kaferry-owned" "$target/source-1/removed"
+        echo 'injected partial deletion failure' >&2; exit 1 ;;
+    "$KAFERRY_TEST_RUN/source-1")
+        /bin/rm -f -- "$target/removed"
+        echo 'injected partial deletion failure' >&2; exit 1 ;;
+esac
+exec /bin/rm "$@"
+''')
+            command.chmod(0o700)
+            # When deletion fails, then partial changes remain, but ownership and peer data survive.
+            result = self.storage(root, run, 'clean', PATH=str(tools) + os.pathsep + os.environ['PATH'],
+                                  KAFERRY_TEST_RUN=str(folder))
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn('injected partial deletion failure', result.stderr)
+            self.assertFalse(removed.exists())
+            self.assertEqual(original, marker.read_bytes())
+            self.assertEqual(b'preserve', (folder / 'source-1/keep').read_bytes())
+            self.assertEqual(b'preserve', (self.run_path(root, peer) / 'source-1/keep').read_bytes())
+            # A later explicit cleanup can still authenticate this run after the fault is removed.
+            result = self.storage(root, run, 'clean')
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertFalse(folder.exists())
+            self.assertTrue(self.run_path(root, peer).exists())
+
+    def test_failed_final_directory_removal_restores_the_marker(self):
+        # Given deletion completes but a filesystem reports a new entry at final removal.
+        for entry in ('late-entry', '.kaferry-owned'):
+            with self.subTest(entry=entry), tempfile.TemporaryDirectory() as temporary:
+                root, run = Path(temporary), 'a' * 32
+                self.assertEqual(0, self.storage(root, run, 'prepare').returncode)
+                folder = self.run_path(root, run)
+                original = (folder / '.kaferry-owned').read_bytes()
+                tools = root / 'tools'; tools.mkdir()
+                command = tools / 'rmdir'
+                command.write_text('''#!/bin/sh
+for target do :; done
+if [ "$target" = "$KAFERRY_TEST_RUN" ]; then
+    printf 'preserve' > "$target/$KAFERRY_TEST_ENTRY"
+    echo 'injected directory not empty' >&2
+    exit 1
+fi
+exec /bin/rmdir "$@"
+''')
+                command.chmod(0o700)
+                # When final removal fails, then restoration never overwrites the new entry.
+                result = self.storage(root, run, 'clean', PATH=str(tools) + os.pathsep + os.environ['PATH'],
+                                      KAFERRY_TEST_RUN=str(folder), KAFERRY_TEST_ENTRY=entry)
+                self.assertNotEqual(0, result.returncode)
+                if entry == 'late-entry':
+                    self.assertIn('ownership marker restored', result.stderr)
+                    self.assertEqual(original, (folder / '.kaferry-owned').read_bytes())
+                else:
+                    self.assertIn('cannot restore fixture storage ownership marker', result.stderr)
+                self.assertEqual('preserve', (folder / entry).read_text())
+                self.assertFalse((folder / 'source-1').exists())
 
     def test_cleanup_cannot_follow_run_or_marker_symlinks(self):
         for target in ('run', 'marker'):

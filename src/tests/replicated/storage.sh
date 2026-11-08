@@ -40,7 +40,16 @@ case "${1:-}" in
         [ -e "$run" ] || exit 0
         [ -f "$run/.kaferry-owned" ] && [ ! -L "$run/.kaferry-owned" ] || fail 'refusing unowned fixture storage'
         [ "$(cat "$run/.kaferry-owned")" = "$marker" ] || fail 'fixture storage ownership does not match this run'
-        rm -rf -- "$run"
+        # Keep ownership proof if a recursive deletion stops partway through.
+        for path in "$run"/* "$run"/.[!.]* "$run"/..?*; do
+            [ "$path" = "$run/.kaferry-owned" ] || rm -rf -- "$path"
+        done
+        rm -- "$run/.kaferry-owned"
+        if ! rmdir -- "$run"; then
+            [ -d "$run" ] && [ ! -L "$run" ] || fail 'fixture storage disappeared during cleanup'
+            (set -C; printf '%s\n' "$marker" > "$run/.kaferry-owned") || fail 'cannot restore fixture storage ownership marker'
+            fail 'fixture storage directory removal failed; ownership marker restored'
+        fi
         rmdir "$project_root" "$namespace" 2>/dev/null || true
         ;;
     *) fail 'use capacity, prepare or clean' ;;
