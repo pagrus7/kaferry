@@ -26,6 +26,16 @@ def suite_args(root, suite='recovery', **changes):
     return argparse.Namespace(**values)
 
 
+def assert_owned_cleanup(test, args, calls, failure):
+    test.assertEqual(1, len({env['KAFERRY_BROKER_RUN_ID'] for _, _, env in calls}))
+    if failure in ('brokers-stop', 'storage-clean'):
+        test.assertNotIn('-v', calls[-1][1])
+    receipt = json.loads((args.output / 'manifest.json').read_text())
+    expected = 'passed' if failure is None else 'interrupted' if failure == 'suite' else 'failed'
+    test.assertEqual(expected, receipt['status'])
+    return receipt
+
+
 class PairedBrokerStorageTest(unittest.TestCase):
     def setUp(self):
         checker = patch('tools.qualification.fault_results.configure',
@@ -149,11 +159,7 @@ class PairedBrokerStorageTest(unittest.TestCase):
                     if label != 'suite':
                         self.assertEqual('kaferry-compat', command[command.index('-p') + 1])
                     self.assertNotEqual(['docker', 'volume', 'rm'], command[:3])
-                self.assertEqual(1, len({env['KAFERRY_BROKER_RUN_ID'] for _, _, env in calls}))
-                if failure in ('brokers-stop', 'storage-clean'):
-                    self.assertNotIn('-v', calls[-1][1])
-                receipt = json.loads((args.output / 'manifest.json').read_text())
-                self.assertEqual('passed' if failure is None else 'interrupted' if failure == 'suite' else 'failed', receipt['status'])
+                receipt = assert_owned_cleanup(self, args, calls, failure)
                 self.assertNotIn('private-volume', json.dumps(receipt))
 
     def test_combined_disk_shortage_prevents_child_workload_from_starting(self):

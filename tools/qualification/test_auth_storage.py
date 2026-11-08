@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from tools.qualification.qualify import external_storage_admission, resolve_run, run_suite
-from tools.qualification.test_broker_storage import suite_args
+from tools.qualification.test_broker_storage import assert_owned_cleanup, suite_args
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -94,11 +94,7 @@ class AuthBrokerStorageTest(unittest.TestCase):
                     if label != 'suite':
                         self.assertEqual('kaferry-qualification', command[command.index('-p') + 1])
                         self.assertIn('src/tests/qualification/broker-storage.compose.yaml', command)
-                self.assertEqual(1, len({env['KAFERRY_BROKER_RUN_ID'] for _, _, env in calls}))
-                if failure in ('brokers-stop', 'storage-clean'):
-                    self.assertNotIn('-v', calls[-1][1])
-                receipt = json.loads((args.output / 'manifest.json').read_text())
-                self.assertEqual('passed' if failure is None else 'interrupted' if failure == 'suite' else 'failed', receipt['status'])
+                assert_owned_cleanup(self, args, calls, failure)
 
 
 class AuthStorageShellTest(unittest.TestCase):
@@ -139,8 +135,9 @@ class AuthStorageShellTest(unittest.TestCase):
 
     def test_auth_runner_preserves_startup_flags_and_temporary_certificate_paths(self):
         # Given the existing shell entrypoint and synthetic Docker/Go executables.
-        for external in (False, True):
-            with self.subTest(external=external), tempfile.TemporaryDirectory() as temporary:
+        storage_modes = ({}, {'KAFERRY_BROKER_VOLUME': 'lab', 'KAFERRY_BROKER_RUN_ID': 'a' * 32})
+        for storage_env in storage_modes:
+            with self.subTest(storage=storage_env), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 fixture = root / 'src/tests/qualification'; fixture.mkdir(parents=True)
                 shutil.copyfile(ROOT / 'src/tests/qualification/run.sh', fixture / 'run.sh')
@@ -163,8 +160,7 @@ class AuthStorageShellTest(unittest.TestCase):
                 env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'], GO=str(go),
                            CALLS=str(root / 'calls'), KAFERRY_REPORT_DIR=str(root / 'evidence'))
                 env.pop('KAFERRY_BROKER_VOLUME', None)
-                if external:
-                    env.update(KAFERRY_BROKER_VOLUME='lab', KAFERRY_BROKER_RUN_ID='a' * 32)
+                env.update(storage_env)
                 # When executed without brokers, then startup waits and all host client paths stay valid.
                 result = subprocess.run(['/bin/sh', str(fixture / 'run.sh')], cwd=root, env=env, capture_output=True, text=True)
                 self.assertEqual(0, result.returncode, result.stderr)
@@ -172,5 +168,5 @@ class AuthStorageShellTest(unittest.TestCase):
                 startup = next(call['args'] for call in calls if 'up' in call['args'])
                 self.assertEqual(['up', '-d', '--build', '--wait', '--wait-timeout', '90'], startup[startup.index('up'):])
                 for call in calls:
-                    self.assertEqual(external, 'src/tests/qualification/broker-storage.compose.yaml' in call['args'])
+                    self.assertEqual(bool(storage_env), 'src/tests/qualification/broker-storage.compose.yaml' in call['args'])
                     self.assertFalse(Path(call['cert']).exists(), 'private fixture certificates must be removed')
