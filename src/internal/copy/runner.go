@@ -380,7 +380,7 @@ func (r *Runner) tips() error {
 	wait := r.limits.TipWait.Duration
 	sampled := false // Interleave watermark queries with consumer polling.
 	for id, p := range r.partitions {
-		if p.stop != nil || r.plan.Source.Kind != "TOPIC" || p.high == nil && (p.window.Upper == nil || !r.plan.ClockCaptureEnabled()) {
+		if !r.needsTip(p) {
 			continue
 		}
 		action := p.tipAction(r.clock.Now(), r.plan.MaxStalenessMS, wait)
@@ -404,6 +404,13 @@ func (r *Runner) tips() error {
 		}
 	}
 	return nil
+}
+
+func (r *Runner) needsTip(p *partition) bool {
+	if p.stop != nil || r.plan.Source.Kind != "TOPIC" {
+		return false
+	}
+	return p.high != nil || p.window.Upper != nil && r.plan.ClockCaptureEnabled()
 }
 
 func (r *Runner) sampleHigh(id int32, p *partition) error {

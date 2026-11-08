@@ -60,23 +60,7 @@ func (b *rebalanceBridge) options() []kgo.Opt {
 		}),
 		kgo.OnPartitionsRevoked(func(_ context.Context, _ *kgo.Client, parts map[string][]int32) { b.revoked(parts[b.topic], false) }),
 		kgo.OnPartitionsLost(func(_ context.Context, _ *kgo.Client, parts map[string][]int32) { b.revoked(parts[b.topic], true) }),
-		kgo.AdjustFetchOffsetsFn(func(_ context.Context, offsets map[string]map[int32]kgo.Offset) (map[string]map[int32]kgo.Offset, error) {
-			b.mu.Lock()
-			defer b.mu.Unlock()
-			for topic, parts := range offsets {
-				if topic != b.topic {
-					return nil, fmt.Errorf("assignment names an unexpected topic")
-				}
-				for id := range parts {
-					position, ok := b.desired[id]
-					if !ok {
-						return nil, fmt.Errorf("assignment has no resolved start for partition %d", id)
-					}
-					parts[id] = kgo.NewOffset().At(position)
-				}
-			}
-			return offsets, nil
-		}),
+		kgo.AdjustFetchOffsetsFn(b.adjustOffsets),
 	}
 }
 func (b *rebalanceBridge) revoked(ids []int32, lost bool) {
@@ -86,4 +70,22 @@ func (b *rebalanceBridge) revoked(ids []int32, lost bool) {
 	for _, id := range ids {
 		delete(b.desired, id)
 	}
+}
+
+func (b *rebalanceBridge) adjustOffsets(_ context.Context, offsets map[string]map[int32]kgo.Offset) (map[string]map[int32]kgo.Offset, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for topic, parts := range offsets {
+		if topic != b.topic {
+			return nil, fmt.Errorf("assignment names an unexpected topic")
+		}
+		for id := range parts {
+			position, ok := b.desired[id]
+			if !ok {
+				return nil, fmt.Errorf("assignment has no resolved start for partition %d", id)
+			}
+			parts[id] = kgo.NewOffset().At(position)
+		}
+	}
+	return offsets, nil
 }

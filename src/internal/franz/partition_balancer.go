@@ -55,23 +55,11 @@ func (b *partitionBalancer) Balance(consumer *kgo.ConsumerBalancer, topics map[s
 	members := slices.Clone(consumer.Members())
 	for i := range members {
 		_, meta := consumer.MemberAt(i)
-		if len(meta.Topics) != 1 || meta.Topics[0] != b.topic {
-			return fail(fmt.Errorf("GROUP member has an incompatible source subscription"))
+		metadata, memberErr := b.denseMember(meta, selected)
+		if memberErr != nil {
+			return fail(memberErr)
 		}
-		owned := map[string][]int32{}
-		for _, topic := range meta.OwnedPartitions {
-			if topic.Topic != b.topic {
-				return fail(fmt.Errorf("GROUP member owns another topic"))
-			}
-			for _, id := range topic.Partitions {
-				index, found := slices.BinarySearch(selected, id)
-				if !found {
-					return fail(fmt.Errorf("GROUP member owns an excluded source partition"))
-				}
-				owned[b.topic] = append(owned[b.topic], int32(index))
-			}
-		}
-		members[i].ProtocolMetadata = b.JoinGroupMetadata(meta.Topics, owned, meta.Generation)
+		members[i].ProtocolMetadata = metadata
 	}
 	delegate, _, err := b.GroupBalancer.MemberBalancer(members)
 	if err != nil {
@@ -82,15 +70,42 @@ func (b *partitionBalancer) Balance(consumer *kgo.ConsumerBalancer, topics map[s
 		return fail(err)
 	}
 	for _, assignment := range dense.IntoSyncAssignment() {
-		var decoded kmsg.ConsumerMemberAssignment
-		if err := decoded.ReadFrom(assignment.MemberAssignment); err != nil {
+		if err := b.expandAssignment(result, assignment, selected); err != nil {
 			return fail(err)
-		}
-		for _, topic := range decoded.Topics {
-			for _, id := range topic.Partitions {
-				result.AddPartition(&kmsg.JoinGroupResponseMember{MemberID: assignment.MemberID}, b.topic, selected[id])
-			}
 		}
 	}
 	return result
+}
+
+func (b *partitionBalancer) denseMember(meta *kmsg.ConsumerMemberMetadata, selected []int32) ([]byte, error) {
+	if len(meta.Topics) != 1 || meta.Topics[0] != b.topic {
+		return nil, fmt.Errorf("GROUP member has an incompatible source subscription")
+	}
+	owned := map[string][]int32{}
+	for _, topic := range meta.OwnedPartitions {
+		if topic.Topic != b.topic {
+			return nil, fmt.Errorf("GROUP member owns another topic")
+		}
+		for _, id := range topic.Partitions {
+			index, found := slices.BinarySearch(selected, id)
+			if !found {
+				return nil, fmt.Errorf("GROUP member owns an excluded source partition")
+			}
+			owned[b.topic] = append(owned[b.topic], int32(index))
+		}
+	}
+	return b.JoinGroupMetadata(meta.Topics, owned, meta.Generation), nil
+}
+
+func (b *partitionBalancer) expandAssignment(result *kgo.BalancePlan, assignment kmsg.SyncGroupRequestGroupAssignment, selected []int32) error {
+	var decoded kmsg.ConsumerMemberAssignment
+	if err := decoded.ReadFrom(assignment.MemberAssignment); err != nil {
+		return err
+	}
+	for _, topic := range decoded.Topics {
+		for _, id := range topic.Partitions {
+			result.AddPartition(&kmsg.JoinGroupResponseMember{MemberID: assignment.MemberID}, b.topic, selected[id])
+		}
+	}
+	return nil
 }

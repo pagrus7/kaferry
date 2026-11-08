@@ -63,29 +63,12 @@ func (p *positioner) Locate(ctx context.Context, parts []int32, saved map[int32]
 	progress := make(map[int32]Progress, len(parts))
 	p.lookups = make(map[int32]int64)
 	for n, part := range parts {
-		window, stored, position, err := p.window(part, saved, adopted, now)
+		assignment, stored, err := p.positionAssignment(part, saved, adopted, now)
 		if err != nil {
 			return Positioning{}, err
 		}
-		position, err = p.start(part, position, window, len(saved) > 0)
-		if err != nil {
-			return Positioning{}, err
-		}
-		if stored.End != nil && (*stored.End > p.high[part] || position > *stored.End) {
-			return Positioning{}, conflict("partition %d captured end is outside retained positions", part)
-		}
-		if stored.End != nil && window.Upper == nil {
-			r := p.plan.OffsetRange(part)
-			if r == nil || !r.HasEnd() {
-				return Positioning{}, conflict("captured end requires completion criteria")
-			}
-		}
-		cursor := copy.Cursor{Partition: part, Position: position, End: stored.End}
-		if (window.Upper != nil || stored.End != nil) && stored.Stop != nil && stored.Stop.Reason != "worker_record_cap" {
-			cursor.Stop = stored.Stop
-		}
-		progress[part] = stored
-		assignments[n] = copy.Assignment{Cursor: cursor, Window: window}
+		progress[part], assignments[n] = stored, assignment
+
 	}
 	if err := p.resolveTimes(ctx, assignments); err != nil {
 		return Positioning{}, err
@@ -105,6 +88,38 @@ func (p *positioner) Locate(ctx context.Context, parts []int32, saved map[int32]
 		}
 	}
 	return Positioning{Assignments: assignments, Progress: progress, Retention: retention, LogStart: p.low, LogEnd: p.high}, nil
+}
+
+func (p *positioner) positionAssignment(part int32, saved map[int32]SavedProgress, adopted *plan.Window, now time.Time) (copy.Assignment, Progress, error) {
+	window, stored, position, err := p.window(part, saved, adopted, now)
+	if err != nil {
+		return copy.Assignment{}, Progress{}, err
+	}
+	position, err = p.start(part, position, window, len(saved) > 0)
+	if err != nil {
+		return copy.Assignment{}, Progress{}, err
+	}
+	if err := p.validateCapturedEnd(part, stored, window, position); err != nil {
+		return copy.Assignment{}, Progress{}, err
+	}
+	cursor := copy.Cursor{Partition: part, Position: position, End: stored.End}
+	if (window.Upper != nil || stored.End != nil) && stored.Stop != nil && stored.Stop.Reason != "worker_record_cap" {
+		cursor.Stop = stored.Stop
+	}
+	return copy.Assignment{Cursor: cursor, Window: window}, stored, nil
+}
+
+func (p *positioner) validateCapturedEnd(part int32, stored Progress, window plan.Window, position int64) error {
+	if stored.End != nil && (*stored.End > p.high[part] || position > *stored.End) {
+		return conflict("partition %d captured end is outside retained positions", part)
+	}
+	if stored.End != nil && window.Upper == nil {
+		r := p.plan.OffsetRange(part)
+		if r == nil || !r.HasEnd() {
+			return conflict("captured end requires completion criteria")
+		}
+	}
+	return nil
 }
 
 func (p *positioner) watermarks(ctx context.Context, ids []int32) error {

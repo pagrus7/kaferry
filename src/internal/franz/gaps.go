@@ -25,40 +25,11 @@ type fetchGap struct {
 }
 
 func (g *fetchGap) Next(ctx context.Context, id int32, position int64) (int64, error) {
-	lookup := kmsg.NewPtrMetadataRequest()
-	wanted := kmsg.NewMetadataRequestTopic()
-	wanted.Topic = &g.topic
-	lookup.Topics = []kmsg.MetadataRequestTopic{wanted}
-	metadata, err := lookup.RequestWith(ctx, g.client)
+	topic, partition, err := g.metadataPartition(ctx, id)
 	if err != nil {
-		return position, transientFailure(err)
+		return position, err
 	}
-	if len(metadata.Topics) != 1 || metadata.Topics[0].Topic == nil || *metadata.Topics[0].Topic != g.topic {
-		return position, fmt.Errorf("source topic unavailable")
-	}
-	topic := metadata.Topics[0]
-	if checkErr := kerr.ErrorForCode(topic.ErrorCode); checkErr != nil {
-		return position, transientFailure(checkErr)
-	}
-	if topicID(topic.TopicID) != g.topicID {
-		return position, fmt.Errorf("source topic identity changed")
-	}
-	var partition *kmsg.MetadataResponseTopicPartition
-	for i := range topic.Partitions {
-		if topic.Partitions[i].Partition == id {
-			partition = &topic.Partitions[i]
-			break
-		}
-	}
-	if partition == nil {
-		return position, fmt.Errorf("source partition %d is missing from metadata", id)
-	}
-	if checkErr := kerr.ErrorForCode(partition.ErrorCode); checkErr != nil {
-		return position, transientFailure(checkErr)
-	}
-	if partition.Leader < 0 {
-		return position, &core.Recoverable{Err: fmt.Errorf("source partition %d leader is being elected", id)}
-	}
+
 	req := kmsg.NewPtrFetchRequest()
 	req.MaxWaitMillis = 0
 	req.ReplicaID, req.IsolationLevel, req.SessionEpoch = -1, 1, -1
@@ -89,6 +60,43 @@ func (g *fetchGap) Next(ctx context.Context, id int32, position int64) (int64, e
 		return position, &core.Recoverable{Err: failure}
 	}
 	return position, failure
+}
+
+func (g *fetchGap) metadataPartition(ctx context.Context, id int32) (topic kmsg.MetadataResponseTopic, partition *kmsg.MetadataResponseTopicPartition, result error) {
+	lookup := kmsg.NewPtrMetadataRequest()
+	wanted := kmsg.NewMetadataRequestTopic()
+	wanted.Topic = &g.topic
+	lookup.Topics = []kmsg.MetadataRequestTopic{wanted}
+	metadata, err := lookup.RequestWith(ctx, g.client)
+	if err != nil {
+		return topic, partition, transientFailure(err)
+	}
+	if len(metadata.Topics) != 1 || metadata.Topics[0].Topic == nil || *metadata.Topics[0].Topic != g.topic {
+		return topic, partition, fmt.Errorf("source topic unavailable")
+	}
+	topic = metadata.Topics[0]
+	if checkErr := kerr.ErrorForCode(topic.ErrorCode); checkErr != nil {
+		return topic, partition, transientFailure(checkErr)
+	}
+	if topicID(topic.TopicID) != g.topicID {
+		return topic, partition, fmt.Errorf("source topic identity changed")
+	}
+	for i := range topic.Partitions {
+		if topic.Partitions[i].Partition == id {
+			partition = &topic.Partitions[i]
+			break
+		}
+	}
+	if partition == nil {
+		return topic, partition, fmt.Errorf("source partition %d is missing from metadata", id)
+	}
+	if checkErr := kerr.ErrorForCode(partition.ErrorCode); checkErr != nil {
+		return topic, partition, transientFailure(checkErr)
+	}
+	if partition.Leader < 0 {
+		return topic, partition, &core.Recoverable{Err: fmt.Errorf("source partition %d leader is being elected", id)}
+	}
+	return topic, partition, nil
 }
 
 func transientFailure(err error) error {

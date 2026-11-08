@@ -125,13 +125,19 @@ func normalize(bounds []sql.Bound) (WindowSpec, error) {
 		}
 		*target = &e
 	}
-	if window.Lower != nil && window.Upper != nil {
-		lo, hi := window.Lower, window.Upper
-		if lo.Now == hi.Now && (lo.Now && lo.AdjustmentMS >= hi.AdjustmentMS || !lo.Now && lo.LiteralMS >= hi.LiteralMS) {
-			return WindowSpec{}, sql.At(bounds[len(bounds)-1].Position, fmt.Errorf("time range is empty; lower bound%s must precede upper bound%s", sql.Reference(lowerPosition), sql.Reference(upperPosition)))
-		}
+	if window.inverted() {
+		return WindowSpec{}, sql.At(bounds[len(bounds)-1].Position, fmt.Errorf("time range is empty; lower bound%s must precede upper bound%s", sql.Reference(lowerPosition), sql.Reference(upperPosition)))
 	}
+
 	return window, nil
+}
+
+func (s WindowSpec) inverted() bool {
+	if s.Lower == nil || s.Upper == nil {
+		return false
+	}
+	lo, hi := s.Lower, s.Upper
+	return lo.Now == hi.Now && (lo.Now && lo.AdjustmentMS >= hi.AdjustmentMS || !lo.Now && lo.LiteralMS >= hi.LiteralMS)
 }
 
 func normalizedBound(e Expression, bound sql.Bound) (Expression, error) {

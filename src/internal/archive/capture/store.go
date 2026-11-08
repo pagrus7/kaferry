@@ -151,6 +151,9 @@ func (s *Store) PublishMany(ids []string) error {
 	if err := s.files.SyncDirectory(s.root); err != nil {
 		return s.fail(err)
 	}
+	return s.forgetPublished(ids)
+}
+func (s *Store) forgetPublished(ids []string) error {
 	next := s.state
 	next.Files = maps.Clone(s.state.Files)
 	for _, id := range ids {

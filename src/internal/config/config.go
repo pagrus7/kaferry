@@ -113,6 +113,16 @@ func (w Worker) Validate() error {
 	if w.PartitionRecordCap <= 0 || w.PartitionByteCap <= 0 || w.RecordCap <= 0 || w.ByteCap <= 0 {
 		return fmt.Errorf("worker record and byte caps must be positive")
 	}
+	if err := w.validateDurations(); err != nil {
+		return err
+	}
+	if w.CheckpointDir != nil && *w.CheckpointDir == "" {
+		return fmt.Errorf("worker.checkpoint_dir must not be empty")
+	}
+	return nil
+}
+
+func (w Worker) validateDurations() error {
 	for _, setting := range []struct {
 		name  string
 		value Duration
@@ -124,9 +134,6 @@ func (w Worker) Validate() error {
 		if setting.name == "delivery_timeout" && (duration < time.Millisecond || duration > 2147483647*time.Millisecond) {
 			return fmt.Errorf("worker.delivery_timeout must be between 1ms and 2147483647ms")
 		}
-	}
-	if w.CheckpointDir != nil && *w.CheckpointDir == "" {
-		return fmt.Errorf("worker.checkpoint_dir must not be empty")
 	}
 	return nil
 }

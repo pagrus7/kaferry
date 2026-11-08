@@ -13,25 +13,9 @@ func partitionRows(p plan.Plan, located kafkaport.Positioning, saved map[int32]k
 	for _, assignment := range located.Assignments {
 		id := assignment.Cursor.Partition
 		progress, exists := saved[id]
-		origin := "literal"
-		if p.Window.Relative() {
-			origin = "resolved"
-			if progress.Window != nil {
-				origin = "saved"
-			} else if len(saved) > 0 {
-				origin = "adopted"
-			}
-		}
-		endOrigin := ""
-		if assignment.Cursor.End != nil {
-			endOrigin = "saved"
-			if progress.End == nil {
-				endOrigin = "literal"
-				if r := p.OffsetRange(id); r != nil && r.Latest {
-					endOrigin = "preview"
-				}
-			}
-		}
+		origin := windowOrigin(p.Window, progress.Window != nil, len(saved) > 0)
+		endOrigin := offsetEndOrigin(p, id, assignment.Cursor.End, progress)
+
 		rows = append(rows, Partition{EndOrigin: endOrigin, ID: id, Start: assignment.Cursor.Position, End: assignment.Cursor.End, Saved: exists, Window: assignment.Window, WindowOrigin: origin, LogStart: located.LogStart[id], LogEnd: located.LogEnd[id]})
 		if exists && progress.Position < located.LogStart[id] {
 			warnings = append(warnings, fmt.Sprintf("Partition %d: saved offset %d expired; start is log start %d.", id, progress.Position, located.LogStart[id]))
@@ -40,4 +24,29 @@ func partitionRows(p plan.Plan, located kafkaport.Positioning, saved map[int32]k
 		}
 	}
 	return rows, warnings
+}
+
+func windowOrigin(window plan.WindowSpec, saved, hasSaved bool) string {
+	if !window.Relative() {
+		return "literal"
+	}
+	if saved {
+		return "saved"
+	}
+	if hasSaved {
+		return "adopted"
+	}
+	return "resolved"
+}
+func offsetEndOrigin(p plan.Plan, id int32, end *int64, progress kafkaport.SavedProgress) string {
+	if end == nil {
+		return ""
+	}
+	if progress.End != nil {
+		return "saved"
+	}
+	if r := p.OffsetRange(id); r != nil && r.Latest {
+		return "preview"
+	}
+	return "literal"
 }

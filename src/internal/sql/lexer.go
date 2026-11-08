@@ -95,16 +95,7 @@ func (l *lexer) next() (token, error) {
 		return t, nil
 	}
 	if identifierStart(r) {
-		start := l.index - 1
-		for l.index < len(l.input) {
-			r, _ = utf8.DecodeRuneInString(l.input[l.index:])
-			if !identifierStart(r) && (r < '0' || r > '9') {
-				break
-			}
-			l.advance()
-		}
-		t.kind, t.text = "identifier", l.input[start:l.index]
-		return t, nil
+		return l.identifierToken(t), nil
 	}
 	if strings.ContainsRune("(),;*=+-<>", r) {
 		t.kind, t.text = "symbol", string(r)
@@ -115,6 +106,19 @@ func (l *lexer) next() (token, error) {
 		return t, nil
 	}
 	return token{}, At(t.Position, fmt.Errorf("%s", characterHint(r, t.Position)))
+}
+
+func (l *lexer) identifierToken(t token) token {
+	start := l.index - 1
+	for l.index < len(l.input) {
+		r, _ := utf8.DecodeRuneInString(l.input[l.index:])
+		if !identifierStart(r) && (r < '0' || r > '9') {
+			break
+		}
+		l.advance()
+	}
+	t.kind, t.text = "identifier", l.input[start:l.index]
+	return t
 }
 
 func (l *lexer) stringToken(t token) (token, error) {

@@ -145,6 +145,25 @@ func (s settings) validate(values map[string]string, keys []string) error {
 	if s.rebalance < s.session || s.rebalance < 30*time.Second {
 		return invalidProperty("max.poll.interval.ms", "must be at least session.timeout.ms and 30000 ms to allow draining and a final commit")
 	}
+	if err := s.validatePropertyProtocols(keys); err != nil {
+		return err
+	}
+	if err := validatePropertyAliases(values); err != nil {
+		return err
+	}
+
+	if strings.HasPrefix(s.protocol, "SASL_") {
+		if err := s.validateAuthentication(keys); err != nil {
+			return err
+		}
+	}
+	if (s.certificate == "") != (s.key == "") {
+		return invalidProperty("ssl.certificate.location/ssl.key.location", "both are required for a client certificate")
+	}
+	return nil
+}
+
+func (s settings) validatePropertyProtocols(keys []string) error {
 	for _, key := range keys {
 		if strings.HasPrefix(key, "ssl.") && !strings.HasSuffix(s.protocol, "SSL") {
 			return invalidProperty(key, "requires SSL or SASL_SSL")
@@ -153,6 +172,10 @@ func (s settings) validate(values map[string]string, keys []string) error {
 			return invalidProperty(key, "requires SASL_PLAINTEXT or SASL_SSL")
 		}
 	}
+	return nil
+}
+func validatePropertyAliases(values map[string]string) error {
+
 	for _, pair := range [][2]string{{"message.timeout.ms", "delivery.timeout.ms"}, {"metadata.max.age.ms", "topic.metadata.refresh.interval.ms"}} {
 		a, hasA := values[pair[0]]
 		b, hasB := values[pair[1]]
@@ -163,14 +186,6 @@ func (s settings) validate(values map[string]string, keys []string) error {
 				return invalidProperty(pair[0], "conflicts with "+pair[1])
 			}
 		}
-	}
-	if strings.HasPrefix(s.protocol, "SASL_") {
-		if err := s.validateAuthentication(keys); err != nil {
-			return err
-		}
-	}
-	if (s.certificate == "") != (s.key == "") {
-		return invalidProperty("ssl.certificate.location/ssl.key.location", "both are required for a client certificate")
 	}
 	return nil
 }

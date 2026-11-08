@@ -125,6 +125,9 @@ func (i *Inspector) lookupOffsets(parent context.Context, queries map[int32]int6
 	if err != nil {
 		return nil, err
 	}
+	return i.offsetResults(response, queries)
+}
+func (i *Inspector) offsetResults(response *kmsg.ListOffsetsResponse, queries map[int32]int64) (map[int32]int64, error) {
 	result := make(map[int32]int64, len(queries))
 	for _, t := range response.Topics {
 		if t.Topic != i.topic {

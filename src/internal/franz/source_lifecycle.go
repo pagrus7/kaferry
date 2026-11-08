@@ -10,30 +10,15 @@ import (
 
 func (s *Source) lifecycle(event lifecycleEvent) error {
 	if event.revoke {
-		err := s.life.Revoke(event.ids, event.lost)
-		for _, id := range event.ids {
-			delete(s.partitions, id)
-			s.store.revoke(id)
-			s.client.ResumeFetchPartitions(map[string][]int32{s.plan.Source.Name: {id}})
-		}
-		event.answer <- lifecycleAnswer{err: err}
-		return err
+		return s.revoke(event)
 	}
 	ctx, cancel := context.WithTimeout(s.query, 10*time.Second)
 	defer cancel()
-	for _, id := range event.ids {
-		if !s.plan.Partitions.Matches(id) {
-			err := fmt.Errorf("assignment contains an excluded source partition")
-			event.answer <- lifecycleAnswer{err: err}
-			return err
-		}
+	if err := s.validateAssignment(ctx, event.ids); err != nil {
+		event.answer <- lifecycleAnswer{err: err}
+		return err
 	}
-	if s.routing != nil && len(event.ids) > 0 {
-		if err := s.routing.ValidatePartitions(ctx, event.ids); err != nil {
-			event.answer <- lifecycleAnswer{err: err}
-			return err
-		}
-	}
+
 	saved, err := s.inspector.Saved(ctx, s.plan.Group, s.fingerprint, s.plan.Window, s.plan.MaxStalenessMS)
 	if err != nil {
 		event.answer <- lifecycleAnswer{err: err}
@@ -72,4 +57,29 @@ func (s *Source) lifecycle(event lifecycleEvent) error {
 		}
 	}
 	return s.life.Assign(positioned.Assignments)
+}
+
+func (s *Source) revoke(event lifecycleEvent) error {
+	err := s.life.Revoke(event.ids, event.lost)
+	for _, id := range event.ids {
+		delete(s.partitions, id)
+		s.store.revoke(id)
+		s.client.ResumeFetchPartitions(map[string][]int32{s.plan.Source.Name: {id}})
+	}
+	event.answer <- lifecycleAnswer{err: err}
+	return err
+}
+func (s *Source) validateAssignment(ctx context.Context, ids []int32) error {
+	for _, id := range ids {
+		if !s.plan.Partitions.Matches(id) {
+			err := fmt.Errorf("assignment contains an excluded source partition")
+			return err
+		}
+	}
+	if s.routing != nil && len(ids) > 0 {
+		if err := s.routing.ValidatePartitions(ctx, ids); err != nil {
+			return err
+		}
+	}
+	return nil
 }
