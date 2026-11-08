@@ -72,7 +72,7 @@ Start with the affected contract and its focused tests below. Follow callers and
 
 Implementation is AI-driven with Codex and Claude Code under human direction.
 
-- Priorities: correctness, simplicity, throughput, CI duration, binary size.
+- Priorities: correctness, simple design, throughput, CI duration, binary size.
 - Single-purpose structs behind narrow interfaces; keep core logic Fx-free. Keep functions focused and control flow readable; lint thresholds are defined in [.golangci.yml](../../.golangci.yml).
 - Keep user documentation example-based. CI caps [README](../../README.md) at 5,500 characters. The [usage guide](../usage.md) covers complete workflows without a shared character cap. Keep one authoritative explanation per topic, link exact contracts, and remove repetition before shortening explanations. Grammar tests parse and plan the fenced SQL examples; invalid examples use inline code. The broker-free archive tutorial generates a temporary download bundle from the SQL, TOML and JSON under `examples/archive-demo`, then runs its documented commands in `make smoke`. Release archive checks set `KAFERRY_TUTORIAL_BUNDLE` to test the exact examples asset before publishing it. To build locally, run `go run ./src/cmd/package-examples .cache/archive-demo.tar.gz`; generated Avro files and download archives stay outside Git.
 
