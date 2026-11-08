@@ -20,6 +20,9 @@ HELPERS = (
     'TestReplicatedAuditFailureOutputIsBounded',
     'TestReplicatedAuditArmsOnlyAfterCurrentGenerationAcceptedProgress',
     'TestReplicatedAuditPreservesDecodedConfigurationAndOriginalDigest',
+    'TestReplicatedAuditReadinessReadsEveryBrokerConcurrently',
+    'TestReplicatedAuditReadinessRejectsIncompleteBrokerReads',
+    'TestReplicatedAuditReadinessSharesCancellation',
     'TestReplicatedZombieRSSStopsAtProcessExit',
     'TestReplicatedZombieExposureSpansSessionWithinSaveDeadline',
 )

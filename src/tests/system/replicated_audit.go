@@ -3,6 +3,7 @@
 package compat
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -358,15 +360,43 @@ func auditAcceptedParts(row ownershipAuditRecord, minimum map[int32]int64) (map[
 }
 
 func (a *replicatedAudit) ready(ctx context.Context, client, group, member string, owned []int32, minimum map[int32]int64) (int32, bool, error) {
-	var all []byte
-	for _, target := range a.targets {
-		data, err := faults.Docker(ctx, "exec", target.Container, "sh", "-ec", requestLogFiles)
-		if err != nil || len(data) > 16<<20 {
-			return 0, false, fmt.Errorf("bounded broker request audit unavailable: %w", err)
-		}
-		all = append(all, data...)
+	all, err := readAuditRequests(ctx, a.targets, faults.Docker)
+	if err != nil {
+		return 0, false, err
 	}
 	return currentGenerationSaved(all, client, group, member, owned, minimum)
+}
+
+// Read every broker concurrently within the caller's existing polling context.
+// No partial result can establish readiness; concatenation retains target order.
+func readAuditRequests(ctx context.Context, targets []faults.Target, run func(context.Context, ...string) ([]byte, error)) ([]byte, error) {
+	outputs, failures := make([][]byte, len(targets)), make([]error, len(targets))
+	var reads sync.WaitGroup
+	for index, target := range targets {
+		reads.Go(func() {
+			started := time.Now()
+			data, err := run(ctx, "exec", target.Container, "sh", "-ec", requestLogFiles)
+			if len(data) == 0 {
+				err = errors.Join(err, errors.New("broker request audit returned no bytes"))
+			}
+			if len(data) > auditCaptureLimit {
+				err = errors.Join(err, errors.New("broker request audit exceeds bounded evidence size"))
+			}
+			cause := context.Cause(ctx)
+			err = errors.Join(err, cause)
+			if err != nil {
+				failures[index] = fmt.Errorf("bounded broker request audit unavailable: broker=%d elapsed=%s bytes=%d context=%s: %w",
+					target.Broker, time.Since(started), len(data), fmt.Sprint(cause), err)
+				return
+			}
+			outputs[index] = data
+		})
+	}
+	reads.Wait()
+	if err := errors.Join(failures...); err != nil {
+		return nil, err
+	}
+	return bytes.Join(outputs, nil), nil
 }
 
 // capture preserves every hourly segment; no size rotation is accepted by the

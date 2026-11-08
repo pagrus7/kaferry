@@ -21,6 +21,9 @@ REPLICATED_HELPER_TESTS := \
 	TestReplicatedAuditFailureOutputIsBounded \
 	TestReplicatedAuditArmsOnlyAfterCurrentGenerationAcceptedProgress \
 	TestReplicatedAuditPreservesDecodedConfigurationAndOriginalDigest \
+	TestReplicatedAuditReadinessReadsEveryBrokerConcurrently \
+	TestReplicatedAuditReadinessRejectsIncompleteBrokerReads \
+	TestReplicatedAuditReadinessSharesCancellation \
 	TestReplicatedZombieRSSStopsAtProcessExit \
 	TestReplicatedZombieExposureSpansSessionWithinSaveDeadline
 ifeq ($(KAFERRY_TEST_BINARY),)
