@@ -154,7 +154,7 @@ After retargeting a PR to a different base branch, push a new commit so CI compa
 | Indicator | Where / meaning |
 | --- | --- |
 | CI | README badge; formatting and documentation checks, vet, race-enabled tests, build, license-notice validation and broker integration |
-| Go coverage | README badge and Codecov PR/file view show line coverage; Actions summarizes weighted Go statement coverage per suite. All Go packages are instrumented; Codecov combines unit/mock/file-component and broker integration coverage |
+| Go coverage | README badge and Codecov PR/file view show line coverage; Actions reports total Go statement coverage per suite. All Go packages are instrumented; Codecov combines unit/mock/file-component and broker integration coverage, and its patch/project checks fail PRs when changed-line or total coverage falls below the thresholds in `codecov.yml` |
 | Static analysis | [Quality workflow](https://github.com/pagrus7/kaferry/actions/workflows/quality.yml): golangci-lint, including Staticcheck, for Go; CodeQL for Go, Python and workflows |
 | Security | govulncheck fails on reachable Go advisories; CodeQL findings and Dependabot alerts appear in GitHub Security. Dependency review checks PRs; updates require review |
 | Complexity / duplication | [Go lint](../../CONTRIBUTING.md#go-lint) checks cognitive complexity, nested conditions, function length and Go duplication; findings across all Go packages fail CI. The quality summary/artifact reports normalized Python clones ≥50 tokens and ≥5 lines, including tests. New clones fail CI; existing clones remain review signals. Run [duplication checks](../../CONTRIBUTING.md#duplication-checks) locally |
