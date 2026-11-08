@@ -29,9 +29,11 @@ func newProxyProducer(seeds []string, diagnostic kgo.Logger, hooks ...kgo.Hook) 
 	// A diagnostic write must be cancellable even after an ambiguous request.
 	// Close this producer before healing; output reconciliation still rejects
 	// any cancelled record that actually reached Kafka.
+	// The SDK's 5s metadata minimum age exceeds this probe's 2s delivery bound.
+	// Its valid 10ms minimum permits native retries inside the existing bound.
 	options := []kgo.Opt{kgo.SeedBrokers(seeds...), kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		kgo.AllowIdempotentProduceCancellation(), kgo.RecordDeliveryTimeout(2 * time.Second),
-		kgo.RecordRetries(0), kgo.ProduceRequestTimeout(time.Second), kgo.RequestTimeoutOverhead(time.Second), kgo.WithHooks(hooks...)}
+		kgo.MetadataMinAge(10 * time.Millisecond), kgo.ProduceRequestTimeout(time.Second), kgo.RequestTimeoutOverhead(time.Second), kgo.WithHooks(hooks...)}
 	if diagnostic != nil {
 		options = append(options, kgo.WithLogger(diagnostic))
 	}
@@ -76,13 +78,42 @@ func TestProxyProducerFirstRetriableResponseRetainsOriginalDiagnostic(t *testing
 	client, err := newProxyProducer(cluster.ListenAddrs(), diagnostic)
 	require.NoError(t, err)
 	defer client.Close()
+	require.Equal(t, 10*time.Millisecond, client.OptValue(kgo.MetadataMinAge))
+	require.Equal(t, int64(1<<63-1), client.OptValue(kgo.RecordRetries), "native retry policy")
+	require.Equal(t, 2*time.Second, client.OptValue(kgo.RecordDeliveryTimeout))
+	require.Equal(t, time.Second, client.OptValue(kgo.ProduceRequestTimeout))
+	require.Equal(t, time.Second, client.OptValue(kgo.RequestTimeoutOverhead))
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	const topic = "first-retriable-response"
 	_, err = kadm.NewClient(client).CreateTopic(ctx, 3, 3, nil, topic)
 	require.NoError(t, err)
 	require.NoError(t, prepareProxyProducer(ctx, client, topic, 0, routes, t.Logf))
-	var requests atomic.Int32
+	requests := rejectFirstProxyProduce(cluster, kerr.NotEnoughReplicas.Code)
+	// When the safe first rejection triggers native retry, the existing bounds
+	// allow exactly one retried request and one acknowledged appended record.
+	result := client.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 0, Value: []byte("once")})
+	require.Len(t, result, 1)
+	require.NoError(t, result.FirstErr(), diagnostic.snapshot())
+	require.Zero(t, result[0].Record.Offset)
+	require.Equal(t, int32(2), requests.Load())
+	require.Contains(t, diagnostic.snapshot(), "NOT_ENOUGH_REPLICAS")
+	ends, err := kadm.NewClient(client).ListEndOffsets(ctx, topic)
+	require.NoError(t, err)
+	require.NoError(t, ends.Error())
+	require.Equal(t, int64(1), ends[topic][0].Offset)
+	// Then retaining more SDK output stays bounded and exposes any omission.
+	bounded := &proxyDiagnostics{}
+	for range 130 {
+		bounded.Log(kgo.LogLevelError, strings.Repeat("synthetic transport error ", 100))
+	}
+	require.Less(t, len(bounded.snapshot()), 128*2100)
+	require.Contains(t, bounded.snapshot(), "[truncated]")
+	require.Contains(t, bounded.snapshot(), "SDK diagnostic rows omitted: 2")
+}
+
+func rejectFirstProxyProduce(cluster *kfake.Cluster, code int16) *atomic.Int32 {
+	requests := &atomic.Int32{}
 	cluster.ControlKey(int16(kmsg.Produce), func(request kmsg.Request) (kmsg.Response, error, bool) {
 		cluster.KeepControl()
 		if requests.Add(1) != 1 {
@@ -95,32 +126,37 @@ func TestProxyProducerFirstRetriableResponseRetainsOriginalDiagnostic(t *testing
 			result := kmsg.ProduceResponseTopic{Topic: topic.Topic, TopicID: topic.TopicID}
 			for _, partition := range topic.Partitions {
 				failed := kmsg.NewProduceResponseTopicPartition()
-				failed.Partition, failed.ErrorCode = partition.Partition, kerr.NotEnoughReplicas.Code
+				failed.Partition, failed.ErrorCode = partition.Partition, code
 				result.Partitions = append(result.Partitions, failed)
 			}
 			response.Topics = append(response.Topics, result)
 		}
 		return response, nil, true
 	})
-	// When the zero-retry override rejects that first response, preserve its
-	// original protocol error rather than assigning a cause to ErrRecordRetries.
-	err = client.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 0, Value: []byte("once")}).FirstErr()
-	require.ErrorIs(t, err, kerr.NotEnoughReplicas)
+	return requests
+}
+
+func TestProxyProducerRejectsPermanentProduceFailureWithoutRetry(t *testing.T) {
+	// Given a permanent rejection, when the probe uses native retries, then it
+	// still returns that error after one request without appending a record.
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "records"))
+	defer cluster.Close()
+	diagnostic := &proxyDiagnostics{}
+	client, err := newProxyProducer(cluster.ListenAddrs(), diagnostic)
+	require.NoError(t, err)
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	requests := rejectFirstProxyProduce(cluster, kerr.TopicAuthorizationFailed.Code)
+	result := client.ProduceSync(ctx, &kgo.Record{Topic: "records", Partition: 0, Value: []byte("rejected")})
+	require.Len(t, result, 1)
+	require.ErrorIs(t, result.FirstErr(), kerr.TopicAuthorizationFailed)
 	require.Equal(t, int32(1), requests.Load())
-	require.Contains(t, diagnostic.snapshot(), "NOT_ENOUGH_REPLICAS")
-	require.Contains(t, diagnostic.snapshot(), "max_retries_reached true")
-	ends, err := kadm.NewClient(client).ListEndOffsets(ctx, topic)
+	require.Contains(t, diagnostic.snapshot(), "TOPIC_AUTHORIZATION_FAILED")
+	ends, err := kadm.NewClient(client).ListEndOffsets(ctx, "records")
 	require.NoError(t, err)
 	require.NoError(t, ends.Error())
-	require.Zero(t, ends[topic][0].Offset)
-	// Then retaining more SDK output stays bounded and exposes any omission.
-	bounded := &proxyDiagnostics{}
-	for range 130 {
-		bounded.Log(kgo.LogLevelError, strings.Repeat("synthetic transport error ", 100))
-	}
-	require.Less(t, len(bounded.snapshot()), 128*2100)
-	require.Contains(t, bounded.snapshot(), "[truncated]")
-	require.Contains(t, bounded.snapshot(), "SDK diagnostic rows omitted: 2")
+	require.Zero(t, ends["records"][0].Offset)
 }
 
 func TestProxyProducerCancellationCannotRetryAfterHealing(t *testing.T) {
