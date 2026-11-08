@@ -259,6 +259,37 @@ class OwnershipAuditTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'stale generation committed'):
             self.validate()
 
+    def test_commit_partition_payloads_remain_strict_on_both_sides(self):
+        # Given full request/response payloads with integer offsets and errors.
+        for side, field in (('request', 'committedOffset'), ('response', 'errorCode')):
+            for mutation in ('absent', 'duplicate-partition', 'duplicate-topic', 'index',
+                             'boolean-value', 'fractional-value', 'missing-partition', 'empty-topics'):
+                with self.subTest(side=side, mutation=mutation):
+                    row = commit(22, 'one', 'old', 2, range(2), 30, 22, 2)
+                    self.assertEqual([(0, 30, 22), (1, 30, 22)], audit.commits(row))
+                    topics = row[side]['topics']
+                    parts = topics[0]['partitions']
+                    if mutation == 'absent':
+                        row[side] = None
+                    elif mutation == 'duplicate-partition':
+                        parts.append(copy.deepcopy(parts[0]))
+                    elif mutation == 'duplicate-topic':
+                        topics.append(copy.deepcopy(topics[0]))
+                    elif mutation == 'index':
+                        parts[0]['partitionIndex'] = True
+                    elif mutation == 'boolean-value':
+                        parts[0][field] = False
+                    elif mutation == 'fractional-value':
+                        parts[0][field] = 1.5
+                    elif mutation == 'missing-partition':
+                        parts.pop()
+                    else:
+                        topics.clear()
+                    # When either side is malformed, then neither duplicate
+                    # topics nor coercion can create a usable commit result.
+                    with self.assertRaises(ValueError):
+                        audit.commits(row)
+
     def test_membership_alone_and_peer_progress_after_healing_do_not_qualify(self):
         # Given ownership transfer without accepted peer progress during the cut.
         self.traffic[2]['at'] = 21.5

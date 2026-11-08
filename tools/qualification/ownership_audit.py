@@ -111,24 +111,23 @@ def records(parts):
     return result
 
 
+def partition_values(topics, field, description):
+    values = {}
+    for topic in topics:
+        for partition in topic['partitions']:
+            key = integer(partition['partitionIndex'])
+            if key in values:
+                raise ValueError(description+' repeated a partition')
+            values[key] = integer(partition[field])
+    return values
+
+
 def commits(record):
     request, response = record['request'], record['response']
     if request is None or response is None:
         raise ValueError('selected CLI commit omitted a full request or response')
-    wanted = {}
-    for topic in request['topics']:
-        for partition in topic['partitions']:
-            key = integer(partition['partitionIndex'])
-            if key in wanted:
-                raise ValueError('selected CLI commit repeated a partition')
-            wanted[key] = integer(partition['committedOffset'])
-    observed = {}
-    for topic in response['topics']:
-        for partition in topic['partitions']:
-            key = integer(partition['partitionIndex'])
-            if key in observed:
-                raise ValueError('commit response repeated a partition')
-            observed[key] = integer(partition['errorCode'])
+    wanted = partition_values(request['topics'], 'committedOffset', 'selected CLI commit')
+    observed = partition_values(response['topics'], 'errorCode', 'commit response')
     if wanted.keys() != observed.keys() or not wanted:
         raise ValueError('commit response omitted requested partitions')
     return [(part, offset, observed[part]) for part, offset in wanted.items()]
