@@ -80,7 +80,7 @@ Testing commands and evidence are in the [contributor guide](../../CONTRIBUTING.
 
 The shared Go setup caches modules and compiled packages by runner architecture, Go version, workload, `go.sum` and commit, restoring the newest matching workload entry. Main pushes and manual checks compile the binary and broker fixtures into the shared `pr-brokers` cache used by integrity, compatibility and parallel-lab jobs. The compile steps match each workload's tags, race instrumentation and CGO setting so a new PR can restore main's compilation results. Successful jobs refresh their cache for later pushes.
 
-PR and main checks run `TestKafkaQuickStart` in the load job after bounded measurements finish, using the built binary and a fresh broker on port 9092. Both the integration job and the load job verify their required tests ran. Release and scheduled integration suites also enable and verify the quick start; ordinary local integration runs skip it unless `KAFERRY_QUICKSTART=1` is set.
+PR and main checks run `TestKafkaQuickStart` in the load job after bounded measurements finish, using the built binary and a fresh broker on port 9092. Both the integration job and the load job verify their required tests ran. The shared integration suite also enables and verifies the quick start for releases; ordinary local integration runs skip it unless `KAFERRY_QUICKSTART=1` is set.
 
 ### Local reviews
 
