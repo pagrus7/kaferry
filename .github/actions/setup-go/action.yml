@@ -1,0 +1,21 @@
+name: Set up Go with a refreshed job cache
+description: Restore Go modules and compilation results, then save successful work for this commit.
+inputs:
+  cache-name:
+    description: Stable job and suite name for independently populated compilation caches.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: '1.27.3'
+        cache: false
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: go-ubuntu24-${{ runner.arch }}-1.27.3-${{ inputs.cache-name }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+        restore-keys: |
+          go-ubuntu24-${{ runner.arch }}-1.27.3-${{ inputs.cache-name }}-${{ hashFiles('go.sum') }}-
