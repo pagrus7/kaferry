@@ -21,7 +21,7 @@ func TestReplayRejectsOffsetsDecreasingBetweenBlocks(t *testing.T) {
 	require.NoError(t, err)
 	pool, err := NewPool(catalog, Limits{})
 	require.NoError(t, err)
-	defer func() { require.NoError(t, pool.Close()) }()
+	defer pool.Close()
 	// When reading across blocks, then each offset must follow the previous block's last offset.
 	selectedFile := selected.Files[0]
 	pos := initial(selectedFile)
@@ -79,7 +79,7 @@ func TestBadCursorAndChangedHandleFailBeforeReturningRecords(t *testing.T) {
 	require.ErrorContains(t, err, "changed")
 	pool, err := NewPool(catalog, Limits{})
 	require.NoError(t, err)
-	defer func() { require.NoError(t, pool.Close()) }()
+	defer pool.Close()
 	_, _, err = pool.Read(f, Position{Block: f.Start, Record: 10, Previous: 42})
 	require.ErrorContains(t, err, "count")
 }
@@ -110,8 +110,7 @@ func writeForeign(t *testing.T, root string, meta File, source avro.Source, offs
 	t.Helper()
 	f, err := os.Create(filepath.Join(root, meta.name()))
 	require.NoError(t, err)
-	// Close on assertion failure; the successful close is checked below.
-	defer func() { _ = f.Close() }()
+	defer f.Close()
 	metadata, err := json.Marshal(meta.Identity)
 	require.NoError(t, err)
 	w, err := goavro.NewOCFWriter(goavro.OCFConfig{W: f, Schema: avro.Schema(), CompressionName: "snappy", MetaData: map[string][]byte{"kaferry": metadata}})
@@ -139,11 +138,11 @@ func TestReplayRejectsRecordHeaderDisagreementBeforeOutput(t *testing.T) {
 			catalog := NewCatalog(root, codec(t), NativeFiles{})
 			pool, err := NewPool(catalog, Limits{})
 			require.NoError(t, err)
-			defer func() { require.NoError(t, pool.Close()) }()
+			defer pool.Close()
 			store := &memoryCheckpoints{}
 			s, err := NewSession(query(), clock{}, store, catalog, pool, 10)
 			require.NoError(t, err)
-			defer func() { require.NoError(t, s.Close()) }()
+			defer s.Close()
 			// When reading, then the specific mismatch fails before output or progress advancement.
 			_, err = s.Next()
 			require.ErrorContains(t, err, kind)

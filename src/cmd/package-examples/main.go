@@ -39,8 +39,7 @@ func build(path string) error {
 	if err != nil {
 		return err
 	}
-	// Close on early failure; the completed archive close is checked below.
-	defer func() { _ = output.Close() }()
+	defer output.Close()
 	compressed := gzip.NewWriter(output)
 	archive := tar.NewWriter(compressed)
 	add := func(name string, data []byte) error {

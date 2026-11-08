@@ -23,7 +23,7 @@ func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, st
 	if len(args) == 1 && args[0] == "--version" {
 		budget.Stage("printing version")
 		if _, err := fmt.Fprintln(stdout, versionString()); err != nil {
-			_, _ = fmt.Fprintln(stderr, err)
+			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		return 0
@@ -39,14 +39,14 @@ func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, st
 	budget.Stage("reading SQL input")
 	statement, err := readStatement(options, stdin)
 	if err != nil {
-		_, _ = fmt.Fprintln(stderr, err)
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
 	var command Command
 	budget.Stage("composing components")
 	graph := fx.New(fx.NopLogger, RuntimeModules, fx.Populate(&command))
 	if checkErr := graph.Err(); checkErr != nil {
-		_, _ = fmt.Fprintln(stderr, "component composition failed")
+		fmt.Fprintln(stderr, "component composition failed")
 		return 2
 	}
 	code, err := executeCommand(ctx, command, options, statement, stdout, budget)
@@ -90,17 +90,16 @@ func executeCommand(ctx context.Context, command Command, options commandOptions
 	return code, err
 }
 
-// Error diagnostics are best effort when the error stream itself fails.
 func printCommandError(output io.Writer, source string, err error) {
 	var diagnostic *sql.Diagnostic
 	if source != "" && errors.As(err, &diagnostic) && diagnostic.Position.Line != 0 {
 		if source == "-" {
 			source = "<stdin>"
 		}
-		_, _ = fmt.Fprintf(output, "%q: %v\n", source, err)
+		fmt.Fprintf(output, "%q: %v\n", source, err)
 		return
 	}
-	_, _ = fmt.Fprintln(output, err)
+	fmt.Fprintln(output, err)
 }
 
 type commandOptions struct {
@@ -115,7 +114,7 @@ func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 	var options commandOptions
 	if len(args) == 0 || (args[0] != "run" && args[0] != "explain" && args[0] != "status") {
 		err := fmt.Errorf("usage: kaferry --version | run|explain|status (--sql statement | --file path | --file -) [--config path]; explain and status accept --json")
-		_, _ = fmt.Fprintln(stderr, err)
+		fmt.Fprintln(stderr, err)
 		return options, err
 	}
 	options.command = args[0]
@@ -142,7 +141,7 @@ func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 	})
 	if inputs != 1 || flags.NArg() != 0 {
 		err := fmt.Errorf("exactly one statement input is required")
-		_, _ = fmt.Fprintln(stderr, err)
+		fmt.Fprintln(stderr, err)
 		return options, err
 	}
 	return options, nil
@@ -173,8 +172,7 @@ func readStatementFile(path string, stdin io.Reader) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Reading cannot leave buffered writes to flush.
-		defer func() { _ = opened.Close() }()
+		defer opened.Close()
 		reader = opened
 	}
 	data, err := io.ReadAll(io.LimitReader(reader, (1<<20)+1))

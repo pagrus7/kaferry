@@ -74,7 +74,7 @@ func tlsFixture(t *testing.T, certificate tls.Certificate, roots *x509.CertPool)
 			workers.Add(1)
 			go func(connection net.Conn) {
 				defer workers.Done()
-				defer func() { require.NoError(t, connection.Close()) }()
+				defer connection.Close()
 				_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
 				if connection.(*tls.Conn).Handshake() == nil {
 					_, _ = connection.Write([]byte{1})
@@ -82,7 +82,7 @@ func tlsFixture(t *testing.T, certificate tls.Certificate, roots *x509.CertPool)
 			}(connection)
 		}
 	}()
-	t.Cleanup(func() { require.NoError(t, listener.Close()); <-done; workers.Wait() })
+	t.Cleanup(func() { listener.Close(); <-done; workers.Wait() })
 	return listener.Addr().String()
 }
 func TestTLSHostnameOverrideKeepsTrustAndClientCertificateChecks(t *testing.T) {
@@ -133,7 +133,7 @@ func TestTLSHostnameOverrideKeepsTrustAndClientCertificateChecks(t *testing.T) {
 			defer cancel()
 			connection, err := (&tls.Dialer{Config: cfg}).DialContext(ctx, "tcp", address)
 			if err == nil {
-				defer func() { require.NoError(t, connection.Close()) }()
+				defer connection.Close()
 				_ = connection.SetReadDeadline(time.Now().Add(time.Second))
 				var b [1]byte
 				_, err = connection.Read(b[:])

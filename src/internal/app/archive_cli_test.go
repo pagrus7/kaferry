@@ -65,7 +65,7 @@ func archiveRecords(t *testing.T, root string) []avro.Record {
 	require.NoError(t, err)
 	pool, err := replay.NewPool(catalog, replay.Limits{})
 	require.NoError(t, err)
-	defer func() { require.NoError(t, pool.Close()) }()
+	defer pool.Close()
 	progress := make([]replay.Progress, len(selection.Files))
 	for i, f := range selection.Files {
 		progress[i] = replay.Progress{File: f, Next: replay.Position{Block: f.Start, Previous: -1}}

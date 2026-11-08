@@ -1,8 +1,8 @@
 package app
 
 import (
-	"bytes"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/pagrus7/kaferry/src/internal/inspect"
@@ -56,7 +56,7 @@ func groupWindows(partitions []inspect.Partition) []windowGroup {
 	return groups
 }
 
-func renderWindows(output *bytes.Buffer, report inspect.Report) {
+func renderWindows(output io.Writer, report inspect.Report) {
 	fmt.Fprintln(output, "\nTime window")
 	fmt.Fprintln(output, "  Uses: record timestamps, not payload event time.")
 	groups := groupWindows(report.Partitions)
@@ -74,7 +74,7 @@ func renderWindows(output *bytes.Buffer, report inspect.Report) {
 	}
 }
 
-func renderWindowGroup(output *bytes.Buffer, report inspect.Report, group windowGroup, multiple bool) {
+func renderWindowGroup(output io.Writer, report inspect.Report, group windowGroup, multiple bool) {
 	if multiple {
 		fmt.Fprintf(output, "  Partitions: %v", group.partitions[:min(8, len(group.partitions))])
 		if len(group.partitions) > 8 {
@@ -93,7 +93,7 @@ func renderWindowGroup(output *bytes.Buffer, report inspect.Report, group window
 	renderCompletion(output, report, group.window)
 }
 
-func renderBounds(output *bytes.Buffer, window plan.Window, origin string) {
+func renderBounds(output io.Writer, window plan.Window, origin string) {
 	if window.Lower == nil && window.Upper == nil {
 		fmt.Fprintln(output, "  Filter: none.")
 		return
@@ -120,7 +120,7 @@ func formatBound(value *int64) string {
 }
 
 // Inspection validates completion arithmetic before rendering the report.
-func renderCompletion(output *bytes.Buffer, report inspect.Report, window plan.Window) {
+func renderCompletion(output io.Writer, report inspect.Report, window plan.Window) {
 	if report.Offsets != nil && report.Offsets.HasEnd() || len(report.PartitionOffsets) > 0 {
 		if report.Source.Kind == "ARCHIVE" {
 			fmt.Fprintln(output, "  Stop: selected archive EOF or the original source offset ends; timestamps filter records.")
@@ -132,7 +132,7 @@ func renderCompletion(output *bytes.Buffer, report inspect.Report, window plan.W
 	renderWindowStop(output, report, window)
 	renderTimestampCompletion(output, report, window)
 }
-func renderWindowStop(output *bytes.Buffer, report inspect.Report, window plan.Window) {
+func renderWindowStop(output io.Writer, report inspect.Report, window plan.Window) {
 	if report.Source.Kind == "ARCHIVE" {
 		rule := "end of this group's fixed selection of completed archive files"
 		if report.WorkerStopAfterRecords > 0 {
@@ -153,7 +153,7 @@ func renderWindowStop(output *bytes.Buffer, report inspect.Report, window plan.W
 		fmt.Fprintln(output, "  Stop: worker record threshold or all assigned partitions stopping, whichever comes first.")
 	}
 }
-func renderTimestampCompletion(output *bytes.Buffer, report inspect.Report, window plan.Window) {
+func renderTimestampCompletion(output io.Writer, report inspect.Report, window plan.Window) {
 
 	if window.Upper == nil {
 		return

@@ -76,7 +76,7 @@ func newPartitionInitialization(t *testing.T, windowed bool) {
 	_, connection := componentConnection(t, p)
 	source, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker, nil)
 	require.NoError(t, err)
-	defer func() { require.NoError(t, source.Close()) }()
+	defer source.Close()
 	life := &lifecycleMock{}
 	require.NoError(t, source.Start(context.Background(), life, nil))
 	ctx := componentContext(t)

@@ -1,7 +1,6 @@
 package checkpoint
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 )
@@ -33,12 +32,12 @@ func (nativeReplacement) Write(file *os.File, data []byte) error {
 func (nativeReplacement) Sync(file *os.File) error     { return file.Sync() }
 func (nativeReplacement) Rename(old, new string) error { return os.Rename(old, new) }
 func (nativeReplacement) Remove(path string) error     { return os.Remove(path) }
-func (nativeReplacement) SyncDirectory(path string) (err error) {
+func (nativeReplacement) SyncDirectory(path string) error {
 	dir, err := os.Open(filepath.Dir(path))
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, dir.Close()) }()
+	defer dir.Close()
 	return dir.Sync()
 }
 
@@ -48,14 +47,13 @@ func replaceCheckpoint(files replacementFS, path string, data []byte) error {
 		return err
 	}
 	name := file.Name()
-	// A successful rename removes the temporary name; failure cleanup is best effort.
-	defer func() { _ = files.Remove(name) }()
+	defer files.Remove(name)
 	if err = files.Write(file, data); err != nil {
-		_ = file.Close() // Preserve the write or sync error.
+		file.Close()
 		return err
 	}
 	if err = files.Sync(file); err != nil {
-		_ = file.Close() // Preserve the write or sync error.
+		file.Close()
 		return err
 	}
 	if err = file.Close(); err != nil {

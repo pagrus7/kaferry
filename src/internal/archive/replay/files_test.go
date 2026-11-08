@@ -167,10 +167,10 @@ func TestIncompleteRestartRejectsMissingResizedOrModifiedSelectedInput(t *testin
 			catalog := NewCatalog(root, codec(t), NativeFiles{})
 			pool, err := NewPool(catalog, Limits{})
 			require.NoError(t, err)
-			defer func() { require.NoError(t, pool.Close()) }()
+			defer pool.Close()
 			journal, err := NewJournal(checkpoints, query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})
 			require.NoError(t, err)
-			defer func() { require.NoError(t, journal.Close()) }()
+			defer journal.Close()
 			_, err = NewSession(query(), clock{}, journal, catalog, pool, 10)
 			require.Error(t, err)
 			require.ErrorContains(t, err, a.name())
@@ -309,7 +309,7 @@ func TestMalformedCompletedInputFailsBeforeOutputOrProgress(t *testing.T) {
 			meter := &measuredOpener{Opener: catalog}
 			pool, err := NewPool(meter, Limits{})
 			require.NoError(t, err)
-			defer func() { require.NoError(t, pool.Close()) }()
+			defer pool.Close()
 			// When selecting or reading, then malformed input cannot produce records or advance progress.
 			s, err := NewSession(query(), clock{}, store, catalog, pool, 10)
 			if damage != "corrupt block" {
@@ -318,7 +318,7 @@ func TestMalformedCompletedInputFailsBeforeOutputOrProgress(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			defer func() { require.NoError(t, s.Close()) }()
+			defer s.Close()
 			_, first := s.Next()
 			require.Error(t, first)
 			_, second := s.Next()

@@ -69,7 +69,7 @@ func TestConsumerConstructionDoesNotJoinBeforeStartAndCanClose(t *testing.T) {
 	factory := componentFactory()
 	connection, err := factory.Open(t.Context(), p.Source)
 	require.NoError(t, err)
-	defer func() { require.NoError(t, connection.Close(context.Background())) }()
+	defer connection.Close(context.Background())
 	input, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker, nil)
 	require.NoError(t, err)
 	source := input.(*Source)
@@ -117,7 +117,7 @@ func TestCorePositioningPrecedesClientOffsetAdjustment(t *testing.T) {
 	_, connection := componentConnection(t, p)
 	input, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker, nil)
 	require.NoError(t, err)
-	defer func() { require.NoError(t, input.Close()) }()
+	defer input.Close()
 	life := &lifecycleMock{}
 	observer := &saveObserver{}
 	if err = input.Start(context.Background(), life, observer); err != nil {
@@ -163,14 +163,14 @@ func TestProductionAdaptersPreserveRawRecordsAndZeroNegativeTimestamps(t *testin
 	factory, sourceConnection := componentConnection(t, p)
 	destination, err := factory.Open(t.Context(), p.Destination)
 	require.NoError(t, err)
-	defer func() { require.NoError(t, destination.Close(context.Background())) }()
+	defer destination.Close(context.Background())
 	if _, err = destination.Describe(t.Context(), false); err != nil {
 		t.Fatal(err)
 	}
 	limits := config.Defaults("").Worker
 	source, store, err := sourceConnection.Source(t.Context(), p, "fp", limits, nil)
 	require.NoError(t, err)
-	defer func() { require.NoError(t, source.Close()) }()
+	defer source.Close()
 	sink, err := destination.Sink(t.Context(), limits)
 	require.NoError(t, err)
 	defer sink.Close()
@@ -208,7 +208,7 @@ func TestKafkaSinkPreservesPartitionsUsingTheRealProducer(t *testing.T) {
 	p.Destination.Partitioning = plan.Preserve
 	connection, err := componentFactory().Open(t.Context(), p.Destination)
 	require.NoError(t, err)
-	defer func() { require.NoError(t, connection.Close(context.Background())) }()
+	defer connection.Close(context.Background())
 	require.NoError(t, connection.ValidatePartitions(t.Context(), []int32{0, 2}))
 	require.ErrorContains(t, connection.ValidatePartitions(t.Context(), []int32{3}), "original partition 3")
 	output, err := connection.Sink(t.Context(), config.Defaults("").Worker)
@@ -243,7 +243,7 @@ func TestExplicitKeyRoutingMatchesKafkaHashVectors(t *testing.T) {
 	p.Destination.Partitioning = plan.Key
 	connection, err := componentFactory().Open(t.Context(), p.Destination)
 	require.NoError(t, err)
-	defer func() { require.NoError(t, connection.Close(context.Background())) }()
+	defer connection.Close(context.Background())
 	output, err := connection.Sink(t.Context(), config.Defaults("").Worker)
 	require.NoError(t, err)
 	defer output.Close()

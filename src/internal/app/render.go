@@ -52,7 +52,7 @@ func renderJSON(output io.Writer, report any) error {
 	return err
 }
 
-func renderEndpoint(output *bytes.Buffer, label string, endpoint inspect.Endpoint) {
+func renderEndpoint(output io.Writer, label string, endpoint inspect.Endpoint) {
 	fmt.Fprintf(output, "  %s: %s %q", label, endpoint.Kind, endpoint.Name)
 	if endpoint.Kind == "TOPIC" {
 		fmt.Fprintf(output, " (connection %q; %d partitions)\n", endpoint.Connection, endpoint.PartitionCount)
@@ -76,7 +76,7 @@ func renderEndpoint(output *bytes.Buffer, label string, endpoint inspect.Endpoin
 	}
 }
 
-func renderProgress(output *bytes.Buffer, report inspect.Report) {
+func renderProgress(output io.Writer, report inspect.Report) {
 	fmt.Fprintf(output, "\nProgress\n  Group: %q\n", report.Group)
 	if report.OneOff {
 		fmt.Fprintln(output, "  ONE_OFF: each run starts fresh. Resume an unfinished run with its logged generated group name.")
@@ -92,7 +92,7 @@ func renderProgress(output *bytes.Buffer, report inspect.Report) {
 	}
 }
 
-func renderFileProgress(output *bytes.Buffer, file *inspect.FileSummary) {
+func renderFileProgress(output io.Writer, file *inspect.FileSummary) {
 
 	if *file.CheckpointExists {
 		fmt.Fprintln(output, "  Resume: saved file checkpoint.")
@@ -104,7 +104,7 @@ func renderFileProgress(output *bytes.Buffer, file *inspect.FileSummary) {
 		fmt.Fprintf(output, "  Checkpoint: %q\n", file.Checkpoint)
 	}
 }
-func renderTopicProgress(output *bytes.Buffer, report inspect.Report) {
+func renderTopicProgress(output io.Writer, report inspect.Report) {
 
 	saved := 0
 	for _, partition := range report.Partitions {
@@ -142,7 +142,7 @@ func startRule(rule string) string {
 	}
 }
 
-func renderBehavior(output *bytes.Buffer, report inspect.Report) {
+func renderBehavior(output io.Writer, report inspect.Report) {
 	fmt.Fprintln(output, "\nBehavior")
 	if report.WorkerStopAfterRecords > 0 {
 		fmt.Fprintf(output, "  Worker stop: after %d records accepted for writing. Resuming gets a fresh allowance.\n", report.WorkerStopAfterRecords)
@@ -169,7 +169,7 @@ func renderBehavior(output *bytes.Buffer, report inspect.Report) {
 	}
 }
 
-func renderDestinationBehavior(output *bytes.Buffer, report inspect.Report) {
+func renderDestinationBehavior(output io.Writer, report inspect.Report) {
 	if report.Destination.Kind != "TOPIC" {
 		return
 	}
