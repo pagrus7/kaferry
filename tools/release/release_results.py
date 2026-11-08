@@ -22,6 +22,62 @@ LOAD_CASES.update({'TestLoadBoundedKafkaCopy/' + name: 'Kafka → Kafka (' + nam
 SOAK = 'TestStreamingSoakFidelityCommitLagMemoryAndShutdown'
 
 
+def recorded_workload(workload):
+    """Validate versioned recipes and retain only their documented parameters."""
+    common = {'name', 'source_compression', 'value_bytes_min_max', 'value_entropy',
+              'key_count', 'null_key_every', 'zipf_s_v', 'seed', 'header_count'}
+    defaults = {'source_compression': 'none', 'source_buffer_records': 0,
+                'value_bytes_min_max': [1024, 5119], 'value_entropy': 'repeated-byte',
+                'key_count': 257, 'null_key_every': 7, 'zipf_s_v': [0, 0], 'seed': 42,
+                'header_count': 3, 'heavy_header_value_bytes': 0, 'tombstone_every': 0,
+                'topic_max_message_bytes': 0, 'min_compaction_lag_ms': 0}
+    random_entropy = 'PCG seeded by record ID and 42'
+    variants = {
+        'cyclic-v1': {},
+        'near-limit-v1': {'value_bytes_min_max': [999000, 999127],
+                          'value_entropy': random_entropy, 'topic_max_message_bytes': 1000000},
+        'hot-keys-v1': {'null_key_every': 0, 'zipf_s_v': [1.25, 1]},
+        'headers-v1': {'header_count': 64, 'heavy_header_value_bytes': 256},
+        'tombstones-v1': {'key_count': 32, 'null_key_every': 0, 'header_count': 4,
+                          'tombstone_every': 5, 'min_compaction_lag_ms': 600000},
+        'fixed-file-v1': {'source_compression': 'not applicable', 'value_bytes_min_max': [1024, 1024],
+                          'value_entropy': 'zero bytes', 'key_count': 1, 'null_key_every': 0,
+                          'seed': 0, 'header_count': 0},
+        'application-24x32-v1': {'value_entropy': random_entropy},
+    }
+    variants.update({'source-' + codec + '-v1': {'source_compression': codec}
+                     for codec in ('none', 'gzip', 'snappy', 'lz4', 'zstd')})
+    if not isinstance(workload, dict) or not isinstance(workload.get('name'), str) or workload['name'] not in variants:
+        raise ValueError('invalid workload identity')
+    name = workload['name']
+    expected = dict(defaults, name=name, **variants[name])
+    if name in LOAD_PROFILES:
+        expected['source_buffer_records'] = 64
+    required = common | {field for field, value in expected.items() if field not in common and value != 0}
+    if not required <= workload.keys() or workload.keys() - expected.keys():
+        raise ValueError('incomplete or unknown workload parameters')
+    normalized = {}
+    for field, value in workload.items():
+        target = expected[field]
+        allowed = [target]
+        if field == 'value_entropy' and name in ('cyclic-v1', 'hot-keys-v1', 'headers-v1', 'tombstones-v1'):
+            allowed.append(random_entropy)
+        if field == 'source_compression' and name == 'cyclic-v1':
+            allowed.append('not applicable')
+        if isinstance(target, list):
+            element_type = (int, float) if field == 'zipf_s_v' else (int,)
+            valid_type = (isinstance(value, list) and len(value) == 2 and
+                          all(type(element) in element_type and
+                              (type(element) is int or math.isfinite(element)) for element in value))
+        else:
+            valid_type = type(value) is type(target)
+        if not valid_type or value not in allowed:
+            raise ValueError('invalid workload parameter type or value')
+        if field in required:
+            normalized[field] = value
+    return normalized
+
+
 def collect(evidence, archive, matrix, commit, version):
     if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9.-]+)?', version):
         raise ValueError('invalid release version')
@@ -52,15 +108,18 @@ def collect(evidence, archive, matrix, commit, version):
             seen.add(key)
             if item['binary_sha256'] != digest or not item['passed'] or item['skipped']:
                 raise ValueError(f'{item["test"]}: measurement did not pass for this binary')
-            workload = item.get('workload')
-            if workload is None:
+            if 'workload' not in item:
                 unrecorded_workloads.add(key)
-                workload = {'name': 'not recorded'}
-                item['workload'] = workload
+                workload = item['workload'] = {'name': 'not recorded'}
             else:
                 recorded_workloads.add(key)
-            if not isinstance(workload, dict) or not isinstance(workload.get('name'), str) or not workload['name']:
-                raise ValueError(f'{item["test"]}: workload identity is missing')
+                workload = item['workload'] = recorded_workload(item['workload'])
+            if 'source_compression_records' in item:
+                counts = item['source_compression_records']
+                if (not isinstance(counts, dict) or
+                        any(codec not in ('none', 'gzip', 'snappy', 'lz4', 'zstd') or
+                            type(count) is not int or count <= 0 for codec, count in counts.items())):
+                    raise ValueError('invalid observed source compression counts')
             profile = item['test'].removeprefix('TestLoadBoundedKafkaCopy/')
             if profile in LOAD_PROFILES:
                 codec = profile.removeprefix('source-').removesuffix('-v1') if profile.startswith('source-') else 'none'
