@@ -112,8 +112,7 @@ jobs:
       - run: python3 -m tools.ci.ci integration go test -count=1 -json -race -tags=integration -coverpkg=./... -coverprofile=build-results/coverage.out ./src/tests/system
         env:
           CGO_ENABLED: "1"
-          KAFERRY_QUICKSTART: "1"
-      - run: python3 -m tools.ci.ci verify-tests integration 'TestKafkaQuickStart' 'TestCLIInterruptCommitsAndResumeDoesNotRecopy' 'TestAllFileDirectionsAndResume' 'TestTopicToTopicSlice'
+      - run: python3 -m tools.ci.ci verify-tests integration 'TestCLIInterruptCommitsAndResumeDoesNotRecopy' 'TestAllFileDirectionsAndResume' 'TestTopicToTopicSlice'
       - name: Check progress and archives against the PR base
         if: github.event_name == 'pull_request'
         env:
@@ -193,6 +192,13 @@ jobs:
       - run: python3 -m tools.ci.ci broker make broker
       - name: Capture bounded load measurements
         run: python3 -m tools.ci.ci load make load
+      - name: Check the fresh-broker quick start
+        env:
+          CGO_ENABLED: "1"
+          KAFERRY_QUICKSTART: "1"
+          KAFERRY_TEST_BINARY: ${{ github.workspace }}/bin/kaferry
+        run: python3 -m tools.ci.ci quickstart go test -count=1 -json -race -tags=integration -run '^TestKafkaQuickStart$' ./src/tests/system
+      - run: python3 -m tools.ci.ci verify-tests quickstart 'TestKafkaQuickStart'
       - if: always()
         run: |
           mkdir -p build-results
