@@ -405,6 +405,51 @@ def external_storage_admission(output, env, parallel, *, auth=False):
     return capacity
 
 
+def validate_auth_storage(default, external, env):
+    services = default.get('services', {})
+    selected = external.get('services', {})
+    volume = external.get('volumes', {}).get('broker-data', {})
+    if default.get('volumes') or 'storage' in services:
+        raise ValueError('default authentication fixture must not select broker storage')
+    if volume.get('external') is not True or volume.get('name') != env['KAFERRY_BROKER_VOLUME']:
+        raise ValueError('authentication broker storage must use the selected external volume')
+    for name in ('kdc', 'kafka-secure-1', 'kafka-secure-2', 'kafka-secure-3'):
+        before, after = services.get(name, {}), dict(selected.get(name, {}))
+        certificates = [mount for mount in before.get('volumes', []) if mount.get('target') == '/mnt/certs']
+        if (len(certificates) != 1 or certificates[0].get('type') != 'bind' or
+                certificates[0].get('source') != env['KAFERRY_QUAL_CERT_DIR'] or
+                bool(certificates[0].get('read_only')) != (name != 'kdc')):
+            raise ValueError('authentication certificate and KDC mounts must retain their host paths and access')
+        if name != 'kdc':
+            logs = ('KAFKA_LOG_DIRS', 'KAFKA_METADATA_LOG_DIR')
+            expected = '/tmp/kaferry-logs/kaferry-auth/kaferry-qualification/' + env['KAFERRY_BROKER_RUN_ID'] + '/' + name
+            settings = after.get('environment', {})
+            if any(settings.get(key) != expected for key in logs):
+                raise ValueError('authentication data and metadata logs must use their owned broker directory')
+            mounts = [mount for mount in after.get('volumes', []) if mount.get('target') == '/tmp/kaferry-logs']
+            if (len(mounts) != 1 or mounts[0].get('type') != 'volume' or
+                    mounts[0].get('source') != 'broker-data' or mounts[0].get('read_only')):
+                raise ValueError('authentication broker log paths must be backed by the selected writable volume')
+            if after.pop('user', None) != '1000:1000':
+                raise ValueError('authentication broker storage requires its fixture owner')
+            if (any(key in before.get('environment', {}) for key in logs) or
+                    before.get('environment', {}).get('KAFKA_HEAP_OPTS') != '-Xms128m -Xmx512m'):
+                raise ValueError('default authentication broker logs and heap must remain unchanged')
+            after['environment'] = {key: value for key, value in settings.items() if key not in logs}
+            after['volumes'] = [mount for mount in after['volumes'] if mount not in mounts]
+        if after != before:
+            raise ValueError('external authentication storage must preserve the broker and KDC configuration')
+
+
+def check_auth_storage(version):
+    env = dict(os.environ, KAFERRY_AUTH_IMAGE=IMAGES[version], KAFERRY_QUAL_CERT_DIR='/tmp',
+               KAFERRY_BROKER_VOLUME='LAB_VOLUME', KAFERRY_BROKER_RUN_ID='a' * 32)
+    compose = ['docker', 'compose', '-p', 'kaferry-qualification', '-f', 'src/tests/qualification/compose.yaml']
+    documents = [json.loads(subprocess.check_output(compose + overlay + ['config', '--format', 'json'],
+        env=env, cwd=ROOT, text=True, timeout=10)) for overlay in ([], ['-f', 'src/tests/qualification/broker-storage.compose.yaml'])]
+    validate_auth_storage(*documents, env)
+
+
 def parallel_run(args):
     if args.companion == 'recovery' and args.companion_duration > 86400:
         raise ValueError('recovery duration must not exceed 24h')

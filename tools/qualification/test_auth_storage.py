@@ -1,6 +1,7 @@
 """Authentication storage keeps its existing lifecycle and private certificate paths."""
 
 import argparse
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -12,10 +13,67 @@ import unittest
 from unittest.mock import patch
 
 from tools.ci.suites import EXPECTED
-from tools.qualification.qualify import IMAGES, external_storage_admission, resolve_run, run_suite
+from tools.qualification.qualify import IMAGES, external_storage_admission, resolve_run, run_suite, validate_auth_storage
 from tools.qualification.test_broker_storage import suite_args
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+class AuthComposeConfigTest(unittest.TestCase):
+    def configurations(self):
+        env = dict(KAFERRY_QUAL_CERT_DIR='/tmp', KAFERRY_BROKER_VOLUME='LAB_VOLUME', KAFERRY_BROKER_RUN_ID='a' * 32)
+        certificate = dict(type='bind', source='/tmp', target='/mnt/certs')
+        services = {'kdc': dict(volumes=[certificate])}
+        for number in range(1, 4):
+            services[f'kafka-secure-{number}'] = dict(environment={'KAFKA_HEAP_OPTS': '-Xms128m -Xmx512m'},
+                volumes=[dict(certificate, read_only=True)])
+        default = dict(services=services)
+        external = deepcopy(default)
+        external['volumes'] = {'broker-data': dict(name='LAB_VOLUME', external=True)}
+        for name, service in external['services'].items():
+            if name == 'kdc':
+                continue
+            directory = '/tmp/kaferry-logs/kaferry-auth/kaferry-qualification/' + 'a' * 32 + '/' + name
+            service['environment'].update(KAFKA_LOG_DIRS=directory, KAFKA_METADATA_LOG_DIR=directory)
+            service['user'] = '1000:1000'
+            service['volumes'].append(dict(type='volume', source='broker-data', target='/tmp/kaferry-logs'))
+        return default, external, env
+
+    def test_external_storage_keeps_default_certificate_and_kdc_configuration(self):
+        # Given merged default/external configurations, when checked, then only bulk storage differs.
+        default, external, env = self.configurations()
+        before = deepcopy((default, external))
+        validate_auth_storage(default, external, env)
+        self.assertEqual(before, (default, external), 'validation must not mutate the rendered configurations')
+
+    def test_rejects_unbacked_data_metadata_paths_and_changed_certificate_mounts(self):
+        # Given misplaced log paths, a different volume or changed broker/KDC configuration.
+        cases = [('external', ('volumes', 'broker-data', 'name'), 'other-volume'),
+                 ('external', ('volumes', 'broker-data', 'external'), False),
+                 ('external', ('services', 'kdc', 'volumes', 0, 'source'), '/other-certs'),
+                 ('external', ('services', 'kdc', 'volumes', 0, 'read_only'), True),
+                 ('default', ('services', 'kdc', 'volumes'), [])]
+        for number in range(1, 4):
+            broker = ('services', f'kafka-secure-{number}')
+            cases += [('external', broker + ('environment', key), '/tmp/kraft-combined-logs')
+                      for key in ('KAFKA_LOG_DIRS', 'KAFKA_METADATA_LOG_DIR')]
+            cases += [('external', broker + ('volumes', 1, key), value) for key, value in (
+                ('source', 'other-volume'), ('target', '/unused-volume'), ('type', 'bind'), ('read_only', True))]
+            cases += [('external', broker + ('volumes', 0, 'source'), '/other-certs'),
+                      ('external', broker + ('volumes', 0, 'read_only'), False),
+                      ('external', broker + ('environment', 'KAFKA_LOG_DIRS'),
+                       '/tmp/kaferry-logs/kaferry-auth/kaferry-qualification/' + 'b' * 32 + f'/kafka-secure-{number}'),
+                      ('external', broker + ('environment', 'KAFKA_HEAP_OPTS'), '-Xmx2g')]
+        for selection, path, value in cases:
+            with self.subTest(configuration=selection, path=path, value=value):
+                default, external, env = self.configurations()
+                changed = default if selection == 'default' else external
+                for key in path[:-1]:
+                    changed = changed[key]
+                changed[path[-1]] = value
+                # When the actual-render contract sees the mutation, then qualification cannot continue.
+                with self.assertRaises(ValueError):
+                    validate_auth_storage(default, external, env)
 
 
 class AuthBrokerStorageTest(unittest.TestCase):

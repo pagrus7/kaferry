@@ -185,7 +185,7 @@ The independent Python checker uses librdkafka; Kaferry uses franz-go. It seeds 
 
 Security fixtures exercise PLAIN, SCRAM-SHA-256/512, signed OAuth client credentials, OAuth token files, Kerberos, server TLS, mTLS, denied access and replicated destination-leader failure. OAuth brokers validate RSA signatures, issuer, audience and expiry against an HTTP JWKS fixture; a live-copy test renews short-lived tokens while the issuer rotates keys. Token-file replacement is tested across invocations. The local KDC covers keytab login; prolonged ticket renewal and deployment-specific identity-provider behavior need separate evidence. Internal broker/controller listeners use plaintext.
 
-Authentication runs capture and validate broker image identities after startup, before running tests. Failed or empty image collection fails qualification. Valid image receipts remain in the manifest if tests or cleanup fail.
+Each authentication case in the compatibility matrix first renders the default and external-volume Compose configurations and checks all three brokers' data and metadata paths, volume mounts and preserved certificate/KDC configuration. This check starts no containers. Authentication runs capture and validate broker image identities after startup, before running tests. Failed or empty image collection fails qualification. Valid image receipts remain in the manifest if tests or cleanup fail.
 
 These commands define test targets. A configuration is qualified only by a completed passing receipt for its exact source, destination and executable; the catalog alone is not evidence that it passed.
 
