@@ -32,6 +32,9 @@ class PairedBrokerStorageTest(unittest.TestCase):
                         new=lambda env: env.update(KAFERRY_ORACLE_RUN='fixture'))
         checker.start()
         self.addCleanup(checker.stop)
+        cleanup_state = patch('tools.qualification.qualify.cleanup_container_state')
+        cleanup_state.start()
+        self.addCleanup(cleanup_state.stop)
         for target, value in [('capture', 'fixture'), ('fixture_images', 'fixture'), ('identity_platforms', {
                 'binary_platform': 'linux-amd64', 'execution_platform': 'linux-amd64'})]:
             mock = patch('tools.qualification.qualify.' + target, return_value=value)

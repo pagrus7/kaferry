@@ -37,6 +37,35 @@ for path in "$root" "$namespace" "$project_root" "$run"; do
 done
 marker=$(printf 'kaferry-%s-v1\n%s\n%s' "$layout" "$project" "$run_id")
 
+deletion_diagnostics() {
+    printf 'cleanup census: metadata only; 2s deadline, 65536-byte limit\n' >&2
+    if ! command -v timeout >/dev/null || ! command -v head >/dev/null ||
+       ! command -v find >/dev/null || [ ! -x /bin/bash ]; then
+        echo 'cleanup census unavailable: required fixture tools are missing' >&2
+        return
+    fi
+    if ! census=$(mktemp); then
+        echo 'cleanup census unavailable: cannot create temporary output' >&2
+        return
+    fi
+    if timeout -k 1 2 /bin/bash -o pipefail -c '
+        LC_ALL=C find -P "$1" -maxdepth 4 -printf "type=%y device=%D inode=%i bytes=%s links=%n path=%p\\n" 2>&1 |
+            head -c 65537
+    ' census "$1" > "$census" 2>&1; then
+        census_status=0
+    else
+        census_status=$?
+    fi
+    census_bytes=$(wc -c < "$census")
+    head -c 65536 "$census" >&2 || true
+    printf '\ncleanup census exit=%s\n' "$census_status" >&2
+    case "$census_status" in 124|137) echo 'cleanup census timed out; metadata is incomplete' >&2 ;; esac
+    [ "$census_bytes" -le 65536 ] || echo 'cleanup census truncated; metadata is incomplete' >&2
+    [ "$census_status" -eq 0 ] || echo 'cleanup census failed; metadata is incomplete' >&2
+    rm -f -- "$census" || echo 'cleanup census temporary output could not be removed' >&2
+    return 0
+}
+
 case "${1:-}" in
     capacity)
         df -Pk "$root" | awk 'END {print $4}'
@@ -62,13 +91,32 @@ case "${1:-}" in
         fi
         # Keep ownership proof if a recursive deletion stops partway through.
         for path in "$run"/* "$run"/.[!.]* "$run"/..?*; do
-            [ "$path" = "$run/.kaferry-owned" ] || rm -rf -- "$path"
+            if [ "$path" != "$run/.kaferry-owned" ]; then
+                if rm -rf -- "$path"; then :; else
+                    deletion_status=$?
+                    deletion_diagnostics "$path" || echo 'cleanup census unavailable' >&2
+                    exit "$deletion_status"
+                fi
+            fi
         done
-        rm -- "$run/.kaferry-owned"
-        if ! rmdir -- "$run"; then
-            [ -d "$run" ] && [ ! -L "$run" ] || fail 'fixture storage disappeared during cleanup'
-            (set -C; printf '%s\n' "$marker" > "$run/.kaferry-owned") || fail 'cannot restore fixture storage ownership marker'
-            fail 'fixture storage directory removal failed; ownership marker restored'
+        if rm -- "$run/.kaferry-owned"; then :; else
+            deletion_status=$?
+            deletion_diagnostics "$run" || echo 'cleanup census unavailable' >&2
+            exit "$deletion_status"
+        fi
+        if rmdir -- "$run"; then :; else
+            deletion_status=$?
+            deletion_diagnostics "$run" || echo 'cleanup census unavailable' >&2
+            if [ ! -d "$run" ] || [ -L "$run" ]; then
+                echo 'fixture storage disappeared during cleanup' >&2
+                exit "$deletion_status"
+            fi
+            if ! (set -C; printf '%s\n' "$marker" > "$run/.kaferry-owned"); then
+                echo 'cannot restore fixture storage ownership marker' >&2
+                exit "$deletion_status"
+            fi
+            echo 'fixture storage directory removal failed; ownership marker restored' >&2
+            exit "$deletion_status"
         fi
         rmdir "$project_root" "$namespace" 2>/dev/null || true
         ;;
