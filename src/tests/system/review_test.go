@@ -100,11 +100,16 @@ func probeSource(t *testing.T, name, group string) *adapter.Source {
 	source, _ := probeSourceProgress(t, name, group)
 	return source
 }
-func probeSourceProgress(t *testing.T, name, group string) (*adapter.Source, core.ProgressStore) {
+func probeSourceProgress(t *testing.T, name, group string, session ...time.Duration) (*adapter.Source, core.ProgressStore) {
 	t.Helper()
 	statement, err := sql.NewParser().Parse(fmt.Sprintf("INSERT INTO TOPIC 'unused' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", name, group))
 	require.NoError(t, err)
-	p, err := plan.NewPlanner(nil).Build(statement, plan.Profiles{"default": {"bootstrap.servers": broker(t)}})
+	properties := map[string]string{"bootstrap.servers": broker(t)}
+	if len(session) > 0 {
+		require.Len(t, session, 1)
+		properties["session.timeout.ms"] = fmt.Sprint(session[0].Milliseconds())
+	}
+	p, err := plan.NewPlanner(nil).Build(statement, plan.Profiles{"default": properties})
 	require.NoError(t, err)
 	clients := adapter.NewClients()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

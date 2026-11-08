@@ -1,8 +1,10 @@
 """Shared Go suite selection and required execution evidence."""
 
 import argparse
+import json
 import os
 from pathlib import Path
+import subprocess
 
 from tools.ci.ci import run, verify_tests
 
@@ -39,10 +41,24 @@ CI_EXTRA = {
 }
 
 
+def fault_execution_seconds():
+    catalog = json.loads((Path(__file__).resolve().parents[2]/'src/tests/qualification/fault-timeouts-ms.json').read_text())
+    if not catalog or any(not budgets or any(type(ms) is not int or ms <= 0 for ms in budgets.values())
+                          for budgets in catalog.values()):
+        raise ValueError('fault observation timeout catalog must contain positive milliseconds')
+    # Preserve the existing 600s execution allowance and account for every added
+    # full recovery horizon. Churn's three windows overlap: only their last 135s
+    # horizon extends the case, so its catalog entry is counted once.
+    milliseconds = sum(sum(budgets.values()) for budgets in catalog.values())
+    return 600 + (milliseconds+999)//1000
+
+
 def command(name, go='go', output='-json', timeout=None, packages='./src/tests/system'):
     tags, pattern, race = GO_SUITES[name]
     if name == 'soak' and packages == './src/tests/system':
         packages = './src/tests/compatibility'
+    if name == 'fault' and timeout is None:
+        timeout = f'{fault_execution_seconds()}s'
     result = [go, 'test', '-count=1']
     if output:
         result.append(output)
@@ -85,6 +101,22 @@ def main():
     if args.action == 'ci':
         return ci(args.suite)
     cmd = command(args.suite, args.go, args.output, args.timeout, args.packages)
+    if args.suite in ('fault', 'recovery'):
+        from tools.qualification.fault_results import collect, configure
+        env = dict(os.environ)
+        env['GO'] = args.go
+        configure(env)
+        directory = Path(env.get('KAFERRY_REPORT_DIR', 'build-results'))
+        directory.mkdir(parents=True, exist_ok=True)
+        env['KAFERRY_REPORT_DIR'] = str(directory.resolve())
+        report = directory/'fault-results.json'
+        report.write_text(json.dumps(dict(schema=1, status='running', oracle_run=env['KAFERRY_ORACLE_RUN']))+'\n')
+        code = subprocess.run(cmd, env=env, check=False).returncode
+        if not code:
+            collect(directory, args.suite, run=env['KAFERRY_ORACLE_RUN'])
+        else:
+            report.write_text(json.dumps(dict(schema=1, status='failed', oracle_run=env['KAFERRY_ORACLE_RUN']))+'\n')
+        return code
     os.execvpe(cmd[0], cmd, os.environ)
 
 

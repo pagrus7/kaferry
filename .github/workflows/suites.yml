@@ -63,6 +63,9 @@ jobs:
       - name: Start plain Kafka fixtures
         if: contains(fromJSON('["integration","load","soak","fault"]'), matrix.suite)
         run: python3 -m tools.ci.ci broker make broker
+      - name: Install independent fault observer
+        if: matrix.suite == 'fault'
+        run: python3 -m tools.qualification.qualify setup
       - name: Run suite
         run: python3 -m tools.ci.suites ci "$SUITE"
       - name: Previous successful measurements
