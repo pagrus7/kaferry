@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
-	"reflect"
 	"testing"
 	"time"
 
@@ -129,13 +128,14 @@ func unassignedTimeout(t *testing.T, afterIntake bool) {
 	// When the unassigned interval reaches the configured timeout.
 	err := r.Run(ctx)
 	// Then report only the local idle outcome, preserving any saved progress.
-	require.False(t, err == nil || exitCode(err) != 3 || err.Error() != "worker held no partitions for 1s",
-		"exit=%d err=%v", exitCode(err), err)
+	require.EqualError(t, err, "worker held no partitions for 1s")
+	require.Equal(t, 3, exitCode(err))
 
 	require.Contains(t, logs.String(), `"msg":"local idle exit","idle_exit":"1s","exit_code":3`, "idle outcome is missing its structured context")
 	if afterIntake {
-		require.False(t, !revoked || len(sink.writes) != 1 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1}}}),
-			"confirmed progress was lost or advanced after release", sink.writes, store.saves)
+		require.True(t, revoked)
+		require.Len(t, sink.writes, 1)
+		require.Equal(t, [][]Cursor{{{Partition: 0, Position: 1}}}, store.saves)
 
 	} else if len(sink.writes) != 0 || len(store.saves) != 0 {
 		t.Fatal("unassigned worker wrote or committed progress", sink.writes, store.saves)

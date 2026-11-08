@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report coverage and Go/Python duplication."""
+"""Report coverage and Python duplication."""
 
 import json
 import os
@@ -56,7 +56,7 @@ def markdown(directory):
     if report.exists():
         r = json.loads(report.read_text())
         d = r["duplication"]
-        rows += ["## Duplication", "", f"Go and Python under `src/` and `tools/`, including tests: {d['sources']} files scanned. "
+        rows += ["## Duplication", "", f"Python under `src/` and `tools/`, including tests: {d['sources']} files scanned. "
                  f"Normalized clones ≥50 tokens and ≥5 lines: **{d['clones']}**, "
                  f"{d['percentage']:.2f}% duplicated lines. New clones: **{d['newClones']}**. "
                  "Comments, identifier names and literal values are ignored.", ""]

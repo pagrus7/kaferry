@@ -242,8 +242,8 @@ func revokedHeldWork(t *testing.T, held string, lost bool) {
 	} else {
 		old = sink.writes[0]
 		require.NoError(t, r.accept(Event{Input: ptrInput(incoming(0, 1, 1)), EOF: &Cursor{Partition: 0, Position: 2}}))
-		require.False(t, r.flow.deferred == nil || r.flow.deferred.eof == nil,
-			"fixture did not hold input and EOF")
+		require.NotNil(t, r.flow.deferred)
+		require.NotNil(t, r.flow.deferred.eof)
 
 	}
 	before := len(sink.writes)
@@ -254,11 +254,13 @@ func revokedHeldWork(t *testing.T, held string, lost bool) {
 	sink.submit = nil
 	require.NoError(t, r.advance())
 	// Then held work and EOF cannot leak into the new assignment.
-	require.False(t, r.pending != nil || r.flow.deferred != nil || len(sink.writes) != before || r.partitions[0].stop != nil,
-		"revoked work survived reassignment")
+	require.Nil(t, r.pending)
+	require.Nil(t, r.flow.deferred)
+	require.Len(t, sink.writes, before)
+	require.Nil(t, r.partitions[0].stop)
 
 	require.NoError(t, r.input(incoming(0, 0, 1)))
-	require.False(t, len(sink.writes) != before+1 || sink.writes[before].Generation == old.Generation,
-		"replay did not receive a fresh generation")
+	require.Len(t, sink.writes, before+1)
+	require.NotEqual(t, old.Generation, sink.writes[before].Generation)
 
 }

@@ -137,8 +137,8 @@ func TestPositioningBatchesBrokerRequests(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	require.False(t, len(offsets.calls) != 3 || times.calls != 1,
-		"broker requests: offsets=%v timestamp lookups=%d", offsets.calls, times.calls)
+	require.Len(t, offsets.calls, 3)
+	require.Equal(t, 1, times.calls)
 
 	ids := make([]int32, len(positioned.Assignments))
 	for i, a := range positioned.Assignments {
@@ -156,10 +156,8 @@ func TestPositioningBatchesBrokerRequests(t *testing.T) {
 		case id%3 == 0:
 			want = 900
 		}
-		require.False(t, a.Cursor.Position != want,
-			"partition %d positioned at %d, want %d", id, a.Cursor.Position, want)
-		require.False(t, *a.Window.Lower != savedLower,
-			"partition %d window %d did not adopt the lowest saved window", id, *a.Window.Lower)
+		require.Equal(t, want, a.Cursor.Position, "partition %d", id)
+		require.Equal(t, savedLower, *a.Window.Lower, "partition %d", id)
 
 	}
 }

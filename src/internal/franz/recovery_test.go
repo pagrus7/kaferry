@@ -219,12 +219,12 @@ func compactedOffsetCompletion(t *testing.T, retained []int32, version int16) {
 	// When reading through the compacted tail with a bounded time range.
 	err = runComponentCopy(deadline, p, config.Defaults(t.TempDir()).Worker)
 	// Then the batch's consumed end is saved, and every retained record is copied.
-	require.False(t, err != nil || deadline.Err() != nil,
-		"did not complete across compacted offsets: copy=%v context=%v", err, deadline.Err())
+	require.NoError(t, err)
+	require.NoError(t, deadline.Err())
 
 	saved, err := kadm.NewClient(producer).FetchOffsets(componentContext(t), p.Group)
-	require.False(t, err != nil || saved["input"][0].At != 10,
-		"wrong consumed end: %v %v", saved, err)
+	require.NoError(t, err)
+	require.EqualValues(t, 10, saved["input"][0].At)
 
 	want := int64(len(retained))
 	if got := cluster.PartitionInfo("output", 0).HighWatermark; got != want {

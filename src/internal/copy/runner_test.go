@@ -291,10 +291,14 @@ func TestPartialCommitReleasesSuccessfulPartitionsOnly(t *testing.T) {
 			// Then only the successful partition releases its work and advances saved progress.
 			n0, _ := r.tracker.Work(0)
 			n1, _ := r.tracker.Work(1)
-			require.False(t, err == nil || n0 != 0 || n1 != 1 || r.tracker.Saved(0) != 1 || r.tracker.Saved(1) != 0,
-				"partial commit released work=%d/%d: %v", n0, n1, err)
-			require.False(t, scenario == "missing result" && !strings.Contains(err.Error(), "missing commit result for partition 1"),
-				"missing result accepted", err)
+			require.Error(t, err)
+			require.Zero(t, n0)
+			require.Equal(t, 1, n1)
+			require.EqualValues(t, 1, r.tracker.Saved(0))
+			require.Zero(t, r.tracker.Saved(1))
+			if scenario == "missing result" {
+				require.ErrorContains(t, err, "missing commit result for partition 1")
+			}
 		})
 	}
 }
@@ -678,6 +682,7 @@ func capturedTipCompletion(t *testing.T, gap bool) {
 	if gap {
 		want = 1
 	}
-	require.False(t, len(d.writes) != want || p.saves[len(p.saves)-1][0].Position != s.high,
-		"copied beyond H or failed to commit its consumed boundary")
+	require.Len(t, d.writes, want)
+	require.NotEmpty(t, p.saves)
+	require.Equal(t, s.high, p.saves[len(p.saves)-1][0].Position)
 }

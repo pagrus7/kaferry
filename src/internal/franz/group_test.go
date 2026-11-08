@@ -334,13 +334,16 @@ func savedOffsetInspection(t *testing.T, grouped bool, code int16, failure error
 			return metadataResponse(id), nil
 		}
 		req := r.(*kmsg.OffsetFetchRequest)
-		require.False(t, req.Group != "group" || len(req.Groups) != 1 || req.Groups[0].Group != "group" || !req.RequireStable,
-			"saved offsets did not request the group's stable commits")
+		require.Equal(t, "group", req.Group)
+		require.Len(t, req.Groups, 1)
+		require.Equal(t, "group", req.Groups[0].Group)
+		require.True(t, req.RequireStable)
 
 		group := req.Groups[0]
-		require.False(t, group.MemberEpoch != -1 || len(group.Topics) != 1 || group.Topics[0].TopicID != id ||
-			!reflect.DeepEqual(group.Topics[0].Partitions, []int32{0, 2}),
-			"saved offsets did not identify the topic and partitions for a non-member")
+		require.EqualValues(t, -1, group.MemberEpoch)
+		require.Len(t, group.Topics, 1)
+		require.Equal(t, id, group.Topics[0].TopicID)
+		require.Equal(t, []int32{0, 2}, group.Topics[0].Partitions)
 
 		if failure != nil && code == 0 {
 			return nil, failure
@@ -362,8 +365,7 @@ func savedOffsetInspection(t *testing.T, grouped bool, code int16, failure error
 	// Then unavailable or unauthorized progress cannot become a fresh start.
 	require.ErrorIs(t, err, failure, "incorrect saved-offset outcome")
 	if failure != nil || code == kerr.GroupIDNotFound.Code {
-		require.False(t, len(saved) != 0,
-			"unexpected usable progress", saved)
+		require.Empty(t, saved)
 
 	} else if len(saved) != 1 || saved[0].Position != 42 || encodeMetadata(saved[0].Progress) != encoded {
 		t.Fatal("saved progress changed", saved)

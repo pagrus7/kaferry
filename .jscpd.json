@@ -1,6 +1,6 @@
 {
   "path": ["src", "tools"],
-  "format": ["go", "python"],
+  "format": ["python"],
   "minTokens": 50,
   "minLines": 5,
   "mode": "weak",

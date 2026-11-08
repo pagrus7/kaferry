@@ -16,8 +16,8 @@ class CoverageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             (directory / 'duplication').mkdir()
-            clone = {'firstFile': {'name': str(Path.cwd() / 'src/a_test.go'), 'start': 10, 'end': 20},
-                     'secondFile': {'name': str(Path.cwd() / 'src/b_test.go'), 'start': 30, 'end': 40},
+            clone = {'firstFile': {'name': str(Path.cwd() / 'tools/test_a.py'), 'start': 10, 'end': 20},
+                     'secondFile': {'name': str(Path.cwd() / 'tools/test_b.py'), 'start': 30, 'end': 40},
                      'tokens': 80, 'isNew': True}
             scan = {'statistics': {'total': {'sources': 4, 'clones': 2, 'percentage': 5, 'newClones': 1}},
                     'duplicates': [dict(clone, isNew=False), clone]}
@@ -29,8 +29,8 @@ class CoverageTest(unittest.TestCase):
             self.assertEqual([clone], result['new_clones'])
             summary = '\n'.join(markdown(directory))
             self.assertIn('New clones: **1**', summary)
-            self.assertIn('src/a_test.go:10-20', summary)
-            self.assertIn('src/b_test.go:30-40', summary)
+            self.assertIn('tools/test_a.py:10-20', summary)
+            self.assertIn('tools/test_b.py:30-40', summary)
             self.assertIn('New duplication fails CI', summary)
 
     def test_statement_weights_and_duplicate_blocks(self):

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -195,10 +194,12 @@ func recordPolicyOutcome(t *testing.T, class string, policies plan.Policies, ski
 	if skip {
 		wantPosition, wantWrites, wantSkipped = 3, 2, 1
 	}
-	require.False(t, (err == nil) != skip || len(sink.writes) != wantWrites || r.skipped != wantSkipped,
-		"error=%v writes=%d skipped=%d", err, len(sink.writes), r.skipped)
-	require.False(t, len(store.saves) == 0 || store.saves[len(store.saves)-1][0].Position != wantPosition,
-		"unsafe committed prefix: %+v", store.saves)
-	require.False(t, !skip && class != "unclassified" && !strings.Contains(err.Error(), "partition 0"),
-		"record failure lost its partition", err)
+	require.Equal(t, skip, err == nil, "record policy success: %v", err)
+	require.Len(t, sink.writes, wantWrites)
+	require.Equal(t, wantSkipped, r.skipped)
+	require.NotEmpty(t, store.saves)
+	require.Equal(t, wantPosition, store.saves[len(store.saves)-1][0].Position)
+	if !skip && class != "unclassified" {
+		require.ErrorContains(t, err, "partition 0")
+	}
 }

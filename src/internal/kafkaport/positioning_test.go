@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"reflect"
 	"testing"
 	"time"
 
@@ -39,8 +38,11 @@ func TestSavedMixedWindowSurvivesClockAdvanceAndAdoption(t *testing.T) {
 
 				return
 			}
-			require.False(t, err != nil || !reflect.DeepEqual(got, window) || origin == "saved" && position != 42,
-				"saved window was re-resolved", got, position, err)
+			require.NoError(t, err)
+			require.Equal(t, window, got)
+			if origin == "saved" {
+				require.EqualValues(t, 42, position)
+			}
 		})
 	}
 }

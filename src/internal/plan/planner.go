@@ -183,7 +183,7 @@ type fingerprintQuery struct {
 	Source      fingerprintEndpoint
 	Destination fingerprintEndpoint
 	Window      WindowSpec
-	// CutoffMS is the fixed fingerprintEndpoint field name for unbounded Kafka and archive queries.
+	// CutoffMS is the fixed serialized field name for unbounded Kafka and archive queries.
 	Disorder           *int64                 `json:",omitempty"`
 	Offsets            *OffsetRange           `json:",omitempty"`
 	PartitionOffsets   []PartitionOffsetRange `json:",omitempty"`

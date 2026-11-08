@@ -210,22 +210,28 @@ func connectionSecurityOptions(t *testing.T, protocol, mechanism, caPath string,
 	// Then TLS trust and the chosen authentication mechanism reach the client.
 	tlsConfig := client.OptValue(kgo.DialTLSConfig).(*tls.Config)
 	if strings.HasSuffix(protocol, "SSL") {
-		require.False(t, tlsConfig == nil || tlsConfig.MinVersion != tls.VersionTLS12 || tlsConfig.RootCAs == nil || !tlsConfig.RootCAs.Equal(roots) || tlsConfig.InsecureSkipVerify,
-			"TLS trust settings were not applied")
+		require.NotNil(t, tlsConfig)
+		require.EqualValues(t, tls.VersionTLS12, tlsConfig.MinVersion)
+		require.NotNil(t, tlsConfig.RootCAs)
+		require.True(t, tlsConfig.RootCAs.Equal(roots))
+		require.False(t, tlsConfig.InsecureSkipVerify)
 
 	} else if tlsConfig != nil {
 		t.Fatal("unexpected TLS transport")
 	}
 	mechanisms := client.OptValue(kgo.SASL).([]sasl.Mechanism)
 	if mechanism == "" {
-		require.Len(t, mechanisms, 0, "unexpected SASL authentication")
-	} else if len(mechanisms) != 1 || mechanisms[0].Name() != mechanism {
-		t.Fatal("wrong SASL mechanism applied")
-	} else {
-		_, first, err := mechanisms[0].Authenticate(t.Context(), "host")
-		require.False(t, err != nil || (mechanism == "PLAIN" && string(first) != "\x00user\x00password") ||
-			(mechanism != "PLAIN" && !strings.Contains(string(first), "n=user,")),
-			"SASL credentials were not applied correctly")
-
+		require.Empty(t, mechanisms, "unexpected SASL authentication")
+		return
 	}
+	require.Len(t, mechanisms, 1)
+	require.Equal(t, mechanism, mechanisms[0].Name())
+	_, first, err := mechanisms[0].Authenticate(t.Context(), "host")
+	require.NoError(t, err)
+	if mechanism == "PLAIN" {
+		require.Equal(t, "\x00user\x00password", string(first))
+	} else {
+		require.Contains(t, string(first), "n=user,")
+	}
+
 }

@@ -181,8 +181,9 @@ func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
 			saved, err := inspector.decodeSaved(map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 42, Metadata: &text}}, "fp", spec, staleness)
 			// Then only compatible progress can reach positioning.
 			if scenario == "valid" || scenario == "captured end without upper bound" {
-				require.False(t, err != nil || saved[0].Position != 42 || len(saved) != 1,
-					saved, err)
+				require.NoError(t, err)
+				require.Len(t, saved, 1)
+				require.EqualValues(t, 42, saved[0].Position)
 
 			} else if scenario == "fingerprint" {
 				var mismatch *plan.FingerprintMismatch
@@ -297,8 +298,8 @@ func invalidOffsetLookup(t *testing.T, mode string) {
 	failure := errors.New("transport failed")
 	m := &metadataMock{request: func(_ context.Context, r kmsg.Request) (kmsg.Response, error) {
 		req := r.(*kmsg.ListOffsetsRequest)
-		require.False(t, req.IsolationLevel != 1 || len(req.Topics[0].Partitions) != 2,
-			"lookup not batched/read-committed")
+		require.EqualValues(t, 1, req.IsolationLevel)
+		require.Len(t, req.Topics[0].Partitions, 2)
 
 		p := []kmsg.ListOffsetsResponseTopicPartition{{Partition: 0, Offset: 42}, {Partition: 2, Offset: -1}}
 		if mode == "request error" {
@@ -320,8 +321,8 @@ func invalidOffsetLookup(t *testing.T, mode string) {
 	// When looking up both starts, then failures never become offset zero.
 	result, err := i.OffsetsForTimes(t.Context(), map[int32]int64{0: 100, 2: 100})
 	if mode == "valid" {
-		require.False(t, err != nil || !reflect.DeepEqual(result, map[int32]int64{0: 42, 2: -1}),
-			result, err)
+		require.NoError(t, err)
+		require.Equal(t, map[int32]int64{0: 42, 2: -1}, result)
 
 	} else if err == nil {
 		t.Fatal("invalid response accepted")

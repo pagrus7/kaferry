@@ -70,8 +70,10 @@ func confirmedStopPersistence(t *testing.T, release string) {
 		require.Empty(t, store.saves)
 		return
 	}
-	require.False(t, len(store.saves) != 1 || store.saves[0][0].Position != 1 || store.saves[0][0].Stop == nil || store.saves[0][0].Stop.At != 1,
-		store.saves)
+	require.Len(t, store.saves, 1)
+	require.EqualValues(t, 1, store.saves[0][0].Position)
+	require.NotNil(t, store.saves[0][0].Stop)
+	require.EqualValues(t, 1, store.saves[0][0].Stop.At)
 
 	if release == "periodic" {
 		if err := r.commit(r.ids()); err != nil || len(store.saves) != 1 {
