@@ -61,46 +61,58 @@ func normalizeOffsets(bounds []sql.OffsetBound) (*OffsetRange, error) {
 	}
 	r := &OffsetRange{}
 	for _, b := range bounds {
-		if b.Latest {
-			if b.Operator != "<" {
-				return nil, sql.At(b.Position, fmt.Errorf("LATEST requires RECORD_OFFSET < LATEST"))
-			}
-			if r.HasEnd() {
-				return nil, sql.At(b.Position, fmt.Errorf("offset upper bound repeats; specify it once"))
-			}
-			r.Latest = true
-			continue
-		}
-		n, err := strconv.ParseInt(b.Value, 10, 64)
-		if err != nil || n < 0 {
-			return nil, sql.At(b.ValuePosition, fmt.Errorf("record offset must be a non-negative signed 64-bit integer"))
-		}
-		if b.Operator == ">" || b.Operator == "<=" {
-			if n == math.MaxInt64 {
-				return nil, sql.At(b.Position, fmt.Errorf("offset boundary overflows; reduce the offset"))
-			}
-			n++
-		}
-		switch b.Operator {
-		case ">", ">=":
-			if r.Lower != nil {
-				return nil, sql.At(b.Position, fmt.Errorf("offset lower bound repeats; specify it once"))
-			}
-			r.Lower = &n
-		case "<", "<=":
-			if r.HasEnd() {
-				return nil, sql.At(b.Position, fmt.Errorf("offset upper bound repeats; specify it once"))
-			}
-			r.Upper = &n
-		default:
-			return nil, sql.At(b.Position, fmt.Errorf("unsupported offset comparison; use <, <=, >, or >="))
+		if err := r.addBound(b); err != nil {
+			return nil, err
 		}
 	}
+
 	if r.Lower != nil && r.Upper != nil && *r.Lower >= *r.Upper {
 		return nil, sql.At(bounds[len(bounds)-1].Position, fmt.Errorf("offset range is empty; lower bound must precede upper bound"))
 	}
 	return r, nil
 }
+func (r *OffsetRange) addBound(b sql.OffsetBound) error {
+	if b.Latest {
+		return r.addLatest(b)
+	}
+	n, err := strconv.ParseInt(b.Value, 10, 64)
+	if err != nil || n < 0 {
+		return sql.At(b.ValuePosition, fmt.Errorf("record offset must be a non-negative signed 64-bit integer"))
+	}
+	if b.Operator == ">" || b.Operator == "<=" {
+		if n == math.MaxInt64 {
+			return sql.At(b.Position, fmt.Errorf("offset boundary overflows; reduce the offset"))
+		}
+		n++
+	}
+	switch b.Operator {
+	case ">", ">=":
+		if r.Lower != nil {
+			return sql.At(b.Position, fmt.Errorf("offset lower bound repeats; specify it once"))
+		}
+		r.Lower = &n
+	case "<", "<=":
+		if r.HasEnd() {
+			return sql.At(b.Position, fmt.Errorf("offset upper bound repeats; specify it once"))
+		}
+		r.Upper = &n
+	default:
+		return sql.At(b.Position, fmt.Errorf("unsupported offset comparison; use <, <=, >, or >="))
+	}
+	return nil
+}
+
+func (r *OffsetRange) addLatest(b sql.OffsetBound) error {
+	if b.Operator != "<" {
+		return sql.At(b.Position, fmt.Errorf("LATEST requires RECORD_OFFSET < LATEST"))
+	}
+	if r.HasEnd() {
+		return sql.At(b.Position, fmt.Errorf("offset upper bound repeats; specify it once"))
+	}
+	r.Latest = true
+	return nil
+}
+
 func (p *Plan) offsetCriteria(s sql.Statement) error {
 	var err error
 	p.Offsets, err = normalizeOffsets(s.OffsetBounds)
@@ -117,26 +129,16 @@ func (p *Plan) offsetCriteria(s sql.Statement) error {
 	seen := map[int32]bool{}
 	rangeIDs := 0
 	for _, b := range s.OffsetBranches {
-		if b.Partitions == nil || b.Partitions.Exclude {
-			return sql.At(b.Position, fmt.Errorf("each offset branch requires PARTITION IN or BETWEEN"))
-		}
-		parts, err := partitionFilter(b.Partitions)
+		parts, nextRangeIDs, err := branchPartitions(b, rangeIDs)
 		if err != nil {
 			return err
 		}
-		if b.Partitions.Range != nil {
-			rangeIDs += len(parts.IDs)
-			if rangeIDs > maxPartitionRangeIDs {
-				return sql.At(b.Partitions.Range.Upper.Position, fmt.Errorf("PARTITION BETWEEN predicates may name at most 65536 IDs per statement"))
-			}
-		}
-		r, err := normalizeOffsets(b.Bounds)
+		rangeIDs = nextRangeIDs
+		r, err := branchOffsetRange(b)
 		if err != nil {
 			return err
 		}
-		if r == nil || !r.HasEnd() {
-			return sql.At(b.Position, fmt.Errorf("each partition offset branch requires an upper offset bound"))
-		}
+
 		for _, id := range parts.IDs {
 			if seen[id] {
 				return sql.At(b.Partitions.Position, fmt.Errorf("partition offset branches overlap; select each partition once"))
@@ -151,4 +153,32 @@ func (p *Plan) offsetCriteria(s sql.Statement) error {
 
 	p.Partitions = selected
 	return nil
+}
+
+func branchPartitions(b sql.OffsetBranch, rangeIDs int) (*PartitionFilter, int, error) {
+	if b.Partitions == nil || b.Partitions.Exclude {
+		return nil, rangeIDs, sql.At(b.Position, fmt.Errorf("each offset branch requires PARTITION IN or BETWEEN"))
+	}
+	parts, err := partitionFilter(b.Partitions)
+	if err != nil {
+		return nil, rangeIDs, err
+	}
+	if b.Partitions.Range != nil {
+		rangeIDs += len(parts.IDs)
+		if rangeIDs > maxPartitionRangeIDs {
+			return nil, rangeIDs, sql.At(b.Partitions.Range.Upper.Position, fmt.Errorf("PARTITION BETWEEN predicates may name at most 65536 IDs per statement"))
+		}
+	}
+
+	return parts, rangeIDs, nil
+}
+func branchOffsetRange(b sql.OffsetBranch) (*OffsetRange, error) {
+	r, err := normalizeOffsets(b.Bounds)
+	if err != nil {
+		return nil, err
+	}
+	if r == nil || !r.HasEnd() {
+		return nil, sql.At(b.Position, fmt.Errorf("each partition offset branch requires an upper offset bound"))
+	}
+	return r, nil
 }

@@ -49,21 +49,28 @@ func (l *lexer) space() error {
 		if !strings.HasPrefix(l.input[l.index:], "/*") {
 			return nil
 		}
-		position := l.position()
-		l.advance()
-		l.advance()
-		for !strings.HasPrefix(l.input[l.index:], "*/") {
-			if l.index == len(l.input) {
-				return At(position, fmt.Errorf("unterminated comment; close it with */"))
-			}
-			if strings.HasPrefix(l.input[l.index:], "/*") {
-				return At(l.position(), fmt.Errorf("nested comments are not supported"))
-			}
-			l.advance()
+		if err := l.blockComment(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *lexer) blockComment() error {
+	position := l.position()
+	l.advance()
+	l.advance()
+	for !strings.HasPrefix(l.input[l.index:], "*/") {
+		if l.index == len(l.input) {
+			return At(position, fmt.Errorf("unterminated comment; close it with */"))
+		}
+		if strings.HasPrefix(l.input[l.index:], "/*") {
+			return At(l.position(), fmt.Errorf("nested comments are not supported"))
 		}
 		l.advance()
-		l.advance()
 	}
+	l.advance()
+	l.advance()
 	return nil
 }
 
@@ -77,23 +84,7 @@ func (l *lexer) next() (token, error) {
 	}
 	r := l.advance()
 	if r == '\'' {
-		t.kind = "string"
-		var b strings.Builder
-		for l.index < len(l.input) {
-			r = l.advance()
-			if r != '\'' {
-				b.WriteRune(r)
-				continue
-			}
-			if l.index < len(l.input) && l.input[l.index] == '\'' {
-				l.advance()
-				b.WriteByte('\'')
-				continue
-			}
-			t.text = b.String()
-			return t, nil
-		}
-		return token{}, At(t.Position, fmt.Errorf("unterminated string literal; close it with a single quote"))
+		return l.stringToken(t)
 	}
 	if r >= '0' && r <= '9' {
 		start := l.index - 1
@@ -124,6 +115,26 @@ func (l *lexer) next() (token, error) {
 		return t, nil
 	}
 	return token{}, At(t.Position, fmt.Errorf("%s", characterHint(r, t.Position)))
+}
+
+func (l *lexer) stringToken(t token) (token, error) {
+	t.kind = "string"
+	var b strings.Builder
+	for l.index < len(l.input) {
+		r := l.advance()
+		if r != '\'' {
+			b.WriteRune(r)
+			continue
+		}
+		if l.index < len(l.input) && l.input[l.index] == '\'' {
+			l.advance()
+			b.WriteByte('\'')
+			continue
+		}
+		t.text = b.String()
+		return t, nil
+	}
+	return token{}, At(t.Position, fmt.Errorf("unterminated string literal; close it with a single quote"))
 }
 
 func characterHint(r rune, position Position) string {

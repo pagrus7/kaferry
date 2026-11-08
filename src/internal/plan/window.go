@@ -119,19 +119,9 @@ func normalize(bounds []sql.Bound) (WindowSpec, error) {
 			return WindowSpec{}, sql.At(bound.Position, fmt.Errorf("at most one lower and one upper bound are allowed; remove this repeated bound%s", sql.Related(*position, "first bound")))
 		}
 		*position = bound.Position
-		if bound.Operator == ">" || bound.Operator == "<=" {
-			e.AdjustmentMS, err = checkedAdd(e.AdjustmentMS, 1)
-			if err != nil {
-				return WindowSpec{}, sql.At(bound.Position, err)
-			}
-		}
-		// Collapse literal arithmetic so equivalent literal queries fingerprint alike.
-		if !e.Now {
-			e.LiteralMS, err = checkedAdd(e.LiteralMS, e.AdjustmentMS)
-			if err != nil {
-				return WindowSpec{}, sql.At(bound.Time.Position, err)
-			}
-			e.AdjustmentMS = 0
+		e, err = normalizedBound(e, bound)
+		if err != nil {
+			return WindowSpec{}, err
 		}
 		*target = &e
 	}
@@ -144,26 +134,35 @@ func normalize(bounds []sql.Bound) (WindowSpec, error) {
 	return window, nil
 }
 
+func normalizedBound(e Expression, bound sql.Bound) (Expression, error) {
+	var err error
+	if bound.Operator == ">" || bound.Operator == "<=" {
+		e.AdjustmentMS, err = checkedAdd(e.AdjustmentMS, 1)
+		if err != nil {
+			return Expression{}, sql.At(bound.Position, err)
+		}
+	}
+	// Collapse literal arithmetic so equivalent literal queries fingerprint alike.
+	if !e.Now {
+		e.LiteralMS, err = checkedAdd(e.LiteralMS, e.AdjustmentMS)
+		if err != nil {
+			return Expression{}, sql.At(bound.Time.Position, err)
+		}
+		e.AdjustmentMS = 0
+	}
+	return e, nil
+}
+
 func expression(t sql.Time) (Expression, error) {
 	e := Expression{Now: t.Now}
 	if !t.Now {
-		if !timestampSyntax.MatchString(t.Literal) {
-			return Expression{}, sql.At(t.Position, fmt.Errorf("timestamp must be RFC 3339 with an explicit zone and at most 3 fractional digits, for example '2026-10-01T09:00:00Z'"))
-		}
-		if t.Literal[len(t.Literal)-1] != 'Z' {
-			zone := t.Literal[len(t.Literal)-6:]
-			hours, _ := strconv.Atoi(zone[1:3])
-			minutes, _ := strconv.Atoi(zone[4:6])
-			if hours > 23 || minutes > 59 {
-				return Expression{}, sql.At(t.Position, fmt.Errorf("invalid timestamp zone; offset hours must be 00-23 and minutes 00-59"))
-			}
-		}
-		instant, err := time.Parse(time.RFC3339Nano, t.Literal)
+		var err error
+		e.LiteralMS, err = literalTimestamp(t)
 		if err != nil {
-			return Expression{}, sql.At(t.Position, fmt.Errorf("invalid RFC 3339 calendar date or clock time; check day, month and time fields"))
+			return Expression{}, err
 		}
-		e.LiteralMS = instant.UnixMilli()
 	}
+
 	for _, adjustment := range t.Adjustments {
 		delta, err := intervalMS(adjustment)
 		if err != nil {
@@ -178,6 +177,25 @@ func expression(t sql.Time) (Expression, error) {
 		}
 	}
 	return e, nil
+}
+
+func literalTimestamp(t sql.Time) (int64, error) {
+	if !timestampSyntax.MatchString(t.Literal) {
+		return 0, sql.At(t.Position, fmt.Errorf("timestamp must be RFC 3339 with an explicit zone and at most 3 fractional digits, for example '2026-10-01T09:00:00Z'"))
+	}
+	if t.Literal[len(t.Literal)-1] != 'Z' {
+		zone := t.Literal[len(t.Literal)-6:]
+		hours, _ := strconv.Atoi(zone[1:3])
+		minutes, _ := strconv.Atoi(zone[4:6])
+		if hours > 23 || minutes > 59 {
+			return 0, sql.At(t.Position, fmt.Errorf("invalid timestamp zone; offset hours must be 00-23 and minutes 00-59"))
+		}
+	}
+	instant, err := time.Parse(time.RFC3339Nano, t.Literal)
+	if err != nil {
+		return 0, sql.At(t.Position, fmt.Errorf("invalid RFC 3339 calendar date or clock time; check day, month and time fields"))
+	}
+	return instant.UnixMilli(), nil
 }
 
 func intervalMS(interval sql.Interval) (int64, error) {
