@@ -341,3 +341,23 @@ func orderedOverlappingRecords(inputs [][]avro.Record) (expected []avro.Record) 
 	}
 	return expected
 }
+
+func TestCatalogRejectsDuplicateFileIDsAcrossWriters(t *testing.T) {
+	// Given two valid completed files with different writers but one shared file ID.
+	root := t.TempDir()
+	values := records(42)
+	identity := descriptor(1, values).Identity
+	for writer := range 2 {
+		identity.WriterID = fmt.Sprintf("%032x", writer+1)
+		file, err := os.Create(filepath.Join(root, (File{Identity: identity}).name()))
+		require.NoError(t, err)
+		encoder, err := codec(t).NewWriter(file, identity)
+		require.NoError(t, err)
+		require.NoError(t, encoder.Append(values[0]))
+		require.NoError(t, encoder.Flush())
+		require.NoError(t, file.Close())
+	}
+	// When selecting inputs, then reject the alias before a replay session can pin it.
+	_, err := NewCatalog(root, codec(t), NativeFiles{}).Select(nil)
+	require.ErrorContains(t, err, "duplicate archive file ID")
+}
