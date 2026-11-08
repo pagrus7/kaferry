@@ -26,6 +26,7 @@ import venv
 
 from tools.ci.ci import capture, verify_tests
 from tools.ci.suites import command as go_suite, EXPECTED
+from tools.qualification import network
 
 ROOT = Path(__file__).resolve().parents[2]
 IMAGES = json.loads((ROOT / 'src/tests/qualification/matrix.json').read_text())
@@ -161,7 +162,9 @@ def suite_command(args, env):
         return [python, '-m', 'tools.qualification.broker_probe', '--binary', args.binary, '--output', str(args.output),
                 '--source', env['KAFKA_TEST_BROKERS'], '--destination', env['KAFKA_TEST_DEST_BROKERS']] + (
                     ['--config', str(args.config.resolve())] if args.config else []) + (
-                    ['--replicated'] if args.suite == 'replicated' else []), []
+                    ['--replicated', '--copier-source', env['KAFERRY_WORKER1_SOURCE_BROKERS'],
+                     '--copier-destination', env['KAFERRY_WORKER1_DESTINATION_BROKERS']]
+                    if args.suite == 'replicated' else []), []
     if args.suite in STREAMING_SUITES:
         # Clear inherited workload selectors so the receipt describes this run.
         env.pop('KAFERRY_SOAK_PROFILE', None)
@@ -266,7 +269,7 @@ def replicated_admission(output, env):
                                      env['KAFERRY_REPLICATED_BROKER_VOLUME']]) or 'null')
         if not labels or labels.get('kaferry.lab.storage') != 'true':
             raise ValueError('external broker volume must exist with label kaferry.lab.storage=true')
-    for port in (*REPLICATED_SOURCE_PORTS, *REPLICATED_DESTINATION_PORTS):
+    for port in (*network.client_ports(), 48074):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
                 listener.bind(('127.0.0.1', port))
@@ -384,9 +387,13 @@ def resolve_run(args, receipt, fixture):
                    KAFERRY_REPLICATED_RUN_ID=uuid.uuid4().hex,
                    KAFERRY_REPLICATED_BROKER_VOLUME=volume or project+'-data',
                    KAFERRY_REPLICATED_VOLUME_EXTERNAL='true' if volume else 'false')
+        for worker in range(1, 4):
+            env[f'KAFERRY_WORKER{worker}_SOURCE_BROKERS'] = network.endpoints('source', worker)
+            env[f'KAFERRY_WORKER{worker}_DESTINATION_BROKERS'] = network.endpoints('destination', worker)
+        env['KAFERRY_TOXIPROXY_API'] = network.API
         compose = ['docker', 'compose', '-f', 'src/tests/replicated/compose.yaml', '-p', project, '--profile', 'replicated']
         receipt['parameters'] = dict(topology='replicated', brokers_per_cluster=3,
-                                     replication_factor=3, min_insync_replicas=2)
+                                     replication_factor=3, min_insync_replicas=2, client_paths=4)
         receipt['fixture_storage'] = dict(mode='external-volume' if volume else 'disposable-volume',
                                          run_id=env['KAFERRY_REPLICATED_RUN_ID'])
     fixtures = args.suite in ('broker', 'replicated', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration') or (args.suite == 'migration' and args.state_contract == 'resume')
@@ -403,6 +410,8 @@ def resolve_run(args, receipt, fixture):
     env.update(KAFERRY_TEST_BINARY=args.binary, KAFERRY_EXPECT_BINARY_SHA256=receipt['binary_sha256'],
                KAFERRY_SOURCE_IMAGE=IMAGES[args.source], KAFERRY_DESTINATION_IMAGE=IMAGES[args.destination])
     receipt['requested_images'] = [env['KAFERRY_SOURCE_IMAGE'], env['KAFERRY_DESTINATION_IMAGE']] if fixtures else []
+    if args.suite == 'replicated':
+        receipt['requested_images'].append(network.IMAGE)
     if args.config and args.suite != 'cloud':
         raise ValueError('--config is only accepted by the external cloud suite')
     if args.suite == 'cloud' and not args.config:
@@ -419,21 +428,57 @@ def resolve_run(args, receipt, fixture):
     return RunSpec(command, expected, env, compose if fixtures else [], timeout)
 
 
+def startup_health(output, compose, env):
+    """Capture only selected, label-verified containers' health before teardown."""
+    project = env.get('KAFERRY_FIXTURE_PROJECT')
+    if not project:
+        raise ValueError('startup health requires an owned Compose project')
+    def query(command):
+        return subprocess.run(command, cwd=ROOT, env=env, check=True, capture_output=True,
+                              text=True, timeout=15).stdout
+    ids = query(compose+['ps', '--all', '--quiet']).split()
+    if any(not re.fullmatch(r'[0-9a-f]{64}', id) for id in ids):
+        raise ValueError('Compose returned invalid container IDs for startup health')
+    template = ('{"id":{{json .Id}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},'
+                '"service":{{json (index .Config.Labels "com.docker.compose.service")}},'
+                '"status":{{json .State.Status}},"running":{{json .State.Running}},'
+                '"exit_code":{{json .State.ExitCode}},"health":{{json .State.Health}}}')
+    rows = [json.loads(line) for line in query(['docker', 'inspect', '--format', template, *ids]).splitlines()] if ids else []
+    if (len(rows) != len(ids) or {row['id'] for row in rows} != set(ids) or
+            any(row.get('project') != project or not row.get('service') for row in rows)):
+        raise ValueError('startup health container ownership does not match the selected Compose project')
+    write_json(output/'startup-health.json', dict(project=project, containers=rows))
+
+
 @contextmanager
 def broker_fixture(args, spec, receipt, fixture, cancelled):
     # Parallel children use the coordinator's lease and their assigned project.
     with lab_lock() if fixture is None else nullcontext():
         owns_fixture = False
+        startup_attempted, startup_complete = False, False
         try:
             if args.suite == 'replicated':
                 receipt['capacity'] = replicated_admission(args.output, spec.env)
                 owns_fixture = True
                 replicated_storage(args.output, spec.compose, spec.env, receipt['capacity'], cancelled)
+                startup_attempted = True
+                logged(spec.compose + ['up', '-d', '--wait', 'toxiproxy'], args.output,
+                       'proxy-up', spec.env, timeout=90, cancelled=cancelled)
+                logged([sys.executable, '-m', 'tools.qualification.network', '--output', str(args.output)],
+                       args.output, 'proxy-configure', spec.env, timeout=60, cancelled=cancelled)
             if spec.compose:
                 owns_fixture = True
+                startup_attempted = True
                 logged(spec.compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output,
                        'brokers-up', spec.env, timeout=180, cancelled=cancelled)
+                startup_complete = True
                 receipt['broker_images'] = capture(spec.compose + ['images', '--format', 'json'])
+            if args.suite == 'replicated':
+                logged([spec.env.get('GO', 'go'), 'test', '-count=1', '-json', '-tags=integration',
+                        '-timeout=3m', '-run', '^TestReplicatedProxyRoutes$', './src/tests/system/faults'],
+                       args.output, 'proxy-proof', spec.env, timeout=210, cancelled=cancelled)
+                verify_tests((args.output / 'proxy-proof.log').read_text(), ['TestReplicatedProxyRoutes'])
+                receipt['proxy_path_check'] = 'passed'
             if fixture is not None:
                 receipt['parallel_capacity'] = parallel_capacity(fixture['reserved_bytes'], args.output, spec.compose, spec.env)
                 write_json(args.output / 'manifest.json', receipt)
@@ -447,6 +492,11 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
         finally:
             if spec.compose and owns_fixture:
                 errors = []
+                if startup_attempted and not startup_complete:
+                    try:
+                        startup_health(args.output, spec.compose, spec.env)
+                    except (OSError, subprocess.SubprocessError, ValueError) as error:
+                        errors.append({'phase': 'startup-health', 'error': str(error)})
                 try:
                     with (args.output / 'brokers.log').open('w') as log:
                         subprocess.run(spec.compose + ['logs', '--no-color'], cwd=ROOT, env=spec.env,

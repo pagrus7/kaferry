@@ -17,8 +17,8 @@ x-environment: &environment
   KAFKA_HEAP_OPTS: -Xms128m -Xmx512m
   KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: 4
   KAFKA_TRANSACTION_STATE_LOG_NUM_PARTITIONS: 4
-  KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,CLIENT://:9094
-  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,CLIENT:PLAINTEXT
+  KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,ADMIN://:9094,WORKER1://:9095,WORKER2://:9096,WORKER3://:9097
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,ADMIN:PLAINTEXT,WORKER1:PLAINTEXT,WORKER2:PLAINTEXT,WORKER3:PLAINTEXT
   KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
   KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
   KAFKA_DEFAULT_REPLICATION_FACTOR: 3
@@ -32,14 +32,50 @@ x-environment: &environment
 x-source: &source
   <<: *environment
   CLUSTER_ID: rUeZ6q3ORyS3JLd4Kc2Q9A
-  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@source-1:9093,2@source-2:9093,3@source-3:9093
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@toxiproxy:28092,2@toxiproxy:28093,3@toxiproxy:28094
 
 x-destination: &destination
   <<: *environment
   CLUSTER_ID: MQ3bplrhSxyW9DFKmR7zQw
-  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@destination-1:9093,2@destination-2:9093,3@destination-3:9093
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@toxiproxy:29092,2@toxiproxy:29093,3@toxiproxy:29094
 
 services:
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.13.0@sha256:5d3dae09bc185dcc5ff6cf43abf6062a4a720aff0c4306a471e773acdcd107aa
+    profiles: [replicated]
+    environment:
+      KAFERRY_REPLICATED_RUN_ID: ${KAFERRY_REPLICATED_RUN_ID:-}
+    ports:
+      - "127.0.0.1:48074:8474"
+      - "127.0.0.1:46092:46092"
+      - "127.0.0.1:46093:46093"
+      - "127.0.0.1:46094:46094"
+      - "127.0.0.1:46192:46192"
+      - "127.0.0.1:46193:46193"
+      - "127.0.0.1:46194:46194"
+      - "127.0.0.1:46292:46292"
+      - "127.0.0.1:46293:46293"
+      - "127.0.0.1:46294:46294"
+      - "127.0.0.1:46392:46392"
+      - "127.0.0.1:46393:46393"
+      - "127.0.0.1:46394:46394"
+      - "127.0.0.1:47092:47092"
+      - "127.0.0.1:47093:47093"
+      - "127.0.0.1:47094:47094"
+      - "127.0.0.1:47192:47192"
+      - "127.0.0.1:47193:47193"
+      - "127.0.0.1:47194:47194"
+      - "127.0.0.1:47292:47292"
+      - "127.0.0.1:47293:47293"
+      - "127.0.0.1:47294:47294"
+      - "127.0.0.1:47392:47392"
+      - "127.0.0.1:47393:47393"
+      - "127.0.0.1:47394:47394"
+    healthcheck:
+      test: [CMD, /toxiproxy-cli, list]
+      interval: 1s
+      timeout: 2s
+      retries: 30
   storage:
     image: ${KAFERRY_REPLICATED_IMAGE:-apache/kafka:4.4.0@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f}
     profiles: [storage]
@@ -53,52 +89,46 @@ services:
       - data:/storage
   source-1:
     <<: *broker
-    ports: ["127.0.0.1:46092:9094"]
     environment:
       <<: *source
       KAFKA_NODE_ID: 1
       KAFKA_LOG_DIRS: /storage/kaferry-replicated/${COMPOSE_PROJECT_NAME}/${KAFERRY_REPLICATED_RUN_ID:-}/source-1
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://source-1:9092,CLIENT://127.0.0.1:46092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://toxiproxy:26092,ADMIN://127.0.0.1:46092,WORKER1://127.0.0.1:46192,WORKER2://127.0.0.1:46292,WORKER3://127.0.0.1:46392
   source-2:
     <<: *broker
-    ports: ["127.0.0.1:46093:9094"]
     environment:
       <<: *source
       KAFKA_NODE_ID: 2
       KAFKA_LOG_DIRS: /storage/kaferry-replicated/${COMPOSE_PROJECT_NAME}/${KAFERRY_REPLICATED_RUN_ID:-}/source-2
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://source-2:9092,CLIENT://127.0.0.1:46093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://toxiproxy:26093,ADMIN://127.0.0.1:46093,WORKER1://127.0.0.1:46193,WORKER2://127.0.0.1:46293,WORKER3://127.0.0.1:46393
   source-3:
     <<: *broker
-    ports: ["127.0.0.1:46094:9094"]
     environment:
       <<: *source
       KAFKA_NODE_ID: 3
       KAFKA_LOG_DIRS: /storage/kaferry-replicated/${COMPOSE_PROJECT_NAME}/${KAFERRY_REPLICATED_RUN_ID:-}/source-3
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://source-3:9092,CLIENT://127.0.0.1:46094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://toxiproxy:26094,ADMIN://127.0.0.1:46094,WORKER1://127.0.0.1:46194,WORKER2://127.0.0.1:46294,WORKER3://127.0.0.1:46394
   destination-1:
     <<: *broker
-    ports: ["127.0.0.1:47092:9094"]
     environment:
       <<: *destination
       KAFKA_NODE_ID: 1
       KAFKA_LOG_DIRS: /storage/kaferry-replicated/${COMPOSE_PROJECT_NAME}/${KAFERRY_REPLICATED_RUN_ID:-}/destination-1
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://destination-1:9092,CLIENT://127.0.0.1:47092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://toxiproxy:27092,ADMIN://127.0.0.1:47092,WORKER1://127.0.0.1:47192,WORKER2://127.0.0.1:47292,WORKER3://127.0.0.1:47392
   destination-2:
     <<: *broker
-    ports: ["127.0.0.1:47093:9094"]
     environment:
       <<: *destination
       KAFKA_NODE_ID: 2
       KAFKA_LOG_DIRS: /storage/kaferry-replicated/${COMPOSE_PROJECT_NAME}/${KAFERRY_REPLICATED_RUN_ID:-}/destination-2
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://destination-2:9092,CLIENT://127.0.0.1:47093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://toxiproxy:27093,ADMIN://127.0.0.1:47093,WORKER1://127.0.0.1:47193,WORKER2://127.0.0.1:47293,WORKER3://127.0.0.1:47393
   destination-3:
     <<: *broker
-    ports: ["127.0.0.1:47094:9094"]
     environment:
       <<: *destination
       KAFKA_NODE_ID: 3
       KAFKA_LOG_DIRS: /storage/kaferry-replicated/${COMPOSE_PROJECT_NAME}/${KAFERRY_REPLICATED_RUN_ID:-}/destination-3
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://destination-3:9092,CLIENT://127.0.0.1:47094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://toxiproxy:27094,ADMIN://127.0.0.1:47094,WORKER1://127.0.0.1:47194,WORKER2://127.0.0.1:47294,WORKER3://127.0.0.1:47394
 
 volumes:
   data:
