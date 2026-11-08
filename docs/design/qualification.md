@@ -113,14 +113,6 @@ python3 -m tools.qualification.qualify run smoke
 
 `resources` runs copy, capture, checkpoint and archive-adapter component tests, including injected failures at filesystem durability boundaries. `fault` includes abrupt process death and restart; its reconciliation permits replay duplicates under the at-least-once contract. `model` compares randomized ownership, delivery, gap and save sequences against a reference model. The same lifecycle target participates in `make fuzz`; `FUZZ_ITERATIONS` sets its execution budget.
 
-For paired performance, use the existing standalone runner with two source revisions:
-
-```sh
-sh tools/qualification/performance_run.sh origin/main HEAD --pairs 6 --archives
-```
-
-The wrapper tears down its disposable brokers after success, failure or interruption. Compare measurements on the same quiet machine; shared-runner throughput has no regression gate. [Performance interpretation](../../CONTRIBUTING.md#paired-performance).
-
 If Docker itself is unavailable, cleanup can fail. The receipt preserves both suite and cleanup errors. After restoring Docker, remove only these lab projects:
 
 ```sh
@@ -139,6 +131,20 @@ clean up the endurance job below, then repeat with the `recovery/manifest.json` 
 project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixture_project"])' build-results/parallel-24h/endurance/manifest.json)
 docker compose -f src/tests/compose.yaml -p "$project" --profile cross-cluster down -v --remove-orphans
 ```
+
+## Paired performance
+
+For paired performance, use the existing standalone runner with two source revisions:
+
+```sh
+sh tools/qualification/performance_run.sh origin/main HEAD --pairs 6 --archives
+```
+
+The wrapper tears down its disposable brokers after success, failure or interruption. Compare measurements on the same quiet machine; shared-runner throughput has no regression gate.
+
+[Performance runs](../../.github/workflows/performance.yml) are separate from required PR checks. They reuse Kafka, disabled-metrics Avro file-copy, and optional archive capture/replay/file-copy assertions, with larger inputs, a warm-up per binary and six interleaved pairs, alternating which binary runs first on one runner. Summaries show median head/base throughput and the pair range; raw metrics, binary/toolchain identities and broker images stay in the `performance` artifact for 30 days. Kafka input is capped at 160,000 records; file/archive input at 200,000. Archive comparisons require Avro support in both revisions.
+
+Nightly runs start with A/A calibration (the same binary on both sides). Review at least 20 calibration runs before setting the repository variable `PERFORMANCE_MODE=comparison`; this enables changed-main comparisons against the last retained compatible scheduled measurement. No compatible baseline starts another calibration. Expired data requires a fresh baseline. Manual dispatch accepts a base revision; adding `ci:performance` opts a PR into the configured mode. In comparison mode, PRs compare against the merge base. No performance threshold blocks merging; choose warnings only after measuring A/A noise.
 
 ## Recovery and endurance coverage
 
