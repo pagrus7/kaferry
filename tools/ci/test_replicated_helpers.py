@@ -24,8 +24,11 @@ HELPERS = (
     'TestBrokerForcedSaveExitLeavesLifetimeHighwaterUnavailable',
     'TestBrokerISRSelectionRequiresActiveSameLeaderBacklog',
     'TestBrokerPollJournalRetainsFailedQueryAndHealthTail',
+    'TestBrokerHealthInspectionRequiresHealthyAndRetainsBoundedProbeEvidence',
     'TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss',
     'TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound',
+) + (
+    # Audit and zombie helpers retain their independent measurements.
     'TestReplicatedAuditFailureCleanupRetainsDiagnostics',
     'TestReplicatedAuditFailureCleanupSkipsPassingCases',
     'TestReplicatedAuditFailureCaptureSharesDeadline',

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -442,28 +443,38 @@ func fullyReplicated(state brokerObservation, side string) bool {
 func (s *brokerCopy) healthy(ctx context.Context, targets ...faults.Target) bool {
 	check := brokerHealthCheck{At: time.Now().UTC()}
 	defer func() { s.healthChecks = append(s.healthChecks, check) }()
-	args := []string{"inspect", "--format", `{{.State.Running}} {{.State.Health.Status}}`}
+	args := []string{"inspect", "--format", brokerHealthFormat}
 	for _, target := range targets {
 		args = append(args, target.Container)
 		check.Containers = append(check.Containers, target.Container)
 	}
-	data, err := faults.Docker(ctx, args...)
+	run := brokerHealthDocker
+	if s.lab != nil && s.lab.Docker != nil {
+		run = s.lab.Docker
+	}
+	data, err := run(ctx, args...)
 	check.Output = brokerDiagnosticText(string(data))
+	if err != nil {
+		check.Diagnostic = "unavailable"
+		if errors.Is(err, errBrokerHealthTruncated) {
+			check.Diagnostic = "truncated"
+		}
+		check.Error = brokerDiagnosticText(err.Error())
+		return false
+	}
+	check.Details, check.Diagnostic, err = brokerHealthSnapshots(data, len(targets))
 	if err != nil {
 		check.Error = brokerDiagnosticText(err.Error())
 		return false
 	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != len(targets) {
-		return false
+	var status strings.Builder
+	ready := true
+	for _, detail := range check.Details {
+		fmt.Fprintf(&status, "%t %s\n", *detail.Running, detail.Health.Status)
+		ready = ready && *detail.Running && detail.Health.Status == "healthy"
 	}
-	for _, line := range lines {
-		if line != "true healthy" {
-			return false
-		}
-	}
-	check.Passed = true
-	return true
+	check.Output, check.Passed = status.String(), ready
+	return ready
 }
 
 func (s *brokerCopy) inject(role faults.Role, kind string, before brokerObservation) (*faults.Injection, int) {

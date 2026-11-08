@@ -13,11 +13,13 @@ import (
 )
 
 type brokerHealthCheck struct {
-	At         time.Time `json:"at"`
-	Containers []string  `json:"containers"`
-	Output     string    `json:"output"`
-	Error      string    `json:"error,omitempty"`
-	Passed     bool      `json:"passed"`
+	At         time.Time              `json:"at"`
+	Containers []string               `json:"containers"`
+	Output     string                 `json:"output"`
+	Error      string                 `json:"error,omitempty"`
+	Passed     bool                   `json:"passed"`
+	Diagnostic string                 `json:"diagnostic_state"`
+	Details    []brokerHealthSnapshot `json:"details,omitempty"`
 }
 
 type brokerPoll struct {

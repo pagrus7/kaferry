@@ -25,6 +25,7 @@ REPLICATED_HELPER_TESTS := \
 	TestBrokerForcedSaveExitLeavesLifetimeHighwaterUnavailable \
 	TestBrokerISRSelectionRequiresActiveSameLeaderBacklog \
 	TestBrokerPollJournalRetainsFailedQueryAndHealthTail \
+	TestBrokerHealthInspectionRequiresHealthyAndRetainsBoundedProbeEvidence \
 	TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss \
 	TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound \
 	TestReplicatedAuditFailureCleanupRetainsDiagnostics \
