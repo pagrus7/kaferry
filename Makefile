@@ -2,6 +2,7 @@ GO ?= go
 PYTHON ?= python3
 JSCPD ?= jscpd
 GOLANGCI_LINT ?= golangci-lint
+GOVULNCHECK = $(GO) run golang.org/x/vuln/cmd/govulncheck@v1.9.0
 DUPLICATION_BASE ?= origin/main
 export CGO_ENABLED := 0
 KAFERRY_VERSION ?= dev
@@ -18,18 +19,34 @@ qualification load soak smoke fault: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/
 endif
 export KAFERRY_TEST_OUTPUT
 
-.PHONY: build test check fast smoke integration fault load soak qualification fuzz benchmark metrics duplicates lint broker broker-down
+.PHONY: build test check fast wording fmt vet race vulnerabilities smoke integration fault load soak qualification fuzz benchmark metrics duplicates lint broker broker-down
 build:
 	mkdir -p bin
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags='-s -w -buildid= -X github.com/pagrus7/kaferry/src/internal/app.version=$(KAFERRY_VERSION) -X github.com/pagrus7/kaferry/src/internal/app.revision=$(KAFERRY_REVISION)' -o bin/kaferry ./src/cmd/kaferry
 test:
 	$(GO) test ./...
 # Only race-instrumented tests enable CGO.
-check:
+check: vet race
+vet:
 	$(GO) vet ./...
-	CGO_ENABLED=1 $(GO) test -race ./...
-fast: check
+race:
+	CGO_ENABLED=1 $(GO) test -vet=off -race ./...
+wording:
+	wording_status=0; \
+	git grep -nEi '(since|as of|through|until|prior to|starting (in|with)|introduced in)[[:space:]]+v[0-9]+\.[0-9]+|first[[:space:]]+observed[[:space:]]+(on|in)[[:space:]]+[0-9]{4}' -- README.md docs src/cmd src/internal ':!docs/design/debates' ':!docs/releases' || wording_status=$$?; \
+	if [ "$$wording_status" -ne 1 ]; then \
+		echo 'Living docs, comments and diagnostics must describe current behavior; keep release and investigation history in release notes, commits or PRs.'; \
+		exit 1; \
+	fi
+fmt:
 	test -z "$$(gofmt -l src)"
+vulnerabilities:
+	mkdir -p build-results
+	rm -f build-results/govulncheck.sarif
+	$(GOVULNCHECK) -format=json ./... > build-results/govulncheck.json
+	$(GOVULNCHECK) -mode=convert -format=sarif < build-results/govulncheck.json > build-results/govulncheck.sarif
+	$(PYTHON) -m tools.ci.ci govulncheck $(GOVULNCHECK) -mode=convert < build-results/govulncheck.json
+fast: wording fmt lint duplicates vulnerabilities race
 	$(PYTHON) -m unittest discover -s tools -t . -p 'test_*.py'
 	$(PYTHON) -m tools.docs.docs
 	$(GO) test -run '^$$' -tags=integration,load,fault,qualification,migration ./src/tests/system ./src/tests/compatibility

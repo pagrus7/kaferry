@@ -13,14 +13,16 @@ Read [contributor instructions](AGENTS.md) before changing the project.
 
 The repository has one Go module, with `go.mod` at the root. Go tests and helper commands that import `src/internal/` packages belong under `src/`.
 
-Run commands from the repository root with Go and Python 3.11+ available:
+Run commands from the repository root with Go, Python 3.11+ and a C compiler for race tests available. `make fast` also needs [golangci-lint](#go-lint), [jscpd](#duplication-checks), and a locally available `origin/main` for the duplication comparison:
 
 ```sh
 make build
 make fast
 ```
 
-`make fast` runs formatting checks, vet, race-enabled component tests, Python tests, documentation checks, source installation and file-copy smoke tests. It does not need Kafka. See [test targets and prerequisites](docs/design/components.md#test-targets) for broker suites.
+`make fast` runs CI's wording, formatting, Go lint, Python duplication and Go vulnerability gates, followed by race-enabled component tests, Python tests, documentation checks, source installation and file-copy smoke tests. It does not need Kafka. See [test targets and prerequisites](docs/design/components.md#test-targets) for broker suites.
+
+Use Go 1.27.3 and `DUPLICATION_BASE=<base-sha>` to match CI's toolchain and comparison base. Vulnerability checks use pinned govulncheck v1.9.0, downloaded and cached by Go, and need access to the vulnerability database. CodeQL and dependency review run separately in GitHub.
 
 Run Python tools as modules, for example `python3 -m tools.docs.docs`. Their tests live beside them; run all with `python3 -m unittest discover -s tools -t .`.
 
@@ -33,11 +35,12 @@ Install the pinned [golangci-lint v2.15.0 binary](https://golangci-lint.run/docs
 ```sh
 curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b ./bin v2.15.0
 make lint GOLANGCI_LINT=./bin/golangci-lint
+make fast GOLANGCI_LINT=./bin/golangci-lint
 ```
 
 The target verifies [.golangci.yml](.golangci.yml) and checks all Go packages in the repository. Existing and new findings fail the check.
 
-The Go lint check includes test files in the default Go build, except that function length and duplicate-code findings exclude `_test.go` files. The separate duplication check below covers Python, including test files. `make fast` continues to run `go vet` and the formatting check.
+The Go lint check includes vet and test files in the default Go build, except that function length and duplicate-code findings exclude `_test.go` files. The separate duplication check below covers Python, including test files. `make fast` uses this lint gate for vet; standalone `make check` runs vet and race tests without requiring golangci-lint.
 
 ## Duplication checks
 
