@@ -332,7 +332,65 @@ def cleanup_replicated(output, compose, env):
                'storage-clean', env, timeout=60)
     except (OSError, RuntimeError) as error:
         errors.append({'phase': 'storage-clean', 'error': str(error)})
+        try:
+            cleanup_container_state(output, compose, env)
+        except OSError:
+            errors.append({'phase': 'cleanup-diagnostics', 'error': 'cannot retain cleanup-container-state.json'})
     return errors
+
+
+def cleanup_container_state(output, compose, env):
+    template = '{"service":{{json .Service}},"state":{{json .State}},"exit_code":{{json .ExitCode}}}'
+    snapshot = dict(captured_at=datetime.now(timezone.utc).isoformat(), timeout_seconds=2,
+                    output_limit_bytes=65536, status='unavailable')
+    command = compose + ['ps', '--all', '--format', template]
+    try:
+        process = subprocess.Popen(command, env=env, cwd=ROOT, stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        write_json(output / 'cleanup-container-state.json', snapshot)
+        return
+    expired = threading.Event()
+    def kill_group():
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    def timeout():
+        expired.set()
+        kill_group()
+    watchdog = threading.Timer(2, timeout)
+    watchdog.start()
+    try:
+        data = process.stdout.read(65537)
+        if len(data) > 65536:
+            kill_group()
+        code = process.wait()
+    finally:
+        watchdog.cancel()
+        kill_group()
+        process.stdout.close()
+        process.wait()
+        watchdog.join()
+    snapshot['exit_code'] = code
+    if expired.is_set():
+        snapshot['status'] = 'timed out'
+    elif len(data) > 65536:
+        snapshot['status'] = 'truncated'
+    elif code:
+        snapshot['status'] = 'failed'
+    else:
+        try:
+            rows = [json.loads(line) for line in data.decode().splitlines()]
+            if len(rows) > 32 or any(set(row) != {'service', 'state', 'exit_code'} or
+                    not isinstance(row['service'], str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,80}', row['service']) or
+                    row['state'] not in ('created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead') or
+                    type(row['exit_code']) is not int for row in rows):
+                raise ValueError('invalid state rows')
+            snapshot.update(status='complete', containers=rows)
+        except (ValueError, TypeError, UnicodeError):
+            snapshot['status'] = 'invalid output'
+    write_json(output / 'cleanup-container-state.json', snapshot)
 
 
 def paired_storage_admission(output, env, parallel):

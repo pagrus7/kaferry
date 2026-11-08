@@ -16,7 +16,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools.qualification.qualify import duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, suite_command, valid_receipts, parallel_allowance, parallel_capacity, parallel_run
+from tools.qualification.qualify import cleanup_container_state, cleanup_replicated, duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, suite_command, valid_receipts, parallel_allowance, parallel_capacity, parallel_run
 from tools.qualification.broker_probe import logical, reconcile, records, replicated_topology, topic_ready
 
 
@@ -29,6 +29,9 @@ class MatrixTest(unittest.TestCase):
         images = patch('tools.qualification.qualify.fixture_images', return_value='fixture')
         images.start()
         self.addCleanup(images.stop)
+        cleanup_state = patch('tools.qualification.qualify.cleanup_container_state')
+        cleanup_state.start()
+        self.addCleanup(cleanup_state.stop)
 
     def suite_args(self, directory, suite, **options):
         binary = directory / 'candidate'
@@ -747,9 +750,10 @@ esac
 if [ "$target" = "$KAFERRY_TEST_RUN" ]; then
     printf 'preserve' > "$target/$KAFERRY_TEST_ENTRY"
     echo 'injected directory not empty' >&2
-    exit 1
+    exit 7
 fi
 ''', KAFERRY_TEST_ENTRY=entry)
+                self.assertEqual(7, result.returncode)
                 if entry == 'late-entry':
                     self.assertIn('ownership marker restored', result.stderr)
                     self.assertEqual(original, (folder / '.kaferry-owned').read_bytes())
@@ -773,6 +777,147 @@ fi
                 # Given a substituted path, when cleaning, then no foreign target is deleted.
                 self.assertNotEqual(0, self.storage(root, run, 'clean').returncode)
                 self.assertEqual(b'preserve', data.read_bytes())
+
+    def diagnostic_cleanup(self, root, run, probe):
+        tools = root / 'tools'; tools.mkdir()
+        programs = {
+            'rm': '''#!/bin/sh
+for target do :; done
+if [ "$target" = "$KAFERRY_TEST_RUN/destination-1" ]; then
+    printf '%s\\n' "$target" >> "$KAFERRY_REMOVALS"
+    echo 'injected deletion failure' >&2
+    exit 7
+fi
+exec /bin/rm "$@"
+''',
+            'timeout': '#!' + sys.executable + '\n' + '''import os, signal, subprocess, sys
+assert sys.argv[1:4] == ['-k', '1', '2']
+p = subprocess.Popen(sys.argv[4:], start_new_session=True)
+try:
+    code = p.wait(timeout=2)
+except subprocess.TimeoutExpired:
+    os.killpg(p.pid, signal.SIGKILL)
+    p.wait()
+    code = 124
+raise SystemExit(code)
+''',
+            'find': '#!' + sys.executable + '\n' + probe,
+        }
+        for name, text in programs.items():
+            path = tools / name; path.write_text(text); path.chmod(0o700)
+        env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'],
+                   KAFERRY_STORAGE_ROOT=str(root), KAFERRY_FIXTURE_PROJECT='kaferry-replicated',
+                   KAFERRY_REPLICATED_RUN_ID=run, KAFERRY_TEST_RUN=str(self.run_path(root, run)),
+                   KAFERRY_REMOVALS=str(root / 'removals'))
+        script = Path(__file__).resolve().parents[2] / 'src/tests/replicated/storage.sh'
+        process = subprocess.Popen(['/bin/sh', str(script), 'clean'], env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            out, err = process.communicate(timeout=6)
+        finally:
+            try: os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+            process.wait()
+        self.assertEqual(7, process.returncode, err)
+        self.assertEqual([str(self.run_path(root, run) / 'destination-1')],
+                         (root / 'removals').read_text().splitlines())
+        return out, err
+
+    def test_first_deletion_error_captures_metadata_without_following_links_or_retry(self):
+        # Given an owned run with broker data and a link to unrelated bytes.
+        with self.prepared_storage() as (root, run, folder):
+            original = (folder / '.kaferry-owned').read_bytes()
+            foreign = root / 'foreign'; foreign.mkdir()
+            (foreign / 'secret').write_bytes(b'file contents must not be captured')
+            target = folder / 'destination-1'
+            (target / 'data').write_bytes(b'broker payload must not be captured')
+            (target / 'link').symlink_to(foreign, target_is_directory=True)
+            # When its first deletion fails, then the census never reads contents or follows the link.
+            _, error = self.diagnostic_cleanup(root, run, '''import os, pathlib, stat, sys
+assert sys.argv[1] == '-P' and sys.argv[3:5] == ['-maxdepth', '4']
+assert 'device=%D' in sys.argv[6]
+p = pathlib.Path(sys.argv[2])
+for entry in [p, *p.iterdir()]:
+    info = entry.lstat()
+    kind = 'l' if stat.S_ISLNK(info.st_mode) else 'd' if stat.S_ISDIR(info.st_mode) else 'f'
+    print(f'type={kind} inode={info.st_ino} bytes={info.st_size} links={info.st_nlink} path={entry}')
+''')
+            self.assertIn('type=l', error)
+            self.assertIn('cleanup census exit=0', error)
+            self.assertNotIn('must not be captured', error)
+            self.assertNotIn(str(foreign / 'secret'), error)
+            self.assertEqual(original, (folder / '.kaferry-owned').read_bytes())
+            self.assertEqual(b'file contents must not be captured', (foreign / 'secret').read_bytes())
+            self.assertTrue((folder / 'source-3').is_dir())
+
+    def test_census_output_failure_and_timeout_preserve_the_original_deletion_error(self):
+        # Given too much metadata, a failed census or a blocked metadata reader.
+        probes = [('truncated', "import sys\nsys.stdout.write('x' * 200000)\n"),
+                  ('failed', "raise SystemExit(19)\n"),
+                  ('timed out', 'import signal\nsignal.pause()\n')]
+        for expected, probe in probes:
+            with self.subTest(expected=expected), self.prepared_storage() as (root, run, folder):
+                marker = (folder / '.kaferry-owned').read_bytes()
+                started = time.monotonic()
+                # When diagnostics fail, then cleanup still finishes with its first status and marker.
+                _, error = self.diagnostic_cleanup(root, run, probe)
+                self.assertIn('cleanup census ' + expected, error)
+                self.assertLess(len(error.encode()), 66560)
+                self.assertLess(time.monotonic() - started, 5)
+                self.assertEqual(marker, (folder / '.kaferry-owned').read_bytes())
+
+
+class CleanupContainerStateTest(unittest.TestCase):
+    def capture(self, root, program):
+        env = dict(os.environ, KAFERRY_TEST_RESOLVED='this-run')
+        cleanup_container_state(root, [sys.executable, '-c', program], env)
+        return json.loads((root / 'cleanup-container-state.json').read_text())
+
+    def test_snapshot_uses_resolved_environment_and_only_allowed_container_fields(self):
+        # Given a state query whose environment belongs to this run.
+        with tempfile.TemporaryDirectory() as temporary:
+            # When captured, then stderr and unrelated container details cannot enter the receipt.
+            result = self.capture(Path(temporary), '''import json, os, sys
+assert os.environ['KAFERRY_TEST_RESOLVED'] == 'this-run'
+assert sys.argv[1:3] == ['ps', '--all']
+assert all(word not in sys.argv[-1] for word in ['Env', 'Mounts', 'HostConfig', 'Command'])
+print('private daemon diagnostic', file=sys.stderr)
+print(json.dumps(dict(service='source-1', state='exited', exit_code=0)))
+''')
+            self.assertEqual('complete', result['status'])
+            self.assertEqual([dict(service='source-1', state='exited', exit_code=0)], result['containers'])
+            self.assertNotIn('private daemon diagnostic', json.dumps(result))
+
+    def test_failed_blocked_excessive_and_invalid_queries_are_bounded_and_explicit(self):
+        # Given failure, an unresponsive command, excessive output or private unexpected fields.
+        examples = [('failed', 'raise SystemExit(17)'),
+                    ('timed out', 'import signal; signal.pause()'),
+                    ('truncated', "import sys; sys.stdout.write('x' * 200000)"),
+                    ('invalid output', "print('{\"HostConfig\":\"private-data\"}')")]
+        for expected, program in examples:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as temporary:
+                started = time.monotonic()
+                # When inspected, then metadata is unavailable rather than replaced with unsafe raw output.
+                result = self.capture(Path(temporary), program)
+                self.assertEqual(expected, result['status'])
+                self.assertNotIn('containers', result)
+                self.assertNotIn('private-data', json.dumps(result))
+                self.assertLess(time.monotonic() - started, 4)
+                self.assertLess(len(json.dumps(result)), 512)
+
+    def test_diagnostic_error_cannot_replace_cleanup_error_or_retry_deletion(self):
+        # Given failed storage cleanup and a second failure retaining its state snapshot.
+        with tempfile.TemporaryDirectory() as temporary:
+            def execute(command, output, label, env, **kwargs):
+                if label == 'storage-clean': raise RuntimeError('original deletion failure')
+            with patch('tools.qualification.qualify.logged', side_effect=execute) as calls, \
+                 patch('tools.qualification.qualify.cleanup_container_state', side_effect=OSError('private path')):
+                # When cleanup fails, then stop and delete each run once and retain the original failure first.
+                result = cleanup_replicated(Path(temporary), ['docker', 'compose'], {})
+            self.assertEqual(['brokers-stop', 'storage-clean'], [c.args[2] for c in calls.call_args_list])
+            self.assertEqual('original deletion failure', result[0]['error'])
+            self.assertEqual('cleanup-diagnostics', result[1]['phase'])
+            self.assertNotIn('private path', json.dumps(result))
 
 
 class Message:
