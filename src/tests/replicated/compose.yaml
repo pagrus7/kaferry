@@ -5,7 +5,7 @@ x-broker: &broker
   volumes:
     - data:/storage
   healthcheck:
-    test: [CMD, env, "KAFKA_HEAP_OPTS=-Xms16m -Xmx64m -XX:ActiveProcessorCount=1", /opt/kafka/bin/kafka-topics.sh, --bootstrap-server, "localhost:9092", --list]
+    test: [CMD, env, "KAFKA_HEAP_OPTS=-Xms16m -Xmx64m -XX:ActiveProcessorCount=1 -XX:TieredStopAtLevel=1", /opt/kafka/bin/kafka-topics.sh, --bootstrap-server, "localhost:9092", --list]
     start_period: 30s
     start_interval: 1s
     interval: 5s
