@@ -92,37 +92,41 @@ func (e *runtimeEngine) runInput(ctx context.Context, p plan.Plan, fp string, li
 	if err != nil {
 		return err
 	}
-	if input != nil {
-		defer func() {
-			stop.Begin()
-			stop.Stage("closing file input")
-			result = copy.CleanupResult(result, "close file input", input.Close())
-		}()
-	}
+
 	var source copy.Source
 	var store copy.ProgressStore
+	sourceLabel := "file input"
 	if input != nil {
 		source, store = input, input
 	} else {
 		if p.Window.Upper != nil && (p.ClockCaptureEnabled() || p.TimestampStopEnabled()) {
 			e.log.Warn("timestamp completion relies on configured arrival-delay and timestamp-disorder assumptions")
 		}
-		var sourceProgress copy.ProgressStore
-		source, sourceProgress, err = sourceConnection.Source(ctx, p, fp, limits, routingValidator(p, destinationConnection))
+		source, store, err = sourceConnection.Source(ctx, p, fp, limits, routingValidator(p, destinationConnection))
 		if err != nil {
 			return err
 		}
-		defer func() {
-			stop.Begin()
-			stop.Stage("closing Kafka input")
-			result = copy.CleanupResult(result, "close Kafka input", source.Close())
-		}()
-		store = sourceProgress
+		sourceLabel = "Kafka input"
 	}
+	defer func() {
+		stop.Begin()
+		stop.Stage("closing " + sourceLabel)
+		result = copy.CleanupResult(result, "close "+sourceLabel, source.Close())
+	}()
+
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if err := e.runOutput(ctx, p, limits, destinationConnection, source, store, stop, observer); err != nil {
+	sink, err := e.openSink(ctx, p, limits, destinationConnection)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		stop.Begin()
+		stop.Stage("closing output")
+		sink.Close()
+	}()
+	if err := e.runOutput(ctx, p, limits, sink, source, store, stop, observer); err != nil {
 		return err
 	}
 
@@ -134,16 +138,8 @@ func (e *runtimeEngine) runInput(ctx context.Context, p plan.Plan, fp string, li
 	return nil
 }
 
-func (e *runtimeEngine) runOutput(ctx context.Context, p plan.Plan, limits config.Worker, destinationConnection kafkaport.Connection, source copy.Source, store copy.ProgressStore, stop Shutdown, observer copy.Observer) error {
-	sink, err := e.openSink(ctx, p, limits, destinationConnection)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		stop.Begin()
-		stop.Stage("closing output")
-		sink.Close()
-	}()
+func (e *runtimeEngine) runOutput(ctx context.Context, p plan.Plan, limits config.Worker, sink copy.Sink, source copy.Source, store copy.ProgressStore, stop Shutdown, observer copy.Observer) error {
+
 	runErr := e.runner.New(source, sink, store, p, limits, stop, observer).Run(ctx)
 	if finalizer, ok := sink.(interface{ Finish() error }); ok {
 		stop.Begin()

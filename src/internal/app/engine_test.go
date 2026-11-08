@@ -499,3 +499,14 @@ func TestEngineMetadataFailurePrecedesProgressAndOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestOneOffCheckpointDeletionPrecedesOutputCleanup(t *testing.T) {
+	// Given a successful one-off archive copy.
+	f := newEngineFixture()
+	p := enginePlan("ARCHIVE", "ARCHIVE")
+	p.OneOff = true
+	// When finalizing, then delete completed progress before closing output and input.
+	err := newEngine(f, f, f, engineLogger(), nil).Run(t.Context(), p, config.Defaults(""), noopShutdown{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"file-input", "file-output", "runner", "run", "publish", "delete-checkpoint", "close-output", "close-file-input"}, f.trace)
+}
