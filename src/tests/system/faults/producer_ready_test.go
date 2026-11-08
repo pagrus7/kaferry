@@ -300,9 +300,9 @@ func checkProducerPreparationContext(t *testing.T, mode string) {
 	result := make(chan error, 1)
 	var completed time.Time
 	go func() {
-		err := prepareProxyProducer(ctx, client, "records", 1, routes, t.Logf)
+		preparationErr := prepareProxyProducer(ctx, client, "records", 1, routes, t.Logf)
 		completed = time.Now()
-		result <- err
+		result <- preparationErr
 	}()
 	select {
 	case <-observed:
