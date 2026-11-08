@@ -27,37 +27,11 @@ func main() {
 
 func build(path string) error {
 	source := "examples/archive-demo"
-	data, err := os.ReadFile(filepath.Join(source, "records.json"))
+	identity, input, err := exampleInput(source)
 	if err != nil {
 		return err
 	}
-	var values []string
-	if checkErr := json.Unmarshal(data, &values); checkErr != nil {
-		return checkErr
-	}
-	codec, err := avro.New(64 << 20)
-	if err != nil {
-		return err
-	}
-	identity := avro.Identity{Version: avro.Version, WriterID: strings.Repeat("1", 32), FileID: strings.Repeat("2", 32),
-		Source: avro.Source{Cluster: "tutorial", Topic: "orders", TopicID: avro.TopicID{1}, Partition: 0}}
-	var input bytes.Buffer
-	writer, err := codec.NewWriter(&input, identity)
-	if err != nil {
-		return err
-	}
-	for offset, value := range values {
-		stamp := int64(1790845200000 + offset*1000)
-		record := avro.Record{Source: identity.Source, Offset: int64(offset), TimestampMS: &stamp,
-			TimestampKind: "create_time", Key: []byte("customer-1"), Value: []byte(value),
-			Headers: []avro.Header{{Key: []byte("example"), Value: []byte("archive-demo")}}}
-		if checkErr := writer.Append(record); checkErr != nil {
-			return checkErr
-		}
-	}
-	if checkErr := writer.Flush(); checkErr != nil {
-		return checkErr
-	}
+
 	if checkErr := os.MkdirAll(filepath.Dir(path), 0o755); checkErr != nil {
 		return checkErr
 	}
@@ -85,7 +59,7 @@ func build(path string) error {
 			return err
 		}
 	}
-	if err := add("input/"+identity.WriterID+"."+identity.FileID+".avro", input.Bytes()); err != nil {
+	if err := add("input/"+identity.WriterID+"."+identity.FileID+".avro", input); err != nil {
 		return err
 	}
 	if err := archive.Close(); err != nil {
@@ -95,4 +69,39 @@ func build(path string) error {
 		return err
 	}
 	return output.Close()
+}
+
+func exampleInput(source string) (avro.Identity, []byte, error) {
+	data, err := os.ReadFile(filepath.Join(source, "records.json"))
+	if err != nil {
+		return avro.Identity{}, nil, err
+	}
+	var values []string
+	if checkErr := json.Unmarshal(data, &values); checkErr != nil {
+		return avro.Identity{}, nil, checkErr
+	}
+	codec, err := avro.New(64 << 20)
+	if err != nil {
+		return avro.Identity{}, nil, err
+	}
+	identity := avro.Identity{Version: avro.Version, WriterID: strings.Repeat("1", 32), FileID: strings.Repeat("2", 32),
+		Source: avro.Source{Cluster: "tutorial", Topic: "orders", TopicID: avro.TopicID{1}, Partition: 0}}
+	var input bytes.Buffer
+	writer, err := codec.NewWriter(&input, identity)
+	if err != nil {
+		return avro.Identity{}, nil, err
+	}
+	for offset, value := range values {
+		stamp := int64(1790845200000 + offset*1000)
+		record := avro.Record{Source: identity.Source, Offset: int64(offset), TimestampMS: &stamp,
+			TimestampKind: "create_time", Key: []byte("customer-1"), Value: []byte(value),
+			Headers: []avro.Header{{Key: []byte("example"), Value: []byte("archive-demo")}}}
+		if checkErr := writer.Append(record); checkErr != nil {
+			return avro.Identity{}, nil, checkErr
+		}
+	}
+	if checkErr := writer.Flush(); checkErr != nil {
+		return avro.Identity{}, nil, checkErr
+	}
+	return identity, input.Bytes(), nil
 }

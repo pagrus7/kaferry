@@ -151,20 +151,7 @@ func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 func readStatement(options commandOptions, stdin io.Reader) (string, error) {
 	statement := options.statement
 	if options.file != "" {
-		reader := stdin
-		if options.file == "-" && reader == nil {
-			return "", fmt.Errorf("stdin is unavailable")
-		}
-		if options.file != "-" {
-			opened, err := os.Open(options.file)
-			if err != nil {
-				return "", err
-			}
-			// Reading cannot leave buffered writes to flush.
-			defer func() { _ = opened.Close() }()
-			reader = opened
-		}
-		data, err := io.ReadAll(io.LimitReader(reader, (1<<20)+1))
+		data, err := readStatementFile(options.file, stdin)
 		if err != nil {
 			return "", err
 		}
@@ -174,4 +161,25 @@ func readStatement(options commandOptions, stdin io.Reader) (string, error) {
 		return "", fmt.Errorf("statement exceeds 1 MiB")
 	}
 	return statement, nil
+}
+
+func readStatementFile(path string, stdin io.Reader) ([]byte, error) {
+	reader := stdin
+	if path == "-" && reader == nil {
+		return nil, fmt.Errorf("stdin is unavailable")
+	}
+	if path != "-" {
+		opened, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		// Reading cannot leave buffered writes to flush.
+		defer func() { _ = opened.Close() }()
+		reader = opened
+	}
+	data, err := io.ReadAll(io.LimitReader(reader, (1<<20)+1))
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }

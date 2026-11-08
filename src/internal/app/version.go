@@ -20,29 +20,7 @@ func currentBuild() buildInfo {
 }
 
 func resolveBuildInfo(info *debug.BuildInfo, version, revision string) buildInfo {
-	build := buildInfo{version: "dev", client: "unknown"}
-	if info != nil {
-		if info.Main.Version != "" && info.Main.Version != "(devel)" {
-			build.version = info.Main.Version
-		}
-		dirty := false
-		for _, setting := range info.Settings {
-			switch setting.Key {
-			case "vcs.revision":
-				build.revision = setting.Value
-			case "vcs.modified":
-				dirty = setting.Value == "true"
-			}
-		}
-		if dirty && build.revision != "" {
-			build.revision += "-dirty"
-		}
-		for _, dependency := range info.Deps {
-			if dependency.Path == "github.com/twmb/franz-go" {
-				build.client = dependency.Version
-			}
-		}
-	}
+	build := toolchainBuild(info)
 	if version != "" {
 		build.version = version
 	}
@@ -51,6 +29,34 @@ func resolveBuildInfo(info *debug.BuildInfo, version, revision string) buildInfo
 	}
 	if build.revision == "" {
 		build.revision = "unknown"
+	}
+	return build
+}
+
+func toolchainBuild(info *debug.BuildInfo) buildInfo {
+	build := buildInfo{version: "dev", client: "unknown"}
+	if info == nil {
+		return build
+	}
+	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+		build.version = info.Main.Version
+	}
+	dirty := false
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			build.revision = setting.Value
+		case "vcs.modified":
+			dirty = setting.Value == "true"
+		}
+	}
+	if dirty && build.revision != "" {
+		build.revision += "-dirty"
+	}
+	for _, dependency := range info.Deps {
+		if dependency.Path == "github.com/twmb/franz-go" {
+			build.client = dependency.Version
+		}
 	}
 	return build
 }
