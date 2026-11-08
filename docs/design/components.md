@@ -122,4 +122,6 @@ The command waits for the required reports. In an existing Claude Code session, 
 
 ### Release evidence
 
-Follow the [release procedure](../releases/README.md#build-and-validation) for build and validation requirements, and [installation verification](../install.md#version-and-verification) for downloaded binaries.
+Follow the [release procedure](../releases/README.md#build-and-validation) for build and validation requirements, and [installation verification](../install.md#release-binaries) for downloaded binaries.
+
+Linker values take precedence over embedded Go build information. Otherwise, the CLI and metrics use the embedded module version, including pseudo-versions and dirty markers; an absent or `(devel)` version reports `dev`. Commit information comes from embedded VCS metadata, with `-dirty` for a modified checkout, or reports `unknown` when unavailable. Version reporting does not query Git or the network.
