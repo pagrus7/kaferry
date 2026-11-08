@@ -4,7 +4,7 @@ Run the same scripts from a terminal, GitHub Actions or a local scheduler. No ag
 
 ## Prepare
 
-Use Python 3.11+, the Go version required by `go.mod`, Docker with Compose, OpenSSL and Make. Linux and macOS AMD64/ARM64 are supported. Release comparisons also need an authenticated `gh` CLI with repository/attestation read access. Linux race tests need a C compiler. On Linux, install the Python venv package if the distribution packages it separately.
+Use Python 3.11+, the Go version required by `go.mod`, Docker Engine 25+ with Compose 2.20.2+, OpenSSL and Make. Linux and macOS AMD64/ARM64 are supported. Release comparisons also need an authenticated `gh` CLI with repository/attestation read access. Linux race tests need a C compiler. On Linux, install the Python venv package if the distribution packages it separately.
 
 From the repository root:
 
