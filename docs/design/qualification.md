@@ -43,7 +43,7 @@ By default the fixture owns a disposable Docker volume. To use an existing volum
 python3 -m tools.qualification.qualify run replicated --broker-volume LAB_VOLUME --output /path/to/fresh/evidence
 ```
 
-`--broker-volume` is supported only by `run replicated`; other suite combinations fail. The volume must allow the fixture initializer to create directories and set broker ownership to UID/GID 1000. Each run gets a fresh UUID directory beneath `kaferry-replicated/<project>/`. Cleanup stops writers and removes only that directory after checking its ownership marker. The external volume and unrelated files remain. Ownership or cleanup failures fail qualification and preserve storage. The volume driver selects its filesystem; this command does not change host storage settings or establish shared-filesystem durability. Archive output still needs the [archive filesystem guarantees](archive.md#layout-and-ownership).
+`--broker-volume` is supported only by `run replicated`; other suite combinations fail. The volume must allow the fixture initializer to create directories and set broker ownership to UID/GID 1000. Each run gets a fresh UUID directory beneath `kaferry-replicated/<project>/`. Cleanup stops writers and removes only that directory after checking its ownership marker. The external volume and unrelated files remain. Failed ownership validation or writer shutdown preserves the run directory; other cleanup failures can occur after data removal and still fail qualification. The volume driver selects its filesystem; this command does not change host storage settings or establish shared-filesystem durability. Archive output still needs the [archive filesystem guarantees](archive.md#layout-and-ownership).
 
 `--output` selects evidence and the smoke's archive/checkpoint output; it does not select broker storage. Keep private driver options, server addresses and access configuration outside receipts intended for publication.
 
@@ -154,11 +154,16 @@ The temporary certificate path satisfies Compose interpolation during teardown; 
 For a stopped replicated run, read its project and run ID from its manifest. When using an external volume, first set `KAFERRY_REPLICATED_BROKER_VOLUME` to the same volume name and `KAFERRY_REPLICATED_VOLUME_EXTERNAL=true`; leave both unset for the default disposable volume. Stop writers before checking the marker and removing their data:
 
 ```sh
-project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixture_project"])' build-results/replicated-smoke/manifest.json)
-export KAFERRY_REPLICATED_RUN_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixture_storage"]["run_id"])' build-results/replicated-smoke/manifest.json)
-docker compose -f src/tests/replicated/compose.yaml -p "$project" --profile replicated stop --timeout 10
-docker compose -f src/tests/replicated/compose.yaml -p "$project" --profile replicated run --rm --no-deps --entrypoint /bin/sh storage -ec "$(cat src/tests/replicated/storage.sh)" storage clean
-docker compose -f src/tests/replicated/compose.yaml -p "$project" --profile replicated down -v --remove-orphans
+(
+  set -eu
+  project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixture_project"])' build-results/replicated-smoke/manifest.json)
+  KAFERRY_REPLICATED_RUN_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixture_storage"]["run_id"])' build-results/replicated-smoke/manifest.json)
+  export KAFERRY_REPLICATED_RUN_ID
+  storage_script=$(cat src/tests/replicated/storage.sh)
+  docker compose -f src/tests/replicated/compose.yaml -p "$project" --profile replicated stop --timeout 10
+  docker compose -f src/tests/replicated/compose.yaml -p "$project" --profile replicated run --rm --no-deps --entrypoint /bin/sh storage -ec "$storage_script" storage clean
+  docker compose -f src/tests/replicated/compose.yaml -p "$project" --profile replicated down -v --remove-orphans
+)
 ```
 
 If marker validation fails, preserve the volume and investigate; do not continue with volume removal.
