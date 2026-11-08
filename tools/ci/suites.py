@@ -16,6 +16,7 @@ GO_SUITES = {
     'soak': ('integration,load', '^TestStreamingSoak', False),
     'fault': ('integration,fault', '^TestBlockingCommit|^TestRebalanceChurn|^TestCrashResume|^TestRecoveryBlockedOutput', False),
     'recovery': ('integration,fault', '^TestRecoveryBlockedOutput$', False),
+    'fault-replicated': ('integration,fault,load', '^TestReplicatedZombieWorker$', False),
 }
 RECOVERY_CASES = {'recovery/'+name for name in
                   ('kill', 'signal', 'delivery-timeout', 'source-outage-shutdown', 'ownership-loss')}
@@ -31,6 +32,7 @@ EXPECTED = {
     'fault': ['TestBlockingCommitAcrossBrokerOutage', 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits',
               'TestCrashResumeReconcilesRetainedRecords', 'TestRecoveryBlockedOutput'],
     'recovery': ['TestRecoveryBlockedOutput'],
+    'fault-replicated': ['TestReplicatedZombieWorker'],
     'qualification': [
         'TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight', 'TestSaslTlsScramMechanisms/SCRAM-SHA-256',
         'TestSaslTlsScramMechanisms/SCRAM-SHA-512', 'TestSaslTlsExternalAuthentication/OAUTHBEARER',

@@ -23,6 +23,7 @@ import (
 )
 
 const requestLogger = "kafka.request.logger"
+const receivedLogger = "org.apache.kafka.network.Request"
 
 const requestLogFiles = `
 for f in /opt/kafka/logs/kafka-request.log*; do
@@ -34,7 +35,7 @@ done`
 type replicatedAudit struct {
 	client  *kgo.Client
 	targets []faults.Target
-	levels  map[int32]string
+	levels  map[int32]map[string]string
 	output  string
 	guard   string
 	guards  map[int32]int
@@ -55,14 +56,16 @@ func startReplicatedAudit(t *testing.T, ctx context.Context, lab *faults.Lab, ou
 	require.NoError(t, err)
 	guard := fmt.Sprintf("kaferry-audit-%d", time.Now().UnixNano())
 	client := fixtureClient(t, strings.Join(faults.Endpoints("source", 0), ","), kgo.ClientID(guard))
-	audit := &replicatedAudit{client: client, targets: targets, levels: make(map[int32]string), output: output, guard: guard,
+	audit := &replicatedAudit{client: client, targets: targets, levels: make(map[int32]map[string]string), output: output, guard: guard,
 		guards: make(map[int32]int), marks: make(map[string]auditMark)}
 	t.Cleanup(func() {
 		cleanup, done := context.WithTimeout(context.Background(), 15*time.Second)
 		defer done()
-		for broker, level := range audit.levels {
-			if err := audit.level(cleanup, broker, level); err != nil {
-				t.Error("restore broker request logger:", err)
+		for broker, levels := range audit.levels {
+			for logger, level := range levels {
+				if err := audit.level(cleanup, broker, logger, level); err != nil {
+					t.Error("restore broker request logger:", err)
+				}
 			}
 		}
 	})
@@ -70,15 +73,19 @@ func startReplicatedAudit(t *testing.T, ctx context.Context, lab *faults.Lab, ou
 		broker := target.Broker
 		request := kmsg.NewPtrDescribeConfigsRequest()
 		request.Resources = []kmsg.DescribeConfigsRequestResource{{ResourceType: kmsg.ConfigResourceTypeBrokerLogger,
-			ResourceName: fmt.Sprint(broker), ConfigNames: []string{requestLogger}}}
+			ResourceName: fmt.Sprint(broker), ConfigNames: []string{requestLogger, receivedLogger}}}
 		result, err := client.Broker(int(broker)).Request(ctx, request)
 		require.NoError(t, err)
 		response := result.(*kmsg.DescribeConfigsResponse)
 		require.Len(t, response.Resources, 1)
 		require.NoError(t, kerr.ErrorForCode(response.Resources[0].ErrorCode))
-		require.Len(t, response.Resources[0].Configs, 1)
-		require.NotNil(t, response.Resources[0].Configs[0].Value)
-		audit.levels[broker] = *response.Resources[0].Configs[0].Value
+		require.Len(t, response.Resources[0].Configs, 2)
+		audit.levels[broker] = make(map[string]string)
+		for _, setting := range response.Resources[0].Configs {
+			require.Contains(t, []string{requestLogger, receivedLogger}, setting.Name)
+			require.NotNil(t, setting.Value)
+			audit.levels[broker][setting.Name] = *setting.Value
+		}
 		config, err := faults.Docker(ctx, "exec", target.Container, "cat", "/opt/kafka/config/log4j2.yaml")
 		require.NoError(t, err, "pinned broker logging configuration must be inspectable")
 		require.NoError(t, os.WriteFile(filepath.Join(output, fmt.Sprintf("source-%d.log4j2.yaml", broker)), config, 0600))
@@ -90,7 +97,8 @@ test -z "${JAVA_TOOL_OPTIONS:-}${_JAVA_OPTIONS:-}${JDK_JAVA_OPTIONS:-}${LOG4J_CO
 tr '\000' '\n' </proc/1/cmdline | sed -n '/^-D[Ll]og4j/p;/^-Dkafka.logs.dir=/p'`)
 		require.NoError(t, err, "unaccounted JVM logging options prevent a complete synchronous audit")
 		require.NoError(t, os.WriteFile(filepath.Join(output, fmt.Sprintf("source-%d.jvm-logging.txt", broker)), flags, 0600))
-		require.NoError(t, audit.level(ctx, broker, "DEBUG"))
+		require.NoError(t, audit.level(ctx, broker, requestLogger, "DEBUG"))
+		require.NoError(t, audit.level(ctx, broker, receivedLogger, "TRACE"))
 	}
 	audit.mark(t, ctx, "baseline")
 	return audit
@@ -107,10 +115,10 @@ func requestLogConfiguration(data []byte) ([]byte, error) {
 	return json.Marshal(map[string]any{"raw_sha256": fmt.Sprintf("%x", sha256.Sum256(data)), "configuration": configuration})
 }
 
-func (a *replicatedAudit) level(ctx context.Context, broker int32, level string) error {
+func (a *replicatedAudit) level(ctx context.Context, broker int32, logger, level string) error {
 	request := kmsg.NewPtrIncrementalAlterConfigsRequest()
 	request.Resources = []kmsg.IncrementalAlterConfigsRequestResource{{ResourceType: kmsg.ConfigResourceTypeBrokerLogger,
-		ResourceName: fmt.Sprint(broker), Configs: []kmsg.IncrementalAlterConfigsRequestResourceConfig{{Name: requestLogger, Value: &level}}}}
+		ResourceName: fmt.Sprint(broker), Configs: []kmsg.IncrementalAlterConfigsRequestResourceConfig{{Name: logger, Value: &level}}}}
 	result, err := a.client.Broker(int(broker)).Request(ctx, request)
 	if err != nil {
 		return err
@@ -159,7 +167,7 @@ type ownershipAuditRecord struct {
 // currentGenerationSaved gates injection on actual accepted commits in the
 // worker's latest successful join generation. Old committed group offsets alone
 // cannot show that the worker has saved in its current generation.
-func currentGenerationSaved(data []byte, client, group, member string, owned []int32) (int32, bool, error) {
+func currentGenerationSaved(data []byte, client, group, member string, owned []int32, minimum map[int32]int64) (int32, bool, error) {
 	var rows []ownershipAuditRecord
 	generation := int32(-1)
 	for _, line := range strings.Split(string(data), "\n") {
@@ -191,7 +199,7 @@ func currentGenerationSaved(data []byte, client, group, member string, owned []i
 				if err != nil {
 					return 0, false, err
 				}
-				positive[part.PartitionIndex] = offset > 0
+				positive[part.PartitionIndex] = offset > max(0, minimum[part.PartitionIndex])
 			}
 		}
 		for _, topic := range row.Response.Topics {
@@ -210,7 +218,7 @@ func currentGenerationSaved(data []byte, client, group, member string, owned []i
 	return generation, generation >= 0 && len(owned) > 0, nil
 }
 
-func (a *replicatedAudit) ready(ctx context.Context, client, group, member string, owned []int32) (int32, bool, error) {
+func (a *replicatedAudit) ready(ctx context.Context, client, group, member string, owned []int32, minimum map[int32]int64) (int32, bool, error) {
 	var all []byte
 	for _, target := range a.targets {
 		data, err := faults.Docker(ctx, "exec", target.Container, "sh", "-ec", requestLogFiles)
@@ -219,7 +227,7 @@ func (a *replicatedAudit) ready(ctx context.Context, client, group, member strin
 		}
 		all = append(all, data...)
 	}
-	return currentGenerationSaved(all, client, group, member, owned)
+	return currentGenerationSaved(all, client, group, member, owned, minimum)
 }
 
 // capture preserves every hourly segment; no size rotation is accepted by the

@@ -484,6 +484,47 @@ class MatrixTest(unittest.TestCase):
                              spec.command[spec.command.index('--copier-source') + 1])
             self.assertNotEqual(spec.env['KAFKA_TEST_BROKERS'], spec.env['KAFERRY_WORKER3_SOURCE_BROKERS'])
 
+    def test_replicated_fault_case_binds_selected_cli_and_independent_oracle(self):
+        # Given the ownership case, use the dedicated newest replicated fixture.
+        with patch('tools.qualification.qualify.run_suite') as run:
+            main(['run', 'fault-replicated', '--case', 'ownership/zombie-worker'])
+        requested = run.call_args.args[0]
+        self.assertEqual(('4.4.0', '4.4.0'), (requested.source, requested.destination))
+        with tempfile.TemporaryDirectory() as temporary:
+            args = self.suite_args(Path(temporary), 'fault-replicated', source='4.4.0', destination='4.4.0',
+                                   case='ownership/zombie-worker')
+            receipt = {}
+            def configure(env):
+                env.update(KAFERRY_ORACLE_PYTHON='/independent/python', KAFERRY_ORACLE_RUN='fresh')
+            # When resolved, then no broker is started and both CLI workers will
+            # receive the same checked candidate executable and independent oracle.
+            with patch('tools.qualification.qualify.capture', return_value='fixture'), \
+                 patch('tools.qualification.fault_results.configure', side_effect=configure):
+                spec = resolve_run(args, receipt, None)
+            self.assertEqual(['ownership/zombie-worker'], receipt['case_selection'])
+            self.assertIn('src/tests/replicated/compose.yaml', spec.compose)
+            self.assertIn('-tags=integration,fault,load', spec.command)
+            self.assertIn('^TestReplicatedZombieWorker$', spec.command)
+            self.assertEqual(['TestReplicatedZombieWorker'], spec.expected)
+            self.assertEqual(300, spec.timeout)
+            self.assertEqual(str(Path(args.binary).resolve()), spec.env['KAFERRY_TEST_BINARY'])
+            self.assertEqual(receipt['binary_sha256'], spec.env['KAFERRY_EXPECT_BINARY_SHA256'])
+            self.assertEqual('fresh', receipt['fault_oracle_run'])
+            self.assertNotEqual(spec.env['KAFKA_TEST_BROKERS'], spec.env['KAFERRY_WORKER1_SOURCE_BROKERS'])
+            self.assertNotEqual(spec.env['KAFERRY_WORKER1_SOURCE_BROKERS'], spec.env['KAFERRY_WORKER2_SOURCE_BROKERS'])
+
+    def test_replicated_fault_case_selector_rejects_other_suites_and_unknown_cases(self):
+        # Given an unsupported case or topology, when resolved, then no external command runs.
+        with tempfile.TemporaryDirectory() as temporary:
+            for suite, case, source in [('broker', 'ownership/zombie-worker', '4.4.0'),
+                                        ('fault-replicated', 'not-built', '4.4.0'),
+                                        ('fault-replicated', 'ownership/zombie-worker', '3.9.2')]:
+                with self.subTest(suite=suite, case=case, source=source):
+                    args = self.suite_args(Path(temporary), suite, case=case, source=source, destination='4.4.0')
+                    with patch('tools.qualification.qualify.capture') as execute, self.assertRaises(ValueError):
+                        resolve_run(args, {}, None)
+                    execute.assert_not_called()
+
     def test_broker_volume_rejects_unsupported_suites_names_and_old_replicated_images(self):
         with tempfile.TemporaryDirectory() as temporary:
             # Given explicit storage requests, when invalid, then no Docker command is issued.

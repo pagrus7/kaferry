@@ -6,9 +6,13 @@ https://github.com/apache/kafka/tree/4.4.0/server/src/main/java/org/apache/kafka
 https://github.com/apache/kafka/blob/4.4.0/core/src/main/scala/kafka/network/SocketServer.scala
 The accepted logging configuration uses synchronous hourly RollingFile output.
 Unknown configurations or incomplete observations cannot establish fencing.
+Classic session expiry is also checked against the coordinator's own
+expireClassicGroupMemberHeartbeat log and the independent ownership snapshot:
+https://github.com/apache/kafka/blob/4.4.0/group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupMetadataManager.java
 """
 
 import argparse
+from collections import Counter
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -48,6 +52,12 @@ def logging_configuration(raw, normalized):
     loggers = configuration['Loggers']
     if patterns != ['[%d] %p %m (%c)%n'] or set(appenders) != {'Console', 'RollingFile'} or set(loggers) != {'Root', 'Logger'}:
         raise ValueError('broker request log format or synchronous logging is unverified')
+    if (appenders['Console'] != dict(name='STDOUT', PatternLayout=dict(pattern='${logPattern}')) or
+            set(loggers['Root']) != {'level', 'AppenderRef'} or
+            dict(ref='STDOUT') not in loggers['Root']['AppenderRef'] or
+            any(set(logger)-{'name', 'level'} for logger in loggers['Logger'] if logger['name'] in
+                ('org.apache.kafka', 'org.apache.kafka.network', 'org.apache.kafka.network.Request'))):
+        raise ValueError('network request receipt logging must reach unfiltered synchronous console output')
     request = [appender for appender in appenders['RollingFile'] if appender['name'] == 'RequestAppender']
     selected = [logger for logger in loggers['Logger'] if logger['name'] == 'kafka.request.logger']
     expected = dict(name='RequestAppender', fileName='${sys:kafka.logs.dir}/kafka-request.log',
@@ -124,6 +134,34 @@ def commits(record):
     return [(part, offset, observed[part]) for part, offset in wanted.items()]
 
 
+def received_commits(diagnostics, broker, workers):
+    """Count network-received commits, including requests still queued to run.
+
+    Request's constructor emits this trace before handing work to KafkaApis.
+    Connection correlation IDs may repeat after reconnect; identity counters keep
+    those receipts distinct, and completion logs additionally retain connections.
+    """
+    result = Counter()
+    for line in diagnostics.splitlines():
+        if 'received request: RequestHeader(apiKey=OFFSET_COMMIT,' not in line:
+            continue
+        match = re.fullmatch(r'\[[^]]+\] TRACE Processor [0-9]+ received request: '
+            r'RequestHeader\(apiKey=OFFSET_COMMIT, apiVersion=[0-9]+, clientId=([^,]*), '
+            r'correlationId=([0-9]+), headerVersion=[0-9]+\) -- (.*) \(org\.apache\.kafka\.network\.Request\)', line)
+        if match is None:
+            raise ValueError('network received commit has an unverified protocol log format')
+        client, correlation, payload = match.groups()
+        if client not in workers:
+            continue
+        group = re.search(r"\bgroupId='([^']*)'", payload)
+        member = re.search(r"\bmemberId='([^']*)'", payload)
+        generation = re.search(r'\bgenerationIdOrMemberEpoch=(-?[0-9]+)', payload)
+        if group is None or member is None or generation is None:
+            raise ValueError('network received commit omitted actual ownership identity')
+        result[(broker, client, int(correlation), group[1], member[1], int(generation[1]))] += 1
+    return result
+
+
 def _validate(directory, identity=None):
     directory = Path(directory)
     case = json.loads((directory/'replicated-ownership.json').read_text())
@@ -153,7 +191,7 @@ def _validate(directory, identity=None):
     peer = case['peer_progress']
     if (len(peer['members']) != 1 or peer['members'][0]['client_id'] != worker2 or
             set(peer['members'][0]['partitions']) != set(range(24)) or
-            not stamp(transfer['finished']) <= stamp(peer['started']) <= stamp(peer['finished']) < stamp(case['fault']['heal']) or
+            not stamp(transfer['finished']) <= stamp(peer['started']) <= stamp(peer['finished']) < stamp(case['heal_started']) <= stamp(case['fault']['heal']) or
             len(case['baseline_saved']) != 24 or len(case['peer_saved']) != 24 or
             any(before < 1 or after <= before+2 for before, after in zip(case['baseline_saved'], case['peer_saved']))):
         raise ValueError('peer progress was not independently observed while the route remained cut')
@@ -176,6 +214,8 @@ def _validate(directory, identity=None):
             window['recovery_seconds'] != 13):
         raise ValueError('ownership fault target, timing or configured recovery window differs from independent safety evidence')
     rows = []
+    expiries = []
+    received = Counter()
     files = [dict(path='replicated-ownership.json', sha256=hashlib.sha256((directory/'replicated-ownership.json').read_bytes()).hexdigest())]
     for broker in range(1, 4):
         config = directory/f'source-{broker}.log4j2.yaml'
@@ -193,6 +233,17 @@ def _validate(directory, identity=None):
                 r'(?:StatusLogger|StatusConsoleListener).*ERROR|AppenderLoggingException|'
                 r'Unable to write to stream|Unable to create file|Error writing to stream)', diagnostics):
             raise ValueError('broker logging diagnostics are missing or report a logging failure')
+        received.update(received_commits(diagnostics, broker, case['workers']))
+        needle = f'Member {old_member} in group {case["group"]} has failed, removing it from the group.'
+        for line in diagnostics.splitlines():
+            if needle not in line:
+                continue
+            match = re.match(r'^\[([^]]+)\] INFO ', line)
+            if not match:
+                raise ValueError('broker session expiry log has an unverified timestamp')
+            at = datetime.strptime(match[1], '%Y-%m-%d %H:%M:%S,%f').replace(tzinfo=timezone.utc).timestamp()
+            if broker == targets[0]['broker'] and injected['at'] <= at <= stamp(transfer['finished']):
+                expiries.append(at)
         before = directory/f'source-{broker}.baseline.requests.log'
         after = directory/f'source-{broker}.final.requests.log'
         start, finish = segments(before), segments(after)
@@ -218,6 +269,8 @@ def _validate(directory, identity=None):
         rows += final
         for path in (config, normalized, flags, console, before, after):
             files.append(dict(path=path.name, sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
+    if not expiries:
+        raise ValueError('independent ownership transfer lacks the coordinator session-expiry observation')
     selected = [row for row in rows if row['requestHeader']['clientId'] in case['workers']]
     if any(row['request'] is None or row['response'] is None for row in selected):
         raise ValueError('selected CLI traffic lacks correlated request/response observations')
@@ -228,6 +281,11 @@ def _validate(directory, identity=None):
            for row in selected):
         raise ValueError('worker1 left the group rather than expiring behind its cut route')
     commit_rows = [row for row in selected if row['requestHeader']['requestApiKeyName'] == 'OFFSET_COMMIT']
+    completed = Counter((row['broker'], row['requestHeader']['clientId'], integer(row['requestHeader']['correlationId']),
+                         row['request']['groupId'], row['request']['memberId'],
+                         integer(row['request']['generationIdOrMemberEpoch'])) for row in commit_rows)
+    if received != completed:
+        raise ValueError('network received commits lack complete correlated broker responses')
     joins = [row for row in selected if row['requestHeader']['requestApiKeyName'] == 'JOIN_GROUP' and
              integer(row['response'].get('errorCode')) == 0]
     baseline_joins = [row for row in joins if row['requestHeader']['clientId'] == worker1 and
@@ -259,11 +317,11 @@ def _validate(directory, identity=None):
                 if not any(join['response']['memberId'] == request['memberId'] and
                            integer(join['response']['generationId']) == epoch and epoch > generation and
                            join['requestHeader']['clientId'] == worker1 and
-                           stamp(case['fault']['heal']) <= join['completed_at'] <= row['completed_at'] for join in joins):
+                           stamp(case['heal_started']) <= join['completed_at'] <= row['completed_at'] for join in joins):
                     raise ValueError('worker1 accepted progress lacks an independently observed legitimate rejoin')
                 rejoined.append(row)
         elif (epoch > generation and request['memberId'] == peer['members'][0]['member_id'] and
-              row['completed_at'] < stamp(case['fault']['heal'])):
+              row['completed_at'] < stamp(case['heal_started'])):
             peer_progress.update(part for part, offset in accepted if part in old_parts and offset > case['baseline_saved'][part]+2)
     if peer_progress != old_parts:
         raise ValueError('broker audit lacks accepted peer progress on every transferred partition')
@@ -290,11 +348,13 @@ def _validate(directory, identity=None):
                     stamp(case['audit_marks']['final']['started']) for row in measurements)):
         raise ValueError('complete broker audit does not surround both observed selected CLI processes')
     proof = dict(implementation='Kafka 4.4 correlated broker request log',
+                session_expiry_observations=len(expiries), expiry_before_transfer_observed=True,
+                received_commits=sum(received.values()), completed_commits=sum(completed.values()),
                 stale_member=old_member, stale_generation=generation, stale_requests=len(stale),
                 stale_rejections=sum(any(error in (22, 25, 82) for _, _, error in commits(row)) for row in stale), accepted_stale_commits=0,
                 accepted_peer_partitions=sorted(peer_progress), accepted_rejoin_commits=len(rejoined),
                 post_transfer_commits=len(post), source_partitions=24, audit_files=files,
-                scope='complete synchronous broker completion log while both selected CLIs run; local suppression and broker rejection are distinguished')
+                scope='network receipts and correlated broker completions around both selected CLI lifetimes; no rejection is inferred when a stale request is absent')
     return dict(safety, ownership_fencing=proof)
 
 

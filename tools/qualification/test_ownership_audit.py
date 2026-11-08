@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from tools.qualification import ownership_audit as audit
+from tools.ci.suites import fault_execution_seconds, fault_timeout_catalog
 
 
 def when(seconds):
@@ -46,6 +47,21 @@ def encode(rows):
     return bytes(output)
 
 
+def network_trace(rows):
+    output = ''
+    for row in rows:
+        header, request = row['requestHeader'], row['request']
+        if header['requestApiKeyName'] != 'OFFSET_COMMIT':
+            continue
+        stamp = datetime.fromtimestamp(row['at'], timezone.utc).strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]
+        output += (f'[{stamp}] TRACE Processor 1 received request: RequestHeader(apiKey=OFFSET_COMMIT, '
+            f'apiVersion=10, clientId={header["clientId"]}, correlationId={header["correlationId"]}, headerVersion=2) -- '
+            f'OffsetCommitRequestData(groupId=\'{request["groupId"]}\', '
+            f'generationIdOrMemberEpoch={request["generationIdOrMemberEpoch"]}, memberId=\'{request["memberId"]}\') '
+            '(org.apache.kafka.network.Request)\n')
+    return output
+
+
 class OwnershipAuditTest(unittest.TestCase):
     def setUp(self):
         self.temporary = self.enterContext(tempfile.TemporaryDirectory())
@@ -53,11 +69,11 @@ class OwnershipAuditTest(unittest.TestCase):
         self.config = b'verified synchronous request logging fixture\n'
         self.configuration = dict(Configuration=dict(
             Properties=dict(Property=[dict(name='logPattern', value='[%d] %p %m (%c)%n')]),
-            Appenders=dict(Console=dict(name='STDOUT'), RollingFile=[dict(name='RequestAppender',
+            Appenders=dict(Console=dict(name='STDOUT', PatternLayout=dict(pattern='${logPattern}')), RollingFile=[dict(name='RequestAppender',
                 fileName='${sys:kafka.logs.dir}/kafka-request.log',
                 filePattern='${sys:kafka.logs.dir}/kafka-request.log.%d{yyyy-MM-dd-HH}',
                 PatternLayout=dict(pattern='${logPattern}'), TimeBasedTriggeringPolicy=dict(modulate=True, interval=1))]),
-            Loggers=dict(Root=dict(level='INFO'), Logger=[dict(name='kafka.request.logger', level='WARN',
+            Loggers=dict(Root=dict(level='INFO', AppenderRef=[dict(ref='STDOUT')]), Logger=[dict(name='kafka.request.logger', level='WARN',
                 additivity=False, AppenderRef=dict(ref='RequestAppender'))])))
         self.safety = dict(id='ownership/zombie-worker', source_commit='a'*40, binary_sha256='b'*64,
                            binary_platform='linux/amd64', execution_platform='linux/amd64',
@@ -71,9 +87,9 @@ class OwnershipAuditTest(unittest.TestCase):
                 'baseline': dict(started=when(0), finished=when(1)), 'final': dict(started=when(33), finished=when(34))},
             baseline=snapshot(5, 6, first), baseline_generation=2, baseline_saved=[10]*24,
             transfer=snapshot(17, 18, survivor), peer_progress=snapshot(19, 20, survivor), peer_saved=[20]*24,
-            healed=snapshot(27, 28, first), fault=dict(start=when(10), heal=when(21),
+            healed=snapshot(27, 28, first), heal_started=when(20.5), fault=dict(start=when(10), heal=when(21),
                 role=dict(kind='worker-coordinator', group='group'), fault=dict(kind='cut'),
-                targets=[dict(cluster='source', listener='worker1')]),
+                targets=[dict(cluster='source', listener='worker1', broker=2)]),
             processes_alive_after_transfer=[True, True], processes_alive_after_heal=[True, True],
             publishing_after_heal=dict(observed=when(22), acknowledged_by_partition=[30]*24),
             publishing=dict(observed=when(30), stopped=when(29), acknowledged_by_partition=[60]*24, max_acknowledgement_gap_seconds=.1),
@@ -100,7 +116,9 @@ class OwnershipAuditTest(unittest.TestCase):
             (self.directory/f'source-{broker}.log4j2.yaml').write_bytes(self.config)
             (self.directory/f'source-{broker}.log4j2.json').write_text(json.dumps(dict(
                 raw_sha256=hashlib.sha256(self.config).hexdigest(), configuration=self.configuration)))
-            (self.directory/f'source-{broker}.console.log').write_text('broker started\n')
+            (self.directory/f'source-{broker}.console.log').write_text('broker started\n'+(
+                '[1970-01-01 00:00:17,000] INFO Member old in group group has failed, removing it from the group.\n'
+                +network_trace(self.traffic) if broker == 2 else ''))
             (self.directory/f'source-{broker}.jvm-logging.txt').write_text(
                 '-Dlog4j2.configurationFile=/opt/kafka/bin/../config/log4j2.yaml\n-Dkafka.logs.dir=/opt/kafka/logs\n')
             (self.directory/f'source-{broker}.baseline.requests.log').write_bytes(encode(self.start))
@@ -125,6 +143,13 @@ class OwnershipAuditTest(unittest.TestCase):
             ('stale_requests', 'stale_rejections', 'accepted_stale_commits', 'accepted_rejoin_commits')))
         self.assertEqual(list(range(12)), proof['accepted_peer_partitions'])
         self.assertEqual(19, len(proof['audit_files']))
+
+    def test_case_uses_registered_budget_without_extending_the_legacy_suite(self):
+        # Given the registered new case, when selecting its budgets, then they
+        # match the actual fixture settings and leave the legacy allowance alone.
+        self.assertEqual({'session.timeout.ms': 6000, 'delivery_timeout': 2000, 'shutdown_timeout': 5000},
+                         fault_timeout_catalog()['ownership/zombie-worker'])
+        self.assertEqual(1073, fault_execution_seconds())
 
     def test_local_suppression_needs_complete_audit_and_peer_progress(self):
         # Given a correct client that suppresses stale commits locally.
@@ -160,6 +185,12 @@ class OwnershipAuditTest(unittest.TestCase):
                     self.validate()
                 self.traffic = original
 
+    def test_legitimate_rejoin_can_finish_during_the_heal_operation(self):
+        # Given a successful new-generation join after enabling starts but before
+        # the proxy API reply returns, when audited, then it is a legitimate rejoin.
+        self.traffic[4]['at'] = 20.6
+        self.assertEqual(1, self.validate()['ownership_fencing']['accepted_rejoin_commits'])
+
     def test_explicit_leave_cannot_be_reported_as_session_expiry(self):
         self.traffic.append(record(12, 'one', 'LEAVE_GROUP', dict(groupId='group'), dict(errorCode=0), 5))
         with self.assertRaisesRegex(ValueError, 'rather than expiring'):
@@ -191,6 +222,30 @@ class OwnershipAuditTest(unittest.TestCase):
         wrong = dict(self.safety, binary_sha256='c'*64)
         with self.assertRaisesRegex(ValueError, 'executable identity'):
             self.validate(wrong)
+
+    def test_membership_transfer_without_actual_session_expiry_does_not_qualify(self):
+        # Given complete membership and commit observations, but no broker expiry.
+        self.write()
+        (self.directory/'source-2.console.log').write_text('broker started\n')
+        # When validated, then disappearance alone cannot establish session expiry.
+        with patch.object(audit, 'validate_case', return_value=self.safety), self.assertRaisesRegex(ValueError, 'session-expiry'):
+            audit.validate(self.directory)
+
+    def test_pending_or_missing_network_receipts_prevent_complete_audit_claim(self):
+        # Given zero accepted stale commits, but an incomplete correlation audit.
+        for mutation in ('pending', 'missing-receipt'):
+            with self.subTest(mutation=mutation):
+                self.write()
+                path = self.directory/'source-2.console.log'
+                data = path.read_text()
+                if mutation == 'pending':
+                    data += network_trace([commit(26, 'one', 'old', 2, range(12), 40, 0, 99)])
+                else:
+                    data = data.replace(network_trace([self.traffic[3]]), '')
+                path.write_text(data)
+                # When validated, then a queued or lost request cannot be mistaken for local fencing.
+                with patch.object(audit, 'validate_case', return_value=self.safety), self.assertRaisesRegex(ValueError, 'correlated broker responses'):
+                    audit.validate(self.directory)
 
     def test_filters_async_logging_rotation_deletion_and_logging_errors_fail(self):
         # Given logging configurations that may silently omit completed requests.
