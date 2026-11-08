@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,11 +53,11 @@ func proveProxyRoute(t *testing.T, lab *Lab, admin *kadm.Client, cluster string,
 	})
 	partition := proxyPartition(ctx, t, admin, topic)
 	// Bootstrap on broker 1, then let Kafka metadata discover a different leader.
-	client, err := kgo.NewClient(kgo.SeedBrokers(Endpoints(cluster, worker)[0]),
-		kgo.RecordPartitioner(kgo.ManualPartitioner()), kgo.RecordDeliveryTimeout(2*time.Second),
-		kgo.RecordRetries(0), kgo.ProduceRequestTimeout(time.Second), kgo.RequestTimeoutOverhead(time.Second))
+	workerSeed := Endpoints(cluster, worker)[0]
+	client, err := proxyProducer(workerSeed)
 	require.NoError(t, err)
-	defer client.Close()
+	closeProbe := sync.OnceFunc(client.Close)
+	defer closeProbe()
 	produce := func(producer *kgo.Client, value string) error {
 		return producer.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: partition, Value: []byte(value)}).FirstErr()
 	}
@@ -78,11 +79,17 @@ func proveProxyRoute(t *testing.T, lab *Lab, admin *kadm.Client, cluster string,
 	require.NoError(t, err)
 	require.NotEqual(t, int32(1), injection.Event.Targets[0].Broker)
 	require.Error(t, produce(client, "blocked"), "success means metadata bypassed the worker proxy")
+	// Discard all diagnostic-producer state before restoring its route, so no
+	// uncertain buffered record can retry after healing.
+	closeProbe()
 	// Then the independent route still writes to the same partition, and healing
 	// restores the worker route. Reconcile the actual output through that route.
 	require.NoError(t, produce(observer, "observer"))
 	require.NoError(t, injection.Heal(ctx))
-	require.NoError(t, produce(client, "after"))
+	recovered, err := proxyProducer(workerSeed)
+	require.NoError(t, err)
+	defer recovered.Close()
+	require.NoError(t, produce(recovered, "after"))
 	reader, err := kgo.NewClient(kgo.SeedBrokers(Endpoints(cluster, 0)...),
 		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{topic: {partition: kgo.NewOffset().AtStart()}}))
 	require.NoError(t, err)
