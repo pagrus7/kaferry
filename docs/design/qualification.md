@@ -15,9 +15,37 @@ python3 -m tools.qualification.qualify plan --tier pr
 
 If `python3` is an older system interpreter, use `make qualification-setup PYTHON=python3.14` and `python3.14` for the CLI commands. Setup builds Kaferry and installs the independent librdkafka checker into a checkout-local Python virtual environment. Run setup and qualification with the same Python major/minor version. Use `--binary /absolute/path/to/kaferry` to select an existing executable. The default is `bin/kaferry`; qualification does not rebuild the selected executable.
 
-Reserve ports 39092/40092 for ordinary plain brokers, 39192/40192 for dedicated endurance brokers, 41092–43094 for the security listeners and 44088 for Kerberos. Run one lab coordinator per host, across all checkouts and do not run `make broker` or `make qualification` alongside it. The runner takes a host-wide lock for its fixed ports and Compose names; legacy Make entrypoints do not take that lock. Standalone broker containers use the `kaferry-compat`, `kaferry-endurance` and `kaferry-qualification` Compose projects; parallel jobs use `kaferry-lab-<run-id>-<slot>`. Other Docker workloads are outside the lab.
+Reserve ports 39092/40092 for ordinary plain brokers, 39192/40192 for dedicated endurance brokers, 41092–43094 for the security listeners, 44088 for Kerberos, and 46092–46094/47092–47094 for plain replicated brokers. Run one lab coordinator per host, across all checkouts and do not run `make broker` or `make qualification` alongside it. The runner takes a host-wide lock for its fixed ports and Compose names; legacy Make entrypoints do not take that lock. Standalone broker containers use the `kaferry-compat`, `kaferry-endurance`, `kaferry-qualification` and `kaferry-replicated` Compose projects; parallel jobs use `kaferry-lab-<run-id>-<slot>`. Other Docker workloads are outside the lab.
 
 Start with one workload, 8 available CPUs, 16–20 GiB available RAM and 100 GiB free test storage; measure actual usage before increasing load. These are starting allocations, not capacity guarantees. Fixtures cap broker JVM heaps at 512 MiB and use four internal offset/transaction partitions.
+
+## Suite taxonomy
+
+An **operating condition** produces zero duplicates, needs no process restart and leaves partition ownership unchanged. Destination stalls shorter than the delivery timeout, steady backpressure and bursts can be operating conditions. Endurance retains its existing one-second destination stalls.
+
+A **fault** exceeds a delivery or session timeout, changes ownership, kills a process or broker, or allows duplicates. Faults belong in deterministic fault suites or chaos, never endurance. Endurance changes one variable per run: a topology variant must retain the workload, gates and fault exposure.
+
+## Plain replicated smoke
+
+The `replicated` suite owns two plain three-broker clusters on the newest catalog image, RF=3 and `min.insync.replicas=2`:
+
+```sh
+python3 -m tools.qualification.qualify run replicated --output build-results/replicated-smoke
+```
+
+Complete [preparation](#prepare), including the independent checker. The runner requires at least two Docker CPUs, 8 GiB of runtime memory, 4 GiB free on the broker filesystem and 1 GiB on the evidence filesystem before starting brokers. These are smoke allowances, not long-run reservations or protection against other disk users. It verifies that all six localhost ports are available and holds the same host lease as the other suites.
+
+The independent librdkafka checker requires distinct three-broker clusters, three in-sync replicas per created partition and the topic minimum ISR of two. It then checks 96 records through preserved/key routing, capture, clone and replay, including partial completion, resume and completed reruns. A passing receipt covers healthy replicated copying for the recorded executable; it does not establish broker/network fault recovery, multi-worker behavior or continuous uptime. Only the newest catalog version is accepted.
+
+By default the fixture owns a disposable Docker volume. To use an existing volume, provision it with the label `kaferry.lab.storage=true`, then pass its name:
+
+```sh
+python3 -m tools.qualification.qualify run replicated --broker-volume LAB_VOLUME --output /path/to/fresh/evidence
+```
+
+`--broker-volume` is supported only by `run replicated`; other suite combinations fail. The volume must allow the fixture initializer to create directories and set broker ownership to UID/GID 1000. Each run gets a fresh UUID directory beneath `kaferry-replicated/<project>/`. Cleanup stops writers and removes only that directory after checking its ownership marker. The external volume and unrelated files remain. Failed ownership validation or writer shutdown preserves the run directory; other cleanup failures can occur after data removal and still fail qualification. The volume driver selects its filesystem; this command does not change host storage settings or establish shared-filesystem durability. Archive output still needs the [archive filesystem guarantees](archive.md#layout-and-ownership).
+
+`--output` selects evidence and the smoke's archive/checkpoint output; it does not select broker storage. Keep private driver options, server addresses and access configuration outside receipts intended for publication.
 
 ## Two concurrent workloads
 
@@ -122,6 +150,23 @@ KAFERRY_QUAL_CERT_DIR=/tmp docker compose -p kaferry-qualification -f src/tests/
 ```
 
 The temporary certificate path satisfies Compose interpolation during teardown; it does not create new brokers. Restarting Docker can interrupt other workloads and is outside the lab's automatic cleanup.
+
+For a stopped replicated run, read its project and run ID from its manifest. When using an external volume, first set `KAFERRY_REPLICATED_BROKER_VOLUME` to the same volume name and `KAFERRY_REPLICATED_VOLUME_EXTERNAL=true`; leave both unset for the default disposable volume. Stop writers before checking the marker and removing their data:
+
+```sh
+(
+  set -eu
+  project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixture_project"])' build-results/replicated-smoke/manifest.json)
+  KAFERRY_REPLICATED_RUN_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixture_storage"]["run_id"])' build-results/replicated-smoke/manifest.json)
+  export KAFERRY_REPLICATED_RUN_ID
+  storage_script=$(cat src/tests/replicated/storage.sh)
+  docker compose -f src/tests/replicated/compose.yaml -p "$project" --profile replicated stop --timeout 10
+  docker compose -f src/tests/replicated/compose.yaml -p "$project" --profile replicated run --rm --no-deps --entrypoint /bin/sh storage -ec "$storage_script" storage clean
+  docker compose -f src/tests/replicated/compose.yaml -p "$project" --profile replicated down -v --remove-orphans
+)
+```
+
+If marker validation fails, preserve the volume and investigate; do not continue with volume removal.
 
 For a parallel run, use the exact `fixture_project` from each child manifest. For example,
 clean up the endurance job below, then repeat with the `recovery/manifest.json` or
@@ -329,7 +374,7 @@ Use a same-VPC client for private MSK access. Keep certification batches short a
 
 ## Evidence and release gates
 
-CLI scenarios use the supplied executable; component/model/fuzz/benchmark tests compile checkout code and are labeled separately. Each suite writes `manifest.json` before execution and updates it atomically afterward. It records source revision/dirty state, executable digest/version, requested images, actual broker image evidence, platform/toolchain, required test names, elapsed time and result. Broker copies include independent reconciliation; endurance includes metrics and `soak.samples.jsonl`. Missing credentials, skipped required tests, empty selections and interrupted runs cannot qualify a case.
+CLI scenarios use the supplied executable; component/model/fuzz/benchmark tests compile checkout code and are labeled separately. Each suite writes `manifest.json` before execution and updates it atomically afterward. It records source revision/dirty state, executable digest/version, requested images, actual broker image evidence, platform/toolchain, required test names, elapsed time and result. `binary_platform` comes from the executable's Go build settings; `execution_platform` identifies the checkout Go target independently. Both use canonical OS/architecture names. Broker copies include independent reconciliation; endurance includes metrics and `soak.samples.jsonl`. Missing credentials, skipped required tests, empty selections and interrupted runs cannot qualify a case.
 
 ```sh
 python3 -m tools.qualification.qualify report build-results/full-matrix --tier full

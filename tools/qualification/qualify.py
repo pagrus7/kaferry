@@ -13,8 +13,10 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -29,13 +31,15 @@ ROOT = Path(__file__).resolve().parents[2]
 IMAGES = json.loads((ROOT / 'src/tests/qualification/matrix.json').read_text())
 VERSIONS = list(IMAGES)
 RELEASES = json.loads((ROOT / 'src/tests/qualification/releases.json').read_text())
-SUITES = ('broker', 'auth', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'migration',
+SUITES = ('broker', 'replicated', 'auth', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'migration',
           'model', 'resources', 'integration', 'fuzz', 'benchmark', 'smoke', 'cloud')
 STOP_GRACE = 5
 SOAK_DRAIN_SECONDS = 10
 STREAMING_SUITES = ('soak', 'capture', 'endurance')
 LAB_LOCK = Path('/tmp/kaferry-qualification.lock')
 VENV = ROOT / ('.cache/qualification/venv-' + str(sys.version_info.major) + '.' + str(sys.version_info.minor))
+REPLICATED_SOURCE_PORTS = (46092, 46093, 46094)
+REPLICATED_DESTINATION_PORTS = (47092, 47093, 47094)
 
 
 def plan(tier):
@@ -65,6 +69,26 @@ def write_json(path, value):
     temporary = path.with_suffix(path.suffix + '.tmp')
     temporary.write_text(json.dumps(value, indent=2) + '\n')
     temporary.replace(path)
+
+
+def canonical_platform(system, architecture):
+    if system not in ('linux', 'darwin') or architecture not in ('amd64', 'arm64'):
+        raise ValueError('qualification requires Linux/macOS AMD64/ARM64 platform metadata')
+    return system + '-' + architecture
+
+
+def identity_platforms(binary, go):
+    settings = {}
+    for line in capture([go, 'version', '-m', binary]).splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] == 'build' and '=' in fields[1]:
+            key, value = fields[1].split('=', 1)
+            settings[key] = value
+    execution = capture([go, 'env', 'GOOS', 'GOARCH']).split()
+    if len(execution) != 2:
+        raise ValueError('Go did not report the checkout execution platform')
+    return dict(binary_platform=canonical_platform(settings.get('GOOS'), settings.get('GOARCH')),
+                execution_platform=canonical_platform(*execution))
 
 
 def logged(command, directory, label, env, timeout=1800, cancelled=None):
@@ -132,11 +156,12 @@ def suite_command(args, env):
     if args.suite != 'recovery':
         env.pop('KAFERRY_RECOVERY_DURATION', None)
     prefix = [env.get('GO', 'go'), 'test', '-count=1', '-json']
-    if args.suite in ('broker', 'cloud'):
+    if args.suite in ('broker', 'replicated', 'cloud'):
         python = str(VENV / 'bin/python') if VENV.exists() else sys.executable
         return [python, '-m', 'tools.qualification.broker_probe', '--binary', args.binary, '--output', str(args.output),
                 '--source', env['KAFKA_TEST_BROKERS'], '--destination', env['KAFKA_TEST_DEST_BROKERS']] + (
-                    ['--config', str(args.config.resolve())] if args.config else []), []
+                    ['--config', str(args.config.resolve())] if args.config else []) + (
+                    ['--replicated'] if args.suite == 'replicated' else []), []
     if args.suite in STREAMING_SUITES:
         # Clear inherited workload selectors so the receipt describes this run.
         env.pop('KAFERRY_SOAK_PROFILE', None)
@@ -225,6 +250,64 @@ def parallel_capacity(required, output, compose, env):
     return result
 
 
+def replicated_admission(output, env):
+    runtime = json.loads(capture(['docker', 'info', '--format', '{{json .}}']))
+    capacity = dict(required_cpus=2, required_runtime_memory_bytes=8 * 1024**3,
+                    required_broker_bytes=4 * 1024**3, required_evidence_bytes=1024**3,
+                    runtime_cpus=runtime.get('NCPU', 0), runtime_memory_bytes=runtime.get('MemTotal', 0),
+                    evidence_free_bytes=shutil.disk_usage(output).free)
+    write_json(output / 'capacity.json', capacity)
+    if (capacity['runtime_cpus'] < capacity['required_cpus'] or
+            capacity['runtime_memory_bytes'] < capacity['required_runtime_memory_bytes'] or
+            capacity['evidence_free_bytes'] < capacity['required_evidence_bytes']):
+        raise ValueError('insufficient replicated fixture capacity; inspect capacity.json')
+    if env['KAFERRY_REPLICATED_VOLUME_EXTERNAL'] == 'true':
+        labels = json.loads(capture(['docker', 'volume', 'inspect', '--format', '{{json .Labels}}',
+                                     env['KAFERRY_REPLICATED_BROKER_VOLUME']]) or 'null')
+        if not labels or labels.get('kaferry.lab.storage') != 'true':
+            raise ValueError('external broker volume must exist with label kaferry.lab.storage=true')
+    for port in (*REPLICATED_SOURCE_PORTS, *REPLICATED_DESTINATION_PORTS):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+                listener.bind(('127.0.0.1', port))
+        except OSError as error:
+            raise ValueError(f'replicated fixture port {port} is unavailable') from error
+    return capacity
+
+
+def replicated_storage_command(compose, operation):
+    # Send the script through argv: a remote Docker daemon cannot bind a client-side checkout path.
+    script = (ROOT / 'src/tests/replicated/storage.sh').read_text()
+    return compose + ['run', '--rm', '--no-deps', '--entrypoint', '/bin/sh',
+                      'storage', '-ec', script, 'storage', operation]
+
+
+def replicated_storage(output, compose, env, capacity, cancelled):
+    logged(replicated_storage_command(compose, 'capacity'), output,
+           'storage-capacity', env, timeout=180, cancelled=cancelled)
+    readings = [int(line) for line in (output / 'storage-capacity.log').read_text().splitlines() if line.isdecimal()]
+    if len(readings) != 1:
+        raise ValueError('replicated storage did not report exactly one free-space reading')
+    capacity['broker_free_bytes'] = readings[0] * 1024
+    write_json(output / 'capacity.json', capacity)
+    if capacity['broker_free_bytes'] < capacity['required_broker_bytes']:
+        raise ValueError('insufficient replicated broker space; inspect capacity.json')
+    logged(replicated_storage_command(compose, 'prepare'), output,
+           'storage-prepare', env, timeout=60, cancelled=cancelled)
+
+
+def cleanup_replicated(output, compose, env):
+    # Stop writers before deleting only the directory bearing this run's marker.
+    errors = []
+    try:
+        logged(compose + ['stop', '--timeout', '10'], output, 'brokers-stop', env, timeout=90)
+        logged(replicated_storage_command(compose, 'clean'), output,
+               'storage-clean', env, timeout=60)
+    except (OSError, RuntimeError) as error:
+        errors.append({'phase': 'storage-clean', 'error': str(error)})
+    return errors
+
+
 def parallel_run(args):
     if args.companion == 'recovery' and args.companion_duration > 86400:
         raise ValueError('recovery duration must not exceed 24h')
@@ -287,13 +370,33 @@ def resolve_run(args, receipt, fixture):
                KAFKA_TEST_BROKERS=f'127.0.0.1:{source_port}', KAFKA_TEST_DEST_BROKERS=f'127.0.0.1:{destination_port}',
                KAFKA_FAULT_CONTAINER=project+'-kafka-1', KAFKA_FAULT_DEST_CONTAINER=project+'-kafka-dr-1', KAFERRY_FIXTURE_PROJECT=project, CGO_ENABLED='1')
     compose = ['docker', 'compose', '-f', 'src/tests/compose.yaml', '-p', project, '--profile', 'cross-cluster']
-    fixtures = args.suite in ('broker', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration') or (args.suite == 'migration' and args.state_contract == 'resume')
+    volume = getattr(args, 'broker_volume', None)
+    if volume and (args.suite != 'replicated' or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', volume)):
+        raise ValueError('--broker-volume requires run replicated and a Docker volume name')
+    if args.suite == 'replicated':
+        if fixture is not None or args.source != VERSIONS[-1] or args.destination != VERSIONS[-1]:
+            raise ValueError('replicated uses the newest catalog image and its dedicated fixture')
+        project = 'kaferry-replicated'
+        env.update(KAFKA_TEST_BROKERS=','.join(f'127.0.0.1:{port}' for port in REPLICATED_SOURCE_PORTS),
+                   KAFKA_TEST_DEST_BROKERS=','.join(f'127.0.0.1:{port}' for port in REPLICATED_DESTINATION_PORTS),
+                   KAFKA_FAULT_CONTAINER=project+'-source-1-1', KAFKA_FAULT_DEST_CONTAINER=project+'-destination-1-1',
+                   KAFERRY_FIXTURE_PROJECT=project, KAFERRY_REPLICATED_IMAGE=IMAGES[VERSIONS[-1]],
+                   KAFERRY_REPLICATED_RUN_ID=uuid.uuid4().hex,
+                   KAFERRY_REPLICATED_BROKER_VOLUME=volume or project+'-data',
+                   KAFERRY_REPLICATED_VOLUME_EXTERNAL='true' if volume else 'false')
+        compose = ['docker', 'compose', '-f', 'src/tests/replicated/compose.yaml', '-p', project, '--profile', 'replicated']
+        receipt['parameters'] = dict(topology='replicated', brokers_per_cluster=3,
+                                     replication_factor=3, min_insync_replicas=2)
+        receipt['fixture_storage'] = dict(mode='external-volume' if volume else 'disposable-volume',
+                                         run_id=env['KAFERRY_REPLICATED_RUN_ID'])
+    fixtures = args.suite in ('broker', 'replicated', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration') or (args.suite == 'migration' and args.state_contract == 'resume')
     if not Path(args.binary).is_file():
         raise ValueError('binary is missing; run make build or pass --binary')
     receipt['binary_sha256'] = hashlib.sha256(Path(args.binary).read_bytes()).hexdigest()
     if fixture is not None and receipt['binary_sha256'] != fixture['binary_sha256']:
         raise ValueError('candidate binary changed after parallel admission')
     receipt['binary_version'] = capture([args.binary, '--version'])
+    receipt.update(identity_platforms(args.binary, env.get('GO', 'go')))
     if args.suite == 'migration' and args.previous_binary:
         receipt['previous_binary_sha256'] = hashlib.sha256(args.previous_binary.read_bytes()).hexdigest()
         receipt['state_contract'] = args.state_contract
@@ -320,8 +423,14 @@ def resolve_run(args, receipt, fixture):
 def broker_fixture(args, spec, receipt, fixture, cancelled):
     # Parallel children use the coordinator's lease and their assigned project.
     with lab_lock() if fixture is None else nullcontext():
+        owns_fixture = False
         try:
+            if args.suite == 'replicated':
+                receipt['capacity'] = replicated_admission(args.output, spec.env)
+                owns_fixture = True
+                replicated_storage(args.output, spec.compose, spec.env, receipt['capacity'], cancelled)
             if spec.compose:
+                owns_fixture = True
                 logged(spec.compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output,
                        'brokers-up', spec.env, timeout=180, cancelled=cancelled)
                 receipt['broker_images'] = capture(spec.compose + ['images', '--format', 'json'])
@@ -336,7 +445,7 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
             receipt['suite_error'] = str(error) or 'interrupted'
             raise
         finally:
-            if spec.compose:
+            if spec.compose and owns_fixture:
                 errors = []
                 try:
                     with (args.output / 'brokers.log').open('w') as log:
@@ -345,8 +454,12 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
                 except (OSError, subprocess.SubprocessError) as error:
                     errors.append({'phase': 'logs', 'error': str(error)})
                 finally:
+                    if args.suite == 'replicated':
+                        errors.extend(cleanup_replicated(args.output, spec.compose, spec.env))
                     try:
-                        logged(spec.compose + ['down', '-v', '--remove-orphans'], args.output, 'brokers-down', spec.env, timeout=60)
+                        # Keep storage if ownership validation or writer shutdown failed.
+                        volumes = [] if args.suite == 'replicated' and errors else ['-v']
+                        logged(spec.compose + ['down', *volumes, '--remove-orphans'], args.output, 'brokers-down', spec.env, timeout=60)
                     except (OSError, RuntimeError) as error:
                         errors.append({'phase': 'teardown', 'error': str(error)})
                 if errors:
@@ -364,13 +477,16 @@ def verify_run(args, spec, receipt):
         for name in ('BenchmarkEncode', 'BenchmarkDecode', 'BenchmarkReplayOverlap', 'BenchmarkCheckpointEncoding', 'BenchmarkCheckpointSaving'):
             if not any(key.startswith(name) for key in measured):
                 raise ValueError('required benchmark did not execute: ' + name)
-    if args.suite in ('broker', 'cloud'):
+    if args.suite in ('broker', 'replicated', 'cloud'):
         probe = json.loads((args.output / 'reconciliation.json').read_text())
         if (probe['status'] != 'passed' or probe['binary_sha256'] != receipt['binary_sha256'] or
                 {c['name'] for c in probe['cases']} != {route + '/' + phase for route in ('topic-preserve', 'topic-key', 'capture', 'clone', 'replay') for phase in ('partial', 'resume', 'completed')} or
                 any(c['verified'] <= 0 or c['verified'] != c['expected'] or
                     c['missing'] or c['duplicates'] or c['corrupted'] for c in probe['cases'])):
             raise ValueError('independent reconciliation did not pass for the tested binary')
+        if args.suite == 'replicated' and probe.get('topology') != dict(
+                source_brokers=3, destination_brokers=3, replication_factor=3, min_insync_replicas=2):
+            raise ValueError('independent reconciliation did not verify the replicated topology')
         receipt['reconciliation'] = probe
     if args.suite == 'auth':
         receipt['broker_images'] = (args.output / 'qualification.broker-images.json').read_text()
@@ -509,10 +625,11 @@ def main(argv=None):
         running = sub.add_parser(name, help='run one suite' if name == 'run' else 'run every planned case sequentially')
         if name == 'run':
             running.add_argument('suite', choices=SUITES)
+            running.add_argument('--broker-volume', help='existing labeled external volume; replicated fixture only')
         elif name == 'matrix':
             running.add_argument('--tier', choices=('pr', 'nightly', 'full'), default='pr')
-        running.add_argument('--source', choices=VERSIONS, default=VERSIONS[0])
-        running.add_argument('--destination', choices=VERSIONS, default=VERSIONS[0])
+        running.add_argument('--source', choices=VERSIONS)
+        running.add_argument('--destination', choices=VERSIONS)
         running.add_argument('--binary', default='bin/kaferry', help='existing candidate executable (default: %(default)s)')
         running.add_argument('--previous-binary', type=Path)
         running.add_argument('--state-contract', choices=('resume', 'reject'), default='resume')
@@ -541,6 +658,9 @@ def main(argv=None):
     requested_duration = getattr(args, 'duration', None)
     if args.action in ('run', 'matrix', 'releases'):
         endurance = getattr(args, 'suite', None) == 'endurance'
+        newest = getattr(args, 'suite', None) == 'replicated'
+        args.source = args.source or VERSIONS[-1 if newest else 0]
+        args.destination = args.destination or VERSIONS[-1 if newest else 0]
         args.duration = args.duration if args.duration is not None else (86400 if endurance else 7200 if getattr(args, 'suite', None) == 'recovery' else 120)
         args.rate = args.rate if args.rate is not None else (200 if endurance else 50)
     os.chdir(ROOT)
