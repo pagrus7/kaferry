@@ -9,6 +9,11 @@ on:
         type: boolean
         default: false
         required: true
+      candidate_version:
+        description: 'Version to embed during validation, e.g. v0.13.0; requires its authored release notes'
+        type: string
+        default: ''
+        required: false
 permissions:
   contents: read
   actions: read
@@ -17,7 +22,7 @@ concurrency:
   cancel-in-progress: false
 env:
   CGO_ENABLED: "0"
-  RELEASE_TAG: ${{ (github.event_name == 'push' || inputs.publish) && github.ref_name || format('validation-{0}', github.sha) }}
+  RELEASE_TAG: ${{ (github.event_name == 'push' || inputs.publish) && github.ref_name || inputs.candidate_version || format('validation-{0}', github.sha) }}
 jobs:
   build:
     timeout-minutes: 20
@@ -49,12 +54,16 @@ jobs:
           SOURCE_SHA: ${{ github.sha }}
           PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
           REF_TYPE: ${{ github.ref_type }}
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
         run: |
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           if [[ "$PUBLISH" == true ]]; then
             test "$REF_TYPE" = tag
-            [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]
+            test -z "$CANDIDATE_VERSION" || test "$CANDIDATE_VERSION" = "$RELEASE_TAG"
             test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          fi
+          if [[ "$PUBLISH" == true || -n "$CANDIDATE_VERSION" ]]; then
+            [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]
             python3 -m tools.release.release_notes "$RELEASE_TAG" > /dev/null
           fi
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
