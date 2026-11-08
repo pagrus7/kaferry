@@ -68,13 +68,18 @@ func (l *Lab) ownedProxy(ctx context.Context, target Target, requireHealthy bool
 		}
 	}
 	if current.Name != target.Proxy || current.Upstream != fmt.Sprintf("%s:%d", target.Service, port) ||
-		current.Listen != fmt.Sprintf("0.0.0.0:%d", routePort(target.Cluster, target.Listener, target.Broker)) {
+		!wildcardListener(current.Listen, routePort(target.Cluster, target.Listener, target.Broker)) {
 		return errors.New("proxy route does not belong to the resolved fixture target")
 	}
 	if requireHealthy && (!current.Enabled || len(current.Toxics) != 0) {
 		return errors.New("proxy already has an active fault")
 	}
 	return nil
+}
+
+func wildcardListener(address string, port int) bool {
+	// The server returns the bound wildcard's canonical address, which may be dual stack.
+	return address == fmt.Sprintf("0.0.0.0:%d", port) || address == fmt.Sprintf("[::]:%d", port)
 }
 
 func (l *Lab) proxyFault(ctx context.Context, target Target, fault Fault) (restoration, error) {

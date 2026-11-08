@@ -156,6 +156,7 @@ func TestRolesRejectMissingStateAndForeignOwnership(t *testing.T) {
 		{Kind: "leader", Cluster: "source"}, {Kind: "worker-coordinator", Cluster: "source", Group: "copy"},
 		{Kind: "cluster", Cluster: "source", Listener: "direct"}, {Kind: "unknown", Cluster: "source"},
 		{Kind: "isr-follower", Cluster: "source", Topic: "input"}, {Kind: "coordinator", Cluster: "source", Group: "copy"},
+		{Kind: "worker-destination", Cluster: "source", Worker: 1}, {Kind: "coordinator", Cluster: "source"},
 	} {
 		_, err := lab.Resolve(t.Context(), role)
 		require.Error(t, err, "%+v", role)
@@ -169,6 +170,160 @@ func TestRolesRejectMissingStateAndForeignOwnership(t *testing.T) {
 	}
 	for _, call := range docker.calls {
 		require.Contains(t, []string{"ps", "inspect"}, call[0])
+	}
+}
+
+func TestRoleResolutionRequiresCurrentPartitionState(t *testing.T) {
+	// Given metadata that cannot establish a current leader, never inspect or mutate a broker.
+	metadata := &metadataStub{err: errors.New("metadata unavailable")}
+	docker := newDockerStub()
+	lab := &Lab{Project: docker.project, Metadata: metadata, Docker: docker.run}
+	role := Role{Kind: "leader", Cluster: "source", Topic: "input"}
+	_, err := lab.Resolve(t.Context(), role)
+	require.ErrorContains(t, err, "metadata unavailable")
+	metadata.err = nil
+	metadata.part.Leader = -1
+	_, err = lab.Resolve(t.Context(), role)
+	require.ErrorContains(t, err, "no fixture leader")
+	require.Empty(t, docker.calls)
+}
+
+func TestContainerInspectionRejectsMissingAmbiguousAndMalformedOwnership(t *testing.T) {
+	for _, mode := range []string{"missing-project", "lookup-failure", "ambiguous", "malformed", "missing-broker"} {
+		t.Run(mode, func(t *testing.T) {
+			// Given an unavailable or ambiguous ownership lookup.
+			docker := newDockerStub()
+			lab := &Lab{Project: docker.project, Docker: func(ctx context.Context, args ...string) ([]byte, error) {
+				return failedInspection(ctx, docker, mode, args)
+			}}
+			if mode == "missing-project" {
+				lab.Project = ""
+			}
+			// When injection is requested, then fail closed before a container mutation.
+			_, err := lab.Inject(t.Context(), Role{Kind: "cluster", Cluster: "source"}, Fault{Kind: "kill"})
+			require.Error(t, err)
+			for _, call := range docker.calls {
+				require.Contains(t, []string{"ps", "inspect"}, call[0])
+			}
+		})
+	}
+}
+
+func failedInspection(ctx context.Context, docker *dockerStub, mode string, args []string) ([]byte, error) {
+	if args[0] == "ps" && mode == "lookup-failure" {
+		return nil, errors.New("daemon unavailable")
+	}
+	if args[0] == "ps" && mode == "ambiguous" {
+		return []byte("first-id second-id"), nil
+	}
+	if args[0] == "inspect" && mode == "malformed" {
+		return []byte("not JSON"), nil
+	}
+	if args[0] == "inspect" && mode == "missing-broker" && args[1] == "id-source-1" {
+		return nil, errors.New("broker container removed")
+	}
+	return docker.run(ctx, args...)
+}
+
+func TestPhysicalFaultChecksStateAgainImmediatelyBeforeMutation(t *testing.T) {
+	for _, mode := range []string{"stopped", "paused", "removed"} {
+		t.Run(mode, func(t *testing.T) {
+			// Given a broker whose state changes after resolving its role.
+			docker := newDockerStub()
+			lab := &Lab{Project: docker.project, Metadata: &metadataStub{coordinator: 2}}
+			lab.Docker = changeOnSecondInspection(docker, mode)
+			// When injecting, then refuse the changed target and never send kill.
+			_, err := lab.Inject(t.Context(), Role{Kind: "coordinator", Cluster: "source", Group: "copy"}, Fault{Kind: "kill"})
+			require.Error(t, err)
+			for _, call := range docker.calls {
+				require.NotEqual(t, "kill", call[0])
+			}
+		})
+	}
+}
+
+func changeOnSecondInspection(docker *dockerStub, mode string) Command {
+	inspections := 0
+	return func(ctx context.Context, args ...string) ([]byte, error) {
+		if args[0] != "inspect" || args[1] != "id-source-2" {
+			return docker.run(ctx, args...)
+		}
+		inspections++
+		if inspections != 2 {
+			return docker.run(ctx, args...)
+		}
+		if mode == "removed" {
+			return nil, errors.New("original container removed")
+		}
+		owned := docker.containers[args[1]]
+		owned.State.Running = mode != "stopped"
+		owned.State.Paused = mode == "paused"
+		docker.containers[args[1]] = owned
+		return docker.run(ctx, args...)
+	}
+}
+
+func TestRestartUsesOriginalContainerAndHealingDoesNotRestartHealthyBroker(t *testing.T) {
+	// Given a healthy coordinator, restart its concrete container once.
+	docker := newDockerStub()
+	lab := &Lab{Project: docker.project, Metadata: &metadataStub{coordinator: 2}, Docker: docker.run}
+	injection, err := lab.Inject(t.Context(), Role{Kind: "coordinator", Cluster: "source", Group: "copy"}, Fault{Kind: "restart"})
+	require.NoError(t, err)
+	require.Contains(t, docker.calls, []string{"restart", "--time", "10", "id-source-2"})
+	// When healing an already running broker, then do not issue a second start.
+	require.NoError(t, injection.Heal(t.Context()))
+	for _, call := range docker.calls {
+		require.NotEqual(t, "start", call[0])
+	}
+}
+
+func TestKilledBrokerCleanupWaitsForTheOriginalContainer(t *testing.T) {
+	// Given an injected kill, do not start a replacement if the original ID is unavailable.
+	docker := newDockerStub()
+	lab := &Lab{Project: docker.project, Metadata: &metadataStub{coordinator: 2}, Docker: docker.run}
+	injection, err := lab.Inject(t.Context(), Role{Kind: "coordinator", Cluster: "source", Group: "copy"}, Fault{Kind: "kill"})
+	require.NoError(t, err)
+	docker.fail = "inspect id-source-2"
+	require.Error(t, injection.Heal(t.Context()))
+	require.True(t, injection.Event.Heal.IsZero())
+	require.NotContains(t, docker.calls, []string{"start", "id-source-2"})
+	// When the original target becomes available, then its pending restore succeeds.
+	docker.fail = ""
+	require.NoError(t, injection.Heal(t.Context()))
+	require.Contains(t, docker.calls, []string{"start", "id-source-2"})
+}
+
+func TestNetworkCleanupHandlesNoDetachMissingNetworkAndInspectionFailure(t *testing.T) {
+	for _, mode := range []string{"no-detach", "missing-network", "inspect-failure"} {
+		t.Run(mode, func(t *testing.T) {
+			// Given an original coordinator on its owned network.
+			docker := newDockerStub()
+			lab := &Lab{Project: docker.project, Metadata: &metadataStub{coordinator: 2}, Docker: docker.run}
+			role := Role{Kind: "coordinator", Cluster: "source", Group: "copy"}
+			if mode == "no-detach" {
+				docker.fail = "network disconnect owned-network id-source-2"
+			}
+			if mode == "missing-network" {
+				owned := docker.containers["id-source-2"]
+				owned.NetworkSettings.Networks = nil
+				docker.containers[owned.ID] = owned
+			}
+			injection, err := lab.Inject(t.Context(), role, Fault{Kind: "disconnect"})
+			if mode != "inspect-failure" {
+				require.Error(t, err)
+				for _, call := range docker.calls {
+					require.False(t, len(call) > 1 && call[0] == "network" && call[1] == "connect")
+				}
+				return
+			}
+			require.NoError(t, err)
+			// When healing cannot inspect the old container, then retain cleanup until it can.
+			docker.fail = "inspect id-source-2"
+			require.Error(t, injection.Heal(t.Context()))
+			require.True(t, injection.Event.Heal.IsZero())
+			docker.fail = ""
+			require.NoError(t, injection.Heal(t.Context()))
+		})
 	}
 }
 

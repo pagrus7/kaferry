@@ -45,10 +45,7 @@ func (m KafkaMetadata) Partition(ctx context.Context, cluster, topic string, par
 	if err != nil {
 		return Partition{}, err
 	}
-	detail, ok := metadata.Topics[topic]
-	if !ok {
-		return Partition{}, errors.New("topic metadata is unavailable")
-	}
+	detail := metadata.Topics[topic]
 	if detail.Err != nil {
 		return Partition{}, fmt.Errorf("topic metadata: %w", detail.Err)
 	}

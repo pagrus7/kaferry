@@ -29,7 +29,7 @@ func newProxyStub(t *testing.T) (*Lab, *proxyStub, *metadataStub) {
 		for id := int32(1); id <= 3; id++ {
 			for index, listener := range listeners {
 				name := fmt.Sprintf("%s-%d-%s", side, id, listener)
-				p.routes[name] = &proxy{Name: name, Listen: fmt.Sprintf("0.0.0.0:%d", routePort(side, listener, id)),
+				p.routes[name] = &proxy{Name: name, Listen: fmt.Sprintf("[::]:%d", routePort(side, listener, id)),
 					Upstream: fmt.Sprintf("%s-%d:%d", side, id, 9092+index), Enabled: true}
 			}
 		}
@@ -71,13 +71,25 @@ func (p *proxyStub) serve(w http.ResponseWriter, r *http.Request) {
 	if len(parts) > 2 {
 		result = current.Toxics
 		if r.Method == http.MethodDelete {
-			current.Toxics = nil
+			current.Toxics = withoutToxic(current.Toxics, parts[3])
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
+}
+
+func withoutToxic(toxics []json.RawMessage, name string) []json.RawMessage {
+	var retained []json.RawMessage
+	for _, value := range toxics {
+		var toxic struct{ Name string }
+		_ = json.Unmarshal(value, &toxic)
+		if toxic.Name != name {
+			retained = append(retained, value)
+		}
+	}
+	return retained
 }
 
 func TestWorkerCoordinatorCutHealsOriginalPathAfterOwnershipMoves(t *testing.T) {
@@ -171,7 +183,7 @@ func TestPartialPathCutUnwindsAndRejectsWrongOrAlreadyFaultedRoutes(t *testing.T
 
 func TestInvalidPrimitivesCannotReachDockerOrProxy(t *testing.T) {
 	lab, proxies, _ := newProxyStub(t)
-	for _, fault := range []Fault{{Kind: "unknown"}, {Kind: "bandwidth"}, {Kind: "latency", Value: -1}, {Kind: "timeout", Stream: "both"}, {Kind: "kill"}} {
+	for _, fault := range []Fault{{Kind: "unknown"}, {Kind: "bandwidth"}, {Kind: "latency", Value: -1}, {Kind: "timeout", Stream: "both"}, {Kind: "kill"}, {Kind: "cut", Value: 1}} {
 		// Given invalid parameters, when injecting, then reject before any route mutation.
 		_, err := lab.Inject(t.Context(), Role{Kind: "leader", Cluster: "source", Topic: "input", Worker: 1}, fault)
 		require.Error(t, err)
@@ -198,4 +210,99 @@ func TestHealCannotMutateAReplacementProxyContainer(t *testing.T) {
 	require.True(t, injection.Event.Heal.IsZero())
 	lab.Docker = original
 	require.NoError(t, injection.Heal(t.Context()))
+}
+
+func TestProxyOwnershipAcceptsOnlyEquivalentBoundWildcardListeners(t *testing.T) {
+	// Given the pinned API's IPv6 wildcard response, preserve exact route ownership.
+	for _, test := range []struct {
+		address string
+		valid   bool
+	}{{"[::]:46394", true}, {"0.0.0.0:46394", true}, {"[::]:46393", false},
+		{"127.0.0.1:46394", false}, {"[::1]:46394", false}, {"::46394", false}, {"", false}} {
+		t.Run(test.address, func(t *testing.T) {
+			lab, proxies, _ := newProxyStub(t)
+			proxies.routes["source-3-worker3"].Listen = test.address
+			// When checking the route, then concrete, malformed or different-port binds fail.
+			injection, err := lab.Inject(t.Context(), Role{Kind: "leader", Cluster: "source", Topic: "input", Worker: 3}, Fault{Kind: "cut"})
+			if test.valid {
+				require.NoError(t, err)
+				require.NoError(t, injection.Heal(t.Context()))
+			} else {
+				require.ErrorContains(t, err, "does not belong")
+				require.Empty(t, proxies.posts)
+			}
+		})
+	}
+}
+
+func TestToxicDefaultsAndUncertainCreationPreserveOtherFaults(t *testing.T) {
+	// Given a default-direction toxic, apply the documented downstream default.
+	lab, proxies, _ := newProxyStub(t)
+	lab.HTTP = nil // Exercise the production timeout-bearing client.
+	role := Role{Kind: "leader", Cluster: "source", Topic: "input", Worker: 1}
+	injection, err := lab.Inject(t.Context(), role, Fault{Kind: "latency", Value: 100})
+	require.NoError(t, err)
+	require.Equal(t, "downstream", proxies.posts[0]["stream"])
+	proxies.routes["source-3-worker1"].Toxics = append(proxies.routes["source-3-worker1"].Toxics, json.RawMessage(`{"name":"another-owner"}`))
+	// When healing, then remove only the injected toxic, preserving an unrelated name.
+	require.NoError(t, injection.Heal(t.Context()))
+	require.Len(t, proxies.routes["source-3-worker1"].Toxics, 1)
+	require.JSONEq(t, `{"name":"another-owner"}`, string(proxies.routes["source-3-worker1"].Toxics[0]))
+	lab, proxies, _ = newProxyStub(t)
+	proxies.fail = "POST /proxies/source-3-worker1/toxics"
+	injection, err = lab.Inject(t.Context(), role, Fault{Kind: "timeout"})
+	require.Error(t, err)
+	// A failed request may not have created the toxic. Cleanup must tolerate its absence.
+	require.False(t, injection.Event.Heal.IsZero())
+	require.Empty(t, proxies.routes["source-3-worker1"].Toxics)
+	for _, call := range proxies.calls {
+		require.False(t, strings.HasPrefix(call, "DELETE "))
+	}
+}
+
+func TestToxicCleanupRetainsUnavailableStateForLaterHealing(t *testing.T) {
+	// Given a toxic whose list request fails, keep its cleanup pending.
+	lab, proxies, _ := newProxyStub(t)
+	role := Role{Kind: "leader", Cluster: "source", Topic: "input", Worker: 1}
+	injection, err := lab.Inject(t.Context(), role, Fault{Kind: "slow_close", Value: 100})
+	require.NoError(t, err)
+	proxies.fail = "GET /proxies/source-3-worker1/toxics"
+	require.Error(t, injection.Heal(t.Context()))
+	require.True(t, injection.Event.Heal.IsZero())
+	proxies.fail = ""
+	// When the original proxy container is stopped, then do not issue a removal to its address.
+	docker := newDockerStub()
+	owned := docker.containers["id-toxiproxy"]
+	owned.State.Running = false
+	docker.containers[owned.ID] = owned
+	lab.Docker = docker.run
+	require.ErrorContains(t, injection.Heal(t.Context()), "not running")
+	require.True(t, injection.Event.Heal.IsZero())
+	owned.State.Running = true
+	docker.containers[owned.ID] = owned
+	// Then restoring the same container permits the pending cleanup.
+	require.NoError(t, injection.Heal(t.Context()))
+	require.Empty(t, proxies.routes["source-3-worker1"].Toxics)
+}
+
+func TestUnavailableProxyAPICannotMutateRoutes(t *testing.T) {
+	for _, mode := range []string{"invalid-address", "closed-server", "invalid-json"} {
+		t.Run(mode, func(t *testing.T) {
+			// Given an API that cannot establish route ownership.
+			lab, proxies, _ := newProxyStub(t)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("invalid JSON")) }))
+			t.Cleanup(server.Close)
+			lab.API = server.URL
+			if mode == "invalid-address" {
+				lab.API = "://invalid"
+			}
+			if mode == "closed-server" {
+				server.Close()
+			}
+			// When injection is attempted, then no fault is sent to the unverified route.
+			_, err := lab.Inject(t.Context(), Role{Kind: "leader", Cluster: "source", Topic: "input", Worker: 1}, Fault{Kind: "cut"})
+			require.Error(t, err)
+			require.Empty(t, proxies.posts)
+		})
+	}
 }

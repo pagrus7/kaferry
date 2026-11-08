@@ -50,10 +50,18 @@ def populate(output):
     request('POST', '/populate', expected)
     observed = request('GET', '/proxies')
     if set(observed) != {row['name'] for row in expected} or any(
-            any(observed[row['name']].get(key) != value for key, value in row.items()) or
+            not matching_route(observed[row['name']], row) or
             observed[row['name']].get('toxics') for row in expected):
         raise ValueError('replicated proxy routes do not match the fixture')
     (output / 'proxy-routes.json').write_text(json.dumps(expected, indent=2) + '\n')
+
+
+def matching_route(observed, expected):
+    # Go may report an IPv4 wildcard listener as its dual-stack IPv6 wildcard.
+    port = expected['listen'].rsplit(':', 1)[1]
+    return (all(observed.get(key) == expected[key] for key in ('name', 'upstream')) and
+            observed.get('enabled') is True and
+            observed.get('listen') in (f'0.0.0.0:{port}', f'[::]:{port}'))
 
 
 def main():
