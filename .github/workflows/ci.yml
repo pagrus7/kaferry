@@ -36,6 +36,17 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: go test -run '^$' -race -tags=integration,qualification ./src/tests/compatibility
+  warm-container-cache:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-name: container-inputs
+      - name: Compile both Linux container inputs
+        run: python3 -m tools.release.container_artifacts candidate .cache/container-context
   fast:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
