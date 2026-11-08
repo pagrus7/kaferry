@@ -111,7 +111,9 @@ Final SQL `OPTIONS` defaults to `FAIL`. `ON_ERROR` cannot be combined with the s
 | `ON_REJECTED_TIMESTAMP` or `ON_ERROR` | Timestamp outside known destination bounds or the client’s supported range |
 | `ON_ERROR` | Synchronous size refusal or supported record validation failure |
 
-Asynchronous broker failures, authentication/authorization errors, out-of-range positions, archive corruption and changed source files always stop copying. Earlier confirmed output remains; resume with the same group after fixing the cause. Counts appear in `copy summary`.
+Asynchronous broker failures, authentication/authorization errors, out-of-range positions during copying, archive corruption and changed source files always stop copying. Earlier confirmed output remains; resume with the same group after fixing the cause. Counts appear in `copy summary`.
+
+On assignment or restart, saved Kafka progress below the retained log start resumes at that log start and logs `expired source position` with `partition`, `saved`, `log_start` and `offset_gap`. The gap is an offset difference, not a lost-record count; deleted input cannot be recovered. Saved progress above log end fails. A saved captured end outside retained positions also fails. Fresh explicit offset bounds outside retained positions fail instead of skipping.
 
 ### Worker settings
 

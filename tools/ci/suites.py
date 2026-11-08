@@ -18,7 +18,9 @@ GO_SUITES = {
 LOAD_PROFILES = ('near-limit-v1', 'hot-keys-v1', 'headers-v1', 'tombstones-v1',
                  'source-none-v1', 'source-gzip-v1', 'source-snappy-v1', 'source-lz4-v1', 'source-zstd-v1')
 EXPECTED = {
-    'integration': ['TestAllFileDirectionsAndResume', 'TestTopicToTopicSlice'],
+    'integration': ['TestAllFileDirectionsAndResume', 'TestTopicToTopicSlice',
+                    'TestRunningSourceOffsetOutOfRangeFailsWithoutSavingProgress',
+                    'TestExpiredSourceProgressRestartReportsGapAndCopiesRetainedRecords'],
     'load': ['TestLoadBoundedKafkaCopy/default'] + ['TestLoadBoundedKafkaCopy/' + name for name in LOAD_PROFILES],
     'soak': ['TestStreamingSoakFidelityCommitLagMemoryAndShutdown'],
     'fault': ['TestBlockingCommitAcrossBrokerOutage', 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits',

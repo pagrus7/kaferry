@@ -141,6 +141,8 @@ python3 -m tools.qualification.qualify run smoke
 
 `resources` runs copy, capture, checkpoint and archive-adapter component tests, including injected failures at filesystem durability boundaries. `fault` includes abrupt process death and restart; its reconciliation permits replay duplicates under the at-least-once contract. `model` compares randomized ownership, delivery, gap and save sequences against a reference model. The same lifecycle target participates in `make fuzz`; `FUZZ_ITERATIONS` sets its execution budget.
 
+`integration` requires two CLI cases for the [source truncation contract](../reference.md#record-error-policies). A protocol fixture rejects an observed source fetch with an out-of-range error; the running CLI must fail explicitly without output or progress beyond its saved initial position. A real-broker case first exits the CLI at observed saved progress, then deletes unread offsets. Restart must copy exactly the retained records, save their end and report the old position, log start and offset gap. These cases distinguish broker-error handling from reported restart skips; they do not measure retention scheduling or claim recovery of deleted records.
+
 ### Load workload profiles
 
 `load` runs the existing bounded Kafka and archive copies plus these Kafka profiles. They reuse the streaming record fixture and verifier, with four source and five destination partitions and key routing. Each profile copies 3,200 records; near-limit uses 256 larger records. The source producer buffers at most 64 records. Every profile requires exact counts, matching submission/receipt fingerprints, no duplicates or corruption, preserved ordered headers and timestamps, expected key routing, and the configured uncommitted-record/byte caps.
