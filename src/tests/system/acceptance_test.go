@@ -5,6 +5,7 @@ package compat
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -391,9 +392,9 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 	case <-ctx.Done():
 		t.Fatal("retention overtook the consumer without a failure")
 	}
-	if !strings.Contains(process.logs(), "offset") {
-		t.Fatal("offset failure has no diagnostic", process.logs())
-	}
+	require.Contains(t, process.logs(), "OFFSET_OUT_OF_RANGE", "running offset loss must identify its cause")
+	require.Zero(t, committedPartitions(t, a, group, src, 1)[0].At,
+		"a failed running consumer must not save progress across deleted input")
 	// Restart the same query and group; cancel only after retained output is durable.
 	// When restarting the same query after retention has removed its saved position.
 	process = startCLI(t, ctx, binary, "", "run", "-e", statement)
@@ -403,10 +404,34 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 		t.Fatalf("retention restart: %v %s", err, process.logs())
 	}
 
-	// Then retained records are copied and the retention gap is logged.
-	if !strings.Contains(process.logs(), "expired source position") {
-		t.Fatal("restart did not log the retention gap", process.logs())
+	// Then exactly the retained records are copied, saved and reported as an explicit offset gap.
+	ends, err := a.ListEndOffsets(ctx, dst)
+	require.NoError(t, err)
+	end, ok := ends.Lookup(dst, 0)
+	require.True(t, ok)
+	require.NoError(t, end.Err)
+	require.Equal(t, int64(5), end.Offset, "restart must neither duplicate nor invent retained input")
+	c := consumer(t)
+	assign(t, c, dst, 1)
+	for i := 5; i < 10; i++ {
+		record := read(t, c)
+		require.Equal(t, int32(0), record.Partition)
+		require.Equal(t, fmt.Sprint(i), string(record.Value), "deleted input must not hide missing retained records")
 	}
+	require.Equal(t, int64(10), committedPartitions(t, a, group, src, 1)[0].At)
+	reported := false
+	for _, line := range strings.Split(process.logs(), "\n") {
+		var event map[string]any
+		if json.Unmarshal([]byte(line), &event) != nil || event["msg"] != "expired source position" {
+			continue
+		}
+		require.Equal(t, "WARN", event["level"])
+		for field, expected := range map[string]float64{"partition": 0, "saved": 0, "log_start": 5, "offset_gap": 5} {
+			require.Equal(t, expected, event[field], "retention warning field %s", field)
+		}
+		reported = true
+	}
+	require.True(t, reported, "restart must report the skipped offset range: %s", process.logs())
 }
 
 // Embedded component tests keep process termination under the test runner's control.
