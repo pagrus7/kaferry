@@ -43,7 +43,7 @@ A changed base, missing prior reports or unaccounted changes require a fresh ful
 
 ## Coverage evidence
 
-Codecov combines the unit and broker-integration uploads for the PR head and fails `codecov/patch` / `codecov/project` when changed lines are under-covered or total coverage drops. `codecov.yml` holds the thresholds. For applicable Go changes, the tests reviewer reads missed and partial changed lines in the Codecov PR view for the frozen HEAD; a passing check does not establish adequate tests.
+Codecov combines the unit and broker-integration uploads for the PR head and fails `codecov/patch` / `codecov/project` when changed-line or total coverage falls below the thresholds configured in `codecov.yml`. For applicable Go changes, the tests reviewer reads missed and partial changed lines in the Codecov PR view for the frozen HEAD; a passing check does not establish adequate tests.
 
 Record the full changed-gap list, decisions and evidence. For each gap, trace callers and invariants, then test reachable behavior, remove unnecessary code or justify retention. Missing data or unresolved disagreements leaves review pending; inspect unchanged gaps only for a concrete risk.
 
