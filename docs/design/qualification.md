@@ -45,7 +45,11 @@ By default the fixture owns a disposable Docker volume. To use an existing volum
 python3 -m tools.qualification.qualify run replicated --broker-volume LAB_VOLUME --output /path/to/fresh/evidence
 ```
 
-`--broker-volume` is supported only by `run replicated`; other suite combinations fail. The volume must allow the fixture initializer to create directories and set broker ownership to UID/GID 1000. Each run gets a fresh UUID directory beneath `kaferry-replicated/<project>/`. Cleanup stops writers and removes only that directory after checking its ownership marker. The external volume and unrelated files remain. Failed ownership validation or writer shutdown preserves the run directory; other cleanup failures can occur after data removal and still fail qualification. The volume driver selects its filesystem; this command does not change host storage settings or establish shared-filesystem durability. Archive output still needs the [archive filesystem guarantees](archive.md#layout-and-ownership).
+`--broker-volume` is supported only by `run replicated`; other suite combinations fail. The volume must allow the fixture initializer to create directories and set broker ownership to UID/GID 1000. Each run gets a fresh UUID directory beneath `kaferry-replicated/<project>/`.
+
+Cleanup stops writers and removes only that directory after checking its ownership marker. The external volume and unrelated files remain. Failed ownership validation or writer shutdown preserves the run directory. Data deletion keeps the marker until the run's other files are removed; a failed deletion leaves the marker and remaining data, without undoing earlier deletions. If final directory removal fails, cleanup attempts to restore the marker and still fails qualification. There is no automatic cleanup retry.
+
+The volume driver selects its filesystem; this command does not change host storage settings or establish shared-filesystem durability. Archive output still needs the [archive filesystem guarantees](archive.md#layout-and-ownership).
 
 `--output` selects evidence and the smoke's archive/checkpoint output; it does not select broker storage. Keep private driver options, server addresses and access configuration outside receipts intended for publication.
 
