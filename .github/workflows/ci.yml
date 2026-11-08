@@ -181,6 +181,9 @@ jobs:
   load:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
     env:
       KAFKA_TEST_BROKERS: 127.0.0.1:39092
       KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
@@ -197,8 +200,17 @@ jobs:
           CGO_ENABLED: "1"
           KAFERRY_QUICKSTART: "1"
           KAFERRY_TEST_BINARY: ${{ github.workspace }}/bin/kaferry
-        run: python3 -m tools.ci.ci quickstart go test -count=1 -json -race -tags=integration -run '^TestKafkaQuickStart$' ./src/tests/system
+        run: python3 -m tools.ci.ci quickstart go test -count=1 -json -race -tags=integration -coverpkg=./... -coverprofile=build-results/quickstart-coverage.out -run '^TestKafkaQuickStart$' ./src/tests/system
       - run: python3 -m tools.ci.ci verify-tests quickstart 'TestKafkaQuickStart'
+      - name: Publish quick-start Go coverage
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: build-results/quickstart-coverage.out
+          disable_search: true
+          flags: go
+          use_oidc: true
+          version: v11.3.1
+          fail_ci_if_error: true
       - if: always()
         run: |
           mkdir -p build-results
