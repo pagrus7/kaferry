@@ -155,85 +155,7 @@ func TestExplainCLIReportsInputAndIdentityErrorsWithoutPartialOutput(t *testing.
 func TestExplainUsesOnlyReadOnlyKafkaRequests(t *testing.T) {
 	for _, output := range []string{"TOPIC", "ARCHIVE", "SELF-COPY", "OFFSET"} {
 		t.Run(output, func(t *testing.T) {
-			// Given real protocol clients and two source partitions.
-			cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(2, "input"), kfake.SeedTopics(3, "output"))
-			defer cluster.Close()
-			producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.RecordPartitioner(kgo.ManualPartitioner()))
-			require.NoError(t, err)
-			defer producer.Close()
-			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			defer cancel()
-			stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
-			for id := range int32(2) {
-				require.NoError(t, producer.ProduceSync(ctx, &kgo.Record{Topic: "input", Partition: id, Timestamp: stamp, Value: []byte("record")}).FirstErr())
-			}
-			var writes atomic.Int64
-			for _, key := range []kmsg.Key{kmsg.Produce, kmsg.Fetch, kmsg.JoinGroup, kmsg.OffsetCommit, kmsg.ConsumerGroupHeartbeat} {
-				cluster.ControlKey(int16(key), func(kmsg.Request) (kmsg.Response, error, bool) {
-					cluster.KeepControl()
-					writes.Add(1)
-					return nil, nil, false
-				})
-			}
-			// A denied optional config request must not add a permission requirement.
-			cluster.ControlKey(int16(kmsg.DescribeConfigs), func(request kmsg.Request) (kmsg.Response, error, bool) {
-				cluster.KeepControl()
-				response := request.ResponseKind().(*kmsg.DescribeConfigsResponse)
-				response.Resources = []kmsg.DescribeConfigsResponseResource{{ErrorCode: 29, ResourceType: kmsg.ConfigResourceTypeTopic, ResourceName: "output"}}
-				return response, nil, true
-			})
-			directory := t.TempDir()
-			destination := "TOPIC 'output'"
-			switch output {
-			case "ARCHIVE":
-				destination = fmt.Sprintf("ARCHIVE '%s'", filepath.Join(directory, "archive.avro"))
-			case "SELF-COPY":
-				destination = "TOPIC 'input'"
-			}
-			query := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='secret_SENTINEL_415') INSERT INTO %s SELECT * FROM TOPIC 'input' WITH (GROUP='preview', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS (ON_ERROR=SKIP)", strings.Join(cluster.ListenAddrs(), ","), destination, stamp.Format(time.RFC3339Nano), stamp.Add(time.Minute).Format(time.RFC3339Nano))
-			if output == "OFFSET" {
-				query = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC 'output' SELECT * FROM TOPIC 'input' WHERE RECORD_OFFSET<LATEST", strings.Join(cluster.ListenAddrs(), ","))
-			}
-			var stdout, stderr bytes.Buffer
-			// When the full Fx-composed command explains the copy.
-			code := Execute(ctx, []string{"explain", "-e", query, "--json"}, nil, &stdout, &stderr)
-			// Then self-copy is rejected before any consume, produce, join or commit;
-			// successful previews report positions without leaking properties.
-			if output == "SELF-COPY" {
-				require.EqualValues(t, 2, code)
-				require.Zero(t, stdout.Len())
-				require.Zero(t, writes.Load())
-				require.Contains(t, stderr.String(), "source and destination are the same Kafka topic")
-				require.NotContains(t, stderr.String(), "secret_SENTINEL")
-				return
-			}
-			var report inspect.Report
-			require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
-			require.Zero(t, code)
-			require.Zero(t, writes.Load())
-			require.Len(t, report.Partitions, 2)
-			if output == "OFFSET" {
-				require.Equal(t, "OFFSET", report.StartRule)
-				for _, p := range report.Partitions {
-					require.EqualValues(t, 1, *p.End)
-					require.Equal(t, "preview", p.EndOrigin)
-				}
-			} else {
-				require.Equal(t, "WINDOW", report.StartRule)
-			}
-			if output != "OFFSET" {
-				require.Equal(t, (inspect.ErrorPolicies{MissingTimestamp: "SKIP", RejectedTimestamp: "SKIP", OtherRecord: "SKIP"}), report.RecordErrors)
-			}
-			require.Zero(t, report.Partitions[0].Start)
-			require.EqualValues(t, 1, report.Partitions[0].LogEnd)
-			require.NotContains(t, stdout.String()+stderr.String(), "secret_SENTINEL")
-			if output == "TOPIC" {
-				require.Empty(t, report.Destination.TimestampType)
-				require.Contains(t, strings.Join(report.Warnings, " "), "unreadable")
-			}
-			entries, err := os.ReadDir(directory)
-			require.NoError(t, err)
-			require.Len(t, entries, 0)
+			explainReadOnlyKafkaRequests(t, output)
 		})
 	}
 }
@@ -251,4 +173,86 @@ func TestShutdownDeadlineCoversExplanationOutput(t *testing.T) {
 	// then printing still uses the process shutdown deadline and reports its stage.
 	t.Setenv("TMPDIR", t.TempDir())
 	runShutdownHelper(t, "explain", "printing explanation")
+}
+
+func explainReadOnlyKafkaRequests(t *testing.T, output string) {
+	// Given real protocol clients and two source partitions.
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(2, "input"), kfake.SeedTopics(3, "output"))
+	defer cluster.Close()
+	producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	require.NoError(t, err)
+	defer producer.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	for id := range int32(2) {
+		require.NoError(t, producer.ProduceSync(ctx, &kgo.Record{Topic: "input", Partition: id, Timestamp: stamp, Value: []byte("record")}).FirstErr())
+	}
+	var writes atomic.Int64
+	for _, key := range []kmsg.Key{kmsg.Produce, kmsg.Fetch, kmsg.JoinGroup, kmsg.OffsetCommit, kmsg.ConsumerGroupHeartbeat} {
+		cluster.ControlKey(int16(key), func(kmsg.Request) (kmsg.Response, error, bool) {
+			cluster.KeepControl()
+			writes.Add(1)
+			return nil, nil, false
+		})
+	}
+	// A denied optional config request must not add a permission requirement.
+	cluster.ControlKey(int16(kmsg.DescribeConfigs), func(request kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
+		response := request.ResponseKind().(*kmsg.DescribeConfigsResponse)
+		response.Resources = []kmsg.DescribeConfigsResponseResource{{ErrorCode: 29, ResourceType: kmsg.ConfigResourceTypeTopic, ResourceName: "output"}}
+		return response, nil, true
+	})
+	directory := t.TempDir()
+	destination := "TOPIC 'output'"
+	switch output {
+	case "ARCHIVE":
+		destination = fmt.Sprintf("ARCHIVE '%s'", filepath.Join(directory, "archive.avro"))
+	case "SELF-COPY":
+		destination = "TOPIC 'input'"
+	}
+	query := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='secret_SENTINEL_415') INSERT INTO %s SELECT * FROM TOPIC 'input' WITH (GROUP='preview', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' OPTIONS (ON_ERROR=SKIP)", strings.Join(cluster.ListenAddrs(), ","), destination, stamp.Format(time.RFC3339Nano), stamp.Add(time.Minute).Format(time.RFC3339Nano))
+	if output == "OFFSET" {
+		query = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC 'output' SELECT * FROM TOPIC 'input' WHERE RECORD_OFFSET<LATEST", strings.Join(cluster.ListenAddrs(), ","))
+	}
+	var stdout, stderr bytes.Buffer
+	// When the full Fx-composed command explains the copy.
+	code := Execute(ctx, []string{"explain", "-e", query, "--json"}, nil, &stdout, &stderr)
+	// Then self-copy is rejected before any consume, produce, join or commit;
+	// successful previews report positions without leaking properties.
+	if output == "SELF-COPY" {
+		require.EqualValues(t, 2, code)
+		require.Zero(t, stdout.Len())
+		require.Zero(t, writes.Load())
+		require.Contains(t, stderr.String(), "source and destination are the same Kafka topic")
+		require.NotContains(t, stderr.String(), "secret_SENTINEL")
+		return
+	}
+	var report inspect.Report
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
+	require.Zero(t, code)
+	require.Zero(t, writes.Load())
+	require.Len(t, report.Partitions, 2)
+	if output == "OFFSET" {
+		require.Equal(t, "OFFSET", report.StartRule)
+		for _, p := range report.Partitions {
+			require.EqualValues(t, 1, *p.End)
+			require.Equal(t, "preview", p.EndOrigin)
+		}
+	} else {
+		require.Equal(t, "WINDOW", report.StartRule)
+	}
+	if output != "OFFSET" {
+		require.Equal(t, (inspect.ErrorPolicies{MissingTimestamp: "SKIP", RejectedTimestamp: "SKIP", OtherRecord: "SKIP"}), report.RecordErrors)
+	}
+	require.Zero(t, report.Partitions[0].Start)
+	require.EqualValues(t, 1, report.Partitions[0].LogEnd)
+	require.NotContains(t, stdout.String()+stderr.String(), "secret_SENTINEL")
+	if output == "TOPIC" {
+		require.Empty(t, report.Destination.TimestampType)
+		require.Contains(t, strings.Join(report.Warnings, " "), "unreadable")
+	}
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	require.Len(t, entries, 0)
 }

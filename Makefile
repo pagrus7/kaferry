@@ -3,7 +3,6 @@ PYTHON ?= python3
 JSCPD ?= jscpd
 GOLANGCI_LINT ?= golangci-lint
 DUPLICATION_BASE ?= origin/main
-LINT_BASE ?= origin/main
 export CGO_ENABLED := 0
 KAFERRY_VERSION ?= dev
 KAFERRY_REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || printf unknown)$(if $(shell git status --porcelain --untracked-files=no 2>/dev/null),-dirty)
@@ -73,7 +72,7 @@ duplicates:
 	$(JSCPD) --config .jscpd.json --baseline-from-ref "$(DUPLICATION_BASE)" --fail-on-new-clones --no-tips
 lint:
 	$(GOLANGCI_LINT) config verify
-	$(GOLANGCI_LINT) run --new-from-rev "$(LINT_BASE)" --whole-files ./...
+	$(GOLANGCI_LINT) run ./...
 
 # Standalone qualification: Python 3.11+, Go, Docker and Compose; no agent required.
 .PHONY: qualification-setup qualification-pr qualification-full model

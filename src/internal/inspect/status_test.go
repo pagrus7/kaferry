@@ -69,70 +69,7 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 		{"foreign member", "unknown", 5}, {"identity conflict while active", "unknown", 5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Given two current partitions and independently observed membership/progress.
-			s, p, f, _ := fixture()
-			source := f.connections["input"]
-			for _, id := range []int32{0, 1} {
-				source.saved[id] = kafkaport.SavedProgress{Position: int64(id), Progress: kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: int64(id)}, End: new(int64(id))}}
-			}
-			switch tc.name {
-			case "worker threshold", "active after worker stop", "partial worker stops", "mixed stops":
-				source.saved[0].Stop.Reason = "worker_record_cap"
-				switch tc.name {
-				case "mixed stops":
-					source.saved[1].Stop.Reason = "timestamp"
-				case "partial worker stops":
-					source.saved[1] = kafkaport.SavedProgress{Position: 1}
-				default:
-					source.saved[1].Stop.Reason = "worker_record_cap"
-				}
-				if tc.name == "active after worker stop" {
-					source.memberships = []kafkaport.Membership{{Idle: false}}
-				}
-			case "no progress":
-				clear(source.saved)
-			case "partial progress":
-				delete(source.saved, 1)
-			case "no stop":
-				source.saved[1] = kafkaport.SavedProgress{Position: 1}
-			case "active":
-				source.memberships = []kafkaport.Membership{{Idle: true}, {Idle: false}}
-			case "changed empty group state":
-				source.memberships = []kafkaport.Membership{{Idle: true, State: "Empty"}, {Idle: true, State: "Dead"}}
-			case "rebalance without members":
-				source.memberships = []kafkaport.Membership{{Idle: false}}
-			case "foreign member":
-				source.memberships = []kafkaport.Membership{{Foreign: true, Idle: false}}
-			case "identity conflict while active":
-				source.fail = "saved"
-				source.failure = &kafkaport.Conflict{Err: errors.New("different query")}
-				source.memberships = []kafkaport.Membership{{Idle: false}}
-			}
-			// When observing without joining, consuming, positioning or committing.
-			r, err := s.Status(t.Context(), p, config.Defaults("home").Worker, core.NoopStopObserver{})
-			// Then identity conflicts win, activity prevents completion, and worker caps remain distinct.
-			require.NoError(t, err)
-			require.Equal(t, tc.verdict, r.Verdict)
-			require.Equal(t, tc.code, r.ExitCode())
-			switch tc.name {
-			case "worker threshold":
-				require.Equal(t, "worker record threshold reached", r.Reason)
-			case "mixed stops":
-				require.Equal(t, "timestamp disorder threshold reached; worker record threshold reached", r.Reason)
-			}
-			require.EqualValues(t, 1, source.closed)
-			require.EqualValues(t, 1, f.connections["output"].closed)
-			require.Empty(t, source.queries)
-			if tc.name != "identity conflict while active" {
-				require.Equal(t, []string{"describe", "members", "saved", "members", "describe"}, source.observations)
-			}
-			if tc.name == "stopped" {
-				require.Len(t, r.Partitions, 2)
-				require.Zero(t, r.Partitions[0].ID)
-				require.NotNil(t, r.Partitions[1].Position)
-				require.Equal(t, int64(1), *r.Partitions[1].Position)
-				require.Equal(t, new(int64(1)), r.Partitions[1].End)
-			}
+			kafkaStatusVerdict(t, tc.name, tc.verdict, tc.code)
 		})
 	}
 }
@@ -258,5 +195,72 @@ func TestStatusRejectsStaleStopsAfterFinalObservationFailure(t *testing.T) {
 			require.Equal(t, 1, source.closed)
 			require.Equal(t, 1, destination.closed)
 		})
+	}
+}
+
+func kafkaStatusVerdict(t *testing.T, name, verdict string, code int) {
+	// Given two current partitions and independently observed membership/progress.
+	s, p, f, _ := fixture()
+	source := f.connections["input"]
+	for _, id := range []int32{0, 1} {
+		source.saved[id] = kafkaport.SavedProgress{Position: int64(id), Progress: kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: int64(id)}, End: new(int64(id))}}
+	}
+	switch name {
+	case "worker threshold", "active after worker stop", "partial worker stops", "mixed stops":
+		source.saved[0].Stop.Reason = "worker_record_cap"
+		switch name {
+		case "mixed stops":
+			source.saved[1].Stop.Reason = "timestamp"
+		case "partial worker stops":
+			source.saved[1] = kafkaport.SavedProgress{Position: 1}
+		default:
+			source.saved[1].Stop.Reason = "worker_record_cap"
+		}
+		if name == "active after worker stop" {
+			source.memberships = []kafkaport.Membership{{Idle: false}}
+		}
+	case "no progress":
+		clear(source.saved)
+	case "partial progress":
+		delete(source.saved, 1)
+	case "no stop":
+		source.saved[1] = kafkaport.SavedProgress{Position: 1}
+	case "active":
+		source.memberships = []kafkaport.Membership{{Idle: true}, {Idle: false}}
+	case "changed empty group state":
+		source.memberships = []kafkaport.Membership{{Idle: true, State: "Empty"}, {Idle: true, State: "Dead"}}
+	case "rebalance without members":
+		source.memberships = []kafkaport.Membership{{Idle: false}}
+	case "foreign member":
+		source.memberships = []kafkaport.Membership{{Foreign: true, Idle: false}}
+	case "identity conflict while active":
+		source.fail = "saved"
+		source.failure = &kafkaport.Conflict{Err: errors.New("different query")}
+		source.memberships = []kafkaport.Membership{{Idle: false}}
+	}
+	// When observing without joining, consuming, positioning or committing.
+	r, err := s.Status(t.Context(), p, config.Defaults("home").Worker, core.NoopStopObserver{})
+	// Then identity conflicts win, activity prevents completion, and worker caps remain distinct.
+	require.NoError(t, err)
+	require.Equal(t, verdict, r.Verdict)
+	require.Equal(t, code, r.ExitCode())
+	switch name {
+	case "worker threshold":
+		require.Equal(t, "worker record threshold reached", r.Reason)
+	case "mixed stops":
+		require.Equal(t, "timestamp disorder threshold reached; worker record threshold reached", r.Reason)
+	}
+	require.EqualValues(t, 1, source.closed)
+	require.EqualValues(t, 1, f.connections["output"].closed)
+	require.Empty(t, source.queries)
+	if name != "identity conflict while active" {
+		require.Equal(t, []string{"describe", "members", "saved", "members", "describe"}, source.observations)
+	}
+	if name == "stopped" {
+		require.Len(t, r.Partitions, 2)
+		require.Zero(t, r.Partitions[0].ID)
+		require.NotNil(t, r.Partitions[1].Position)
+		require.Equal(t, int64(1), *r.Partitions[1].Position)
+		require.Equal(t, new(int64(1)), r.Partitions[1].End)
 	}
 }

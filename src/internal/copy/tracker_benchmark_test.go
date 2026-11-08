@@ -3,6 +3,8 @@ package copy
 import (
 	"fmt"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func BenchmarkTrackerBatch(b *testing.B) {
@@ -18,9 +20,8 @@ func BenchmarkTrackerBatch(b *testing.B) {
 				// When a batch is admitted and deliveries arrive in reverse order.
 				for i := range tokens {
 					token, err := tracker.Observe(Cursor{Position: int64(i)}, int64(i+1), 1024)
-					if err != nil {
-						b.Fatal(err)
-					}
+					require.NoError(b, err)
+
 					tokens[i] = token
 					tracker.Submitted(token)
 				}

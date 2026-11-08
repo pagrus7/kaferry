@@ -19,110 +19,137 @@ type modelPartition struct {
 
 // The model computes the first unfinished input from its complete event history;
 // it does not use the tracker's generation, pending map or prefix implementation.
+type lifecycleModel struct {
+	tracker *Tracker
+	parts   [4]modelPartition
+	stale   []Token
+}
+
 func checkLifecycle(t *testing.T, actions []byte) {
 	t.Helper()
-	tracker := NewTracker()
-	parts := [4]modelPartition{}
-	stale := make([]Token, 0, 32)
-	for p := range parts {
-		tracker.Assign(Cursor{Partition: int32(p)})
+	model := lifecycleModel{tracker: NewTracker(), stale: make([]Token, 0, 32)}
+	for id := range model.parts {
+		model.tracker.Assign(Cursor{Partition: int32(id)})
 	}
 	for step, action := range actions {
-		p := int(action >> 6)
-		part := &parts[p]
-		cursor := Cursor{Partition: int32(p), Position: part.consumed}
-		confirmed := part.consumed
-		for _, work := range part.work {
-			if !work.done {
-				confirmed = min(confirmed, work.position)
-			}
-		}
-		switch action % 8 {
-		case 0, 1:
-			if len(part.work) < 64 {
-				token, err := tracker.Observe(cursor, cursor.Position+1, int64(action)+1)
-				require.NoError(t, err)
-				part.work = append(part.work, modelDelivery{token: token, position: cursor.Position, next: cursor.Position + 1, bytes: int64(action) + 1})
-				part.consumed++
-			}
-		case 2:
-			if len(part.work) != 0 {
-				index := step % len(part.work)
-				work := &part.work[index]
-				if work.bytes > 0 {
-					tracker.Submitted(work.token)
-					work.submitted = true
-				}
-			}
-		case 3, 4:
-			if len(part.work) != 0 {
-				work := &part.work[step%len(part.work)]
-				if work.bytes == 0 {
-					break
-				}
-				success := action%8 == 3
-				require.True(t, tracker.Settle(work.token, success))
-				work.done = work.done || success
-				work.submitted = false
-			}
-		case 5:
-			tracker.Committed(Cursor{Partition: int32(p), Position: confirmed})
-			kept := part.work[:0]
-			for _, work := range part.work {
-				if work.next > confirmed {
-					kept = append(kept, work)
-				} else {
-					stale = append(stale, work.token)
-				}
-			}
-			part.work, part.saved = kept, confirmed
-		case 6:
-			for _, work := range part.work {
-				stale = append(stale, work.token)
-			}
-			tracker.Revoke(int32(p))
-			tracker.Assign(Cursor{Partition: int32(p), Position: part.saved})
-			part.work, part.consumed = nil, part.saved
-		case 7:
-			if len(part.work) < 64 {
-				cursor.Position++
-				require.NoError(t, tracker.Advance(cursor))
-				// Advance creates resolved work without a delivery callback.
-				part.work = append(part.work, modelDelivery{position: cursor.Position, next: cursor.Position, done: true})
-				part.consumed++
-			}
-		}
-		if len(stale) > 32 {
-			stale = stale[len(stale)-32:]
-		}
-		for _, token := range stale {
-			require.False(t, tracker.Settle(token, true), "stale outcome at step %d", step)
-		}
-		totalRecords, totalBytes, inFlight := 0, int64(0), false
-		for id, state := range parts {
-			want, bytes, resolved := state.consumed, int64(0), true
-			for _, work := range state.work {
-				bytes += work.bytes
-				if !work.done {
-					want = min(want, work.position)
-					resolved = false
-				}
-				inFlight = inFlight || work.submitted && !work.done
-			}
-			require.Equal(t, Cursor{Partition: int32(id), Position: want}, tracker.Confirmed(int32(id)), "step %d", step)
-			require.Equal(t, state.saved, tracker.Saved(int32(id)))
-			records, actualBytes := tracker.Work(int32(id))
-			require.Equal(t, len(state.work), records)
-			require.Equal(t, bytes, actualBytes)
-			require.Equal(t, resolved, tracker.Resolved(int32(id)))
-			totalRecords += records
-			totalBytes += bytes
-		}
-		records, bytes := tracker.Total()
-		require.Equal(t, totalRecords, records)
-		require.Equal(t, totalBytes, bytes)
-		require.Equal(t, inFlight, tracker.InFlight())
+		model.apply(t, step, action)
+		model.check(t, step)
 	}
+}
+func (m *lifecycleModel) apply(t *testing.T, step int, action byte) {
+	t.Helper()
+	id := int(action >> 6)
+	part := &m.parts[id]
+	cursor := Cursor{Partition: int32(id), Position: part.consumed}
+	switch action % 8 {
+	case 0, 1:
+		if len(part.work) < 64 {
+			token, err := m.tracker.Observe(cursor, cursor.Position+1, int64(action)+1)
+			require.NoError(t, err)
+			part.work = append(part.work, modelDelivery{token: token, position: cursor.Position, next: cursor.Position + 1, bytes: int64(action) + 1})
+			part.consumed++
+		}
+	case 2:
+		part.submit(m.tracker, step)
+	case 3, 4:
+		part.settle(t, m.tracker, step, action%8 == 3)
+	case 5:
+		m.commit(id)
+	case 6:
+		m.revoke(id)
+	case 7:
+		if len(part.work) < 64 {
+			cursor.Position++
+			require.NoError(t, m.tracker.Advance(cursor))
+			// Advance creates resolved work without a delivery callback.
+			part.work = append(part.work, modelDelivery{position: cursor.Position, next: cursor.Position, done: true})
+			part.consumed++
+		}
+	}
+}
+func (p *modelPartition) submit(tracker *Tracker, step int) {
+	if len(p.work) == 0 {
+		return
+	}
+	work := &p.work[step%len(p.work)]
+	if work.bytes > 0 {
+		tracker.Submitted(work.token)
+		work.submitted = true
+	}
+}
+func (p *modelPartition) settle(t *testing.T, tracker *Tracker, step int, success bool) {
+	t.Helper()
+	if len(p.work) == 0 {
+		return
+	}
+	work := &p.work[step%len(p.work)]
+	if work.bytes == 0 {
+		return
+	}
+	require.True(t, tracker.Settle(work.token, success))
+	work.done = work.done || success
+	work.submitted = false
+}
+func (m *lifecycleModel) commit(id int) {
+	part := &m.parts[id]
+	confirmed, _, _, _ := part.expected()
+	m.tracker.Committed(Cursor{Partition: int32(id), Position: confirmed})
+	kept := part.work[:0]
+	for _, work := range part.work {
+		if work.next > confirmed {
+			kept = append(kept, work)
+		} else {
+			m.stale = append(m.stale, work.token)
+		}
+	}
+	part.work, part.saved = kept, confirmed
+}
+func (m *lifecycleModel) revoke(id int) {
+	part := &m.parts[id]
+	for _, work := range part.work {
+		m.stale = append(m.stale, work.token)
+	}
+	m.tracker.Revoke(int32(id))
+	m.tracker.Assign(Cursor{Partition: int32(id), Position: part.saved})
+	part.work, part.consumed = nil, part.saved
+}
+func (p modelPartition) expected() (confirmed, bytes int64, resolved, inFlight bool) {
+	confirmed, resolved = p.consumed, true
+	for _, work := range p.work {
+		bytes += work.bytes
+		if !work.done {
+			confirmed = min(confirmed, work.position)
+			resolved = false
+		}
+		inFlight = inFlight || work.submitted && !work.done
+	}
+	return
+}
+func (m *lifecycleModel) check(t *testing.T, step int) {
+	t.Helper()
+	if len(m.stale) > 32 {
+		m.stale = m.stale[len(m.stale)-32:]
+	}
+	for _, token := range m.stale {
+		require.False(t, m.tracker.Settle(token, true), "stale outcome at step %d", step)
+	}
+	totalRecords, totalBytes, inFlight := 0, int64(0), false
+	for id, state := range m.parts {
+		want, bytes, resolved, submitted := state.expected()
+		inFlight = inFlight || submitted
+		require.Equal(t, Cursor{Partition: int32(id), Position: want}, m.tracker.Confirmed(int32(id)), "step %d", step)
+		require.Equal(t, state.saved, m.tracker.Saved(int32(id)))
+		records, actualBytes := m.tracker.Work(int32(id))
+		require.Equal(t, len(state.work), records)
+		require.Equal(t, bytes, actualBytes)
+		require.Equal(t, resolved, m.tracker.Resolved(int32(id)))
+		totalRecords += records
+		totalBytes += bytes
+	}
+	records, bytes := m.tracker.Total()
+	require.Equal(t, totalRecords, records)
+	require.Equal(t, totalBytes, bytes)
+	require.Equal(t, inFlight, m.tracker.InFlight())
 }
 
 func TestProgressLifecycleModel(t *testing.T) {

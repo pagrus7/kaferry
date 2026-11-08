@@ -15,55 +15,7 @@ import (
 func TestUnassignedTimeoutHasDistinctOutcomeBeforeAndAfterIntake(t *testing.T) {
 	for _, afterIntake := range []bool{false, true} {
 		t.Run(map[bool]string{false: "before intake", true: "after intake"}[afterIntake], func(t *testing.T) {
-			// Given a bounded worker that becomes unassigned, optionally after copying.
-			r, source, sink, store, clock := fixture(t)
-			upper, stamp := clock.Now().Add(time.Hour).UnixMilli(), clock.Now().UnixMilli()
-			r.plan.Source.Kind = "TOPIC"
-			r.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
-			r.limits.IdleExit.Duration = 1 * time.Second
-			var logs bytes.Buffer
-			r.log = slog.New(slog.NewJSONHandler(&logs, nil))
-			source.assignments = nil
-			if afterIntake {
-				source.assignments = []Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}
-				input := incoming(0, 0, 1)
-				input.Record.TimestampMS = &stamp
-				source.events = []Event{{Input: &input}}
-				sink.submit = func(_ Record, token Token) error {
-					sink.reports <- Delivery{Token: token}
-					return nil
-				}
-			}
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			deadline := clock.Now().Add(5 * time.Second)
-			revoked := false
-			clock.tick = func() {
-				if afterIntake && !revoked && len(sink.writes) > 0 {
-					require.NoError(t, r.Revoke([]int32{0}, false))
-					require.NoError(t, r.Assign(nil))
-					revoked = true
-				}
-				if !clock.Now().Before(deadline) {
-					cancel()
-				}
-			}
-
-			// When the unassigned interval reaches the configured timeout.
-			err := r.Run(ctx)
-
-			// Then report only the local idle outcome, preserving any saved progress.
-			if err == nil || exitCode(err) != 3 || err.Error() != "worker held no partitions for 1s" {
-				t.Fatalf("exit=%d err=%v", exitCode(err), err)
-			}
-			require.Contains(t, logs.String(), `"msg":"local idle exit","idle_exit":"1s","exit_code":3`, "idle outcome is missing its structured context")
-			if afterIntake {
-				if !revoked || len(sink.writes) != 1 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1}}}) {
-					t.Fatal("confirmed progress was lost or advanced after release", sink.writes, store.saves)
-				}
-			} else if len(sink.writes) != 0 || len(store.saves) != 0 {
-				t.Fatal("unassigned worker wrote or committed progress", sink.writes, store.saves)
-			}
+			unassignedTimeout(t, afterIntake)
 		})
 	}
 }
@@ -136,5 +88,56 @@ func TestDelayedHandoffDistinguishesPartitionCompletionFromIdleExit(t *testing.T
 	// Then A completes its current assignment and B reports being unassigned.
 	if !doneA || errA != nil || !doneB || errB == nil || exitCode(errB) != 3 {
 		t.Fatalf("A: done=%v err=%v; B: done=%v err=%v", doneA, errA, doneB, errB)
+	}
+}
+
+func unassignedTimeout(t *testing.T, afterIntake bool) {
+	// Given a bounded worker that becomes unassigned, optionally after copying.
+	r, source, sink, store, clock := fixture(t)
+	upper, stamp := clock.Now().Add(time.Hour).UnixMilli(), clock.Now().UnixMilli()
+	r.plan.Source.Kind = "TOPIC"
+	r.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
+	r.limits.IdleExit.Duration = 1 * time.Second
+	var logs bytes.Buffer
+	r.log = slog.New(slog.NewJSONHandler(&logs, nil))
+	source.assignments = nil
+	if afterIntake {
+		source.assignments = []Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &upper}}}
+		input := incoming(0, 0, 1)
+		input.Record.TimestampMS = &stamp
+		source.events = []Event{{Input: &input}}
+		sink.submit = func(_ Record, token Token) error {
+			sink.reports <- Delivery{Token: token}
+			return nil
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	deadline := clock.Now().Add(5 * time.Second)
+	revoked := false
+	clock.tick = func() {
+		if afterIntake && !revoked && len(sink.writes) > 0 {
+			require.NoError(t, r.Revoke([]int32{0}, false))
+			require.NoError(t, r.Assign(nil))
+			revoked = true
+		}
+		if !clock.Now().Before(deadline) {
+			cancel()
+		}
+	}
+
+	// When the unassigned interval reaches the configured timeout.
+	err := r.Run(ctx)
+	// Then report only the local idle outcome, preserving any saved progress.
+	require.False(t, err == nil || exitCode(err) != 3 || err.Error() != "worker held no partitions for 1s",
+		"exit=%d err=%v", exitCode(err), err)
+
+	require.Contains(t, logs.String(), `"msg":"local idle exit","idle_exit":"1s","exit_code":3`, "idle outcome is missing its structured context")
+	if afterIntake {
+		require.False(t, !revoked || len(sink.writes) != 1 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1}}}),
+			"confirmed progress was lost or advanced after release", sink.writes, store.saves)
+
+	} else if len(sink.writes) != 0 || len(store.saves) != 0 {
+		t.Fatal("unassigned worker wrote or committed progress", sink.writes, store.saves)
 	}
 }

@@ -98,39 +98,7 @@ func TestMetadataRequestsRespectCallerDeadline(t *testing.T) {
 func TestOffsetLookupRejectsIncompleteAndFailedPartitions(t *testing.T) {
 	for _, mode := range []string{"valid", "missing", "foreign topic", "partition error", "request error"} {
 		t.Run(mode, func(t *testing.T) {
-			// Given batched timestamp queries with a match and a no-match result.
-			failure := errors.New("transport failed")
-			m := &metadataMock{request: func(_ context.Context, r kmsg.Request) (kmsg.Response, error) {
-				req := r.(*kmsg.ListOffsetsRequest)
-				if req.IsolationLevel != 1 || len(req.Topics[0].Partitions) != 2 {
-					t.Fatal("lookup not batched/read-committed")
-				}
-				p := []kmsg.ListOffsetsResponseTopicPartition{{Partition: 0, Offset: 42}, {Partition: 2, Offset: -1}}
-				if mode == "request error" {
-					return nil, failure
-				}
-				if mode == "missing" {
-					p = p[:1]
-				}
-				if mode == "partition error" {
-					p[1].ErrorCode = kerr.TopicAuthorizationFailed.Code
-				}
-				topic := "input"
-				if mode == "foreign topic" {
-					topic = "other"
-				}
-				return &kmsg.ListOffsetsResponse{Topics: []kmsg.ListOffsetsResponseTopic{{Topic: topic, Partitions: p}}}, nil
-			}}
-			i := &Inspector{codec: commitmeta.NewCodec(), client: m, topic: "input"}
-			// When looking up both starts, then failures never become offset zero.
-			result, err := i.OffsetsForTimes(t.Context(), map[int32]int64{0: 100, 2: 100})
-			if mode == "valid" {
-				if err != nil || !reflect.DeepEqual(result, map[int32]int64{0: 42, 2: -1}) {
-					t.Fatal(result, err)
-				}
-			} else if err == nil {
-				t.Fatal("invalid response accepted")
-			}
+			invalidOffsetLookup(t, mode)
 		})
 	}
 }
@@ -213,9 +181,9 @@ func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
 			saved, err := inspector.decodeSaved(map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 42, Metadata: &text}}, "fp", spec, staleness)
 			// Then only compatible progress can reach positioning.
 			if scenario == "valid" || scenario == "captured end without upper bound" {
-				if err != nil || saved[0].Position != 42 || len(saved) != 1 {
-					t.Fatal(saved, err)
-				}
+				require.False(t, err != nil || saved[0].Position != 42 || len(saved) != 1,
+					saved, err)
+
 			} else if scenario == "fingerprint" {
 				var mismatch *plan.FingerprintMismatch
 				require.ErrorAs(t, err, &mismatch)
@@ -322,4 +290,40 @@ func TestDestinationLayoutAcceptsRecreationAndGrowth(t *testing.T) {
 	require.NoError(t, c.ValidatePartitions(t.Context(), []int32{1, 2}))
 	require.Equal(t, [16]byte{2}, c.inspector.topicID)
 	require.ErrorContains(t, c.ValidatePartitions(t.Context(), []int32{3}), "original partition 3")
+}
+
+func invalidOffsetLookup(t *testing.T, mode string) {
+	// Given batched timestamp queries with a match and a no-match result.
+	failure := errors.New("transport failed")
+	m := &metadataMock{request: func(_ context.Context, r kmsg.Request) (kmsg.Response, error) {
+		req := r.(*kmsg.ListOffsetsRequest)
+		require.False(t, req.IsolationLevel != 1 || len(req.Topics[0].Partitions) != 2,
+			"lookup not batched/read-committed")
+
+		p := []kmsg.ListOffsetsResponseTopicPartition{{Partition: 0, Offset: 42}, {Partition: 2, Offset: -1}}
+		if mode == "request error" {
+			return nil, failure
+		}
+		if mode == "missing" {
+			p = p[:1]
+		}
+		if mode == "partition error" {
+			p[1].ErrorCode = kerr.TopicAuthorizationFailed.Code
+		}
+		topic := "input"
+		if mode == "foreign topic" {
+			topic = "other"
+		}
+		return &kmsg.ListOffsetsResponse{Topics: []kmsg.ListOffsetsResponseTopic{{Topic: topic, Partitions: p}}}, nil
+	}}
+	i := &Inspector{codec: commitmeta.NewCodec(), client: m, topic: "input"}
+	// When looking up both starts, then failures never become offset zero.
+	result, err := i.OffsetsForTimes(t.Context(), map[int32]int64{0: 100, 2: 100})
+	if mode == "valid" {
+		require.False(t, err != nil || !reflect.DeepEqual(result, map[int32]int64{0: 42, 2: -1}),
+			result, err)
+
+	} else if err == nil {
+		t.Fatal("invalid response accepted")
+	}
 }

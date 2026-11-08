@@ -35,7 +35,7 @@ curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b ./bin v2.15.0
 make lint GOLANGCI_LINT=./bin/golangci-lint
 ```
 
-The target verifies [.golangci.yml](.golangci.yml) and checks every Go file changed since the locally available `origin/main`; existing findings in those files also fail. After retargeting a branch, pass `LINT_BASE=<base-sha>` to `make lint`. In CI, manual and scheduled runs check files changed in the latest commit. To inspect all findings, including unchanged files, run `./bin/golangci-lint run ./...`.
+The target verifies [.golangci.yml](.golangci.yml) and checks all Go packages in the repository. Existing and new findings fail the check.
 
 The Go lint check includes test files in the default Go build, except that function length and duplicate-code findings exclude `_test.go` files. The separate duplication check below still scans tests in Go and Python, including files behind build tags. `make fast` continues to run `go vet` and the formatting check.
 

@@ -73,7 +73,7 @@ Start with the affected contract and its focused tests below. Follow callers and
 Implementation is AI-driven with Codex and Claude Code under human direction.
 
 - Priorities: correctness, simplicity, throughput, CI duration, binary size.
-- Single-purpose structs behind narrow interfaces; keep core logic Fx-free. Lines of code and cyclomatic complexity are signals, not targets.
+- Single-purpose structs behind narrow interfaces; keep core logic Fx-free. Keep functions focused and control flow readable; lint thresholds are defined in [.golangci.yml](../../.golangci.yml).
 - Keep user documentation example-based. CI caps [README](../../README.md) at 5,500 characters. The [usage guide](../usage.md) covers complete workflows without a shared character cap. Keep one authoritative explanation per topic, link exact contracts, and remove repetition before shortening explanations. Grammar tests parse and plan the fenced SQL examples; invalid examples use inline code. The broker-free archive tutorial generates a temporary download bundle from the SQL, TOML and JSON under `examples/archive-demo`, then runs its documented commands in `make smoke`. Release archive checks set `KAFERRY_TUTORIAL_BUNDLE` to test the exact examples asset before publishing it. To build locally, run `go run ./src/cmd/package-examples .cache/archive-demo.tar.gz`; generated Avro files and download archives stay outside Git.
 
 ## Tests
@@ -155,9 +155,9 @@ After retargeting a PR to a different base branch, push a new commit so CI compa
 | --- | --- |
 | CI | README badge; formatting and documentation checks, vet, race-enabled tests, build, license-notice validation and broker integration |
 | Go coverage | README badge and Codecov PR/file view show line coverage; Actions summarizes weighted Go statement coverage per suite. All Go packages are instrumented; Codecov combines unit/mock/file-component and broker integration coverage |
-| Static analysis | [Quality workflow](https://github.com/pagrus7/kaferry/actions/workflows/quality.yml): Staticcheck and golangci-lint for Go; CodeQL for Go, Python and workflows |
+| Static analysis | [Quality workflow](https://github.com/pagrus7/kaferry/actions/workflows/quality.yml): golangci-lint, including Staticcheck, for Go; CodeQL for Go, Python and workflows |
 | Security | govulncheck fails on reachable Go advisories; CodeQL findings and Dependabot alerts appear in GitHub Security. Dependency review checks PRs; updates require review |
-| Complexity / duplication | [Go lint](../../CONTRIBUTING.md#go-lint) checks cognitive complexity, nested conditions, function length and Go duplication; findings in files changed against the PR base fail CI. The quality summary/artifact reports normalized Go/Python clones ≥50 tokens and ≥5 lines, including tests. New clones fail CI; existing clones remain review signals. Run [duplication checks](../../CONTRIBUTING.md#duplication-checks) locally |
+| Complexity / duplication | [Go lint](../../CONTRIBUTING.md#go-lint) checks cognitive complexity, nested conditions, function length and Go duplication; findings across all Go packages fail CI. The quality summary/artifact reports normalized Go/Python clones ≥50 tokens and ≥5 lines, including tests. New clones fail CI; existing clones remain review signals. Run [duplication checks](../../CONTRIBUTING.md#duplication-checks) locally |
 | Extended tests | README badge; load, fault, ACL/failover, fuzz, codec benchmarks and a 30-minute soak with destination stalls. Soak duration is configurable on manual dispatch |
 | Performance | Dated SHA/environment JSON and summaries: throughput, sampled RSS/growth, lag, caps, shutdown, ns/op and allocations. Prior successful measurements compare only matching settings; shared runners provide no regression gate |
 

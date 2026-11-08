@@ -35,14 +35,12 @@ func TestSavedMixedWindowSurvivesClockAdvanceAndAdoption(t *testing.T) {
 
 			// Then persisted windows remain authoritative; only fresh resolution fails.
 			if origin == "fresh" {
-				if err == nil {
-					t.Fatal("empty fresh window accepted")
-				}
+				require.Error(t, err, "empty fresh window accepted")
+
 				return
 			}
-			if err != nil || !reflect.DeepEqual(got, window) || origin == "saved" && position != 42 {
-				t.Fatal("saved window was re-resolved", got, position, err)
-			}
+			require.False(t, err != nil || !reflect.DeepEqual(got, window) || origin == "saved" && position != 42,
+				"saved window was re-resolved", got, position, err)
 		})
 	}
 }
@@ -126,28 +124,7 @@ func TestPositioningRejectsIncompleteOrInvalidOffsetResults(t *testing.T) {
 	for _, stage := range []string{"earliest", "latest", "stable"} {
 		for _, value := range []int64{-1, -2} {
 			t.Run(stage+map[int64]string{-1: "-missing", -2: "-negative"}[value], func(t *testing.T) {
-				// Given a broker adapter that omits an offset or returns a sentinel as a real position.
-				reader := offsetReaderFunc(func(_ context.Context, _ []int32, kind OffsetKind, committed bool) (map[int32]int64, error) {
-					current := "latest"
-					if kind == EarliestOffset {
-						current = "earliest"
-					}
-					if committed {
-						current = "stable"
-					}
-					if current == stage {
-						if value == -1 {
-							return nil, nil
-						}
-						return map[int32]int64{0: value}, nil
-					}
-					return map[int32]int64{0: 0}, nil
-				})
-				p := NewPositionerFactory(core.RealClock{}, quietLogger(), NewOffsetLookupFactory()).New(reader, &timesStub{}, plan.Plan{Start: "LATEST"}, "fp", "topic-id")
-				// When resolving the assignment, then it fails instead of silently starting at offset zero.
-				if _, err := p.Locate(t.Context(), []int32{0}, nil); err == nil {
-					t.Fatal("invalid offset result accepted")
-				}
+				invalidPositioningOffset(t, stage, value)
 			})
 		}
 	}
@@ -181,5 +158,30 @@ func TestPositioningRestoresCapturedEndAndTerminalStops(t *testing.T) {
 		pos := NewPositionerFactory(core.RealClock{}, quietLogger(), NewOffsetLookupFactory()).New(&offsetsStub{}, &timesStub{}, p, "fp", "topic-id")
 		_, err := pos.Locate(t.Context(), []int32{0}, map[int32]SavedProgress{0: {Position: 2, Progress: Progress{End: &end}}})
 		require.ErrorContains(t, err, "captured end")
+	}
+}
+
+func invalidPositioningOffset(t *testing.T, stage string, value int64) {
+	// Given a broker adapter that omits an offset or returns a sentinel as a real position.
+	reader := offsetReaderFunc(func(_ context.Context, _ []int32, kind OffsetKind, committed bool) (map[int32]int64, error) {
+		current := "latest"
+		if kind == EarliestOffset {
+			current = "earliest"
+		}
+		if committed {
+			current = "stable"
+		}
+		if current == stage {
+			if value == -1 {
+				return nil, nil
+			}
+			return map[int32]int64{0: value}, nil
+		}
+		return map[int32]int64{0: 0}, nil
+	})
+	p := NewPositionerFactory(core.RealClock{}, quietLogger(), NewOffsetLookupFactory()).New(reader, &timesStub{}, plan.Plan{Start: "LATEST"}, "fp", "topic-id")
+	// When resolving the assignment, then it fails instead of silently starting at offset zero.
+	if _, err := p.Locate(t.Context(), []int32{0}, nil); err == nil {
+		t.Fatal("invalid offset result accepted")
 	}
 }

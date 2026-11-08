@@ -53,13 +53,7 @@ func TestRecoveryStreamsRootOnceAcrossMultipleNamespaces(t *testing.T) {
 			require.True(t, scanClosed, "finish the scan before deletion can reorder later entries")
 		}
 		if op == "open-directory" || op == "read-directory-batch" {
-			for _, namespace := range []string{first.namespace, second.namespace} {
-				lock, err := (NativeFiles{}).TryLock(filepath.Join(namespace, "lock"))
-				if lock != nil {
-					require.NoError(t, lock.Close())
-				}
-				require.ErrorIs(t, err, ErrBusy, "both owners stay locked throughout cleanup")
-			}
+			requireWriterLocks(t, []string{first.namespace, second.namespace})
 		}
 		return nil
 	}
@@ -130,4 +124,15 @@ func TestStorageCapabilityDiagnostics(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrPermission)
 	require.NotErrorIs(t, err, ErrUnsupportedStorage)
 	require.NoError(t, storageError("exclusive locking", nil))
+}
+
+func requireWriterLocks(t *testing.T, namespaces []string) {
+	t.Helper()
+	for _, namespace := range namespaces {
+		lock, err := (NativeFiles{}).TryLock(filepath.Join(namespace, "lock"))
+		if lock != nil {
+			require.NoError(t, lock.Close())
+		}
+		require.ErrorIs(t, err, ErrBusy, "both owners stay locked throughout cleanup")
+	}
 }

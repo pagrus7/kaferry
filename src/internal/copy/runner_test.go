@@ -291,12 +291,10 @@ func TestPartialCommitReleasesSuccessfulPartitionsOnly(t *testing.T) {
 			// Then only the successful partition releases its work and advances saved progress.
 			n0, _ := r.tracker.Work(0)
 			n1, _ := r.tracker.Work(1)
-			if err == nil || n0 != 0 || n1 != 1 || r.tracker.Saved(0) != 1 || r.tracker.Saved(1) != 0 {
-				t.Fatalf("partial commit released work=%d/%d: %v", n0, n1, err)
-			}
-			if scenario == "missing result" && !strings.Contains(err.Error(), "missing commit result for partition 1") {
-				t.Fatal("missing result accepted", err)
-			}
+			require.False(t, err == nil || n0 != 0 || n1 != 1 || r.tracker.Saved(0) != 1 || r.tracker.Saved(1) != 0,
+				"partial commit released work=%d/%d: %v", n0, n1, err)
+			require.False(t, scenario == "missing result" && !strings.Contains(err.Error(), "missing commit result for partition 1"),
+				"missing result accepted", err)
 		})
 	}
 }
@@ -507,47 +505,7 @@ func TestCapturedTipFinishesWithoutAnotherEOF(t *testing.T) {
 	// Given
 	for _, gap := range []bool{false, true} {
 		t.Run(map[bool]string{false: "records", true: "control gap"}[gap], func(t *testing.T) {
-			r, s, d, p, _ := fixture(t)
-			hi := int64(1000)
-			stamp := int64(500)
-			r.plan.Source.Kind = "TOPIC"
-			r.plan.Window.Upper = &plan.Expression{LiteralMS: hi}
-			r.limits.TipWait.Duration = 1 * time.Second
-			s.assignments[0].Window.Upper = &hi
-			first := incoming(0, 0, 1)
-			first.Record.TimestampMS = &stamp
-			second := incoming(0, 1, 1)
-			if gap {
-				second = incoming(0, 4, 1)
-			}
-			second.Record.TimestampMS = &stamp
-			s.high = 2
-			if gap {
-				s.high = 3
-			}
-			s.events = []Event{{EOF: &Cursor{Partition: 0, Position: 0}}, {Input: &first}, {Input: &second}}
-			d.flush = func() error {
-				if len(d.writes) > 0 {
-					for _, tok := range d.writes {
-						d.reports <- Delivery{Token: tok}
-					}
-					d.flush = nil
-				}
-				return nil
-			}
-
-			// When
-			runErr := r.Run(context.Background())
-
-			// Then
-			require.NoError(t, runErr, "sampled H incorrectly required another EOF")
-			want := 2
-			if gap {
-				want = 1
-			}
-			if len(d.writes) != want || p.saves[len(p.saves)-1][0].Position != s.high {
-				t.Fatal("copied beyond H or failed to commit its consumed boundary")
-			}
+			capturedTipCompletion(t, gap)
 		})
 	}
 }
@@ -679,4 +637,47 @@ func (s *failingPoll) Poll(d time.Duration) (Event, error) {
 		return Event{}, s.err
 	}
 	return s.testSource.Poll(d)
+}
+
+func capturedTipCompletion(t *testing.T, gap bool) {
+	r, s, d, p, _ := fixture(t)
+	hi := int64(1000)
+	stamp := int64(500)
+	r.plan.Source.Kind = "TOPIC"
+	r.plan.Window.Upper = &plan.Expression{LiteralMS: hi}
+	r.limits.TipWait.Duration = 1 * time.Second
+	s.assignments[0].Window.Upper = &hi
+	first := incoming(0, 0, 1)
+	first.Record.TimestampMS = &stamp
+	second := incoming(0, 1, 1)
+	if gap {
+		second = incoming(0, 4, 1)
+	}
+	second.Record.TimestampMS = &stamp
+	s.high = 2
+	if gap {
+		s.high = 3
+	}
+	s.events = []Event{{EOF: &Cursor{Partition: 0, Position: 0}}, {Input: &first}, {Input: &second}}
+	d.flush = func() error {
+		if len(d.writes) > 0 {
+			for _, tok := range d.writes {
+				d.reports <- Delivery{Token: tok}
+			}
+			d.flush = nil
+		}
+		return nil
+	}
+
+	// When
+	runErr := r.Run(context.Background())
+
+	// Then
+	require.NoError(t, runErr, "sampled H incorrectly required another EOF")
+	want := 2
+	if gap {
+		want = 1
+	}
+	require.False(t, len(d.writes) != want || p.saves[len(p.saves)-1][0].Position != s.high,
+		"copied beyond H or failed to commit its consumed boundary")
 }

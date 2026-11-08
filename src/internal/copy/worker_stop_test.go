@@ -201,49 +201,7 @@ func TestSignalAfterWorkerStopPreservesCompletionAndSaveFailures(t *testing.T) {
 func TestWorkerStopFailuresSaveOnlyConfirmedProgress(t *testing.T) {
 	for _, failure := range []string{"delivery", "timeout", "commit"} {
 		t.Run(failure, func(t *testing.T) {
-			// Given a two-write limit with a failure during completion.
-			r, source, sink, store, _ := fixture(t)
-			r.plan.WorkerStopAfterRecords = 2
-			for i := range 3 {
-				input := incoming(0, int64(i), 1)
-				source.events = append(source.events, Event{Input: &input})
-			}
-			want := failure + " failed"
-			switch failure {
-			case "delivery":
-				sink.flush = func() error {
-					if len(sink.writes) < 2 {
-						return nil
-					}
-					sink.reports <- Delivery{Token: sink.writes[0]}
-					sink.reports <- Delivery{Token: sink.writes[1], Err: errors.New(want)}
-					sink.flush = nil
-					return nil
-				}
-			case "timeout":
-				want = "outstanding writes did not finish within 10 seconds"
-			case "commit":
-				acknowledgeWritesOnFlush(sink)
-				store.fail = map[int32]error{0: errors.New(want)}
-			}
-			// When stopping at the cap.
-			err := r.Run(t.Context())
-			// Then fail without consuming a third input or saving past unconfirmed output.
-			require.ErrorContains(t, err, want)
-			var exit *Exit
-			require.ErrorAs(t, err, &exit)
-			require.Equal(t, 1, exit.Code)
-			require.Len(t, sink.writes, 2)
-			require.Len(t, source.events, 1)
-			if failure == "timeout" {
-				require.Empty(t, store.saves)
-			} else {
-				cursor := Cursor{Partition: 0, Position: 1}
-				if failure == "commit" {
-					cursor = workerStopCursor(0, 2) // The save was attempted but failed.
-				}
-				require.Equal(t, [][]Cursor{{cursor}}, store.saves)
-			}
+			workerStopFailure(t, failure)
 		})
 	}
 }
@@ -296,5 +254,51 @@ func TestWorkerStopMakesTopicSignalsAndUnassignedExitBounded(t *testing.T) {
 			require.Equal(t, want, exit.Code)
 			require.LessOrEqual(t, clock.Now().Sub(time.Unix(100, 0)), time.Second)
 		})
+	}
+}
+
+func workerStopFailure(t *testing.T, failure string) {
+	// Given a two-write limit with a failure during completion.
+	r, source, sink, store, _ := fixture(t)
+	r.plan.WorkerStopAfterRecords = 2
+	for i := range 3 {
+		input := incoming(0, int64(i), 1)
+		source.events = append(source.events, Event{Input: &input})
+	}
+	want := failure + " failed"
+	switch failure {
+	case "delivery":
+		sink.flush = func() error {
+			if len(sink.writes) < 2 {
+				return nil
+			}
+			sink.reports <- Delivery{Token: sink.writes[0]}
+			sink.reports <- Delivery{Token: sink.writes[1], Err: errors.New(want)}
+			sink.flush = nil
+			return nil
+		}
+	case "timeout":
+		want = "outstanding writes did not finish within 10 seconds"
+	case "commit":
+		acknowledgeWritesOnFlush(sink)
+		store.fail = map[int32]error{0: errors.New(want)}
+	}
+	// When stopping at the cap.
+	err := r.Run(t.Context())
+	// Then fail without consuming a third input or saving past unconfirmed output.
+	require.ErrorContains(t, err, want)
+	var exit *Exit
+	require.ErrorAs(t, err, &exit)
+	require.Equal(t, 1, exit.Code)
+	require.Len(t, sink.writes, 2)
+	require.Len(t, source.events, 1)
+	if failure == "timeout" {
+		require.Empty(t, store.saves)
+	} else {
+		cursor := Cursor{Partition: 0, Position: 1}
+		if failure == "commit" {
+			cursor = workerStopCursor(0, 2) // The save was attempted but failed.
+		}
+		require.Equal(t, [][]Cursor{{cursor}}, store.saves)
 	}
 }

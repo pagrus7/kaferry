@@ -70,15 +70,7 @@ func TestMergePreservesDuplicatesFullRecordsAndPhysicalTiesWithBoundedResources(
 		inputs = append(inputs, values)
 		writeFile(t, root, id+1, values, 2)
 	}
-	for _, offset := range []int64{42, 43, 44} {
-		for _, values := range inputs {
-			for _, r := range values {
-				if r.Offset == offset {
-					expected = append(expected, r)
-				}
-			}
-		}
-	}
+	expected = orderedOverlappingRecords(inputs)
 	catalog := NewCatalog(root, codec(t), NativeFiles{})
 	selected, err := catalog.Select(nil)
 	require.NoError(t, err)
@@ -335,4 +327,17 @@ func TestMalformedCompletedInputFailsBeforeOutputOrProgress(t *testing.T) {
 			require.Zero(t, store.saved.Position)
 		})
 	}
+}
+
+func orderedOverlappingRecords(inputs [][]avro.Record) (expected []avro.Record) {
+	for _, offset := range []int64{42, 43, 44} {
+		for _, values := range inputs {
+			for _, r := range values {
+				if r.Offset == offset {
+					expected = append(expected, r)
+				}
+			}
+		}
+	}
+	return expected
 }

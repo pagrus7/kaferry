@@ -124,68 +124,72 @@ func TestInspectionRejectsRelativeDisorderOverflowWithoutWriting(t *testing.T) {
 func TestInspectionPreservesIncompatibleReplayProgressAfterSourceValidation(t *testing.T) {
 	for _, count := range []int{1, 2} {
 		t.Run(map[int]string{1: "partial", 2: "complete"}[count], func(t *testing.T) {
-			// Given a real archive and a checkpoint bound to the original destination.
-			directory, input := t.TempDir(), t.TempDir()
-			limits := config.Defaults("").Worker
-			limits.CheckpointDir = &directory
-			factory := NewFactory(core.RealClock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-			endpoint := plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: input}
-			output, err := factory.OpenOutput(endpoint, limits)
-			require.NoError(t, err)
-			for n := range 2 {
-				record := core.Record{Source: &core.Provenance{Cluster: "cluster", Topic: "orders", TopicID: [16]byte{1}, Partition: 3, Offset: int64(n)}, Value: []byte("record"), TimestampType: "unknown"}
-				require.NoError(t, output.Submit(record, core.Token{}))
-			}
-			require.NoError(t, output.Finish())
-			output.Close()
-			p := plan.Plan{Source: endpoint, Destination: plan.Endpoint{Kind: "TOPIC", Name: "output"}, Group: "g"}
-			fp, err := p.Fingerprint("", "destination", "original")
-			require.NoError(t, err)
-			source, err := factory.OpenSource(p, fp, limits, 0)
-			require.NoError(t, err)
-			require.NoError(t, source.Start(&lifecycleMock{}, nil))
-			for range count {
-				event, checkErr := source.Poll(0)
-				require.NoError(t, checkErr)
-				require.NotNil(t, event.Input)
-				_, checkErr = source.Save(t.Context(), []core.Cursor{{Position: event.Input.Next}})
-				require.NoError(t, checkErr)
-			}
-			require.NoError(t, source.Close())
-			path := checkpoint.Path(directory, p.Group)
-			before, err := os.ReadFile(path)
-			require.NoError(t, err)
-
-			// When a different query inspects the source-safe checkpoint, including its excluded original partition.
-			p.Partitions = &plan.PartitionFilter{IDs: []int32{0}}
-			p.Window.Lower = &plan.Expression{LiteralMS: 10}
-			current, err := p.Fingerprint("", "destination", "replacement")
-			require.NoError(t, err)
-			info, err := NewInspector(core.RealClock{}).Source(p, current, limits)
-			// Then diagnostics preserve the saved identity and position without applying the incompatible query or writing.
-			var mismatch *plan.FingerprintMismatch
-			require.ErrorAs(t, err, &mismatch)
-			require.True(t, info.Saved)
-			require.EqualValues(t, count, info.Position)
-			require.Equal(t, fp, info.Fingerprint)
-			require.Equal(t, []int32{3}, info.Partitions)
-			after, err := os.ReadFile(path)
-			require.NoError(t, err)
-			require.Equal(t, before, after)
-			if count == 1 {
-				// An incompatible fingerprint must not hide a missing unfinished input.
-				entries, err := os.ReadDir(input)
-				require.NoError(t, err)
-				for _, entry := range entries {
-					if strings.HasSuffix(entry.Name(), ".avro") {
-						require.NoError(t, os.Remove(filepath.Join(input, entry.Name())))
-					}
-				}
-				info, err = NewInspector(core.RealClock{}).Source(p, current, limits)
-				require.Error(t, err)
-				require.NotErrorAs(t, err, &mismatch)
-				require.False(t, info.Saved)
-			}
+			incompatibleReplayInspection(t, count)
 		})
+	}
+}
+
+func incompatibleReplayInspection(t *testing.T, count int) {
+	// Given a real archive and a checkpoint bound to the original destination.
+	directory, input := t.TempDir(), t.TempDir()
+	limits := config.Defaults("").Worker
+	limits.CheckpointDir = &directory
+	factory := NewFactory(core.RealClock{}, checkpoint.DurableWriter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	endpoint := plan.Endpoint{Kind: "ARCHIVE", Format: "avro", Name: input}
+	output, err := factory.OpenOutput(endpoint, limits)
+	require.NoError(t, err)
+	for n := range 2 {
+		record := core.Record{Source: &core.Provenance{Cluster: "cluster", Topic: "orders", TopicID: [16]byte{1}, Partition: 3, Offset: int64(n)}, Value: []byte("record"), TimestampType: "unknown"}
+		require.NoError(t, output.Submit(record, core.Token{}))
+	}
+	require.NoError(t, output.Finish())
+	output.Close()
+	p := plan.Plan{Source: endpoint, Destination: plan.Endpoint{Kind: "TOPIC", Name: "output"}, Group: "g"}
+	fp, err := p.Fingerprint("", "destination", "original")
+	require.NoError(t, err)
+	source, err := factory.OpenSource(p, fp, limits, 0)
+	require.NoError(t, err)
+	require.NoError(t, source.Start(&lifecycleMock{}, nil))
+	for range count {
+		event, checkErr := source.Poll(0)
+		require.NoError(t, checkErr)
+		require.NotNil(t, event.Input)
+		_, checkErr = source.Save(t.Context(), []core.Cursor{{Position: event.Input.Next}})
+		require.NoError(t, checkErr)
+	}
+	require.NoError(t, source.Close())
+	path := checkpoint.Path(directory, p.Group)
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	// When a different query inspects the source-safe checkpoint, including its excluded original partition.
+	p.Partitions = &plan.PartitionFilter{IDs: []int32{0}}
+	p.Window.Lower = &plan.Expression{LiteralMS: 10}
+	current, err := p.Fingerprint("", "destination", "replacement")
+	require.NoError(t, err)
+	info, err := NewInspector(core.RealClock{}).Source(p, current, limits)
+	// Then diagnostics preserve the saved identity and position without applying the incompatible query or writing.
+	var mismatch *plan.FingerprintMismatch
+	require.ErrorAs(t, err, &mismatch)
+	require.True(t, info.Saved)
+	require.EqualValues(t, count, info.Position)
+	require.Equal(t, fp, info.Fingerprint)
+	require.Equal(t, []int32{3}, info.Partitions)
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	if count == 1 {
+		// An incompatible fingerprint must not hide a missing unfinished input.
+		entries, err := os.ReadDir(input)
+		require.NoError(t, err)
+		for _, entry := range entries {
+			if strings.HasSuffix(entry.Name(), ".avro") {
+				require.NoError(t, os.Remove(filepath.Join(input, entry.Name())))
+			}
+		}
+		info, err = NewInspector(core.RealClock{}).Source(p, current, limits)
+		require.Error(t, err)
+		require.NotErrorAs(t, err, &mismatch)
+		require.False(t, info.Saved)
 	}
 }
