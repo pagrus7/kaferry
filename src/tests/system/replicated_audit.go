@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,6 +25,7 @@ import (
 
 const requestLogger = "kafka.request.logger"
 const receivedLogger = "org.apache.kafka.network.Request"
+const auditCaptureLimit = 16 << 20
 
 const requestLogFiles = `
 for f in /opt/kafka/logs/kafka-request.log*; do
@@ -33,13 +35,15 @@ for f in /opt/kafka/logs/kafka-request.log*; do
 done`
 
 type replicatedAudit struct {
-	client  *kgo.Client
-	targets []faults.Target
-	levels  map[int32]map[string]string
-	output  string
-	guard   string
-	guards  map[int32]int
-	marks   map[string]auditMark
+	client         *kgo.Client
+	targets        []faults.Target
+	levels         map[int32]map[string]string
+	output         string
+	guard          string
+	guards         map[int32]int
+	marks          map[string]auditMark
+	faultAttempted bool
+	failureCommand func(context.Context, ...string) ([]byte, error)
 }
 
 type auditMark struct {
@@ -59,6 +63,9 @@ func startReplicatedAudit(t *testing.T, ctx context.Context, lab *faults.Lab, ou
 	audit := &replicatedAudit{client: client, targets: targets, levels: make(map[int32]map[string]string), output: output, guard: guard,
 		guards: make(map[int32]int), marks: make(map[string]auditMark)}
 	t.Cleanup(func() {
+		// Failed cases retain diagnostics before logger restoration. They never
+		// create the final files consumed by the strict qualification validator.
+		audit.retainFailure(t)
 		cleanup, done := context.WithTimeout(context.Background(), 15*time.Second)
 		defer done()
 		for broker, levels := range audit.levels {
@@ -102,6 +109,115 @@ tr '\000' '\n' </proc/1/cmdline | sed -n '/^-D[Ll]og4j/p;/^-Dkafka.logs.dir=/p'`
 	}
 	audit.mark(t, ctx, "baseline")
 	return audit
+}
+
+type failedAuditArtifact struct {
+	Broker   int32     `json:"broker"`
+	Path     string    `json:"path"`
+	Started  time.Time `json:"started"`
+	Finished time.Time `json:"finished"`
+	Bytes    int       `json:"bytes"`
+	SHA256   string    `json:"sha256,omitempty"`
+	Saved    bool      `json:"saved"`
+	Errors   []string  `json:"errors,omitempty"`
+}
+
+type failedAuditCapture struct {
+	CaseFailed     bool                  `json:"case_failed"`
+	DiagnosticOnly bool                  `json:"diagnostic_only"`
+	Partial        bool                  `json:"partial"`
+	Started        time.Time             `json:"started"`
+	Finished       time.Time             `json:"finished"`
+	Artifacts      []failedAuditArtifact `json:"artifacts"`
+}
+
+func (a *replicatedAudit) retainFailure(t *testing.T) {
+	t.Helper()
+	if !a.faultAttempted || !t.Failed() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := a.captureFailure(ctx); err != nil {
+		t.Error("retain failed broker audit (diagnostics only):", err)
+	}
+}
+
+// captureFailure makes one attempt per artifact, with a shared cleanup budget.
+// Even command errors retain available bytes. Missing/truncated output is an
+// explicit error, never evidence that no broker request occurred.
+func (a *replicatedAudit) captureFailure(ctx context.Context) error {
+	run := a.failureCommand
+	if run == nil {
+		run = boundedAuditDocker
+	}
+	receipt := failedAuditCapture{CaseFailed: true, DiagnosticOnly: true, Started: time.Now().UTC()}
+	var failures []error
+	for _, target := range a.targets {
+		for _, kind := range []string{"requests", "console"} {
+			artifact := failedAuditArtifact{Broker: target.Broker, Started: time.Now().UTC(),
+				Path: fmt.Sprintf("source-%d.failure.%s.log", target.Broker, kind)}
+			args := []string{"exec", target.Container, "sh", "-ec", requestLogFiles}
+			if kind == "console" {
+				args = []string{"logs", target.Container}
+			}
+			attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
+			data, err := run(attempt, args...)
+			cancel()
+			if err != nil {
+				artifact.Errors = append(artifact.Errors, err.Error())
+			}
+			if len(data) > auditCaptureLimit {
+				data = data[:auditCaptureLimit]
+				artifact.Errors = append(artifact.Errors, "capture exceeded bounded evidence size")
+			}
+			artifact.Bytes = len(data)
+			if len(data) == 0 {
+				artifact.Errors = append(artifact.Errors, "capture returned no bytes; absence of requests is not established")
+			} else if err := os.WriteFile(filepath.Join(a.output, artifact.Path), data, 0600); err != nil {
+				artifact.Errors = append(artifact.Errors, err.Error())
+			} else {
+				artifact.Saved = true
+				artifact.SHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
+			}
+			artifact.Finished = time.Now().UTC()
+			for _, message := range artifact.Errors {
+				failures = append(failures, fmt.Errorf("%s: %s", artifact.Path, message))
+			}
+			receipt.Artifacts = append(receipt.Artifacts, artifact)
+		}
+	}
+	receipt.Partial = len(failures) > 0
+	receipt.Finished = time.Now().UTC()
+	encoded, err := json.MarshalIndent(receipt, "", "  ")
+	if err == nil {
+		err = os.WriteFile(filepath.Join(a.output, "replicated-audit.failure.json"), append(encoded, '\n'), 0600)
+	}
+	return errors.Join(append(failures, err)...)
+}
+
+type boundedAuditOutput struct {
+	data     []byte
+	exceeded bool
+}
+
+func (b *boundedAuditOutput) Write(data []byte) (int, error) {
+	n := min(len(data), auditCaptureLimit-len(b.data))
+	b.data = append(b.data, data[:n]...)
+	b.exceeded = b.exceeded || n < len(data)
+	return len(data), nil
+}
+
+func boundedAuditDocker(ctx context.Context, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, "docker", args...)
+	var output boundedAuditOutput
+	command.Stdout, command.Stderr = &output, &output
+	command.WaitDelay = 250 * time.Millisecond
+	err := command.Run()
+	if output.exceeded {
+		err = errors.Join(err, errors.New("capture exceeded bounded evidence size"))
+	}
+	return output.data, err
 }
 
 // KafkaDockerWrapper rewrites YAML on every container start, including logger

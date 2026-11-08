@@ -233,6 +233,7 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	// to remove its member and assign all its partitions to the surviving peer.
 	injection, err := lab.Inject(ctx, role, faults.Fault{Kind: "cut"})
 	if injection != nil {
+		audit.faultAttempted = true
 		t.Cleanup(func() {
 			cleanup, done := context.WithTimeout(context.Background(), 15*time.Second)
 			defer done()
