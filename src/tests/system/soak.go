@@ -84,6 +84,10 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	destinationBrokers := broker(t)
 	destinationAdmin := a
 	stall := os.Getenv("KAFERRY_SOAK_DEST_STALL_CONTAINER")
+	var trace func(stallObservation)
+	if stall != "" {
+		trace = stallTrace(t)
+	}
 	var stalledBrokers []*ownedBroker
 	if archiveMode && stall != "" {
 		t.Fatal("archive soak does not use a destination broker stall")
@@ -97,10 +101,10 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 			project = fixtureProject("kaferry-replicated")
 			for node := 1; node <= 3; node++ {
 				service := fmt.Sprintf("destination-%d", node)
-				stalledBrokers = append(stalledBrokers, ownBroker(t, project+"-"+service+"-1", project, service))
+				stalledBrokers = append(stalledBrokers, ownStallBroker(t, project+"-"+service+"-1", project, service, trace))
 			}
 		} else {
-			stalledBrokers = []*ownedBroker{ownBroker(t, stall, fixtureProject(project), "kafka-dr")}
+			stalledBrokers = []*ownedBroker{ownStallBroker(t, stall, fixtureProject(project), "kafka-dr", trace)}
 		}
 		destinationBrokers = os.Getenv("KAFKA_TEST_DEST_BROKERS")
 		if destinationBrokers == "" || destinationBrokers == broker(t) {
@@ -152,7 +156,7 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	nextPublish, nextSample := start, start.Add(time.Second)
 	nextBurst, nextStall := start.Add(10*time.Second), start.Add(30*time.Second)
 	bursts := 0
-	stalls := &destinationStalls{brokers: stalledBrokers, next: nextStall}
+	stalls := &destinationStalls{brokers: stalledBrokers, next: nextStall, record: trace}
 	monitor := soakMonitor{next: nextSample, kafka: !archiveMode, endurance: report.Endurance}
 	reconciled := false
 	report.PublishingSeconds, report.DrainSeconds = duration.Seconds(), soakDrainDuration.Seconds()
@@ -365,6 +369,7 @@ type destinationStalls struct {
 	brokers     []*ownedBroker
 	until, next time.Time
 	count       int
+	record      func(stallObservation)
 }
 
 func (s *destinationStalls) paused() bool {
@@ -379,17 +384,21 @@ func (s *destinationStalls) paused() bool {
 func (s *destinationStalls) step(t *testing.T, now time.Time, publishing bool) {
 	t.Helper()
 	if len(s.brokers) > 0 && !s.paused() && publishing && !now.Before(s.next) {
+		s.state("before pause", now)
 		for _, broker := range s.brokers {
 			require.NoError(t, broker.pause(t))
 		}
 		s.count++
 		s.until = time.Now().Add(time.Second)
+		s.state("hold", s.until.Add(-time.Second))
 		s.next = s.next.Add(time.Minute)
 	}
 	if s.paused() && !now.Before(s.until) {
+		s.state("before unpause", now)
 		for _, broker := range s.brokers {
 			require.NoError(t, broker.recover())
 		}
+		s.state("after unpause", time.Now())
 	}
 }
 
