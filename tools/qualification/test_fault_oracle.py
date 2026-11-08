@@ -16,6 +16,7 @@ from tools.qualification.fault_results import RECOVERY_CASES, collect, configure
 
 class DriverError:
     _TIMED_OUT, _TRANSPORT, _WAIT_COORD = -185, -195, -180
+    NOT_COORDINATOR = 16
 
     def __init__(self, code, message='driver failure'):
         self.value, self.message = code, message
@@ -127,6 +128,11 @@ class FaultOracleTest(unittest.TestCase):
 
     def test_initialization_records_transient_setup_then_exact_baseline_before_ready(self):
         # Given a cold coordinator and preloaded source data, with no copier yet.
+        for name in ('_TIMED_OUT', 'NOT_COORDINATOR'):
+            with self.subTest(error=name):
+                self.check_initialization_error_before_ready(name)
+
+    def check_initialization_error_before_ready(self, name):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             oracle = self.oracle(root, saved=0, destination=[])
@@ -135,7 +141,7 @@ class FaultOracleTest(unittest.TestCase):
                 self.assertEqual(1, timeout)
                 if clock[0] == 1:
                     clock[0] += 1
-                    raise DriverException(DriverError(DriverError._TIMED_OUT))
+                    raise DriverException(DriverError(getattr(DriverError, name)))
                 return [SimpleNamespace(offset=0, error=None)]
             with patch.dict(sys.modules, confluent_kafka=DRIVER), \
                  patch('tools.qualification.fault_oracle.time.time', side_effect=lambda: clock[0]), \
@@ -147,7 +153,7 @@ class FaultOracleTest(unittest.TestCase):
                 self.assertEqual(dict(ready=True), oracle.initialize(10))
             rows = [json.loads(line) for line in (root/'bootstrap.jsonl').read_text().splitlines()]
             self.assertEqual(['initialization-error', 'sample', 'initialization-ready'], [row['kind'] for row in rows])
-            self.assertEqual('_TIMED_OUT', rows[0]['driver_error'])
+            self.assertEqual(name, rows[0]['driver_error'])
             self.assertEqual(1, rows[0]['finished_at']-rows[0]['started_at'])
             self.assertEqual([2], rows[1]['source_ends'])
             self.assertEqual([0], rows[1]['destination_ends'])
@@ -155,6 +161,14 @@ class FaultOracleTest(unittest.TestCase):
             self.assertEqual('', (root/'samples.jsonl').read_text())
             self.assertEqual(3, oracle.started)
             validate_bootstrap(dict(bootstrap=oracle.bootstrap, started_at=oracle.started), root, {0})
+            # Then the receipt validator shares the narrow driver allowlist;
+            # a rechecksummed unknown setup failure cannot qualify this proof.
+            rows[0]['driver_error'] = 'UNKNOWN_ERROR'
+            proof = root/'bootstrap.jsonl'
+            proof.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+            oracle.bootstrap['sha256'] = checksum(proof)
+            with self.assertRaisesRegex(ValueError, 'invalid transient observer initialization evidence'):
+                validate_bootstrap(dict(bootstrap=oracle.bootstrap, started_at=oracle.started), root, {0})
 
     def test_initialization_never_retries_unsafe_progress_or_changed_records(self):
         # Given an unsafe save, or destination bytes that do not match the source.
@@ -176,7 +190,9 @@ class FaultOracleTest(unittest.TestCase):
         # Given the existing ready deadline or a nontransient/data failure.
         for failure, deadline, expected_error in [
                 (DriverException(DriverError(DriverError._TIMED_OUT)), 3, TimeoutError),
+                (DriverException(DriverError(DriverError.NOT_COORDINATOR)), 3, TimeoutError),
                 (DriverException(DriverError(29)), 10, DriverException),
+                (DriverException(DriverError(9999)), 10, DriverException),
                 (ValueError('corrupt fixture record'), 10, ValueError)]:
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -202,19 +218,20 @@ class FaultOracleTest(unittest.TestCase):
                 self.assertEqual('initialization-failure', rows[-1]['kind'])
                 self.assertEqual(0, oracle.checked)
 
-    def test_same_driver_timeout_during_a_measured_sample_is_fatal_without_retry(self):
-        # Given the same driver timeout after readiness and outside a fault.
-        with tempfile.TemporaryDirectory() as temporary:
-            oracle = self.oracle(Path(temporary))
-            failure = DriverException(DriverError(DriverError._TIMED_OUT))
-            with patch.object(oracle.progress, 'committed', side_effect=failure) as query:
-                # When sampling the run, then the error propagates immediately
-                # rather than becoming initialization, a gap or passing proof.
-                with self.assertRaises(DriverException) as raised:
-                    oracle.sample()
-            self.assertIs(failure, raised.exception)
-            query.assert_called_once_with(oracle.parts, timeout=1)
-            self.assertEqual((0, 0), (oracle.checked, oracle.gaps))
+    def test_same_driver_error_during_a_measured_sample_is_fatal_without_retry(self):
+        # Given the same driver errors after readiness and outside a fault.
+        for code in (DriverError._TIMED_OUT, DriverError.NOT_COORDINATOR):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as temporary:
+                oracle = self.oracle(Path(temporary))
+                failure = DriverException(DriverError(code))
+                with patch.object(oracle.progress, 'committed', side_effect=failure) as query:
+                    # When sampling the run, then the error propagates immediately
+                    # rather than becoming initialization, a gap or passing proof.
+                    with self.assertRaises(DriverException) as raised:
+                        oracle.sample()
+                self.assertIs(failure, raised.exception)
+                query.assert_called_once_with(oracle.parts, timeout=1)
+                self.assertEqual((0, 0), (oracle.checked, oracle.gaps))
 
     def test_wire_timeout_remains_failure_and_snapshot_readers_pause_at_the_cut(self):
         # Given the documented None watermark timeout and an idle snapshot reader.

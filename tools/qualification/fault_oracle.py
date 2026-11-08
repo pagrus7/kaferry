@@ -32,7 +32,7 @@ def checksum(path):
     return digest.hexdigest()
 
 
-INITIALIZATION_ERRORS = ('_TIMED_OUT', '_TRANSPORT', '_WAIT_COORD')
+INITIALIZATION_ERRORS = ('_TIMED_OUT', '_TRANSPORT', '_WAIT_COORD', 'NOT_COORDINATOR')
 
 
 def transient_initialization(error):
