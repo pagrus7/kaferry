@@ -1,6 +1,6 @@
 # Settings and results reference
 
-Exact settings, inspection output, exit codes and metrics. For operating steps, see [usage](usage.md); for delivery and restart rules, see [copy behavior](design/decisions.md).
+Exact settings, inspection output, exit codes and metrics. For operating steps, see [usage](usage.md); for restarting safely, see [resume or start over](usage.md#resume-or-start-over).
 
 ## Inspection
 
@@ -67,7 +67,11 @@ Source properties follow `FROM`; sink properties follow `INSERT INTO`. Unknown o
 | `MAX_STALENESS` | `INTERVAL '5' MINUTE` with a timestamp upper bound | Capture replicated ends after the interval end plus this allowance; `OFF` disables wall-clock capture |
 | `MAX_OUT_OF_ORDER` | `OFF` | Allowance before timestamp progress can finish a partition; `OFF` disables timestamp stopping |
 
-Both allowances require an upper timestamp bound and reject an explicit offset end. Either enabled rule can establish completion. Raising only one allowance does not protect against an invalid assumption used by the other. Both `OFF` means following filtered records until another stop or a signal. Neither allowance limits total run time. [Completion guarantees](design/decisions.md#completion).
+For timestamp filters without saved progress, a positive lower bound starts at Kafka’s first matching offset; a non-positive or absent lower bound starts at earliest retained data. With no timestamp match, start at the readable committed end so open transactions remain eligible. Saved positions take precedence.
+
+Both allowances require an upper timestamp bound and reject an explicit offset end. Either enabled rule can establish completion. Raising only one allowance does not protect against an invalid assumption used by the other. Both `OFF` means following filtered records until another stop or a signal. Neither allowance limits total run time. [Allowance examples and assumptions](usage.md#allow-late-arrivals).
+
+Omitting `GROUP` generates and logs a fresh `kaferry-<hex>` group each run. Quote that logged name to resume. Use the same named group for cooperating Kafka workers; unnamed runs copy independently.
 
 #### Archive source
 
@@ -84,6 +88,10 @@ Both allowances require an upper timestamp bound and reject an explicit offset e
 | --- | --- | --- |
 | `PARTITIONING` | `PRESERVE` | Preserve original partition numbers, or use `KEY` for key-based routing |
 
+The destination needs every selected source partition ID with `PRESERVE`. `KEY` uses Java-compatible Murmur2 routing for non-null keys and sticky routing for null keys; source offsets are never copied. Ordering holds within a source/destination partition pair during an uninterrupted producer session with stable routing. Rebalances and restarts can duplicate or reorder writes; no cross-partition order is guaranteed.
+
+Topics must exist. Recreating a destination changes its UUID and prevents resume with the old group; running workers may write to its replacement before detecting the change. Destination timestamp settings may replace timestamps, and retention may delete old records soon after copying. [Recovery procedure](usage.md#recover-after-destination-topic-recreation).
+
 #### Archive sink
 
 | Property | Default | Meaning |
@@ -92,6 +100,18 @@ Both allowances require an upper timestamp bound and reject an explicit offset e
 | `ROTATE_AFTER_AGE` | `INTERVAL '1' HOUR` | Elapsed file age before rotation |
 
 [Rotation and publication](design/archive.md#rotation).
+
+### Record-error policies
+
+Final SQL `OPTIONS` defaults to `FAIL`. `ON_ERROR` cannot be combined with the specific policies below. SKIP drops only an identified record rejected before delivery acceptance:
+
+| Policy | Skippable failure |
+| --- | --- |
+| `ON_MISSING_TIMESTAMP` or `ON_ERROR` | Missing timestamp required by a timestamp filter |
+| `ON_REJECTED_TIMESTAMP` or `ON_ERROR` | Timestamp outside known destination bounds or the client’s supported range |
+| `ON_ERROR` | Synchronous size refusal or supported record validation failure |
+
+Asynchronous broker failures, authentication/authorization errors, out-of-range positions, archive corruption and changed source files always stop copying. Earlier confirmed output remains; resume with the same group after fixing the cause. Counts appear in `copy summary`.
 
 ### Worker settings
 
@@ -116,7 +136,7 @@ Caps must be positive; `max_frame_bytes` is at most 4,294,967,295. Durations are
 
 Replay can cache eight decoded blocks of up to 64 MiB each (512 MiB of raw block data at the defaults), independently of the worker work cap. Decoding, records and client buffers add memory; these settings do not cap total process memory. Lowering `archive_replay_blocks` reduces the cache count. Lowering `max_frame_bytes` can reject archives whose headers declare a larger block limit, even if their actual blocks are small.
 
-Caps include delivered records whose source progress is not yet saved. [Delivery and progress](design/decisions.md#delivery-and-progress).
+Caps include delivered records whose source progress is not yet saved. Output acknowledgement precedes progress saving; a crash in between can repeat writes. At a cap, reading pauses until progress is saved. One oversized record may proceed alone.
 
 ### Connection properties
 

@@ -1,6 +1,6 @@
 # Qualification lab
 
-Run the same scripts from a terminal, GitHub Actions or a local scheduler. No agent, chat session or hosted automation is required. [Component tests](components.md#test-targets) remain the fast development entrypoints; this lab owns disposable broker setup, teardown and qualification evidence.
+Run the same scripts from a terminal, GitHub Actions or a local scheduler. No agent, chat session or hosted automation is required. [Component tests](../../CONTRIBUTING.md#test-targets) remain the fast development entrypoints; this lab owns disposable broker setup, teardown and qualification evidence.
 
 ## Prepare
 
@@ -119,7 +119,7 @@ For paired performance, use the existing standalone runner with two source revis
 sh tools/qualification/performance_run.sh origin/main HEAD --pairs 6 --archives
 ```
 
-The wrapper tears down its disposable brokers after success, failure or interruption. Compare measurements on the same quiet machine; shared-runner throughput has no regression gate. [Performance interpretation](components.md#paired-performance).
+The wrapper tears down its disposable brokers after success, failure or interruption. Compare measurements on the same quiet machine; shared-runner throughput has no regression gate. [Performance interpretation](../../CONTRIBUTING.md#paired-performance).
 
 If Docker itself is unavailable, cleanup can fail. The receipt preserves both suite and cleanup errors. After restoring Docker, remove only these lab projects:
 

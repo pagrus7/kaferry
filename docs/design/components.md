@@ -74,100 +74,9 @@ Implementation is AI-driven with Codex and Claude Code under human direction.
 
 - Priorities: correctness, simple design, throughput, CI duration, binary size.
 - Single-purpose structs behind narrow interfaces; keep core logic Fx-free. Keep functions focused and control flow readable; lint thresholds are defined in [.golangci.yml](../../.golangci.yml).
-- Keep user documentation example-based. CI caps [README](../../README.md) at 5,500 characters. The [usage guide](../usage.md) covers complete workflows without a shared character cap. Keep one authoritative explanation per topic, link exact contracts, and remove repetition before shortening explanations. Grammar tests parse and plan the fenced SQL examples; invalid examples use inline code. The broker-free archive tutorial generates a temporary download bundle from the SQL, TOML and JSON under `examples/archive-demo`, then runs its documented commands in `make smoke`. Release archive checks set `KAFERRY_TUTORIAL_BUNDLE` to test the exact examples asset before publishing it. To build locally, run `go run ./src/cmd/package-examples .cache/archive-demo.tar.gz`; generated Avro files and download archives stay outside Git.
+- Follow the [documentation guidance](../../CONTRIBUTING.md#documentation) for user-facing changes.
 
-## Tests
-
-Most tests exercise pure functions or individual components with handwritten mocks. Kafka and filesystem failures use injected ports; file-component tests use real files, and app tests replace Fx factories. Fewer [broker/CLI tests](../../src/tests/system) cover complete copy paths, rebalances and restart. PR checks also build the base revision, verify resume or explicit format rejection in both directions, and check archive interoperability. Functional tests use Given/When/Then phases. Use `testify/require` for routine assertions; keep direct domain checks where clearer. Fatal assertions run in the test goroutine.
-
-### Test targets
-
-Run from the repository root with Python 3 available. [Makefile](../../Makefile) defines these targets; [suite definitions](../../tools/ci/suites.py) share Go test selection and required execution evidence with CI and standalone qualification. Kafka fixtures need Docker and Compose.
-
-| Command | Scope / prerequisite | CI owner |
-| --- | --- | --- |
-| `make check` | Vet and race-enabled unit/mock/component tests, kfake and shutdown subprocesses; no broker | Every PR/main; all release platforms |
-| `make fast` | Wording, formatting, Go lint, Python duplication, vulnerabilities, race/script/docs checks, build/licenses and file-copy smoke; golangci-lint and jscpd required | Optional before push; CI runs these entrypoints |
-| `make broker` | Start disposable source/destination Kafka clusters | Fixture setup |
-| `make integration` | Broker/CLI paths, fidelity, resume and rebalances; start brokers first | Every PR/main; release |
-| `make fault` | Outages and ownership loss; start brokers first | Code PRs, nightly, weekly, release |
-| `make load` | Bounded Kafka/archive copy caps/fidelity, overlap-cache behavior and file-copy metric overhead; start brokers first | Every PR/main, weekly, release |
-| `make soak` | Streaming fidelity, lag, memory and shutdown; start brokers first | Weekly and release, 30 minutes |
-| `make qualification` | Security/ACLs and replicated failover; starts TLS/SASL fixture | Code PRs, nightly, weekly, release |
-| `make fuzz` | SQL parser, Avro decoder and capture/replay state; 100,000 iterations per target | Nightly; weekly |
-| `make benchmark` | Avro blocks and overlapping replay: CPU/allocations | Nightly; weekly |
-| `make broker-down` | Stop disposable clusters | Fixture cleanup |
-
-Time-window arithmetic, boundaries and overflow use deterministic unit tests in `make check`. Set `FUZZ_ITERATIONS` to change the per-target fuzz budget; failures remain fatal.
-
-### Coverage limits
-
-- Most broker tests start after their group coordinator is ready. `TestKafkaQuickStart` starts its own fresh broker and exercises the first group lookup before the offsets topic exists.
-- Component tests in `make check` withhold coordinator, join, offset, commit and fetch replies and check cleanup.
-
-See [client limits](client-compatibility.md#operational-limits) for deployment constraints.
-
-To run the documented [local Kafka playground](../usage.md#local-kafka-playground) alone, use Docker with port 9092 free and no `kaferry-kafka-demo` container. No fixture brokers are needed:
-
-```sh
-KAFERRY_QUICKSTART=1 go test -count=1 -tags=integration -run '^TestKafkaQuickStart$' -v ./src/tests/system
-```
-
-PR and release integration jobs enable this test and verify that it ran; ordinary local integration runs skip it unless requested.
-
-### Test results
-
-[Standalone qualification lab](qualification.md) covers broker/authentication matrices, published-version contracts, managed-service inputs and multi-day local runs.
-
-[tools/ci/ci.py](../../tools/ci/ci.py) writes logs, environment/result JSON and measurements to ignored `build-results/`, setting `KAFERRY_REPORT_DIR`. Direct load/soak commands need that variable to save metrics.
-
-The dedicated [application endurance profile](qualification.md#endurance-on-a-persistent-host) uses 24 hours and 24/32 partitions with achieved-load gates; it is outside the scheduled CI suites. Soak defaults to two minutes of publishing locally. `KAFERRY_SOAK_DURATION` overrides it (minimum one minute); every run keeps the process alive for ten seconds after the later of the scheduled publishing end and final source submission, before shutdown and final reconciliation.
-
-```sh
-make broker
-make build
-python3 -m tools.ci.ci load make load
-KAFERRY_SOAK_DURATION=30m python3 -m tools.ci.ci soak make soak
-python3 -m tools.ci.ci summary
-make broker-down
-```
-
-To include destination stalls, after `make broker`, use its separate destination cluster:
-
-```sh
-KAFKA_TEST_DEST_BROKERS=127.0.0.1:40092 \
-KAFERRY_SOAK_DEST_STALL_CONTAINER=kaferry-compat-kafka-dr-1 \
-KAFERRY_SOAK_DURATION=30m \
-python3 -m tools.ci.ci soak make soak
-```
-
-[CI](https://github.com/pagrus7/kaferry/actions/workflows/ci.yml) runs on main pushes, PRs and manual dispatch. Bounded load measurements run in parallel with unit and broker-integration tests and appear in the `load` job summary and `checks-load` artifact: throughput, sampled RSS, work caps and logs. Summaries list the slowest tests. [Extended tests](https://github.com/pagrus7/kaferry/actions/workflows/qualification.yml) select fault/security, fuzz and benchmarks nightly; the weekly selection adds load and a 30-minute soak. Unchanged suites reuse recent successful executions under the [scheduled qualification rules](qualification.md#compatibility-matrix); weekly fuzzing always runs. Manual dispatch runs all suites; its publishing duration, ten seconds without new input, and cleanup must fit the 40-minute test timeout. Release assets retain a concise [qualification summary](../releases/README.md#qualification-summary); detailed artifacts retain evidence for 30 days; each test invocation runs once and failures stay visible in Actions.
-
-PRs also run quality/security checks and [additional integrity suites](../../.github/workflows/risk.yml). Only the prose allowlist skips fault and security/failover tests; unknown paths run both. The ordinary PR suites always run. Strict branch protection applies to admins; CodeQL errors and High/Critical security findings block merging.
-
-Use targeted package tests during local edits; full local suites are optional when CI will repeat them. Keep real-Kafka tests for broker behavior; move tests only after comparing executed names and the combined coverage on the same revision.
-
-After retargeting a PR to a different base branch, push a new commit so CI compares the new base and head.
-
-### Quality indicators
-
-| Indicator | Where / meaning |
-| --- | --- |
-| CI | README badge; formatting and documentation checks, vet, race-enabled tests, build, license-notice validation and broker integration |
-| Go coverage | README badge and Codecov PR/file view show line coverage; Actions reports total Go statement coverage per suite. All Go packages are instrumented; Codecov combines unit/mock/file-component and broker integration coverage, and its patch/project checks fail PRs when changed-line or total coverage falls below the thresholds in `codecov.yml` |
-| Static analysis | [Quality workflow](https://github.com/pagrus7/kaferry/actions/workflows/quality.yml): golangci-lint, including Staticcheck, for Go; CodeQL for Go, Python and workflows |
-| Security | govulncheck fails on reachable Go advisories; CodeQL findings and Dependabot alerts appear in GitHub Security. Dependency review checks PRs; updates require review |
-| Complexity / duplication | [Go lint](../../CONTRIBUTING.md#go-lint) checks cognitive complexity, nested conditions, function length and Go duplication; findings across all Go packages fail CI. The quality summary/artifact reports normalized Python clones ≥50 tokens and ≥5 lines, including tests. New clones fail CI; existing clones remain review signals. Run [duplication checks](../../CONTRIBUTING.md#duplication-checks) locally |
-| Extended tests | README badge; load, fault, ACL/failover, fuzz, codec benchmarks and a 30-minute soak with destination stalls. Soak duration is configurable on manual dispatch |
-| Performance | Dated SHA/environment JSON and summaries: throughput, sampled RSS/growth, lag, caps, shutdown, ns/op and allocations. Prior successful measurements compare only matching settings; shared runners provide no regression gate |
-
-Missing measurements are unavailable. Coverage and vulnerability scans describe Go code; badges report only the listed checks.
-
-### Paired performance
-
-[Performance runs](../../.github/workflows/performance.yml) are separate from required PR checks. They reuse Kafka, disabled-metrics Avro file-copy, and optional archive capture/replay/file-copy assertions, with larger inputs, a warm-up per binary and six interleaved pairs, alternating which binary runs first on one runner. Summaries show median head/base throughput and the pair range; raw metrics, binary/toolchain identities and broker images stay in the `performance` artifact for 30 days. Kafka input is capped at 160,000 records; file/archive input at 200,000. Archive comparisons require Avro support in both revisions.
-
-Nightly runs start with A/A calibration (the same binary on both sides). Review at least 20 calibration runs before setting the repository variable `PERFORMANCE_MODE=comparison`; this enables changed-main comparisons against the last retained compatible scheduled measurement. No compatible baseline starts another calibration. Expired data requires a fresh baseline. Manual dispatch accepts a base revision; adding `ci:performance` opts a PR into the configured mode. In comparison mode, PRs compare against the merge base. No performance threshold blocks merging; choose warnings only after measuring A/A noise.
+Testing commands and evidence are in the [contributor guide](../../CONTRIBUTING.md#tests).
 
 ### Local reviews
 
@@ -213,8 +122,4 @@ The command waits for the required reports. In an existing Claude Code session, 
 
 ### Release evidence
 
-[Release procedure](../releases/README.md#build-and-validation) defines archive contents, build targets, licensing and validation gates. `--version` reports the build version, commit, Go and franz-go version. Broker fixtures also use franz-go; Linux race checks require CGO and a C compiler.
-
-Linker values take precedence over embedded Go build information. Otherwise, the CLI and metrics use the embedded module version, including pseudo-versions and dirty markers; an absent or `(devel)` version reports `dev`. Commit information comes from embedded VCS metadata, with `-dirty` for a modified checkout, or reports `unknown` when unavailable. Version reporting does not query Git or the network.
-
-For downloads with attestation bundles, verify archive provenance with `gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry`, and the extracted binary's SBOM with `gh attestation verify kaferry --repo pagrus7/kaferry --predicate-type https://spdx.dev/Document/v2.3`. Attestations establish build origin. Downloads without these bundles can be checked against `SHA256SUMS` for file integrity.
+Follow the [release procedure](../releases/README.md#build-and-validation) for build and validation requirements, and [installation verification](../install.md#version-and-verification) for downloaded binaries.
