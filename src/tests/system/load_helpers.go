@@ -293,12 +293,12 @@ func medianRSS(samples []int64) int64 {
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
 	return sorted[len(sorted)/2]
 }
-func memoryEnvelope(t *testing.T, samples []int64) (warm, final, peak int64) {
+func memoryEnvelope(t *testing.T, samples []int64, finalSamples int) (warm, final, peak int64) {
 	t.Helper()
-	if len(samples) < 30 {
+	if len(samples) < max(30, finalSamples) {
 		t.Fatal("not enough samples for memory stability")
 	}
-	warm, final = medianRSS(samples[10:30]), medianRSS(samples[len(samples)-20:])
+	warm, final = medianRSS(samples[10:30]), medianRSS(samples[len(samples)-finalSamples:])
 	for _, sample := range samples {
 		peak = max(peak, sample)
 	}

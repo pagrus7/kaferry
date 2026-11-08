@@ -20,7 +20,7 @@ class SuitesTest(unittest.TestCase):
         for name, tags, pattern, timeout in [
             ('load', 'integration,load', '^TestLoad', '20m'),
             ('fault', 'integration,fault', '^TestBlockingCommit|^TestRebalanceChurn|^TestCrashResume|^TestRecoveryBlockedOutput', '10m'),
-            ('soak', 'integration,load', '^TestStreamingSoak', '660s'),
+            ('soak', 'integration,load', '^TestStreamingSoak', '370s'),
         ]:
             with self.subTest(suite=name):
                 args = argparse.Namespace(suite=name, duration=60, rate=50)

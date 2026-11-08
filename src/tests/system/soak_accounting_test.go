@@ -23,6 +23,32 @@ func streamFixtureRecord(id int, stamp time.Time) *kgo.Record {
 	return &kgo.Record{Key: record.Key, Value: record.Value, Headers: headers, Timestamp: stamp, Partition: int32(id % 4)}
 }
 
+func TestSoakMonitorRequiresFiveIdleRSSSamples(t *testing.T) {
+	var monitor soakMonitor
+	for i := 0; i < 30; i++ {
+		monitor.recordRSS(20<<10, false)
+	}
+	for i := 0; i < 4; i++ {
+		monitor.recordRSS(22<<10, true)
+	}
+	require.ErrorContains(t, monitor.checkIdleRSS(5), "got 4, need 5")
+	monitor.recordRSS(22<<10, true)
+	require.NoError(t, monitor.checkIdleRSS(5))
+	_, final, _ := memoryEnvelope(t, monitor.rss, 5)
+	require.Equal(t, int64(22<<10), final)
+	monitor.recordRSS(20<<10, false)
+	require.ErrorContains(t, monitor.checkIdleRSS(5), "got 0, need 5")
+}
+
+func TestConsumeOnlyStartAllowsLatePublishingGrace(t *testing.T) {
+	scheduledEnd := time.Unix(0, 0)
+	require.Equal(t, scheduledEnd.Add(10*time.Second),
+		consumeOnlyStart(scheduledEnd, scheduledEnd.Add(-time.Second)).Add(soakDrainDuration))
+	lastPublish := scheduledEnd.Add(5 * time.Second)
+	deadline := consumeOnlyStart(scheduledEnd, lastPublish).Add(soakDrainDuration)
+	require.Equal(t, scheduledEnd.Add(15*time.Second), deadline)
+}
+
 func TestLoadStreamingAccountingRetainsAllDeliveryFailures(t *testing.T) {
 	// Given acknowledged source IDs with two gaps and one corrupted value.
 	stream := newStreamRecords("fixture", time.Now().Truncate(time.Millisecond))
