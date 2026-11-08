@@ -15,7 +15,9 @@ import (
 
 // Reports are optional build artifacts, never part of the archive or CLI API.
 type loadReport struct {
-	Endurance *enduranceEvidence `json:"endurance,omitempty"`
+	Endurance                *enduranceEvidence `json:"endurance,omitempty"`
+	Workload                 workloadProfile    `json:"workload"`
+	SourceCompressionRecords map[string]int64   `json:"source_compression_records,omitempty"`
 
 	Test                             string        `json:"test"`
 	ReadySeconds                     float64       `json:"ready_seconds,omitempty"`
@@ -62,7 +64,8 @@ type loadReport struct {
 
 func newLoadReport(t *testing.T, kind string) *loadReport {
 	t.Helper()
-	r := &loadReport{Test: t.Name(), Kind: kind, Platform: runtime.GOOS + "/" + runtime.GOARCH, FixtureClient: "franz-go"}
+	r := &loadReport{Test: t.Name(), Kind: kind, Platform: runtime.GOOS + "/" + runtime.GOARCH,
+		FixtureClient: "franz-go", Workload: defaultWorkloadProfile()}
 	if directory := os.Getenv("KAFERRY_REPORT_DIR"); directory != "" {
 		t.Cleanup(func() {
 			if r.cli != nil {

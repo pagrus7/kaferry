@@ -16,19 +16,31 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+type kafkaLoadScenario struct {
+	name           string
+	count, records int
+	bytes          int64
+	config         string
+	limit          int
+	profile        *workloadProfile
+}
+
 func TestLoadBoundedKafkaCopy(t *testing.T) {
-	// Given default caps and a small-cap slow-destination scenario.
-	scenarios := []struct {
-		name           string
-		count, records int
-		bytes          int64
-		config         string
-		limit          int
-	}{
-		{"default", 16000, 20000, 128 << 20, "", 0},
-		{"preserved partitions", 16000, 20000, 128 << 20, "", 0},
-		{"slow destination small caps", 128, 32, 128 << 10, "[worker]\nrecord_cap=32\nbyte_cap=131072\npartition_record_cap=8\npartition_byte_cap=32768\n", 0},
-		{"record limit", 16000, 20000, 128 << 20, "", 2000},
+	// Given default caps, small caps and the measured payload/key/compression profiles.
+	scenarios := []kafkaLoadScenario{
+		{name: "default", count: 16000, records: 20000, bytes: 128 << 20},
+		{name: "preserved partitions", count: 16000, records: 20000, bytes: 128 << 20},
+		{name: "slow destination small caps", count: 128, records: 32, bytes: 128 << 10,
+			config: "[worker]\nrecord_cap=32\nbyte_cap=131072\npartition_record_cap=8\npartition_byte_cap=32768\n"},
+		{name: "record limit", count: 16000, records: 20000, bytes: 128 << 20, limit: 2000},
+	}
+	for _, profile := range loadWorkloadProfiles() {
+		count := 3200
+		if profile.TopicMaxMessageBytes != 0 {
+			count = 256
+		}
+		scenarios = append(scenarios, kafkaLoadScenario{name: profile.Name, count: count,
+			records: 20000, bytes: 128 << 20, profile: &profile})
 	}
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -40,10 +52,30 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			report.WorkerStopAfterRecords = scenario.limit
 			report.SourcePartitions, report.DestinationPartitions = 4, 5
 			report.WorkerRecordCap, report.WorkerByteCap = recordCap, byteCap
+			if scenario.profile != nil {
+				report.Workload = *scenario.profile
+			}
 			// Given seeded topics, a compiled CLI and worker limits.
 			a := admin(t)
 			src, dst := topic(t, a, 4), topic(t, a, 5)
-			p := producer(t)
+			compression := newSourceCompressionCounts()
+			var options []kgo.Opt
+			if profile := scenario.profile; profile != nil {
+				options = append(options, kgo.MaxBufferedRecords(profile.SourceBufferRecords), kgo.ProducerBatchCompression(profile.compression()), kgo.WithHooks(compression))
+				alterTopicConfig(t, a, src, map[string]string{"compression.type": "producer"})
+				for _, name := range []string{src, dst} {
+					if profile.TopicMaxMessageBytes != 0 {
+						alterTopicConfig(t, a, name, map[string]string{"max.message.bytes": fmt.Sprint(profile.TopicMaxMessageBytes)})
+					}
+					if profile.CompactionLagMS != 0 {
+						// Preserve every version and tombstone through this bounded reconciliation.
+						alterTopicConfig(t, a, name, map[string]string{"cleanup.policy": "compact",
+							"min.compaction.lag.ms": fmt.Sprint(profile.CompactionLagMS),
+							"delete.retention.ms":   fmt.Sprint(profile.CompactionLagMS)})
+					}
+				}
+			}
+			p := producer(t, options...)
 			reports := make(chan kgo.ProduceResult, count)
 			seedTimeout, copyTimeout := 15*time.Second, time.Minute
 			if count > scenario.count {
@@ -52,7 +84,16 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			seedCtx, seedCancel := context.WithTimeout(t.Context(), seedTimeout)
 			defer seedCancel()
 			stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+			if scenario.profile != nil && scenario.profile.CompactionLagMS != 0 {
+				// Cleaner age follows record timestamps; old fixture timestamps would bypass the lag.
+				stamp = time.Now().Truncate(time.Millisecond)
+			}
 			records := newFiniteStreamRecords(src, stamp, count)
+			records.profile = scenario.profile
+			if scenario.name != "preserved partitions" {
+				records.keyRouting = kgo.StickyKeyPartitioner(nil).ForTopic(dst)
+				records.destinationPartitions = 5
+			}
 			records.publish(t, seedCtx, p, reports, count)
 			for range count {
 				select {
@@ -60,9 +101,18 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 					if e.Err != nil {
 						t.Fatal("fixture publish failed", e)
 					}
+					records.acknowledged++
 				case <-seedCtx.Done():
 					t.Fatal("fixture delivery timed out")
 				}
+			}
+			require.NoError(t, p.Flush(seedCtx))
+			if scenario.profile != nil {
+				var err error
+				report.SourceCompressionRecords, err = compression.wait(seedCtx, int64(count))
+				require.NoError(t, err, "observe every source record's asynchronously reported compression")
+				require.Equal(t, map[string]int64{scenario.profile.SourceCompression: int64(count)}, report.SourceCompressionRecords,
+					"source batches must use the reported compression codec")
 			}
 			seedCancel()
 			binaryPath := testBinary(t)
@@ -108,6 +158,13 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			require.Zero(t, records.corrupted, "corrupted destination records")
 			require.Zero(t, records.unexpected, "unexpected destination records")
 			require.Zero(t, records.reordered, "reordered destination records")
+			delivery := records.delivery(want == count)
+			report.Delivery = &delivery
+			if want == count {
+				require.True(t, delivery.ReconciliationComplete)
+				require.NotNil(t, delivery.Integrity.Matched)
+				require.True(t, *delivery.Integrity.Matched, "submitted and received record fingerprints differ")
+			}
 			require.EqualValues(t, want, topicRecordCount(t, a, dst, 5), "destination must not exceed the cap")
 			cpu := process.cpu()
 			t.Logf("records=%d elapsed=%s records/s=%.0f child_cpu=%s sampled_peak_rss_MiB=%.1f peak_uncommitted_records=%d peak_uncommitted_bytes=%d", report.Records, time.Duration(report.ElapsedSeconds*float64(time.Second)), report.RecordsPerSecond, cpu, float64(report.SampledPeakRSSBytes)/(1<<20), summary.PeakRecords, summary.PeakBytes)

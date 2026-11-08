@@ -55,6 +55,8 @@ func TestLoadObservability(t *testing.T) {
 				require.NoError(t, os.WriteFile(config, []byte(settings), 0600))
 				statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='%s') ", output, source, mode)
 				report := newLoadReport(t, "observability")
+				report.Workload = workloadProfile{Name: "fixed-file-v1", SourceCompression: "not applicable",
+					ValueBytes: [2]int{1024, 1024}, ValueEntropy: "zero bytes", KeyCount: 1}
 				report.ArchiveFormat = "avro"
 				report.WorkerRecordCap = 20000
 				report.WorkerByteCap = 128 << 20

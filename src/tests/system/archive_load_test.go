@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,6 +113,9 @@ func TestLoadArchiveCopy(t *testing.T) {
 func measureArchiveCLI(t *testing.T, statement, cfg string, count int) *loadReport {
 	t.Helper()
 	report := newLoadReport(t, "archive")
+	if strings.Contains(statement, "SELECT * FROM ARCHIVE") {
+		report.Workload.SourceCompression = "not applicable"
+	}
 	report.ArchiveFormat = "avro"
 	report.ArchivePayload = os.Getenv("KAFERRY_ARCHIVE_PAYLOAD")
 	if report.ArchivePayload == "" {

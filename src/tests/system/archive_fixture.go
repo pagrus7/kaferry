@@ -29,9 +29,13 @@ func archiveLoadRecord(id int) core.Record {
 }
 
 func archiveLoadRecordPartitions(id, partitions int) core.Record {
-	value := bytes.Repeat([]byte{byte(id % 251)}, 1024+id%4096)
-	if os.Getenv("KAFERRY_ARCHIVE_PAYLOAD") == "random" {
-		random := rand.New(rand.NewPCG(uint64(id), 42))
+	return archiveLoadRecordPayload(id, partitions, [2]int{1024, 5119}, os.Getenv("KAFERRY_ARCHIVE_PAYLOAD") == "random", 42)
+}
+
+func archiveLoadRecordPayload(id, partitions int, valueBytes [2]int, randomPayload bool, seed uint64) core.Record {
+	value := bytes.Repeat([]byte{byte(id % 251)}, valueBytes[0]+id%(valueBytes[1]-valueBytes[0]+1))
+	if randomPayload {
+		random := rand.New(rand.NewPCG(uint64(id), seed))
 		for i := range value {
 			value[i] = byte(random.Uint32())
 		}

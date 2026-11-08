@@ -49,6 +49,9 @@ func TestLoadReportIdentifiesExecutedBinary(t *testing.T) {
 	var report loadReport
 	require.NoError(t, json.Unmarshal(encoded, &report))
 	require.Equal(t, "franz-go", report.FixtureClient)
+	require.Equal(t, "cyclic-v1", report.Workload.Name)
+	require.Equal(t, [2]int{1024, 5119}, report.Workload.ValueBytes)
+	require.EqualValues(t, 42, report.Workload.Seed)
 	require.Zero(t, report.SourcePartitions)
 	require.Zero(t, report.DestinationPartitions)
 	require.Equal(t, "github.com/twmb/franz-go "+clientVersion, report.Client)

@@ -4,10 +4,8 @@ package compat
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"reflect"
@@ -37,6 +35,7 @@ func loadRecordCount(t *testing.T, name string, fallback, maximum int) int {
 }
 
 type streamRecords struct {
+	profile                *workloadProfile
 	topic                  string
 	stamp                  time.Time
 	headers                []kgo.RecordHeader
@@ -110,12 +109,7 @@ func (s *streamRecords) publish(t *testing.T, ctx context.Context, producer *kgo
 	t.Helper()
 	for range count {
 		id := s.published
-		payload := archiveLoadRecordPartitions(id, len(s.receipts.next)).Value
-		key := []byte(fmt.Sprintf("key-%d", id%257))
-		if id%7 == 0 {
-			key = nil
-		}
-		message := &kgo.Record{Topic: s.topic, Partition: int32(id % len(s.receipts.next)), Key: key, Value: payload, Timestamp: s.stamp, Headers: s.headers}
+		message := s.record(id)
 		s.receipts.submit(id, message)
 		callback := deliveryReporter(ctx, reports)
 		if observer := s.observer; observer != nil {
@@ -142,12 +136,9 @@ func (s *streamRecords) verify(t *testing.T, record *kgo.Record) {
 	if !unique {
 		return
 	}
-	key := []byte(fmt.Sprintf("key-%d", id%257))
-	if id%7 == 0 {
-		key = nil
-	}
-	if !reflect.DeepEqual(key, record.Key) || !record.Timestamp.Equal(s.stamp) ||
-		!reflect.DeepEqual(s.headers, record.Headers) || !reflect.DeepEqual(archiveLoadRecordPartitions(id, len(s.receipts.next)).Value, record.Value) {
+	want := s.record(id)
+	if !reflect.DeepEqual(want.Key, record.Key) || !record.Timestamp.Equal(s.stamp) ||
+		!reflect.DeepEqual(want.Headers, record.Headers) || !reflect.DeepEqual(want.Value, record.Value) {
 		s.corrupted++
 		return
 	}
@@ -174,6 +165,14 @@ func (s *streamRecords) verifyArchive(t *testing.T, record core.Record, identity
 		return
 	}
 	want := archiveLoadRecordPartitions(id, len(s.receipts.next))
+	if s.profile != nil {
+		message := s.record(id)
+		want.Key, want.Value = message.Key, message.Value
+		want.Headers = make([]core.Header, len(message.Headers))
+		for i, header := range message.Headers {
+			want.Headers[i] = core.Header{Name: header.Key, Value: header.Value}
+		}
+	}
 	want.Source.Cluster, want.Source.Topic, want.Source.TopicID = identity.Cluster, identity.Topic, identity.TopicID
 	stamp := s.stamp.UnixMilli()
 	want.TimestampMS = &stamp
@@ -192,11 +191,11 @@ func (s *streamRecords) verifyArchive(t *testing.T, record core.Record, identity
 func (s *streamRecords) receive(t *testing.T, key, value []byte, headers []kgo.RecordHeader) (int, bool) {
 	t.Helper()
 	s.received++
-	if len(value) < 4 {
+	id, valid := s.recordID(value, headers)
+	if !valid {
 		s.unexpected++
 		return 0, false
 	}
-	id := int(binary.BigEndian.Uint32(value))
 	if id >= s.published {
 		s.unexpected++
 		return id, false

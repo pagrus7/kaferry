@@ -141,6 +141,20 @@ python3 -m tools.qualification.qualify run smoke
 
 `resources` runs copy, capture, checkpoint and archive-adapter component tests, including injected failures at filesystem durability boundaries. `fault` includes abrupt process death and restart; its reconciliation permits replay duplicates under the at-least-once contract. `model` compares randomized ownership, delivery, gap and save sequences against a reference model. The same lifecycle target participates in `make fuzz`; `FUZZ_ITERATIONS` sets its execution budget.
 
+### Load workload profiles
+
+`load` runs the existing bounded Kafka and archive copies plus these Kafka profiles. They reuse the streaming record fixture and verifier, with four source and five destination partitions and key routing. Each profile copies 3,200 records; near-limit uses 256 larger records. The source producer buffers at most 64 records. Every profile requires exact counts, matching submission/receipt fingerprints, no duplicates or corruption, preserved ordered headers and timestamps, expected key routing, and the configured uncommitted-record/byte caps.
+
+| Profile | Input |
+| --- | --- |
+| `near-limit-v1` | Deterministic high-entropy values of 999,000–999,127 bytes, with source and destination `max.message.bytes` set to 1,000,000. The remaining space accommodates record/batch framing. |
+| `hot-keys-v1` | Zipf keys over 257 ranks, exponent 1.25 and offset 1; deterministic PCG seed 42 with each record ID. No null keys. |
+| `headers-v1` | 64 ordered headers with repeated names, null and empty values, and 256-byte values on the remaining 62 headers. |
+| `tombstones-v1` | 32 cyclic non-null keys and a null value every fifth record. A header identifies tombstones independently of their null values. Both topics use compaction with a ten-minute minimum compaction lag and tombstone retention. Current record timestamps keep every version available for bounded reconciliation; this case does not test deletion by the cleaner. |
+| `source-none-v1`, `source-gzip-v1`, `source-snappy-v1`, `source-lz4-v1`, `source-zstd-v1` | Cyclic keys and repeated-byte values, published with each source compression codec. Source topics retain producer compression. This compressible input is fixed regardless of archive entropy overrides, so successful source-batch observations must account for every record using the named codec. |
+
+Measurements retain a versioned `workload.name` and its payload, key, header, seed, compaction and source-codec parameters. `source_compression_records` records record counts observed in source batches, grouped by codec, for these profiles. The release-results generator validates the complete versioned parameters and rejects unknown metadata. Compare rates only for matching workloads and parameters. These bounded profiles do not change the fixed endurance workload or its gates.
+
 If Docker itself is unavailable, cleanup can fail. The receipt preserves both suite and cleanup errors. After restoring Docker, remove only these lab projects:
 
 ```sh

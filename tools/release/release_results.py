@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 
 from tools.qualification.qualify import verify_release
+from tools.ci.suites import LOAD_PROFILES
 
 
 LOAD_CASES = {
@@ -17,7 +18,64 @@ LOAD_CASES = {
     'TestLoadArchiveCopy/replay': 'Archive → Kafka',
     'TestLoadArchiveCopy/file': 'Archive → archive',
 }
+LOAD_CASES.update({'TestLoadBoundedKafkaCopy/' + name: 'Kafka → Kafka (' + name + ')' for name in LOAD_PROFILES})
 SOAK = 'TestStreamingSoakFidelityCommitLagMemoryAndShutdown'
+
+
+def recorded_workload(workload):
+    """Validate versioned recipes and retain only their documented parameters."""
+    common = {'name', 'source_compression', 'value_bytes_min_max', 'value_entropy',
+              'key_count', 'null_key_every', 'zipf_s_v', 'seed', 'header_count'}
+    defaults = {'source_compression': 'none', 'source_buffer_records': 0,
+                'value_bytes_min_max': [1024, 5119], 'value_entropy': 'repeated-byte',
+                'key_count': 257, 'null_key_every': 7, 'zipf_s_v': [0, 0], 'seed': 42,
+                'header_count': 3, 'heavy_header_value_bytes': 0, 'tombstone_every': 0,
+                'topic_max_message_bytes': 0, 'min_compaction_lag_ms': 0}
+    random_entropy = 'PCG seeded by record ID and 42'
+    variants = {
+        'cyclic-v1': {},
+        'near-limit-v1': {'value_bytes_min_max': [999000, 999127],
+                          'value_entropy': random_entropy, 'topic_max_message_bytes': 1000000},
+        'hot-keys-v1': {'null_key_every': 0, 'zipf_s_v': [1.25, 1]},
+        'headers-v1': {'header_count': 64, 'heavy_header_value_bytes': 256},
+        'tombstones-v1': {'key_count': 32, 'null_key_every': 0, 'header_count': 4,
+                          'tombstone_every': 5, 'min_compaction_lag_ms': 600000},
+        'fixed-file-v1': {'source_compression': 'not applicable', 'value_bytes_min_max': [1024, 1024],
+                          'value_entropy': 'zero bytes', 'key_count': 1, 'null_key_every': 0,
+                          'seed': 0, 'header_count': 0},
+        'application-24x32-v1': {'value_entropy': random_entropy},
+    }
+    variants.update({'source-' + codec + '-v1': {'source_compression': codec}
+                     for codec in ('none', 'gzip', 'snappy', 'lz4', 'zstd')})
+    if not isinstance(workload, dict) or not isinstance(workload.get('name'), str) or workload['name'] not in variants:
+        raise ValueError('invalid workload identity')
+    name = workload['name']
+    expected = dict(defaults, name=name, **variants[name])
+    if name in LOAD_PROFILES:
+        expected['source_buffer_records'] = 64
+    required = common | {field for field, value in expected.items() if field not in common and value != 0}
+    if not required <= workload.keys() or workload.keys() - expected.keys():
+        raise ValueError('incomplete or unknown workload parameters')
+    normalized = {}
+    for field, value in workload.items():
+        target = expected[field]
+        allowed = [target]
+        if field == 'value_entropy' and name in ('cyclic-v1', 'hot-keys-v1', 'headers-v1', 'tombstones-v1'):
+            allowed.append(random_entropy)
+        if field == 'source_compression' and name == 'cyclic-v1':
+            allowed.append('not applicable')
+        if isinstance(target, list):
+            element_type = (int, float) if field == 'zipf_s_v' else (int,)
+            valid_type = (isinstance(value, list) and len(value) == 2 and
+                          all(type(element) in element_type and
+                              (type(element) is int or math.isfinite(element)) for element in value))
+        else:
+            valid_type = type(value) is type(target)
+        if not valid_type or value not in allowed:
+            raise ValueError('invalid workload parameter type or value')
+        if field in required:
+            normalized[field] = value
+    return normalized
 
 
 def collect(evidence, archive, matrix, commit, version):
@@ -29,6 +87,7 @@ def collect(evidence, archive, matrix, commit, version):
         raise ValueError('a passing full compatibility matrix is required')
     digest = document['cases'][0]['binary_sha256']
     environments, measurements, seen = {}, [], set()
+    recorded_workloads, unrecorded_workloads = set(), set()
     for suite in ('load', 'soak'):
         directory = evidence / f'qualification-{suite}'
         env = json.loads((directory / f'{suite}.environment.json').read_text())
@@ -49,12 +108,33 @@ def collect(evidence, archive, matrix, commit, version):
             seen.add(key)
             if item['binary_sha256'] != digest or not item['passed'] or item['skipped']:
                 raise ValueError(f'{item["test"]}: measurement did not pass for this binary')
+            if 'workload' not in item:
+                unrecorded_workloads.add(key)
+                workload = item['workload'] = {'name': 'not recorded'}
+            else:
+                recorded_workloads.add(key)
+                workload = item['workload'] = recorded_workload(item['workload'])
+            if 'source_compression_records' in item:
+                counts = item['source_compression_records']
+                if (not isinstance(counts, dict) or
+                        any(codec not in ('none', 'gzip', 'snappy', 'lz4', 'zstd') or
+                            type(count) is not int or count <= 0 for codec, count in counts.items())):
+                    raise ValueError('invalid observed source compression counts')
+            profile = item['test'].removeprefix('TestLoadBoundedKafkaCopy/')
+            if profile in LOAD_PROFILES:
+                codec = profile.removeprefix('source-').removesuffix('-v1') if profile.startswith('source-') else 'none'
+                if (workload['name'] != profile or workload.get('source_compression') != codec or
+                        item.get('source_compression_records') != {codec: item['records']}):
+                    raise ValueError(f'{item["test"]}: workload or observed source compression does not match')
             for field in ('records', 'records_per_second', 'elapsed_seconds'):
                 value = item[field]
                 if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                     raise ValueError(f'{item["test"]}: invalid {field}')
             measurements.append(dict(item, suite=suite))
-    required = {('load', test) for test in LOAD_CASES} | {('soak', SOAK)}
+    if recorded_workloads and unrecorded_workloads:
+        raise ValueError('workload identity is missing from some measurements')
+    required = {('load', test) for test in LOAD_CASES
+                if recorded_workloads or test.removeprefix('TestLoadBoundedKafkaCopy/') not in LOAD_PROFILES} | {('soak', SOAK)}
     if not required <= seen or not environments['soak'].get('soak_duration'):
         raise ValueError('required load or soak measurements are missing')
     return {'schema': 1, 'version': version, 'source_commit': commit,
@@ -82,11 +162,11 @@ def markdown(report):
             'SQL input release through process exit. The soak uses paced input and destination stalls; '
             'its rate does not measure maximum copying capacity. These figures do not establish a performance '
             'change against another release. Use paired, interleaved runs for that comparison.', '',
-            '| Suite / scenario | Records | Records/s | Sampled peak RSS MiB |',
-            '| --- | ---: | ---: | ---: |']
+            '| Suite / scenario | Workload | Records | Records/s | Sampled peak RSS MiB |',
+            '| --- | --- | ---: | ---: | ---: |']
     for item in report['measurements']:
         label = LOAD_CASES.get(item['test'], item['test'])
-        rows.append(f'| {item["suite"]} / {label} | {item["records"]:,} | '
+        rows.append(f'| {item["suite"]} / {label} | {item["workload"]["name"]} | {item["records"]:,} | '
                     f'{item["records_per_second"]:,.0f} | {item["sampled_peak_rss_bytes"] / (1 << 20):.1f} |')
     rows += ['', '## Environments', '']
     for suite, env in report['environments'].items():
