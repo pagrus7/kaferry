@@ -45,7 +45,7 @@ By default the fixture owns a disposable Docker volume. To use an existing volum
 python3 -m tools.qualification.qualify run replicated --broker-volume LAB_VOLUME --output /path/to/fresh/evidence
 ```
 
-`--broker-volume` is supported by `run replicated` and `run endurance --topology replicated`; other suite combinations fail. The volume must allow the fixture initializer to create directories and set broker ownership to UID/GID 1000. Each run gets a fresh UUID directory beneath `kaferry-replicated/<project>/`.
+`--broker-volume` is supported by `run replicated`, `run fault-replicated` and `run endurance --topology replicated`; other suite combinations fail. The volume must allow the fixture initializer to create directories and set broker ownership to UID/GID 1000. Each run gets a fresh UUID directory beneath `kaferry-replicated/<project>/`.
 
 Cleanup stops writers and removes only that directory after checking its ownership marker. The external volume and unrelated files remain. Failed ownership validation or writer shutdown preserves the run directory. Data deletion keeps the marker until the run's other files are removed; a failed deletion leaves the marker and remaining data, without undoing earlier deletions. If final directory removal fails, cleanup attempts to restore the marker and still fails qualification. There is no automatic cleanup retry.
 
@@ -73,6 +73,22 @@ For each cluster and worker route, the proxy proof bootstraps on broker 1, publi
 The Go [fault helper](../../src/tests/system/faults) resolves leaders, group coordinators, an in-sync follower, whole clusters and worker destination/coordinator paths at injection time. Container faults use Docker kill/start, restart, pause/unpause and network disconnect/reconnect, preserving the original network aliases. Route faults disable proxies or apply directional timeout, reset, latency, bandwidth or slow-close toxics. Millisecond values apply to timeout, reset, latency and slow close; bandwidth is KB/s per connection. Empty listener selection addresses all six paths per resolved broker; worker selection addresses only that worker's path. Healing restores the originally resolved container IDs and proxy names, even after ownership moves. Ownership labels and proxy upstream/listen addresses must match the fixture before mutation. Partial injection unwinds earlier mutations; failed healing remains pending and fails the test.
 
 A coordinator-path cut blocks every connection from that worker to the coordinator broker, including colocated fetch or metadata traffic. It does not filter Kafka request types. Container disconnection affects that broker's replication and controller connections as well as clients. The helper supplies portable primitives; this smoke does not exercise every primitive against live brokers or qualify recovery from their combinations. Use the runner so the host lease, startup and teardown remain in force.
+
+## Replicated ownership fault
+
+After [preparation](#prepare), use an existing candidate executable and a fresh evidence directory. This command needs the same exclusive ports, two Docker CPUs, 8 GiB runtime memory and storage allowances as the replicated smoke, plus `ps` with RSS reporting. It owns and cleans up the same fixture and runs all proxy-path proofs first. Optional `--broker-volume LAB_VOLUME` uses the labelled-volume procedure above.
+
+```sh
+python3 -m tools.qualification.qualify run fault-replicated --case ownership/zombie-worker --binary bin/kaferry --output build-results/ownership-zombie
+```
+
+`ownership/zombie-worker` starts two instances of that exact executable in one group, using separate worker routes. Both clusters have 24 partitions with three replicas and minimum ISR two. An independent publisher submits one record per source partition every 100 milliseconds; acknowledgement gaps over two seconds fail. Fault timing follows observed group ownership and accepted commits.
+
+A passing receipt requires the coordinator's actual session-expiry observation, independent transfer of worker 1's partitions to worker 2, and accepted peer progress on every transferred partition while worker 1's coordinator route remains cut. After healing, publishing and saved progress must advance again on every partition. Configured session, delivery and shutdown timeouts are six, two and five seconds; the independent observer covers their full 13-second recovery horizon and a healthy observation afterward. The Go case has a four-minute test deadline.
+
+Scoped broker logging records network-received commits and correlated request/response completions around both CLI lifetimes, including member IDs and generations. Every received selected-CLI commit must have a complete response observation. No accepted stale-generation commit is permitted after transfer; a legitimate rejoin must have its independently observed new generation. A stale request need not reach Kafka, and an absent request is never counted as a broker rejection. Missing or truncated logs, logging failures and unsupported logging configurations fail the case. Original logger levels are restored during cleanup.
+
+Final librdkafka reconciliation checks full retained input and output, including permitted replay duplicates and saved progress. Each CLI must also stay within 512 MiB sampled RSS and its configured 1,024-record/128 MiB uncommitted caps. The output retains `manifest.json`, `replicated-ownership.json`, `ownership-proof.json`, raw broker/CLI logs and the shared observer's checksummed bootstrap and safety samples. Failure or Ctrl-C retains failed evidence and attempts fixture cleanup. A command or source test alone does not qualify an executable; qualification requires its completed passing receipt.
 
 ## Two concurrent workloads
 
