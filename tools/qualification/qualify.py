@@ -25,7 +25,7 @@ import uuid
 import venv
 
 from tools.ci.ci import capture, verify_tests
-from tools.ci.suites import command as go_suite, EXPECTED
+from tools.ci.suites import command as go_suite, EXPECTED, REPLICATED_CASES, replicated_execution_seconds
 from tools.qualification import network
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -165,7 +165,11 @@ def suite_command(args, env):
         env.pop('KAFERRY_RECOVERY_DURATION', None)
     prefix = [env.get('GO', 'go'), 'test', '-count=1', '-json']
     if args.suite == 'fault-replicated':
-        return go_suite(args.suite, go=prefix[0], timeout='4m'), EXPECTED[args.suite]
+        selected = [args.case] if getattr(args, 'case', None) else list(REPLICATED_CASES)
+        command = go_suite(args.suite, go=prefix[0], timeout=('4m' if selected == ['ownership/zombie-worker'] else f'{replicated_execution_seconds(selected)}s'))
+        if len(selected) == 1:
+            command[command.index('-run')+1] = '/'.join('^'+part+'$' for part in REPLICATED_CASES[selected[0]].split('/'))
+        return command, [REPLICATED_CASES[id] for id in selected]
     if args.suite in ('broker', 'replicated', 'cloud'):
         python = str(VENV / 'bin/python') if VENV.exists() else sys.executable
         return [python, '-m', 'tools.qualification.broker_probe', '--binary', args.binary, '--output', str(args.output),
@@ -520,9 +524,9 @@ def resolve_run(args, receipt, fixture):
     if selected_case and args.suite != 'fault-replicated':
         raise ValueError('--case requires run fault-replicated')
     if args.suite == 'fault-replicated':
-        if selected_case not in (None, 'ownership/zombie-worker'):
+        if selected_case is not None and selected_case not in REPLICATED_CASES:
             raise ValueError('unknown replicated fault case')
-        receipt['case_selection'] = ['ownership/zombie-worker']
+        receipt['case_selection'] = [selected_case] if selected_case else list(REPLICATED_CASES)
     paired = not replicated_fixture(args) and (args.suite in PAIRED_SUITES or
         args.suite == 'migration' and args.state_contract == 'resume')
     auth = args.suite == 'auth' and volume is not None
@@ -601,7 +605,7 @@ def resolve_run(args, receipt, fixture):
     elif args.suite == 'recovery':
         timeout = args.duration + 600
     elif args.suite == 'fault-replicated':
-        timeout = 300
+        timeout = replicated_execution_seconds(receipt['case_selection'])+60
     return RunSpec(command, expected, env, compose if fixtures else [], timeout)
 
 
@@ -746,9 +750,9 @@ def verify_run(args, spec, receipt):
         from tools.qualification.fault_results import collect
         receipt['fault_results'] = collect(args.output, args.suite, receipt, spec.env.get('KAFERRY_ORACLE_RUN'))
     if args.suite == 'fault-replicated':
-        from tools.qualification.ownership_audit import validate
-        case = validate(args.output, receipt)
-        receipt['fault_results'] = dict(schema=1, status='passed', cases=[case], oracle_run=spec.env['KAFERRY_ORACLE_RUN'],
+        from tools.qualification.replicated_results import collect
+        cases = collect(args.output, receipt['case_selection'], receipt, spec.env['KAFERRY_ORACLE_RUN'])
+        receipt['fault_results'] = dict(schema=1, status='passed', cases=cases, oracle_run=spec.env['KAFERRY_ORACLE_RUN'],
             **{key: receipt[key] for key in ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')})
 
 
@@ -902,7 +906,7 @@ def main(argv=None):
             running.add_argument('suite', choices=SUITES)
             running.add_argument('--broker-volume', help='existing labeled external volume for local brokers')
             running.add_argument('--topology', choices=('single', 'replicated'), help='endurance topology (default: single)')
-            running.add_argument('--case', choices=('ownership/zombie-worker',), help='case within fault-replicated')
+            running.add_argument('--case', choices=tuple(REPLICATED_CASES), help='one case within fault-replicated; default: all registered cases')
         elif name == 'matrix':
             running.add_argument('--tier', choices=('pr', 'nightly', 'full'), default='pr')
         running.add_argument('--source', choices=VERSIONS)

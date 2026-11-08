@@ -110,6 +110,28 @@ Cleanup stops writers, validates the run's project/UUID ownership marker and rem
 
 On a deletion error, `storage-clean.log` retains a metadata-only census of that path, to four levels and 64 KiB. It does not follow symbolic links or read file contents. The census has a two-second deadline and one-second forced-termination allowance. `cleanup-container-state.json` records only service names, states and exit codes, with a separate two-second deadline and 64 KiB limit. Missing tools, failed queries, timeouts and truncated observations are explicit. These partial observations cannot establish the cause of a filesystem error or the absence of open kernel references. Diagnostics do not retry deletion or change the failed qualification result.
 
+## Replicated broker faults
+
+The five broker cases use the same [preparation](#prepare), exclusive fixture and independent saved-prefix observer as the ownership case. Each starts one selected CLI process and steady source publication across 24 RF=3 partitions with `min.insync.replicas=2`. Choose one case for a short run:
+
+```sh
+python3 -m tools.qualification.qualify run fault-replicated --case broker/source-leader --binary bin/kaferry --output build-results/source-leader
+```
+
+| Case | Required observation |
+| --- | --- |
+| `broker/source-leader` | Kill the source partition's leader resolved at injection; observe a replacement leader and continued publication before restoring the original broker. |
+| `broker/destination-leader` | Kill the resolved destination leader; observe replacement leadership while input continues, then restore the broker and require saved progress. |
+| `broker/rolling-source` | Restart source brokers 1–3 one at a time; observe broker health, all 24 ISR sets at three replicas and advancing saved progress before the next restart. |
+| `broker/rolling-destination` | Apply the same sequence to the destination cluster. |
+| `broker/destination-isr-loss` | Cut only the resolved destination leader's replication listener, leaving all controllers running. Observe actual ISR=1 below minISR=2, unresolved CLI output and no save past the acknowledged target prefix; restore ISR and require the same process to resume. |
+
+One delayed source leader leaves at most one publication outstanding per partition; healthy partitions continue receiving offers every 100 milliseconds, and offer-schedule gaps over two seconds fail. Every offer must finish successfully before final reconciliation. A source acknowledgement timeout fails the fixture. Source records retain unique full identities. Broker faults can cause the existing fail-fast source, save or delivery errors; the leader and rolling cases record any resulting exit 1 and restart with the same executable, SQL, group and worker route after broker recovery. The ISR case permits no process restart.
+
+Broker cases explicitly configure six-second sessions, eight-second RPCs, the product's ten-second periodic-save context, 60-second delivery and five-second shutdown bounds. They verify the fixture's existing 30-second replica-lag timeout. Each complete post-heal observation covers their 119-second sum and a healthy observation afterward. The zombie case retains its separate 31-second window and existing deadlines. Omitting `--case` selects all six implemented replicated fault cases; the runner sums their Go allowances instead of applying a single-case deadline. CI runs each selected case in its own 15-minute job and retains the separate healthy smoke artifact.
+
+Each case retains resolved targets, start/heal times, actual timeout settings, observed transitions and every worker's exit/restart and resource measurements in `broker-CASE/replicated-broker.json`, plus raw CLI logs and shared independent observations. Passing requires exact final source counts and saved positions, full-record reconciliation, duplicate attribution to the observed fault windows, at most 512 MiB sampled CLI RSS and the configured 1,024-record/128 MiB uncommitted caps. These local clusters share one host. A receipt covers the recorded broker failures and replication paths; physical machine or zone loss requires a separate deployment.
+
 ## Two concurrent workloads
 
 The `parallel` command holds the host lease for a pair of independent runs. It starts

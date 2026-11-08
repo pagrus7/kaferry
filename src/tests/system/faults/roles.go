@@ -21,6 +21,7 @@ type Role struct {
 	Group     string `json:"group,omitempty"`
 	Worker    int    `json:"worker,omitempty"`
 	Listener  string `json:"listener,omitempty"`
+	Broker    int32  `json:"broker,omitempty"`
 }
 
 type Partition struct {
@@ -113,6 +114,11 @@ func (r Role) paths() ([]string, error) {
 
 func (l *Lab) brokers(ctx context.Context, role Role) ([]int32, error) {
 	switch role.Kind {
+	case "broker":
+		if role.Broker < 1 || role.Broker > 3 {
+			return nil, errors.New("broker role requires broker 1 through 3")
+		}
+		return []int32{role.Broker}, nil
 	case "cluster":
 		return []int32{1, 2, 3}, nil
 	case "worker-destination":

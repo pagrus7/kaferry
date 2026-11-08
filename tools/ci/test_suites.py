@@ -16,6 +16,25 @@ from tools.qualification.fault_results import FAULT_CASES
 
 
 class SuitesTest(unittest.TestCase):
+    def test_replicated_broker_budgets_are_registered_and_selection_scoped(self):
+        # Given five broker recipes and the unchanged ownership recipe, when
+        # selecting deadlines, then each uses only its actual registered bounds.
+        catalog = suites.fault_timeout_catalog()
+        for id in suites.REPLICATED_CASES:
+            if id.startswith('broker/'):
+                self.assertEqual(119000, sum(catalog[id].values()))
+                self.assertEqual(359, suites.replicated_execution_seconds([id]))
+        self.assertEqual(240, suites.replicated_execution_seconds(['ownership/zombie-worker']))
+        self.assertEqual(2035, suites.replicated_execution_seconds(list(suites.REPLICATED_CASES)))
+        for selected in ([], ['broker/not-implemented']):
+            with self.assertRaises(ValueError):
+                suites.replicated_execution_seconds(selected)
+        for key in ('socket.timeout.ms', 'replica.lag.time.max.ms'):
+            changed = json.loads(json.dumps(catalog))
+            changed['broker/source-leader'].pop(key)
+            with patch('tools.ci.suites.json.loads', return_value=changed), self.assertRaises(ValueError):
+                suites.fault_timeout_catalog()
+
     def test_registered_ownership_bounds_extend_only_the_catalog_key_allowlist(self):
         # Given the new exposure's actual bounds, when loading the catalog,
         # then its31s horizon is exact and legacy eight-case budgets stay473s.
