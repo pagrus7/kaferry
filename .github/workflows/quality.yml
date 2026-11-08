@@ -12,6 +12,8 @@ env:
   CGO_ENABLED: "0"
 jobs:
   go:
+    outputs:
+      dependency-result: ${{ steps.dependencies.outcome }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -23,6 +25,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        id: dependencies
+        if: github.event_name == 'pull_request'
+        timeout-minutes: 5
+        continue-on-error: true
       - uses: ./.github/actions/setup-go
         with:
           cache-name: quality-go
@@ -70,6 +77,9 @@ jobs:
           name: quality-go
           path: build-results/
           retention-days: 30
+      - name: Require successful dependency review
+        if: always() && steps.dependencies.outcome == 'failure'
+        run: exit 1
   codeql:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -97,9 +107,12 @@ jobs:
         with:
           category: codeql-${{ matrix.language }}
   dependencies:
-    if: github.event_name == 'pull_request'
+    needs: go
+    if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 2
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+      - name: Require the dependency review result
+        env:
+          RESULT: ${{ needs.go.outputs.dependency-result }}
+        run: test "$RESULT" = success
