@@ -20,7 +20,7 @@ class PublicationTest(unittest.TestCase):
         self.evidence = Path(self.temporary.name)
         self.binary = b'release executable fixture'
         self.receipt = dict(suite='endurance', status='passed', requested_seconds=60,
-            drain_seconds=300, started_at='2026-11-06T04:00:00+00:00', elapsed_seconds=370,
+            drain_seconds=10, started_at='2026-11-06T04:00:00+00:00', elapsed_seconds=80,
             source_commit='a'*40, working_tree_dirty=False, binary_version='kaferry dev',
             binary_sha256=hashlib.sha256(self.binary).hexdigest(), platform='Linux', go='go fixture')
         self.metrics = dict(binary_sha256=self.receipt['binary_sha256'], platform='linux-arm64',

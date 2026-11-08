@@ -32,7 +32,7 @@ RELEASES = json.loads((ROOT / 'src/tests/qualification/releases.json').read_text
 SUITES = ('broker', 'auth', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'migration',
           'model', 'resources', 'integration', 'fuzz', 'benchmark', 'smoke', 'cloud')
 STOP_GRACE = 5
-SOAK_DRAIN_SECONDS = 300
+SOAK_DRAIN_SECONDS = 10
 STREAMING_SUITES = ('soak', 'capture', 'endurance')
 LAB_LOCK = Path('/tmp/kaferry-qualification.lock')
 VENV = ROOT / ('.cache/qualification/venv-' + str(sys.version_info.major) + '.' + str(sys.version_info.minor))
@@ -306,7 +306,11 @@ def resolve_run(args, receipt, fixture):
     receipt.update(command=list(map(str, command)), expected_tests=expected)
     if fixtures:
         receipt.update(fixture_project=project, fixture_brokers=[env['KAFKA_TEST_BROKERS'], env['KAFKA_TEST_DEST_BROKERS']])
-    timeout = args.duration + SOAK_DRAIN_SECONDS + 300 if args.suite in (*STREAMING_SUITES, 'recovery') else 1800
+    timeout = 1800
+    if args.suite in STREAMING_SUITES:
+        timeout = args.duration + SOAK_DRAIN_SECONDS + 300
+    elif args.suite == 'recovery':
+        timeout = args.duration + 600
     return RunSpec(command, expected, env, compose if fixtures else [], timeout)
 
 
