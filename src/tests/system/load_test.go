@@ -58,10 +58,10 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			// Given seeded topics, a compiled CLI and worker limits.
 			a := admin(t)
 			src, dst := topic(t, a, 4), topic(t, a, 5)
-			var compression sourceCompressionCounts
+			compression := newSourceCompressionCounts()
 			var options []kgo.Opt
 			if profile := scenario.profile; profile != nil {
-				options = append(options, kgo.MaxBufferedRecords(profile.SourceBufferRecords), kgo.ProducerBatchCompression(profile.compression()), kgo.WithHooks(&compression))
+				options = append(options, kgo.MaxBufferedRecords(profile.SourceBufferRecords), kgo.ProducerBatchCompression(profile.compression()), kgo.WithHooks(compression))
 				alterTopicConfig(t, a, src, map[string]string{"compression.type": "producer"})
 				for _, name := range []string{src, dst} {
 					if profile.TopicMaxMessageBytes != 0 {
@@ -108,7 +108,9 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			}
 			require.NoError(t, p.Flush(seedCtx))
 			if scenario.profile != nil {
-				report.SourceCompressionRecords = compression.snapshot()
+				var err error
+				report.SourceCompressionRecords, err = compression.wait(seedCtx, int64(count))
+				require.NoError(t, err, "observe every source record's asynchronously reported compression")
 				require.Equal(t, map[string]int64{scenario.profile.SourceCompression: int64(count)}, report.SourceCompressionRecords,
 					"source batches must use the reported compression codec")
 			}

@@ -3,6 +3,7 @@
 package compat
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math/rand/v2"
@@ -140,20 +141,52 @@ func (s *streamRecords) recordID(value []byte, headers []kgo.RecordHeader) (int,
 }
 
 // Count the codecs actually written by the source fixture, rather than just its configuration.
-type sourceCompressionCounts [5]atomic.Int64
+type sourceCompressionCounts struct {
+	records [5]atomic.Int64
+	changed chan struct{}
+}
+
+func newSourceCompressionCounts() *sourceCompressionCounts {
+	return &sourceCompressionCounts{changed: make(chan struct{}, 1)}
+}
 
 func (c *sourceCompressionCounts) OnProduceBatchWritten(_ kgo.BrokerMetadata, _ string, _ int32, batch kgo.ProduceBatchMetrics) {
-	if int(batch.CompressionType) < len(c) {
-		c[batch.CompressionType].Add(int64(batch.NumRecords))
+	if int(batch.CompressionType) < len(c.records) {
+		c.records[batch.CompressionType].Add(int64(batch.NumRecords))
+		select {
+		case c.changed <- struct{}{}:
+		default:
+		}
 	}
 }
 
 func (c *sourceCompressionCounts) snapshot() map[string]int64 {
 	result := make(map[string]int64)
 	for i, name := range []string{"none", "gzip", "snappy", "lz4", "zstd"} {
-		if count := c[i].Load(); count != 0 {
+		if count := c.records[i].Load(); count != 0 {
 			result[name] = count
 		}
 	}
 	return result
+}
+
+func (c *sourceCompressionCounts) wait(ctx context.Context, expected int64) (map[string]int64, error) {
+	for {
+		observed := c.snapshot()
+		if err := ctx.Err(); err != nil {
+			return observed, err
+		}
+		var total int64
+		for _, count := range observed {
+			total += count
+		}
+		if total >= expected {
+			return observed, nil
+		}
+		select {
+		case <-ctx.Done():
+			return c.snapshot(), ctx.Err()
+		case <-c.changed:
+		}
+	}
 }

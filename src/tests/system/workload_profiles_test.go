@@ -4,6 +4,7 @@ package compat
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,71 @@ func TestLoadWorkloadProfilesPreserveFidelityAndIdentifyTombstones(t *testing.T)
 			require.True(t, *delivery.Integrity.Matched)
 		})
 	}
+}
+
+func TestLoadSourceCompressionWaitsForDelayedObservationsAndCancellation(t *testing.T) {
+	for _, cancelWhileWaiting := range []bool{false, true} {
+		name := "delayed observation"
+		if cancelWhileWaiting {
+			name = "cancellation"
+		}
+		t.Run(name, func(t *testing.T) {
+			// Given one observed record and two source records whose hook has not run.
+			counts := newSourceCompressionCounts()
+			counts.OnProduceBatchWritten(kgo.BrokerMetadata{}, "fixture", 0, kgo.ProduceBatchMetrics{NumRecords: 1, CompressionType: 1})
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			type result struct {
+				observed map[string]int64
+				err      error
+			}
+			done := make(chan result, 1)
+			go func() {
+				observed, err := counts.wait(ctx, 3)
+				done <- result{observed, err}
+			}()
+			// The first hook filled this channel. Sending again proves the waiter
+			// consumed its notification and is waiting for the remaining records.
+			select {
+			case counts.changed <- struct{}{}:
+			case early := <-done:
+				t.Fatalf("observation wait returned before the delayed hook: %+v", early)
+			case <-ctx.Done():
+				t.Fatal("observation waiter did not consume the first notification")
+			}
+			// When the delayed hook runs, or the wait is explicitly cancelled.
+			if cancelWhileWaiting {
+				cancel()
+			} else {
+				counts.OnProduceBatchWritten(kgo.BrokerMetadata{}, "fixture", 0, kgo.ProduceBatchMetrics{NumRecords: 2, CompressionType: 1})
+			}
+			// Then retain exact codec counts, and return cancellation with partial evidence.
+			select {
+			case completed := <-done:
+				if cancelWhileWaiting {
+					require.ErrorIs(t, completed.err, context.Canceled)
+					require.Equal(t, map[string]int64{"gzip": 1}, completed.observed)
+				} else {
+					require.NoError(t, completed.err)
+					require.Equal(t, map[string]int64{"gzip": 3}, completed.observed)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("observation waiter did not finish")
+			}
+		})
+	}
+}
+
+func TestLoadSourceCompressionObservationRespectsDeadline(t *testing.T) {
+	// Given partial observations and an expired publication deadline.
+	counts := newSourceCompressionCounts()
+	counts.OnProduceBatchWritten(kgo.BrokerMetadata{}, "fixture", 0, kgo.ProduceBatchMetrics{NumRecords: 1, CompressionType: 4})
+	ctx, cancel := context.WithDeadline(t.Context(), time.Time{})
+	defer cancel()
+	// When awaiting all source records, then the deadline preserves partial evidence.
+	observed, err := counts.wait(ctx, 3)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, map[string]int64{"zstd": 1}, observed)
 }
 
 func TestLoadWorkloadTombstoneNullIsNotEmptyAndRequiresItsID(t *testing.T) {
