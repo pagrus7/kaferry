@@ -37,6 +37,7 @@ SUITES = ('broker', 'replicated', 'fault-replicated', 'auth', 'fault', 'load', '
 STOP_GRACE = 5
 SOAK_DRAIN_SECONDS = 10
 STREAMING_SUITES = ('soak', 'capture', 'endurance')
+PAIRED_SUITES = ('broker', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration')
 LAB_LOCK = Path('/tmp/kaferry-qualification.lock')
 VENV = ROOT / ('.cache/qualification/venv-' + str(sys.version_info.major) + '.' + str(sys.version_info.minor))
 REPLICATED_SOURCE_PORTS = (46092, 46093, 46094)
@@ -268,19 +269,25 @@ def parallel_capacity(required, output, compose, env):
     return result
 
 
-def replicated_admission(output, env, endurance_seconds=None):
+def fixture_capacity(output, required):
     runtime = json.loads(capture(['docker', 'info', '--format', '{{json .}}']))
-    capacity = dict(required_cpus=2, required_runtime_memory_bytes=8 * 1024**3,
-                    required_broker_bytes=4 * 1024**3, required_evidence_bytes=1024**3,
+    capacity = dict(required,
                     runtime_cpus=runtime.get('NCPU', 0), runtime_memory_bytes=runtime.get('MemTotal', 0),
                     evidence_free_bytes=shutil.disk_usage(output).free)
-    if endurance_seconds is not None:
-        capacity.update(endurance_allowance(endurance_seconds, replicas=3))
     write_json(output / 'capacity.json', capacity)
     if (capacity['runtime_cpus'] < capacity['required_cpus'] or
             capacity['runtime_memory_bytes'] < capacity['required_runtime_memory_bytes'] or
             capacity['evidence_free_bytes'] < capacity['required_evidence_bytes']):
-        raise ValueError('insufficient replicated fixture capacity; inspect capacity.json')
+        raise ValueError('insufficient fixture capacity; inspect capacity.json')
+    return capacity
+
+
+def replicated_admission(output, env, endurance_seconds=None):
+    required = dict(required_cpus=2, required_runtime_memory_bytes=8 * 1024**3,
+        required_broker_bytes=4 * 1024**3, required_evidence_bytes=1024**3)
+    if endurance_seconds is not None:
+        required.update(endurance_allowance(endurance_seconds, replicas=3))
+    capacity = fixture_capacity(output, required)
     if env['KAFERRY_REPLICATED_VOLUME_EXTERNAL'] == 'true':
         labels = json.loads(capture(['docker', 'volume', 'inspect', '--format', '{{json .Labels}}',
                                      env['KAFERRY_REPLICATED_BROKER_VOLUME']]) or 'null')
@@ -307,11 +314,11 @@ def replicated_storage(output, compose, env, capacity, cancelled):
            'storage-capacity', env, timeout=180, cancelled=cancelled)
     readings = [int(line) for line in (output / 'storage-capacity.log').read_text().splitlines() if line.isdecimal()]
     if len(readings) != 1:
-        raise ValueError('replicated storage did not report exactly one free-space reading')
+        raise ValueError('fixture storage did not report exactly one free-space reading')
     capacity['broker_free_bytes'] = readings[0] * 1024
     write_json(output / 'capacity.json', capacity)
     if capacity['broker_free_bytes'] < capacity['required_broker_bytes']:
-        raise ValueError('insufficient replicated broker space; inspect capacity.json')
+        raise ValueError('insufficient fixture broker space; inspect capacity.json')
     logged(replicated_storage_command(compose, 'prepare'), output,
            'storage-prepare', env, timeout=60, cancelled=cancelled)
 
@@ -326,6 +333,17 @@ def cleanup_replicated(output, compose, env):
     except (OSError, RuntimeError) as error:
         errors.append({'phase': 'storage-clean', 'error': str(error)})
     return errors
+
+
+def paired_storage_admission(output, env, parallel):
+    count = 2 if parallel else 1
+    capacity = fixture_capacity(output, dict(required_cpus=2 * count, required_runtime_memory_bytes=4 * count * 1024**3,
+        required_broker_bytes=4 * 1024**3, required_evidence_bytes=1024**3))
+    labels = json.loads(capture(['docker', 'volume', 'inspect', '--format', '{{json .Labels}}',
+                                 env['KAFERRY_BROKER_VOLUME']]) or 'null')
+    if not labels or labels.get('kaferry.lab.storage') != 'true':
+        raise ValueError('external broker volume must exist with label kaferry.lab.storage=true')
+    return capacity
 
 
 def parallel_run(args):
@@ -401,8 +419,15 @@ def resolve_run(args, receipt, fixture):
         if selected_case not in (None, 'ownership/zombie-worker'):
             raise ValueError('unknown replicated fault case')
         receipt['case_selection'] = ['ownership/zombie-worker']
-    if volume and (not replicated_fixture(args) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', volume)):
-        raise ValueError('--broker-volume requires a replicated fixture and a Docker volume name')
+    paired = not replicated_fixture(args) and (args.suite in PAIRED_SUITES or
+        args.suite == 'migration' and args.state_contract == 'resume')
+    if volume is not None and (not (replicated_fixture(args) or paired) or
+                               not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', volume)):
+        raise ValueError('--broker-volume requires a paired or replicated broker fixture and a Docker volume name')
+    if volume and paired:
+        env.update(KAFERRY_BROKER_VOLUME=volume, KAFERRY_BROKER_RUN_ID=uuid.uuid4().hex)
+        compose[4:4] = ['-f', 'src/tests/broker-storage.compose.yaml']
+        receipt['fixture_storage'] = dict(mode='external-volume', run_id=env['KAFERRY_BROKER_RUN_ID'], layout='paired')
     if replicated_fixture(args):
         if fixture is not None or args.source != VERSIONS[-1] or args.destination != VERSIONS[-1]:
             raise ValueError('replicated uses the newest catalog image and its dedicated fixture')
@@ -423,7 +448,7 @@ def resolve_run(args, receipt, fixture):
                                      replication_factor=3, min_insync_replicas=2, client_paths=4)
         receipt['fixture_storage'] = dict(mode='external-volume' if volume else 'disposable-volume',
                                          run_id=env['KAFERRY_REPLICATED_RUN_ID'])
-    fixtures = args.suite in ('broker', *REPLICATED_SUITES, 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration') or (args.suite == 'migration' and args.state_contract == 'resume')
+    fixtures = paired or replicated_fixture(args)
     if not Path(args.binary).is_file():
         raise ValueError('binary is missing; run make build or pass --binary')
     receipt['binary_sha256'] = hashlib.sha256(Path(args.binary).read_bytes()).hexdigest()
@@ -500,6 +525,10 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
                        'proxy-up', spec.env, timeout=90, cancelled=cancelled)
                 logged([sys.executable, '-m', 'tools.qualification.network', '--output', str(args.output)],
                        args.output, 'proxy-configure', spec.env, timeout=60, cancelled=cancelled)
+            elif receipt.get('fixture_storage', {}).get('layout') == 'paired':
+                receipt['storage_capacity'] = paired_storage_admission(args.output, spec.env, fixture is not None)
+                owns_fixture = True
+                replicated_storage(args.output, spec.compose, spec.env, receipt['storage_capacity'], cancelled)
             if spec.compose:
                 owns_fixture = True
                 startup_attempted = True
@@ -539,11 +568,12 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
                 except (OSError, subprocess.SubprocessError) as error:
                     errors.append({'phase': 'logs', 'error': str(error)})
                 finally:
-                    if replicated_fixture(args):
+                    owned_storage = replicated_fixture(args) or receipt.get('fixture_storage', {}).get('layout') == 'paired'
+                    if owned_storage:
                         errors.extend(cleanup_replicated(args.output, spec.compose, spec.env))
                     try:
                         # Keep storage if ownership validation or writer shutdown failed.
-                        volumes = [] if replicated_fixture(args) and errors else ['-v']
+                        volumes = [] if owned_storage and errors else ['-v']
                         logged(spec.compose + ['down', *volumes, '--remove-orphans'], args.output, 'brokers-down', spec.env, timeout=60)
                     except (OSError, RuntimeError) as error:
                         errors.append({'phase': 'teardown', 'error': str(error)})
@@ -722,7 +752,7 @@ def main(argv=None):
         running = sub.add_parser(name, help='run one suite' if name == 'run' else 'run every planned case sequentially')
         if name == 'run':
             running.add_argument('suite', choices=SUITES)
-            running.add_argument('--broker-volume', help='existing labeled external volume; replicated fixtures only')
+            running.add_argument('--broker-volume', help='existing labeled external volume for paired or replicated brokers')
             running.add_argument('--topology', choices=('single', 'replicated'), help='endurance topology (default: single)')
             running.add_argument('--case', choices=('ownership/zombie-worker',), help='case within fault-replicated')
         elif name == 'matrix':
@@ -745,6 +775,7 @@ def main(argv=None):
     parallel.add_argument('--source', choices=VERSIONS, default=VERSIONS[0])
     parallel.add_argument('--destination', choices=VERSIONS, default=VERSIONS[0])
     parallel.add_argument('--binary', default='bin/kaferry', help='existing candidate executable (default: %(default)s)')
+    parallel.add_argument('--broker-volume', help='existing labeled external volume for both jobs’ brokers')
     parallel.add_argument('--output', type=Path, required=True, help='new evidence directory; existing paths are refused')
     verifying = sub.add_parser('verify-release', help='validate full matrix evidence against an exact release archive')
     verifying.add_argument('report', type=Path)

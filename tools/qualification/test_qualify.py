@@ -528,7 +528,7 @@ class MatrixTest(unittest.TestCase):
     def test_broker_volume_rejects_unsupported_suites_names_and_old_replicated_images(self):
         with tempfile.TemporaryDirectory() as temporary:
             # Given explicit storage requests, when invalid, then no Docker command is issued.
-            for suite, volume, source in [('broker', 'lab', '4.4.0'), ('replicated', '-foreign', '4.4.0'),
+            for suite, volume, source in [('auth', 'lab', '4.4.0'), ('replicated', '-foreign', '4.4.0'),
                                            ('replicated', 'lab', '3.9.2')]:
                 with self.subTest(suite=suite, volume=volume, source=source):
                     args = self.suite_args(Path(temporary), suite, source=source, destination='4.4.0', broker_volume=volume)

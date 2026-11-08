@@ -1,0 +1,31 @@
+# Opt-in overlay; initialize each owned directory before starting either broker.
+services:
+  storage:
+    image: ${KAFERRY_SOURCE_IMAGE}
+    profiles: [storage]
+    user: "0:0"
+    network_mode: none
+    entrypoint: [/bin/sh]
+    environment:
+      KAFERRY_FIXTURE_PROJECT: ${COMPOSE_PROJECT_NAME}
+      KAFERRY_STORAGE_LAYOUT: paired
+      KAFERRY_BROKER_RUN_ID: ${KAFERRY_BROKER_RUN_ID:?fixture run ID is required}
+    volumes:
+      - broker-data:/storage
+  kafka:
+    user: "1000:1000"
+    environment:
+      KAFKA_LOG_DIRS: /tmp/kaferry-logs/kaferry-paired/${COMPOSE_PROJECT_NAME}/${KAFERRY_BROKER_RUN_ID}/kafka
+    volumes:
+      - broker-data:/tmp/kaferry-logs
+  kafka-dr:
+    user: "1000:1000"
+    environment:
+      KAFKA_LOG_DIRS: /tmp/kaferry-logs/kaferry-paired/${COMPOSE_PROJECT_NAME}/${KAFERRY_BROKER_RUN_ID}/kafka-dr
+    volumes:
+      - broker-data:/tmp/kaferry-logs
+
+volumes:
+  broker-data:
+    name: ${KAFERRY_BROKER_VOLUME:?external broker volume is required}
+    external: true
