@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"syscall"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,7 +26,11 @@ import (
 	"github.com/pagrus7/kaferry/src/internal/plan"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 	"go.uber.org/fx"
 )
 
@@ -360,7 +364,64 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 	}
 }
 
-func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing.T) {
+func TestRunningSourceOffsetOutOfRangeFailsWithoutSavingProgress(t *testing.T) {
+	// Given a protocol fixture that rejects the first observed source fetch as out of range.
+	binary := testBinary(t)
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"), kfake.MaxVersions(kversion.V3_9_0()))
+	defer cluster.Close()
+	client, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...))
+	require.NoError(t, err)
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	a := kadm.NewClient(client)
+	metadata, err := a.Metadata(ctx, "input")
+	require.NoError(t, err)
+	id := metadata.Topics["input"].ID
+	var rejected atomic.Int32
+	cluster.ControlKey(int16(kmsg.Fetch), func(request kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
+		req := request.(*kmsg.FetchRequest)
+		res := req.ResponseKind().(*kmsg.FetchResponse)
+		for _, topic := range req.Topics {
+			if topic.Topic != "input" && topic.TopicID != id {
+				continue
+			}
+			result := kmsg.FetchResponseTopic{Topic: topic.Topic, TopicID: topic.TopicID}
+			for _, part := range topic.Partitions {
+				partition := kmsg.NewFetchResponseTopicPartition()
+				partition.Partition, partition.ErrorCode = part.Partition, kerr.OffsetOutOfRange.Code
+				partition.LogStartOffset, partition.HighWatermark, partition.LastStableOffset = 5, 10, 10
+				result.Partitions = append(result.Partitions, partition)
+				rejected.Add(1)
+			}
+			res.Topics = append(res.Topics, result)
+		}
+		return res, nil, len(res.Topics) > 0
+	})
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC 'output' SELECT * FROM TOPIC 'input' WITH (GROUP='running-retention', START=EARLIEST)", strings.Join(cluster.ListenAddrs(), ","))
+
+	// When the selected CLI receives that broker error after saving its initial position.
+	process := startCLI(t, ctx, binary, "", "run", "-e", statement)
+	err = process.wait()
+
+	// Then it fails explicitly without resetting, delivering records or advancing saved progress.
+	require.NoError(t, ctx.Err(), "out-of-range failure must precede the test deadline")
+	var exit *exec.ExitError
+	require.ErrorAs(t, err, &exit)
+	require.Equal(t, 1, exit.ExitCode())
+	require.Positive(t, rejected.Load(), "the fixture must reject an actual fetch")
+	require.Contains(t, process.logs(), "OFFSET_OUT_OF_RANGE")
+	require.Zero(t, committedPartitions(t, a, "running-retention", "input", 1)[0].At)
+	ends, err := a.ListEndOffsets(ctx, "output")
+	require.NoError(t, err)
+	end, ok := ends.Lookup("output", 0)
+	require.True(t, ok)
+	require.NoError(t, end.Err)
+	require.Zero(t, end.Offset)
+}
+
+func TestExpiredSourceProgressRestartReportsGapAndCopiesRetainedRecords(t *testing.T) {
 	// Given
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
@@ -371,8 +432,11 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 	defer cancel()
 	process := startCLI(t, ctx, binary, "", "run", "-e", statement)
 	committedPartitions(t, a, group, src, 1)
-	// When retention deletes records while the consumer is stopped.
-	require.NoError(t, process.signal(syscall.SIGSTOP))
+	// When the CLI exits before any publication, all of its pending fetches are closed.
+	require.NoError(t, process.signal(os.Interrupt))
+	require.NoError(t, process.wait(), "%s", process.logs())
+	require.Zero(t, committedPartitions(t, a, group, src, 1)[0].At)
+	// When retention then deletes unread records, the next CLI starts from known saved progress.
 	p := producer(t)
 	for i := range 10 {
 		publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte(fmt.Sprint(i)), Timestamp: time.Now()})
@@ -381,21 +445,6 @@ func TestRetentionOvertakesRunningConsumerFailsAndRestartUsesLogStart(t *testing
 	if err != nil || deleted.Error() != nil {
 		t.Fatal("delete unread records", deleted, err)
 	}
-	require.NoError(t, process.signal(syscall.SIGCONT))
-	// Then the running consumer fails instead of silently resetting its offset.
-	select {
-	case <-process.done:
-		err := process.wait()
-		if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
-			t.Fatalf("running offset loss did not fail: %v %s", err, process.logs())
-		}
-	case <-ctx.Done():
-		t.Fatal("retention overtook the consumer without a failure")
-	}
-	require.Contains(t, process.logs(), "OFFSET_OUT_OF_RANGE", "running offset loss must identify its cause")
-	require.Zero(t, committedPartitions(t, a, group, src, 1)[0].At,
-		"a failed running consumer must not save progress across deleted input")
-	// Restart the same query and group; cancel only after retained output is durable.
 	// When restarting the same query after retention has removed its saved position.
 	process = startCLI(t, ctx, binary, "", "run", "-e", statement)
 	waitEnd(t, a, dst, 5)
