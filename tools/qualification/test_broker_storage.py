@@ -1,4 +1,4 @@
-"""External paired broker storage must stay inside a verified run namespace."""
+"""External broker storage must stay inside a verified run namespace."""
 
 import argparse
 import hashlib
@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from tools.qualification.qualify import (
-    main, paired_storage_admission, parallel_run,
+    external_storage_admission, main, parallel_run,
     resolve_run, run_suite,
 )
 
@@ -46,7 +46,7 @@ class PairedBrokerStorageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             run_ids = set()
-            for suite in ('broker', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration', 'migration'):
+            for suite in ('broker', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration', 'migration', 'auth'):
                 with self.subTest(suite=suite):
                     args = suite_args(root, suite)
                     receipt, default = {}, {}
@@ -56,8 +56,9 @@ class PairedBrokerStorageTest(unittest.TestCase):
                     self.assertEqual(normal.command, external.command)
                     self.assertEqual(normal.timeout, external.timeout)
                     self.assertEqual(normal.expected, external.expected)
-                    self.assertIn('src/tests/broker-storage.compose.yaml', external.compose)
-                    self.assertNotIn('src/tests/broker-storage.compose.yaml', normal.compose)
+                    overlay = 'src/tests/' + ('qualification/' if suite == 'auth' else '') + 'broker-storage.compose.yaml'
+                    self.assertIn(overlay, external.compose)
+                    self.assertNotIn(overlay, normal.compose)
                     self.assertNotIn('fixture_storage', default)
                     self.assertEqual('private-volume', external.env['KAFERRY_BROKER_VOLUME'])
                     run_id = receipt['fixture_storage']['run_id']
@@ -68,7 +69,7 @@ class PairedBrokerStorageTest(unittest.TestCase):
 
     def test_invalid_suites_names_and_migration_rejection_never_inspect_docker(self):
         # Given inputs that cannot own a paired broker fixture.
-        cases = [(suite, 'lab', 'resume') for suite in ('auth', 'cloud', 'model', 'resources', 'fuzz', 'benchmark', 'smoke')]
+        cases = [(suite, 'lab', 'resume') for suite in ('cloud', 'model', 'resources', 'fuzz', 'benchmark', 'smoke')]
         cases += [('migration', 'lab', 'reject')]
         cases += [('broker', name, 'resume') for name in ('', '-foreign', '../volume', '/absolute', 'a/b')]
         with tempfile.TemporaryDirectory() as temporary:
@@ -130,7 +131,7 @@ class PairedBrokerStorageTest(unittest.TestCase):
                             raise KeyboardInterrupt()
                         raise RuntimeError('unverified storage')
                 with patch('tools.qualification.qualify.LAB_LOCK', root / 'lease'), \
-                     patch('tools.qualification.qualify.paired_storage_admission', return_value={'required_broker_bytes': 4096}), \
+                     patch('tools.qualification.qualify.external_storage_admission', return_value={'required_broker_bytes': 4096}), \
                      patch('tools.qualification.qualify.logged', side_effect=command), \
                      patch('tools.qualification.qualify.subprocess.run'), patch('tools.qualification.qualify.verify_run'):
                     # When finishing, then only this project stops and cleanup follows a successful stop.
@@ -166,7 +167,7 @@ class PairedBrokerStorageTest(unittest.TestCase):
                 calls.append(label)
                 if label == 'storage-capacity':
                     (output / 'storage-capacity.log').write_text('10000000\n')
-            with patch('tools.qualification.qualify.paired_storage_admission', return_value={'required_broker_bytes': 4096}), \
+            with patch('tools.qualification.qualify.external_storage_admission', return_value={'required_broker_bytes': 4096}), \
                  patch('tools.qualification.qualify.logged', side_effect=command), \
                  patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=10**12)), \
                  patch('tools.qualification.qualify.subprocess.check_output', return_value='fs 0 0 7 0% /tmp/kaferry-logs\n') as disk, \
@@ -194,7 +195,7 @@ class PairedBrokerStorageTest(unittest.TestCase):
                     raise RuntimeError('ownership mismatch')
             with patch('tools.qualification.qualify.LAB_LOCK', root / 'lease'), \
                  patch('tools.qualification.qualify.replicated_admission', return_value={'required_broker_bytes': 4096}) as admit, \
-                 patch('tools.qualification.qualify.paired_storage_admission', side_effect=AssertionError('paired admission used')), \
+                 patch('tools.qualification.qualify.external_storage_admission', side_effect=AssertionError('paired admission used')), \
                  patch('tools.qualification.qualify.endurance_capacity', side_effect=AssertionError('RF=1 disk allowance used')), \
                  patch('tools.qualification.qualify.logged', side_effect=command), \
                  patch('tools.qualification.qualify.subprocess.run'), patch('tools.qualification.qualify.verify_run'):
@@ -225,11 +226,11 @@ class PairedAdmissionTest(unittest.TestCase):
                      patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=free)):
                     # When admitting, then shortages fail before inspecting or using the volume.
                     if accepted:
-                        result = paired_storage_admission(Path(temporary), {'KAFERRY_BROKER_VOLUME': 'lab'}, parallel)
+                        result = external_storage_admission(Path(temporary), {'KAFERRY_BROKER_VOLUME': 'lab'}, parallel)
                         self.assertEqual(4 if parallel else 2, result['required_cpus'])
                     else:
                         with self.assertRaisesRegex(ValueError, 'capacity'):
-                            paired_storage_admission(Path(temporary), {'KAFERRY_BROKER_VOLUME': 'lab'}, parallel)
+                            external_storage_admission(Path(temporary), {'KAFERRY_BROKER_VOLUME': 'lab'}, parallel)
                         self.assertEqual(1, execute.call_count)
                 saved = json.loads((Path(temporary) / 'capacity.json').read_text())
                 self.assertEqual(cpus, saved['runtime_cpus'])

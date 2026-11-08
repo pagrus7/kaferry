@@ -23,6 +23,11 @@ case "$layout" in
             *) fail 'storage requires a disposable paired fixture project' ;;
         esac
         ;;
+    auth)
+        run_id=${KAFERRY_BROKER_RUN_ID:?fixture run ID is required}
+        brokers='kafka-secure-1 kafka-secure-2 kafka-secure-3'
+        [ "$project" = kaferry-qualification ] || fail 'storage requires the disposable authentication fixture project'
+        ;;
     *) fail 'invalid fixture storage layout' ;;
 esac
 case "$project" in *[!a-z0-9_-]*) fail 'invalid fixture project' ;; esac
@@ -84,7 +89,7 @@ case "${1:-}" in
         [ -e "$run" ] || exit 0
         [ -f "$run/.kaferry-owned" ] && [ ! -L "$run/.kaferry-owned" ] || fail 'refusing unowned fixture storage'
         [ "$(cat "$run/.kaferry-owned")" = "$marker" ] || fail 'fixture storage ownership does not match this run'
-        if [ "$layout" = paired ]; then
+        if [ "$layout" != replicated ]; then
             for broker in $brokers; do
                 [ ! -L "$run/$broker" ] || fail 'refusing a symbolic link in fixture storage'
             done

@@ -4,7 +4,12 @@ mkdir -p .cache/qualification
 cert_dir=$(mktemp -d "$PWD/.cache/qualification/run.XXXXXX")
 export KAFERRY_QUAL_CERT_DIR="$cert_dir"
 compose() {
-  docker compose -p kaferry-qualification -f src/tests/qualification/compose.yaml "$@"
+  if [ -n "${KAFERRY_BROKER_VOLUME:-}" ]; then
+    docker compose -p kaferry-qualification -f src/tests/qualification/compose.yaml \
+      -f src/tests/qualification/broker-storage.compose.yaml "$@"
+  else
+    docker compose -p kaferry-qualification -f src/tests/qualification/compose.yaml "$@"
+  fi
 }
 cleanup() {
   if [ -n "${KAFERRY_REPORT_DIR:-}" ]; then

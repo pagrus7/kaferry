@@ -92,16 +92,19 @@ Final librdkafka reconciliation checks full retained input and output, including
 
 ## Broker storage
 
-`run --broker-volume NAME` also supports the paired fixtures for `broker`, `fault`, `load`, `soak`, `capture`, `endurance`, `recovery`, `integration` and `migration --state-contract resume`. `parallel --broker-volume NAME` places both jobs' brokers on that volume. Authentication owns a separate fixture lifecycle and does not support this option; cloud, migration rejection and suites without local brokers reject it too. Default broker storage is unchanged.
+`run --broker-volume NAME` also supports `auth` and the paired fixtures for `broker`, `fault`, `load`, `soak`, `capture`, `endurance`, `recovery`, `integration` and `migration --state-contract resume`. `parallel --broker-volume NAME` places both jobs' brokers on that volume. Cloud, migration rejection and suites without local brokers reject this option. Default broker storage is unchanged.
 
 ```sh
 python3 -m tools.qualification.qualify run endurance --duration 1m --broker-volume LAB_VOLUME --output build-results/external-rehearsal
 python3 -m tools.qualification.qualify parallel --duration 1m --companion-duration 1m --broker-volume LAB_VOLUME --output build-results/external-pair
+python3 -m tools.qualification.qualify run auth --source 4.4.0 --broker-volume LAB_VOLUME --output build-results/external-auth
 ```
 
-The volume must already exist with label `kaferry.lab.storage=true` and permit directory creation and broker ownership changes to UID/GID 1000. The runner checks the label before starting the initializer or brokers. Paired runs use fresh UUID directories beneath `kaferry-paired/<project>/`, with separate source/destination directories. The volume is mounted at `/tmp/kaferry-logs`, so existing endurance and combined parallel disk checks measure the selected broker filesystem. `--output` still selects evidence and archive/checkpoint output separately; it does not move host temporary files.
+The volume must already exist with label `kaferry.lab.storage=true` and permit directory creation and broker ownership changes to UID/GID 1000. The runner checks the label before starting the initializer or brokers. Paired runs use fresh UUID directories beneath `kaferry-paired/<project>/`, with separate source/destination directories. Authentication uses `kaferry-auth/kaferry-qualification/<run-id>/`, with separate directories for all three brokers' Kafka data and metadata logs. Certificates, keys and client control files stay in the temporary host directory; KDC state stays in its disposable container. The volume is mounted at `/tmp/kaferry-logs`, so existing endurance and combined parallel disk checks measure the selected broker filesystem. `--output` still selects evidence and archive/checkpoint output separately; it does not move host temporary files.
 
 For paired external storage, preflight additionally requires two Docker CPUs and 4 GiB of runtime memory, or four CPUs and 8 GiB for both parallel jobs together. `manifest.json` records required and observed capacity in `storage_capacity`; rejected checks retain `capacity.json`. These planning allowances include two 512 MiB broker heaps per job plus room for broker native memory and clients; they are not measured capacity guarantees. Default paired storage retains its existing disk checks without this CPU/memory preflight.
+
+Authentication with external storage requires two Docker CPUs, 8 GiB of runtime memory, 4 GiB free on the selected broker filesystem and 1 GiB on the evidence filesystem. These are bounded-suite planning allowances, not storage reservations or measured capacity guarantees. Its existing authentication, ACL and leader-failure checks, startup deadline and broker heaps remain unchanged.
 
 Cleanup stops writers, validates the run's project/UUID ownership marker and removes only that run directory. The external volume, peer runs and unrelated files remain. Failed ownership validation or writer shutdown preserves the run directory. Data deletion keeps the marker until the run's other files are removed; a failed deletion leaves the marker and remaining data, without undoing earlier deletions. If final directory removal fails, cleanup attempts to restore the marker and still fails qualification. There is no automatic cleanup retry. The volume driver selects its filesystem; this option does not configure host storage or establish shared-filesystem durability. Archive output still requires the [archive filesystem guarantees](archive.md#layout-and-ownership), including atomic rename without replacement; selecting a broker volume does not relax that contract. Inspect diagnostics before publication and keep private volume names, driver options, addresses and access configuration outside shared evidence.
 
@@ -257,7 +260,7 @@ project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixtu
 docker compose -f src/tests/compose.yaml -p "$project" --profile cross-cluster down -v --remove-orphans
 ```
 
-For paired brokers started with `--broker-volume`, restore that volume name and the run identity before cleanup. Use the child manifest for each parallel job. Stop writers before deleting the owned directory, and preserve storage if any command fails:
+For paired or authentication brokers started with `--broker-volume`, restore that volume name and the run identity before cleanup. Select that run's manifest below; use the child manifest for each parallel job. Stop writers before deleting the owned directory, and preserve storage if any command fails:
 
 ```sh
 (
@@ -268,12 +271,21 @@ For paired brokers started with `--broker-volume`, restore that volume name and 
   KAFERRY_BROKER_RUN_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fixture_storage"]["run_id"])' "$manifest")
   KAFERRY_SOURCE_IMAGE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["requested_images"][0])' "$manifest")
   export KAFERRY_BROKER_RUN_ID KAFERRY_SOURCE_IMAGE
+  suite=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["suite"])' "$manifest")
+  if [ "$suite" = auth ]; then
+    export KAFERRY_AUTH_IMAGE="$KAFERRY_SOURCE_IMAGE" KAFERRY_QUAL_CERT_DIR=/tmp
+    set -- -f src/tests/qualification/compose.yaml -f src/tests/qualification/broker-storage.compose.yaml
+  else
+    set -- -f src/tests/compose.yaml -f src/tests/broker-storage.compose.yaml --profile cross-cluster
+  fi
   storage_script=$(cat src/tests/replicated/storage.sh)
-  docker compose -f src/tests/compose.yaml -f src/tests/broker-storage.compose.yaml -p "$project" --profile cross-cluster stop --timeout 10
-  docker compose -f src/tests/compose.yaml -f src/tests/broker-storage.compose.yaml -p "$project" --profile cross-cluster run --rm --no-deps --entrypoint /bin/sh storage -ec "$storage_script" storage clean
-  docker compose -f src/tests/compose.yaml -f src/tests/broker-storage.compose.yaml -p "$project" --profile cross-cluster down --remove-orphans
+  docker compose "$@" -p "$project" stop --timeout 10
+  docker compose "$@" -p "$project" run --rm --no-deps --entrypoint /bin/sh storage -ec "$storage_script" storage clean
+  docker compose "$@" -p "$project" down --remove-orphans
 )
 ```
+
+For authentication, `/tmp` satisfies certificate-path interpolation during teardown; it does not regenerate credentials or start brokers.
 
 ## Paired performance
 
