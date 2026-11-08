@@ -16,7 +16,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools.qualification.qualify import duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, suite_command, valid_receipts, parallel_allowance, parallel_capacity, parallel_run
+from tools.qualification.qualify import duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, matrix_plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, suite_command, valid_receipts, parallel_allowance, parallel_capacity, parallel_run
 from tools.qualification.broker_probe import logical, reconcile, records, replicated_topology, topic_ready
 
 
@@ -306,6 +306,33 @@ class MatrixTest(unittest.TestCase):
             receipt = json.loads((args.output / 'manifest.json').read_text())
             self.assertEqual('interrupted', receipt['status'])
             self.assertEqual('interrupted', receipt['suite_error'])
+
+    def test_ci_plan_batches_only_pr_brokers_without_changing_receipt_cases(self):
+        # Given the six PR receipt cases, when planning runners, then batch the
+        # four brokers while preserving nightly/full matrices and receipt IDs.
+        self.assertEqual(6, len(plan('pr')))
+        self.assertEqual(3, len(matrix_plan('pr')))
+        self.assertEqual(['broker-pr'], [case['id'] for case in matrix_plan('pr') if case['suite'] == 'broker'])
+        for tier in ('nightly', 'full'):
+            self.assertEqual(plan(tier), matrix_plan(tier))
+
+    def test_broker_batch_continues_after_failure_with_separate_case_directories(self):
+        # Given a failed broker case, when batching, then execute every remaining
+        # case, retain their independent receipts and fail the runner overall.
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)/'results'
+            seen = []
+            def execute(case):
+                seen.append(case)
+                case.output.mkdir()
+                if len(seen) == 2:
+                    raise RuntimeError('injected case failure')
+            with patch('tools.qualification.qualify.run_suite', side_effect=execute):
+                self.assertEqual(1, main(['broker-batch', '--output', str(output)]))
+            expected = [case for case in plan('pr') if case['suite'] == 'broker']
+            self.assertEqual([case['id'] for case in expected], [case.id for case in seen])
+            self.assertEqual([output.resolve()/case['id'] for case in expected], [case.output for case in seen])
+            self.assertTrue(all(case.output.is_dir() for case in seen))
 
     def test_reports_reject_missing_failed_duplicate_and_mismatched_runs(self):
         for problem in ('missing', 'failed', 'digest', 'commit', 'duplicate', None):

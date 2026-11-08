@@ -107,7 +107,11 @@ jobs:
           set -- .cache/release-input/kaferry-*-linux-amd64.tar.gz
           test "$#" = 1
           tar -xzf "$1" -C bin kaferry
+      - name: Run PR broker cases sequentially
+        if: matrix.id == 'broker-pr'
+        run: python3 -m tools.qualification.qualify broker-batch --output build-results
       - name: Run standalone suite
+        if: matrix.id != 'broker-pr'
         env:
           SUITE: ${{ matrix.suite }}
           SOURCE: ${{ matrix.source }}

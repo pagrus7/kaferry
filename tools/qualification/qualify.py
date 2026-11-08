@@ -61,6 +61,14 @@ def plan(tier):
     return cases
 
 
+def matrix_plan(tier):
+    cases = plan(tier)
+    if tier == 'pr':
+        return [dict(id='broker-pr', suite='broker', source='', destination='')] + [
+            case for case in cases if case['suite'] != 'broker']
+    return cases
+
+
 def duration(value):
     try:
         seconds = int(value[:-1]) * {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}[value[-1]]
@@ -701,7 +709,7 @@ def main(argv=None):
     setup.add_argument('--cloud', action='store_true', help='also install the AWS IAM signer')
     planning = sub.add_parser('plan', help='print the CI matrix without running anything')
     planning.add_argument('--tier', choices=('pr', 'nightly', 'full'), default='pr')
-    for name in ('run', 'matrix', 'releases'):
+    for name in ('run', 'matrix', 'releases', 'broker-batch'):
         running = sub.add_parser(name, help='run one suite' if name == 'run' else 'run every planned case sequentially')
         if name == 'run':
             running.add_argument('suite', choices=SUITES)
@@ -737,7 +745,7 @@ def main(argv=None):
     reporting.add_argument('--tier', choices=('pr', 'nightly', 'full'), default='pr')
     args = parser.parse_args(argv)
     requested_duration = getattr(args, 'duration', None)
-    if args.action in ('run', 'matrix', 'releases'):
+    if args.action in ('run', 'matrix', 'releases', 'broker-batch'):
         endurance = getattr(args, 'suite', None) == 'endurance'
         newest = replicated_fixture(args)
         args.source = args.source or VERSIONS[-1 if newest else 0]
@@ -758,7 +766,7 @@ def main(argv=None):
                         str(ROOT / 'src/tests/qualification' / requirements)], check=True)
         return 0
     if args.action == 'plan':
-        print(json.dumps({'include': plan(args.tier)}))
+        print(json.dumps({'include': matrix_plan(args.tier)}))
         return 0
     if args.action == 'verify-release':
         verify_release(args.report, args.archive, args.commit)
@@ -768,10 +776,14 @@ def main(argv=None):
     if args.action == 'releases':
         released_binaries(args)
         return 0
-    if args.action == 'matrix':
+    if args.action in ('matrix', 'broker-batch'):
         directory = args.output.resolve()
         directory.mkdir(parents=True, exist_ok=False)
-        for case in plan(args.tier):
+        cases = plan('pr') if args.action == 'broker-batch' else plan(args.tier)
+        if args.action == 'broker-batch':
+            cases = [case for case in cases if case['suite'] == 'broker']
+        failed = False
+        for case in cases:
             settings = dict(case)
             if requested_duration is not None:
                 settings['duration'] = requested_duration
@@ -779,8 +791,9 @@ def main(argv=None):
             try:
                 run_suite(case_args)
             except (OSError, ValueError, RuntimeError) as error:
+                failed = True
                 print(str(error), file=sys.stderr)
-        return report(directory, args.tier)
+        return int(failed) if args.action == 'broker-batch' else report(directory, args.tier)
     run_suite(args)
     return 0
 
