@@ -20,6 +20,8 @@ REPLICATED_HELPER_TESTS := \
 	TestBrokerCurrentProgressDoesNotWaitForChildExit \
 	TestBrokerCurrentProgressRequiresReadableCompleteEvidence \
 	TestBrokerCurrentProgressRejectsMalformedCompleteRows \
+	TestBrokerRestartRechecksFailureAfterHealthObservation \
+	TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss \
 	TestReplicatedAuditFailureCleanupRetainsDiagnostics \
 	TestReplicatedAuditFailureCleanupSkipsPassingCases \
 	TestReplicatedAuditFailureCaptureSharesDeadline \

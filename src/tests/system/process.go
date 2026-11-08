@@ -148,6 +148,62 @@ func (p *cliProcess) currentLogs() (string, error) {
 	}
 	return string(data), nil
 }
+func currentCopyProgress(process *cliProcess) (copySummary, bool, error) {
+	logs, err := process.currentLogs()
+	if err != nil {
+		return copySummary{}, false, err
+	}
+	return latestCopyProgress(logs)
+}
+
+func latestCopyProgress(logs string) (copySummary, bool, error) {
+	var result copySummary
+	found := false
+	// A live writer may be between writing a JSON record and its newline. Only
+	// complete rows are evidence; currentLogs rejects this suffix after exit.
+	complete := logs[:strings.LastIndexByte(logs, '\n')+1]
+	for _, line := range strings.Split(complete, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "{") {
+			continue // Terminal command errors are plain text, not progress rows.
+		}
+		progress, ok, err := decodeCopyProgress(line)
+		if err != nil {
+			return copySummary{}, false, err
+		}
+		if ok {
+			result, found = progress, true
+		}
+	}
+	return result, found, nil
+}
+
+func decodeCopyProgress(line string) (copySummary, bool, error) {
+	var header struct {
+		Message string `json:"msg"`
+	}
+	if err := json.Unmarshal([]byte(line), &header); err != nil {
+		return copySummary{}, false, fmt.Errorf("decode complete CLI log row: %w", err)
+	}
+	if header.Message != "progress" {
+		return copySummary{}, false, nil
+	}
+	var counts struct {
+		Submitted *int `json:"submitted"`
+		Confirmed *int `json:"confirmed"`
+	}
+	if err := json.Unmarshal([]byte(line), &counts); err != nil {
+		return copySummary{}, false, fmt.Errorf("decode CLI progress counts: %w", err)
+	}
+	if counts.Submitted == nil || counts.Confirmed == nil || *counts.Submitted < 0 || *counts.Confirmed < 0 || *counts.Confirmed > *counts.Submitted {
+		return copySummary{}, false, fmt.Errorf("CLI progress requires nonnegative submitted and confirmed counts with confirmed at most submitted")
+	}
+	var progress copySummary
+	if err := json.Unmarshal([]byte(line), &progress); err != nil {
+		return copySummary{}, false, fmt.Errorf("decode CLI progress record: %w", err)
+	}
+	return progress, true, nil
+}
+
 func (p *cliProcess) cpu() time.Duration {
 	_ = p.wait()
 	return p.command.ProcessState.UserTime() + p.command.ProcessState.SystemTime()

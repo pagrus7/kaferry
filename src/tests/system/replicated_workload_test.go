@@ -5,6 +5,7 @@ package compat
 import (
 	"context"
 	"encoding/binary"
+	"io"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -83,8 +84,7 @@ func TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites
 		}
 		return rejectedReplicatedProduce(produce, 7), nil, true
 	})
-	client := fixtureClient(t, cluster.ListenAddrs()[0], kgo.RecordPartitioner(kgo.ManualPartitioner()),
-		kgo.RecordDeliveryTimeout(10*time.Second), kgo.MaxBufferedRecords(48), kgo.AllowIdempotentProduceCancellation())
+	client := replicatedBrokerProducer(t, cluster.ListenAddrs()[0], 10*time.Second)
 	publisher := startReplicatedBrokerPublisher(t.Context(), client, "source", 10*time.Second)
 	t.Cleanup(func() { blocked.Store(false); publisher.stop() })
 	// When a partition waits for its acknowledgement, healthy partitions still
@@ -115,6 +115,44 @@ func TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites
 	require.NoError(t, err)
 	require.NoError(t, ends.Error())
 	for partition, count := range state.Acknowledged {
+		require.Equal(t, count, ends["source"][int32(partition)].Offset)
+	}
+}
+
+func TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss(t *testing.T) {
+	// Given an established idempotent producer on the known-plain fixture.
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(replicatedPartitions, "source"))
+	defer cluster.Close()
+	client := replicatedBrokerProducer(t, cluster.ListenAddrs()[0], 10*time.Second)
+	require.NoError(t, client.ProduceSync(t.Context(), &kgo.Record{Topic: "source", Partition: 0, Key: []byte("warmup"), Value: []byte("warmup")}).FirstErr())
+	var cut atomic.Bool
+	cluster.ControlKey(int16(kmsg.Produce), func(kmsg.Request) (kmsg.Response, error, bool) { return nil, io.EOF, true })
+	cluster.ControlKey(int16(kmsg.ApiVersions), func(kmsg.Request) (kmsg.Response, error, bool) {
+		cut.Store(true)
+		return nil, io.EOF, true
+	})
+	// When the established connection drops and the replacement's first API
+	// negotiation also closes, retry the same offers without manual resubmission.
+	publisher := startReplicatedBrokerPublisher(t.Context(), client, "source", 10*time.Second)
+	t.Cleanup(func() { publisher.stop() })
+	require.Eventually(t, func() bool {
+		state := publisher.snapshot()
+		return state.err != nil || slices.Min(state.Acknowledged) >= 2
+	}, 5*time.Second, 10*time.Millisecond)
+	state := publisher.stop()
+	// Then every offered write is acknowledged once and exact source ends match.
+	require.True(t, cut.Load(), "replacement API negotiation was not cut")
+	require.NoError(t, state.err)
+	require.GreaterOrEqual(t, slices.Min(state.Acknowledged), int64(2))
+	require.Equal(t, state.Offered, state.Acknowledged)
+	require.Zero(t, client.BufferedProduceRecords())
+	ends, err := kadm.NewClient(client).ListEndOffsets(t.Context(), "source")
+	require.NoError(t, err)
+	require.NoError(t, ends.Error())
+	for partition, count := range state.Acknowledged {
+		if partition == 0 {
+			count++
+		} // The independently acknowledged warmup record.
 		require.Equal(t, count, ends["source"][int32(partition)].Offset)
 	}
 }
@@ -160,7 +198,8 @@ func TestReplicatedPublisherStopsAfterRejectedBatch(t *testing.T) {
 	}
 	// When the broker-fault publisher meets the same permanent rejection, then
 	// it also stops, retains the error and drains all offered callbacks.
-	offers := startReplicatedBrokerPublisher(t.Context(), client, "source", time.Second)
+	source := replicatedBrokerProducer(t, cluster.ListenAddrs()[0], time.Second)
+	offers := startReplicatedBrokerPublisher(t.Context(), source, "source", time.Second)
 	t.Cleanup(func() { offers.stop() })
 	select {
 	case <-offers.done:
@@ -171,5 +210,5 @@ func TestReplicatedPublisherStopsAfterRejectedBatch(t *testing.T) {
 	require.Error(t, failed.err)
 	require.Positive(t, slices.Max(failed.Offered))
 	require.Zero(t, slices.Max(failed.Acknowledged))
-	require.Zero(t, client.BufferedProduceRecords())
+	require.Zero(t, source.BufferedProduceRecords())
 }

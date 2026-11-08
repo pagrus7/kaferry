@@ -19,6 +19,8 @@ HELPERS = (
     'TestBrokerCurrentProgressDoesNotWaitForChildExit',
     'TestBrokerCurrentProgressRequiresReadableCompleteEvidence',
     'TestBrokerCurrentProgressRejectsMalformedCompleteRows',
+    'TestBrokerRestartRechecksFailureAfterHealthObservation',
+    'TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss',
     'TestReplicatedAuditFailureCleanupRetainsDiagnostics',
     'TestReplicatedAuditFailureCleanupSkipsPassingCases',
     'TestReplicatedAuditFailureCaptureSharesDeadline',

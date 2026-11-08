@@ -17,7 +17,6 @@ import (
 	"github.com/pagrus7/kaferry/src/tests/system/faults"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"
-	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestReplicatedBrokerFaults(t *testing.T) {
@@ -88,8 +87,7 @@ func replicatedBrokerFault(t *testing.T, name string) {
 	s.config = configuration(t, zombieWorkerSettings(timeouts))
 	s.statement = zombieWorkerSQL(timeouts, 1, prefix+"-worker", s.src, s.dst, s.group)
 	s.start()
-	producer := fixtureClient(t, strings.Join(faults.Endpoints("source", 0), ","), kgo.RecordPartitioner(kgo.ManualPartitioner()),
-		kgo.MaxBufferedRecords(2*replicatedPartitions), kgo.RecordDeliveryTimeout(timeouts["delivery_timeout"]), kgo.AllowIdempotentProduceCancellation())
+	producer := replicatedBrokerProducer(t, strings.Join(faults.Endpoints("source", 0), ","), timeouts["delivery_timeout"])
 	s.publisher = startReplicatedBrokerPublisher(ctx, producer, s.src, timeouts["delivery_timeout"])
 	t.Cleanup(func() { s.publisher.stop() })
 	baseline := s.wait("nonempty saved prefix on every partition", false, func(_ context.Context, state brokerObservation) bool {
@@ -216,7 +214,11 @@ func (s *brokerCopy) measureLast(reason string) {
 	summary := summaryFrom(s.t, logs)
 	require.LessOrEqual(s.t, summary.PeakRecords, 1024)
 	require.LessOrEqual(s.t, summary.PeakBytes, int64(134217728))
-	terminal, _ := brokerTerminalFailure(logs)
+	terminal := ""
+	if process.command.ProcessState.ExitCode() != 0 {
+		terminal, err = completedBrokerFailure(process, true)
+		require.NoError(s.t, err)
+	}
 	s.measurements = append(s.measurements, map[string]any{"pid": process.pid(), "started_at": s.starts[i], "stopped_at": time.Now().UTC(),
 		"binary_sha256": os.Getenv("KAFERRY_EXPECT_BINARY_SHA256"), "worker_route": 1,
 		"terminal_error": terminal,
@@ -230,15 +232,36 @@ func (s *brokerCopy) live(allowFailure bool) {
 	if !process.finished() {
 		return
 	}
-	logs, err := process.currentLogs()
+	_, err := completedBrokerFailure(process, allowFailure)
 	require.NoError(s.t, err)
-	require.True(s.t, allowFailure, "CLI exited before recovery: %s", logs)
-	require.Error(s.t, process.wait())
-	require.Equal(s.t, 1, process.command.ProcessState.ExitCode(), logs)
+}
+
+func completedBrokerFailure(process *cliProcess, allowFailure bool) (string, error) {
+	logs, err := process.currentLogs()
+	if err != nil {
+		return "", err
+	}
+	if !allowFailure {
+		return "", fmt.Errorf("CLI exited before recovery: %s", logs)
+	}
+	if process.wait() == nil || process.command.ProcessState.ExitCode() != 1 {
+		return "", fmt.Errorf("broker fault requires exit 1 before restart: %s", logs)
+	}
 	// Only the product's existing transport/coordinator/deadline failures may
 	// use this case's recorded restart. Other failures remain qualification errors.
-	_, known := brokerTerminalFailure(logs)
-	require.True(s.t, known, "broker fault produced an unexplained CLI failure: %s", logs)
+	terminal, known := brokerTerminalFailure(logs)
+	if !known {
+		return "", fmt.Errorf("broker fault produced an unexplained CLI failure: %s", logs)
+	}
+	return terminal, nil
+}
+
+func restartBrokerWorker(process *cliProcess, allowFailure bool, restart func()) error {
+	if _, err := completedBrokerFailure(process, allowFailure); err != nil {
+		return err
+	}
+	restart()
+	return nil
 }
 
 func brokerTerminalFailure(logs string) (string, bool) {
@@ -309,62 +332,6 @@ func (s *brokerCopy) observe(ctx context.Context) (brokerObservation, bool) {
 		state.Ends[partition] = part.Offset
 	}
 	return state, true
-}
-
-func currentCopyProgress(process *cliProcess) (copySummary, bool, error) {
-	logs, err := process.currentLogs()
-	if err != nil {
-		return copySummary{}, false, err
-	}
-	return latestCopyProgress(logs)
-}
-
-func latestCopyProgress(logs string) (copySummary, bool, error) {
-	var result copySummary
-	found := false
-	// A live writer may be between writing a JSON record and its newline. Only
-	// complete rows are evidence; currentLogs rejects this suffix after exit.
-	complete := logs[:strings.LastIndexByte(logs, '\n')+1]
-	for _, line := range strings.Split(complete, "\n") {
-		if !strings.HasPrefix(strings.TrimSpace(line), "{") {
-			continue // Terminal command errors are plain text, not progress rows.
-		}
-		progress, ok, err := decodeCopyProgress(line)
-		if err != nil {
-			return copySummary{}, false, err
-		}
-		if ok {
-			result, found = progress, true
-		}
-	}
-	return result, found, nil
-}
-
-func decodeCopyProgress(line string) (copySummary, bool, error) {
-	var header struct {
-		Message string `json:"msg"`
-	}
-	if err := json.Unmarshal([]byte(line), &header); err != nil {
-		return copySummary{}, false, fmt.Errorf("decode complete CLI log row: %w", err)
-	}
-	if header.Message != "progress" {
-		return copySummary{}, false, nil
-	}
-	var counts struct {
-		Submitted *int `json:"submitted"`
-		Confirmed *int `json:"confirmed"`
-	}
-	if err := json.Unmarshal([]byte(line), &counts); err != nil {
-		return copySummary{}, false, fmt.Errorf("decode CLI progress counts: %w", err)
-	}
-	if counts.Submitted == nil || counts.Confirmed == nil || *counts.Submitted < 0 || *counts.Confirmed < 0 || *counts.Confirmed > *counts.Submitted {
-		return copySummary{}, false, fmt.Errorf("CLI progress requires nonnegative submitted and confirmed counts with confirmed at most submitted")
-	}
-	var progress copySummary
-	if err := json.Unmarshal([]byte(line), &progress); err != nil {
-		return copySummary{}, false, fmt.Errorf("decode CLI progress record: %w", err)
-	}
-	return progress, true, nil
 }
 
 func (s *brokerCopy) topology(ctx context.Context, side, topic string) ([]faults.Partition, bool) {
@@ -483,8 +450,12 @@ func (s *brokerCopy) heal(injection *faults.Injection, window int, before broker
 	})
 	health.BrokerHealthy = true
 	if s.workers[len(s.workers)-1].finished() {
-		s.measureLast("broker fault fail-fast exit; restarted after health and ISR recovery")
-		s.start()
+		// The worker may exit during the successful health query, after wait's
+		// liveness check. Classify that completed lifetime at the restart boundary.
+		require.NoError(s.t, restartBrokerWorker(s.workers[len(s.workers)-1], allowFailure, func() {
+			s.measureLast("broker fault fail-fast exit; restarted after health and ISR recovery")
+			s.start()
+		}))
 	}
 	after := s.wait("post-heal publication and saved progress on every partition", false, func(_ context.Context, state brokerObservation) bool {
 		return fullyReplicated(state, injection.Event.Role.Cluster) && allAbove(state.Saved, before.Saved, 2) && allAbove(state.Publishing.Acknowledged, before.Publishing.Acknowledged, 2)

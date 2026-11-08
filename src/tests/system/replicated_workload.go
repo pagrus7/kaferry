@@ -7,12 +7,23 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 const replicatedPartitions = 24
+
+func replicatedBrokerProducer(t *testing.T, brokers string, delivery time.Duration) *kgo.Client {
+	t.Helper()
+	// The dedicated fixture proves its plain connection settings before faults.
+	// A severed first API request must retry within the existing delivery bound,
+	// rather than treating the EOF as a guessed TLS/SASL configuration error.
+	return fixtureClient(t, brokers, kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.MaxBufferedRecords(2*replicatedPartitions), kgo.RecordDeliveryTimeout(delivery),
+		kgo.AllowIdempotentProduceCancellation(), kgo.AlwaysRetryEOF())
+}
 
 // replicatedPublisher publishes one record per partition every 100ms. The
 // acknowledgement counts, rather than the scheduler, gate scenario transitions.
