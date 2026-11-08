@@ -1,6 +1,6 @@
 # Local reviews
 
-Shared workflow for independent agents. Role criteria live in [docs](docs.md) and [tests](tests.md); client adapters select agents and point here.
+Shared workflow for independent reviewers. Role criteria live in [docs](docs.md) and [tests](tests.md).
 
 Initial reviewers receive scope and evidence without suspected findings or preferred fixes. Fix-verification follow-ups may reference findings.
 
@@ -16,8 +16,8 @@ The coordinator follows these steps; reviewers follow the contract below.
 
 1. Read AGENTS.md. Accept one base revision (default `origin/main`), rejecting extra arguments or a leading `-`. Resolve base, HEAD and merge base; quote revisions in Git commands. Do not fetch or switch branches during review.
 2. Read `git diff --no-ext-diff <merge-base>` and `git status --short`, including deletions and relevant untracked files. State compared SHAs and any uncommitted scope. If nothing changed, say so without claiming a review.
-3. Freeze the patch at a recorded commit. A draft PR with unfinished fields `Pending` may start CI. Give the required native reviewers the actual patch, role file and contract; run standard reviewers independently in parallel. Give the tests reviewer the repository and SHA. Do not push during source reviews.
-4. Wait for every required final report. Missing patch access, necessary reads or complete reports leaves review INCOMPLETE, including provider limits. One coordinator watches CI; after it finishes, the tests reviewer (docs reviewer for formatting-only) verifies successful final-head results once against raw evidence and live state.
+3. Freeze the patch at a recorded commit. A draft PR with unfinished fields `Pending` may start CI. Give each required reviewer the actual patch, role criteria and contract; run standard reviewers independently in parallel. Give the tests reviewer the repository and SHA. Do not push during source reviews.
+4. Wait for every required final report. Missing patch access, necessary reads or complete reports leaves review INCOMPLETE, including unavailable tools or evidence. One coordinator watches CI; after it finishes, the tests reviewer (docs reviewer for formatting-only) verifies successful final-head results once against raw evidence and live state.
 5. If no non-test Go files under `src/cmd/` or `src/internal/` changed, record patch coverage N/A. Otherwise have the tests reviewer complete the coverage review below. Missing evidence leaves review pending.
 6. Recheck HEAD, diff and status against the reviewed scope. Mark ready only after required reviews, coverage decisions and final-head CI pass. Keep scope, reports and evidence locally; distinguish source inspection from checks actually run.
 
