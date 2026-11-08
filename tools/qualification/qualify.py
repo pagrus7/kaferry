@@ -428,24 +428,50 @@ def resolve_run(args, receipt, fixture):
     return RunSpec(command, expected, env, compose if fixtures else [], timeout)
 
 
+def startup_health(output, compose, env):
+    """Capture only selected, label-verified containers' health before teardown."""
+    project = env.get('KAFERRY_FIXTURE_PROJECT')
+    if not project:
+        raise ValueError('startup health requires an owned Compose project')
+    def query(command):
+        return subprocess.run(command, cwd=ROOT, env=env, check=True, capture_output=True,
+                              text=True, timeout=15).stdout
+    ids = query(compose+['ps', '--all', '--quiet']).split()
+    if any(not re.fullmatch(r'[0-9a-f]{64}', id) for id in ids):
+        raise ValueError('Compose returned invalid container IDs for startup health')
+    template = ('{"id":{{json .Id}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},'
+                '"service":{{json (index .Config.Labels "com.docker.compose.service")}},'
+                '"status":{{json .State.Status}},"running":{{json .State.Running}},'
+                '"exit_code":{{json .State.ExitCode}},"health":{{json .State.Health}}}')
+    rows = [json.loads(line) for line in query(['docker', 'inspect', '--format', template, *ids]).splitlines()] if ids else []
+    if (len(rows) != len(ids) or {row['id'] for row in rows} != set(ids) or
+            any(row.get('project') != project or not row.get('service') for row in rows)):
+        raise ValueError('startup health container ownership does not match the selected Compose project')
+    write_json(output/'startup-health.json', dict(project=project, containers=rows))
+
+
 @contextmanager
 def broker_fixture(args, spec, receipt, fixture, cancelled):
     # Parallel children use the coordinator's lease and their assigned project.
     with lab_lock() if fixture is None else nullcontext():
         owns_fixture = False
+        startup_attempted, startup_complete = False, False
         try:
             if args.suite == 'replicated':
                 receipt['capacity'] = replicated_admission(args.output, spec.env)
                 owns_fixture = True
                 replicated_storage(args.output, spec.compose, spec.env, receipt['capacity'], cancelled)
+                startup_attempted = True
                 logged(spec.compose + ['up', '-d', '--wait', 'toxiproxy'], args.output,
                        'proxy-up', spec.env, timeout=90, cancelled=cancelled)
                 logged([sys.executable, '-m', 'tools.qualification.network', '--output', str(args.output)],
                        args.output, 'proxy-configure', spec.env, timeout=60, cancelled=cancelled)
             if spec.compose:
                 owns_fixture = True
+                startup_attempted = True
                 logged(spec.compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output,
                        'brokers-up', spec.env, timeout=180, cancelled=cancelled)
+                startup_complete = True
                 receipt['broker_images'] = capture(spec.compose + ['images', '--format', 'json'])
             if args.suite == 'replicated':
                 logged([spec.env.get('GO', 'go'), 'test', '-count=1', '-json', '-tags=integration',
@@ -466,6 +492,11 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
         finally:
             if spec.compose and owns_fixture:
                 errors = []
+                if startup_attempted and not startup_complete:
+                    try:
+                        startup_health(args.output, spec.compose, spec.env)
+                    except (OSError, subprocess.SubprocessError, ValueError) as error:
+                        errors.append({'phase': 'startup-health', 'error': str(error)})
                 try:
                     with (args.output / 'brokers.log').open('w') as log:
                         subprocess.run(spec.compose + ['logs', '--no-color'], cwd=ROOT, env=spec.env,
