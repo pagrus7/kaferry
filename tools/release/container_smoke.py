@@ -116,7 +116,8 @@ def main():
     parser.add_argument("image")
     parser.add_argument("context", type=Path)
     parser.add_argument("architecture", choices=("amd64", "arm64"))
-    parser.add_argument("--demo", action="store_true")
+    parser.add_argument("--demo", action="store_true",
+                        help="verify fresh Kafka copies, corrupted output and cancellation")
     args = parser.parse_args()
     record = json.loads((args.context / "release.json").read_text())
     config = json.loads(subprocess.check_output(["docker", "image", "inspect", args.image], text=True))[0]
