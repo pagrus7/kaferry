@@ -20,7 +20,7 @@ make build
 make check
 ```
 
-`make check` runs vet and race-enabled component tests without Kafka. For the full local check, install the lint and duplication tools below, then run `make fast`. It also checks documentation, Python tools, source installation and file-copy smoke tests. Vulnerability checks need network access. Docker and Compose are needed only for broker suites.
+`make check` runs vet and race-enabled component tests without Kafka. For the full local check, install the lint and duplication tools below, then run `make fast`. It also checks documentation, Python tools, source installation and file-copy smoke tests. Vulnerability checks need network access. Broker suites require Docker Engine 25+ and Compose 2.20.2+ for startup healthcheck polling.
 
 ## Go lint
 

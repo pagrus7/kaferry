@@ -23,6 +23,8 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
     healthcheck:
       test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "kafka:9092", "--list"]
+      start_period: 30s
+      start_interval: 1s
       interval: 5s
       timeout: 5s
       retries: 12
@@ -52,6 +54,8 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
     healthcheck:
       test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "kafka-dr:9092", "--list"]
+      start_period: 30s
+      start_interval: 1s
       interval: 5s
       timeout: 5s
       retries: 12
