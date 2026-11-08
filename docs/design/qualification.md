@@ -372,7 +372,7 @@ python3 -m tools.qualification.qualify run endurance --topology replicated --out
 
 For a topology comparison, hold broker versions constant as well: run the single-broker baseline with `--source 4.4.0 --destination 4.4.0`. The replicated fixture accepts only the newest catalog entry; the default single-broker run uses the oldest.
 
-The dedicated `endurance` suite uses the following fixed application workload. Full-duration runs stay out of PR, nightly and weekly matrices; the replicated fixture workflow runs a one-minute variant rehearsal when its relevant paths change. Short `soak` and `capture` settings remain available. Use a fresh output directory for each run. The runner preserves evidence on failure and removes its disposable brokers in cleanup. Interrupt with Ctrl-C; an interrupted run cannot qualify. A fresh run starts fresh topics and progress rather than resuming an interrupted qualification.
+The dedicated `endurance` suite uses the following fixed application workload. Full-duration runs stay out of PR, nightly and weekly matrices; the replicated fixture workflow runs a one-minute variant rehearsal when its relevant paths change. Smoke and rehearsal use separate hosted jobs and the same candidate executable; the rehearsal verifies its digest before use. Short `soak` and `capture` settings remain available. Use a fresh output directory for each run. The runner preserves evidence on failure and removes its disposable brokers in cleanup. Interrupt with Ctrl-C; an interrupted run cannot qualify. A fresh run starts fresh topics and progress rather than resuming an interrupted qualification.
 
 | Setting | Purpose and acceptance |
 | --- | --- |
