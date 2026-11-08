@@ -4,10 +4,13 @@ on:
   pull_request:
     paths:
       - 'src/tests/replicated/**'
+      - 'src/tests/system/faults/**'
       - 'src/tests/qualification/matrix.json'
       - 'tools/qualification/qualify.py'
       - 'tools/qualification/broker_probe.py'
       - 'tools/qualification/test_qualify.py'
+      - 'tools/qualification/network.py'
+      - 'tools/qualification/test_network.py'
       - '.github/workflows/replicated-lab.yml'
 permissions:
   contents: read
@@ -30,20 +33,31 @@ jobs:
           python3 - <<'PY'
           import json, subprocess
           from pathlib import Path
-          # Given the newest pinned catalog entry, render only the replicated brokers.
+          from tools.qualification import network
+          # Given the pinned broker and proxy images, render the replicated fixture.
           image = list(json.loads(Path('src/tests/qualification/matrix.json').read_text()).values())[-1]
           fixture = json.loads(subprocess.check_output(['docker', 'compose', '-f', 'src/tests/replicated/compose.yaml', '-p', 'kaferry-replicated', '--profile', 'replicated', 'config', '--format', 'json']))
           services = fixture['services']
           # When rendered, then all six brokers retain RF=3, min ISR=2 and capped heaps.
-          assert set(services) == {f'{side}-{node}' for side in ('source', 'destination') for node in range(1, 4)}
-          assert len({service['environment']['KAFKA_LOG_DIRS'] for service in services.values()}) == 6
-          for service in services.values():
+          brokers = {f'{side}-{node}' for side in ('source', 'destination') for node in range(1, 4)}
+          assert set(services) == brokers | {'toxiproxy'}
+          assert len({services[name]['environment']['KAFKA_LOG_DIRS'] for name in brokers}) == 6
+          assert services['toxiproxy']['image'] == network.IMAGE
+          assert {port['published'] for port in services['toxiproxy']['ports']} == {str(port) for port in (*network.client_ports(), 48074)}
+          for name in brokers:
+              service = services[name]
               assert service['image'] == image
               assert service['user'] == '1000:1000'
+              assert not service.get('ports')
               env = service['environment']
               assert env['KAFKA_DEFAULT_REPLICATION_FACTOR'] == '3'
               assert env['KAFKA_MIN_INSYNC_REPLICAS'] == '2'
               assert env['KAFKA_HEAP_OPTS'] == '-Xms128m -Xmx512m'
+              side, node = name.split('-')
+              expected = [f'INTERNAL://toxiproxy:{network.route_port(side, int(node), "internal")}']
+              expected += [f'{listener.upper()}://127.0.0.1:{network.route_port(side, int(node), listener)}' for listener in network.LISTENERS[2:]]
+              assert env['KAFKA_ADVERTISED_LISTENERS'].split(',') == expected
+              assert env['KAFKA_CONTROLLER_QUORUM_VOTERS'] == ','.join(f'{node}@toxiproxy:{network.route_port(side, node, "controller")}' for node in range(1, 4))
           assert services['source-1']['environment']['CLUSTER_ID'] != services['destination-1']['environment']['CLUSTER_ID']
           PY
       - name: Install the independent checker and build candidate

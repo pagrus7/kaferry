@@ -15,7 +15,7 @@ python3 -m tools.qualification.qualify plan --tier pr
 
 If `python3` is an older system interpreter, use `make qualification-setup PYTHON=python3.14` and `python3.14` for the CLI commands. Setup builds Kaferry and installs the independent librdkafka checker into a checkout-local Python virtual environment. Run setup and qualification with the same Python major/minor version. Use `--binary /absolute/path/to/kaferry` to select an existing executable. The default is `bin/kaferry`; qualification does not rebuild the selected executable.
 
-Reserve ports 39092/40092 for ordinary plain brokers, 39192/40192 for dedicated endurance brokers, 41092–43094 for the security listeners, 44088 for Kerberos, and 46092–46094/47092–47094 for plain replicated brokers. Run one lab coordinator per host, across all checkouts and do not run `make broker` or `make qualification` alongside it. The runner takes a host-wide lock for its fixed ports and Compose names; legacy Make entrypoints do not take that lock. Standalone broker containers use the `kaferry-compat`, `kaferry-endurance`, `kaferry-qualification` and `kaferry-replicated` Compose projects; parallel jobs use `kaferry-lab-<run-id>-<slot>`. Other Docker workloads are outside the lab.
+Reserve ports 39092/40092 for ordinary plain brokers, 39192/40192 for dedicated endurance brokers, 41092–43094 for the security listeners and 44088 for Kerberos. The replicated fixture uses the [ports below](#replicated-network-paths). Run one lab coordinator per host, across all checkouts and do not run `make broker` or `make qualification` alongside it. The runner takes a host-wide lock for its fixed ports and Compose names; legacy Make entrypoints do not take that lock. Standalone broker containers use the `kaferry-compat`, `kaferry-endurance`, `kaferry-qualification` and `kaferry-replicated` Compose projects; parallel jobs use `kaferry-lab-<run-id>-<slot>`. Other Docker workloads are outside the lab.
 
 Start with one workload, 8 available CPUs, 16–20 GiB available RAM and 100 GiB free test storage; measure actual usage before increasing load. These are starting allocations, not capacity guarantees. Fixtures cap broker JVM heaps at 512 MiB and use four internal offset/transaction partitions.
 
@@ -33,11 +33,11 @@ The `replicated` suite owns two plain three-broker clusters on the newest catalo
 python3 -m tools.qualification.qualify run replicated --output build-results/replicated-smoke
 ```
 
-Complete [preparation](#prepare), including the independent checker. The runner requires at least two Docker CPUs, 8 GiB of runtime memory, 4 GiB free on the broker filesystem and 1 GiB on the evidence filesystem before starting brokers. These are smoke allowances, not long-run reservations or protection against other disk users. It verifies that all six localhost ports are available and holds the same host lease as the other suites.
+Complete [preparation](#prepare), including the independent checker. The runner requires at least two Docker CPUs, 8 GiB of runtime memory, 4 GiB free on the broker filesystem and 1 GiB on the evidence filesystem before starting brokers. These allowances include the proxy process; they are smoke allowances, not long-run reservations or protection against other disk users. It verifies that all 25 localhost ports are available and holds the same host lease as the other suites.
 
 The readiness CLI checks use 16–64 MiB Java heaps and set the JVM processor count to one. Broker JVM heaps remain capped at 512 MiB. Readiness requires a topic-list response from Kafka's API within five seconds.
 
-The independent librdkafka checker requires distinct three-broker clusters, three in-sync replicas per created partition and the topic minimum ISR of two. After creation is acknowledged, each topic has a 30-second setup window for that metadata and configuration to become visible. It then checks 96 records through preserved/key routing, capture, clone and replay, including partial completion, resume and completed reruns. A passing receipt covers healthy replicated copying for the recorded executable; it does not establish broker/network fault recovery, multi-worker behavior or continuous uptime. Only the newest catalog version is accepted.
+The runner first verifies that each worker path crosses its proxy, as described below. The independent librdkafka checker then requires distinct three-broker clusters, three in-sync replicas per created partition and the topic minimum ISR of two. After creation is acknowledged, each topic has a 30-second setup window for that metadata and configuration to become visible. It checks 96 records through preserved/key routing, capture, clone and replay, including partial completion, resume and completed reruns. Kaferry uses worker 1's path while the checker uses its independent path. A passing receipt covers the fixture's path isolation and healthy replicated copying for the recorded executable; it does not establish Kaferry's broker/network fault recovery, multi-worker behavior or continuous uptime. Only the newest catalog version is accepted.
 
 By default the fixture owns a disposable Docker volume. To use an existing volume, provision it with the label `kaferry.lab.storage=true`, then pass its name:
 
@@ -48,6 +48,25 @@ python3 -m tools.qualification.qualify run replicated --broker-volume LAB_VOLUME
 `--broker-volume` is supported only by `run replicated`; other suite combinations fail. The volume must allow the fixture initializer to create directories and set broker ownership to UID/GID 1000. Each run gets a fresh UUID directory beneath `kaferry-replicated/<project>/`. Cleanup stops writers and removes only that directory after checking its ownership marker. The external volume and unrelated files remain. Failed ownership validation or writer shutdown preserves the run directory; other cleanup failures can occur after data removal and still fail qualification. The volume driver selects its filesystem; this command does not change host storage settings or establish shared-filesystem durability. Archive output still needs the [archive filesystem guarantees](archive.md#layout-and-ownership).
 
 `--output` selects evidence and the smoke's archive/checkpoint output; it does not select broker storage. Keep private driver options, server addresses and access configuration outside receipts intended for publication.
+
+### Replicated network paths
+
+The fixture pins [Toxiproxy 2.13.0](https://github.com/Shopify/toxiproxy/releases/tag/v2.13.0) by its multi-platform image digest. Each broker has separate admin, worker 1–3, replication and controller proxies: 36 routes in one disposable proxy container. The runner starts that container and populates its HTTP API before starting Kafka; configuration uses no checkout bind mount. Brokers publish no direct host ports. Client metadata advertises the corresponding worker or admin proxy for every broker. Replication metadata and controller quorum addresses also name their own proxies on the Compose network.
+
+| Path | Source ports | Destination ports |
+| --- | --- | --- |
+| Independent publisher, oracle and admin | 46092–46094 | 47092–47094 |
+| Worker 1 | 46192–46194 | 47192–47194 |
+| Worker 2 | 46292–46294 | 47292–47294 |
+| Worker 3 | 46392–46394 | 47392–47394 |
+
+All published ports bind to localhost; the control API uses 48074. Replication uses 26092–26094/27092–27094 and controllers use 28092–28094/29092–29094 inside Compose only. Broker health checks connect locally; these checks do not carry copy or replication traffic.
+
+For each cluster and worker route, the proxy proof bootstraps on broker 1, publishes to a partition led by another broker discovered through metadata, then disables that leader's worker proxy. Publication through the worker must fail while the independent admin path can still publish to the same partition. Healing must restore publication, and an independent reader checks the exact three acknowledged records. `proxy-events.json` records resolved targets and injection/heal times; `proxy-routes.json` records the configured paths. This catches clients bypassing proxies after metadata discovery.
+
+The Go [fault helper](../../src/tests/system/faults) resolves leaders, group coordinators, an in-sync follower, whole clusters and worker destination/coordinator paths at injection time. Container faults use Docker kill/start, restart, pause/unpause and network disconnect/reconnect, preserving the original network aliases. Route faults disable proxies or apply directional timeout, reset, latency, bandwidth or slow-close toxics. Millisecond values apply to timeout, reset, latency and slow close; bandwidth is KB/s per connection. Empty listener selection addresses all six paths per resolved broker; worker selection addresses only that worker's path. Healing restores the originally resolved container IDs and proxy names, even after ownership moves. Ownership labels and proxy upstream/listen addresses must match the fixture before mutation. Partial injection unwinds earlier mutations; failed healing remains pending and fails the test.
+
+A coordinator-path cut blocks every connection from that worker to the coordinator broker, including colocated fetch or metadata traffic. It does not filter Kafka request types. Container disconnection affects that broker's replication and controller connections as well as clients. The helper supplies portable primitives; this smoke does not exercise every primitive against live brokers or qualify recovery from their combinations. Use the runner so the host lease, startup and teardown remain in force.
 
 ## Two concurrent workloads
 

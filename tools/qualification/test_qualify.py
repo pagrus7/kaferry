@@ -474,7 +474,10 @@ class MatrixTest(unittest.TestCase):
             self.assertEqual('127.0.0.1:47092,127.0.0.1:47093,127.0.0.1:47094', spec.env['KAFKA_TEST_DEST_BROKERS'])
             self.assertIn('--replicated', spec.command)
             self.assertEqual(dict(topology='replicated', brokers_per_cluster=3, replication_factor=3,
-                                  min_insync_replicas=2), receipt['parameters'])
+                                  min_insync_replicas=2, client_paths=4), receipt['parameters'])
+            self.assertEqual('127.0.0.1:46192,127.0.0.1:46193,127.0.0.1:46194',
+                             spec.command[spec.command.index('--copier-source') + 1])
+            self.assertNotEqual(spec.env['KAFKA_TEST_BROKERS'], spec.env['KAFERRY_WORKER3_SOURCE_BROKERS'])
 
     def test_broker_volume_rejects_unsupported_suites_names_and_old_replicated_images(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -499,7 +502,7 @@ class MatrixTest(unittest.TestCase):
                      patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=10**12)):
                     if accepted:
                         replicated_admission(Path(temporary), env)
-                        self.assertEqual(6, sockets.return_value.__enter__.return_value.bind.call_count)
+                        self.assertEqual(25, sockets.return_value.__enter__.return_value.bind.call_count)
                     else:
                         with self.assertRaisesRegex(ValueError, 'label'):
                             replicated_admission(Path(temporary), env)
@@ -531,6 +534,8 @@ class MatrixTest(unittest.TestCase):
                     calls.append((command, label, env.copy()))
                     if label == 'storage-capacity':
                         (output / 'storage-capacity.log').write_text('10000000\n')
+                    if label == 'proxy-proof':
+                        (output / 'proxy-proof.log').write_text('{"Action":"pass","Test":"TestReplicatedProxyRoutes"}\n')
                     if label == 'suite' and interruption:
                         raise KeyboardInterrupt()
                     if label == 'storage-clean' and not interruption:
@@ -543,12 +548,12 @@ class MatrixTest(unittest.TestCase):
                     # When finishing, then writers stop before cleanup and a cleanup failure cannot qualify.
                     with self.assertRaises(KeyboardInterrupt if interruption else RuntimeError):
                         run_suite(args)
-                self.assertEqual(['storage-capacity', 'storage-prepare', 'brokers-up', 'suite', 'brokers-stop',
+                self.assertEqual(['storage-capacity', 'storage-prepare', 'proxy-up', 'proxy-configure', 'brokers-up', 'proxy-proof', 'suite', 'brokers-stop',
                                   'storage-clean', 'brokers-down'], [label for _, label, _ in calls])
                 self.assertEqual(1, len({env['KAFERRY_REPLICATED_RUN_ID'] for _, _, env in calls}))
                 for command, label, env in calls:
                     self.assertEqual('true' if volume else 'false', env['KAFERRY_REPLICATED_VOLUME_EXTERNAL'])
-                    if label != 'suite':
+                    if label not in ('suite', 'proxy-configure', 'proxy-proof'):
                         self.assertEqual('kaferry-replicated', command[command.index('-p') + 1])
                     self.assertNotEqual(['docker', 'volume', 'rm'], command[:3])
                 if not interruption:

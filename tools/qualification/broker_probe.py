@@ -211,6 +211,9 @@ def run_probe(args):
     destination = config.get('destination', {'bootstrap.servers': args.destination})
     fixture_source = client_properties(config.get('fixture_source', source), config.get('aws_region'))
     fixture_destination = client_properties(config.get('fixture_destination', destination), config.get('aws_region'))
+    if args.replicated:
+        source = {'bootstrap.servers': args.copier_source}
+        destination = {'bootstrap.servers': args.copier_destination}
     admins = [AdminClient(fixture_source), AdminClient(fixture_destination)]
     namespace = 'kaferry-qualification-' + uuid.uuid4().hex
     expected = records()
@@ -310,7 +313,12 @@ def main():
     parser.add_argument('--destination', default='127.0.0.1:40092')
     parser.add_argument('--config', type=Path, help='private JSON containing source/destination Kafka properties')
     parser.add_argument('--replicated', action='store_true', help='require the plain RF=3/min-ISR=2 fixture')
+    parser.add_argument('--copier-source', help='replicated fixture worker source route')
+    parser.add_argument('--copier-destination', help='replicated fixture worker destination route')
     args = parser.parse_args()
+    if (args.replicated and not (args.copier_source and args.copier_destination) or
+            not args.replicated and (args.copier_source or args.copier_destination)):
+        parser.error('--replicated requires both copier routes; overrides require --replicated')
     args.binary = args.binary.resolve()
     run_probe(args)
 
