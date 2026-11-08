@@ -154,8 +154,6 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	producer := fixtureClient(t, strings.Join(faults.Endpoints("source", 0), ","), kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		kgo.MaxBufferedRecords(2*replicatedPartitions), kgo.RecordDeliveryTimeout(2*time.Second),
 		kgo.AllowIdempotentProduceCancellation())
-	publisher := startReplicatedPublisher(ctx, producer, src)
-	t.Cleanup(func() { publisher.stop() })
 	config := configuration(t, fmt.Sprintf("record_cap=1024\npartition_record_cap=128\nbyte_cap=134217728\npartition_byte_cap=8388608\nprogress_interval='100ms'\ndelivery_timeout=%q\nshutdown_timeout=%q\n",
 		timeouts["delivery_timeout"], timeouts["shutdown_timeout"]))
 	binary := testBinary(t)
@@ -175,7 +173,7 @@ func TestReplicatedZombieWorker(t *testing.T) {
 		memories = append(memories, watchRSS(t, process))
 		require.NoError(t, process.send(statement))
 		waitMembers(t, source, group, worker, replicatedPartitions, nil)
-		waitReplicated(t, ctx, "broker-observed worker client identity", publisher, workers, func(query context.Context) bool {
+		waitReplicated(t, ctx, "broker-observed worker client identity", nil, workers, func(query context.Context) bool {
 			state, err := observeOwnership(query, source, group, src)
 			if err != nil {
 				return false
@@ -189,6 +187,10 @@ func TestReplicatedZombieWorker(t *testing.T) {
 			return false
 		})
 	}
+	// Start input after the initial join has settled. Startup ownership changes
+	// must not create replay before this case's one declared fault window.
+	publisher := startReplicatedPublisher(ctx, producer, src)
+	t.Cleanup(func() { publisher.stop() })
 	var baseline ownershipSnapshot
 	var saved []int64
 	waitReplicated(t, ctx, "both workers own and save every source partition", publisher, workers, func(query context.Context) bool {
