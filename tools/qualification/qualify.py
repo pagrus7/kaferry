@@ -519,7 +519,8 @@ def main(argv=None):
         running.add_argument('--config', type=Path)
         running.add_argument('--duration', type=duration)
         running.add_argument('--rate', type=int, choices=range(1, 10001), metavar='1..10000')
-        running.add_argument('--output', type=Path, default=Path('build-results/qualification') /
+        running.add_argument('--output', type=Path, help='new evidence directory; existing paths are refused',
+            default=Path('build-results/qualification') /
             (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]))
     parallel = sub.add_parser('parallel', help='run isolated endurance and recovery/capture together under one host lease')
     parallel.add_argument('--companion', choices=('recovery', 'capture'), default='recovery')
@@ -528,7 +529,7 @@ def main(argv=None):
     parallel.add_argument('--source', choices=VERSIONS, default=VERSIONS[0])
     parallel.add_argument('--destination', choices=VERSIONS, default=VERSIONS[0])
     parallel.add_argument('--binary', default='bin/kaferry')
-    parallel.add_argument('--output', type=Path, required=True)
+    parallel.add_argument('--output', type=Path, required=True, help='new evidence directory; existing paths are refused')
     verifying = sub.add_parser('verify-release', help='validate full matrix evidence against an exact release archive')
     verifying.add_argument('report', type=Path)
     verifying.add_argument('archive', type=Path)
