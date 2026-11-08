@@ -19,3 +19,4 @@ runs:
         key: go-ubuntu24-${{ runner.arch }}-1.27.3-${{ inputs.cache-name }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
         restore-keys: |
           go-ubuntu24-${{ runner.arch }}-1.27.3-${{ inputs.cache-name }}-${{ hashFiles('go.sum') }}-
+          go-ubuntu24-${{ runner.arch }}-1.27.3-${{ inputs.cache-name }}-
