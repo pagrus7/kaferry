@@ -19,7 +19,7 @@ func explanationFixture() inspect.Report {
 	lo, hi := int64(1000), int64(2000)
 	return inspect.Report{Version: 2, Fingerprint: "query-id", Group: "backfill", MaxStalenessMS: 1000, MaxOutOfOrderMS: new(int64(1000)), StartRule: "WINDOW",
 		Source:       inspect.Endpoint{Kind: "TOPIC", Name: "input", Connection: "prod", ClusterID: "cluster-id", TopicID: "topic-id", PartitionCount: 1},
-		Destination:  inspect.Endpoint{Kind: "ARCHIVE", Name: "out.avro", File: &inspect.FileSummary{}},
+		Destination:  inspect.Endpoint{Kind: "ARCHIVE", Name: "out.avro", File: &inspect.ArchiveSummary{}},
 		Partitions:   []inspect.Partition{{ID: 0, Start: 4, LogEnd: 12, End: new(int64(12)), Saved: true, Window: plan.Window{Lower: &lo, Upper: &hi}, WindowOrigin: "literal"}},
 		RecordErrors: inspect.ErrorPolicies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}, Warnings: []string{}}
 }
@@ -135,7 +135,7 @@ func TestTextExplanationLimitedStopRules(t *testing.T) {
 			case "file":
 				position, window := int64(0), plan.Window{}
 				saved := false
-				report.Source = inspect.Endpoint{Kind: "ARCHIVE", File: &inspect.FileSummary{PositionRecords: &position, Window: &window, CheckpointExists: &saved}}
+				report.Source = inspect.Endpoint{Kind: "ARCHIVE", File: &inspect.ArchiveSummary{PositionRecords: &position, Window: &window, CheckpointExists: &saved}}
 				report.Partitions = nil
 				want = "Stop: worker record threshold or end of this group's fixed selection of completed archive files, whichever comes first"
 			case "following topic":
@@ -157,12 +157,12 @@ func TestTextExplanationArchiveProgressAndSelection(t *testing.T) {
 			report := explanationFixture()
 			position, upper := int64(200), int64(2000)
 			window := plan.Window{Upper: &upper}
-			report.Source = inspect.Endpoint{Kind: "ARCHIVE", Name: "input.avro", File: &inspect.FileSummary{Exists: true, SizeBytes: 500, PositionRecords: &position, Window: &window, CheckpointExists: &saved}}
+			report.Source = inspect.Endpoint{Kind: "ARCHIVE", Name: "input.avro", File: &inspect.ArchiveSummary{Exists: true, SizeBytes: 500, PositionRecords: &position, Window: &window, CheckpointExists: &saved}}
 			report.Partitions = nil
 			report.OneOff = !saved
 			if saved {
 				report.Source.File.Checkpoint = "saved.json"
-				report.Destination.File = &inspect.FileSummary{Exists: true, SizeBytes: 120}
+				report.Destination.File = &inspect.ArchiveSummary{Exists: true, SizeBytes: 120}
 			}
 			// When rendering, then report the record position, snapshot size and EOF rule, without a work estimate.
 			output := textExplanation(t, report)

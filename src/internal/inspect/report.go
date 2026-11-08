@@ -38,10 +38,10 @@ type Endpoint struct {
 	Partitioning    string                `json:"partitioning,omitempty"`
 	PartitionFilter *plan.PartitionFilter `json:"partition_filter,omitempty"`
 	TimestampType   string                `json:"timestamp_type,omitempty"`
-	File            *FileSummary          `json:"file,omitempty"`
+	File            *ArchiveSummary       `json:"file,omitempty"`
 }
 
-type FileSummary struct {
+type ArchiveSummary struct {
 	FileCount        int          `json:"file_count,omitempty"`
 	PositionRecords  *int64       `json:"position_records,omitempty"`
 	Exists           bool         `json:"exists"`

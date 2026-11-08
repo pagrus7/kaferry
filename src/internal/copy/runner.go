@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/pagrus7/kaferry/src/internal/config"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 )
 
@@ -26,7 +25,7 @@ type Runner struct {
 	clock          Clock
 	log            *slog.Logger
 	plan           plan.Plan
-	limits         config.Worker
+	limits         Settings
 	tracker        ProgressTracker
 	partitions     map[int32]*partition
 	submitted      uint64
@@ -47,8 +46,8 @@ type Runner struct {
 	nextProgress, nextObservation time.Time
 }
 
-func NewRunner(source Source, sink Sink, store ProgressStore, clock Clock, logger *slog.Logger, p plan.Plan, limits config.Worker, tracker ProgressTracker, stop StopObserver, observer Observer) *Runner {
-	interval := limits.ProgressInterval.Duration
+func NewRunner(source Source, sink Sink, store ProgressStore, clock Clock, logger *slog.Logger, p plan.Plan, limits Settings, tracker ProgressTracker, stop StopObserver, observer Observer) *Runner {
+	interval := limits.ProgressInterval
 	return &Runner{source: source, sink: sink, store: store, clock: clock, log: logger, plan: p, limits: limits, tracker: tracker, partitions: make(map[int32]*partition), stop: stop, observer: observer, progressInterval: interval}
 }
 func (r *Runner) Assign(assignments []Assignment) error {
@@ -297,7 +296,7 @@ func (r *Runner) submitPending(ctx context.Context) error {
 			s.busySince = r.clock.Now()
 			r.log.Warn("destination queue full; intake paused")
 		}
-		budget := r.limits.DeliveryTimeout.Duration
+		budget := r.limits.DeliveryTimeout
 		if r.clock.Now().Sub(s.busySince) >= budget {
 			return fmt.Errorf("destination queue remained full for %s", budget)
 		}
@@ -376,7 +375,7 @@ func (r *Runner) eof(cursor Cursor) error {
 	return nil
 }
 func (r *Runner) tips(ctx context.Context) error {
-	wait := r.limits.TipWait.Duration
+	wait := r.limits.TipWait
 	sampled := false // Interleave watermark queries with consumer polling.
 	for id, p := range r.partitions {
 		if !r.needsTip(p) {

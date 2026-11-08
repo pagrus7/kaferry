@@ -4,17 +4,17 @@ import (
 	"context"
 
 	"github.com/pagrus7/kaferry/src/internal/config"
-	"github.com/pagrus7/kaferry/src/internal/kafkaport"
+	"github.com/pagrus7/kaferry/src/internal/kafka"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 )
 
-func (s *Service) source(ctx context.Context, p plan.Plan, limits config.Worker, connection kafkaport.InspectionConnection, report *Report) ([]int32, error) {
+func (s *Service) source(ctx context.Context, p plan.Plan, limits config.Worker, connection kafka.InspectionConnection, report *Report) ([]int32, error) {
 	if p.Source.Kind == "ARCHIVE" {
-		info, err := s.files.Source(p, report.Fingerprint, limits)
+		info, err := s.archives.Source(p, report.Fingerprint, limits)
 		if err != nil {
 			return nil, err
 		}
-		report.Source.File = fileSummary(info.ArchiveInspection)
+		report.Source.File = archiveSummary(info.ArchiveInspection)
 		report.Source.File.Window = &info.Window
 		report.Source.File.PositionRecords = &info.Position
 		report.Warnings = append(report.Warnings, info.Warnings...)
@@ -32,10 +32,10 @@ func (s *Service) source(ctx context.Context, p plan.Plan, limits config.Worker,
 	return ids, nil
 }
 
-func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafkaport.InspectionConnection, report *Report) error {
-	saved := map[int32]kafkaport.SavedProgress{}
+func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafka.InspectionConnection, report *Report) error {
+	saved := map[int32]kafka.SavedProgress{}
 	if !p.OneOff {
-		if err := connection.CheckMembers(ctx, p.Group, kafkaport.GroupProtocol(p, report.Fingerprint)); err != nil {
+		if err := connection.CheckMembers(ctx, p.Group, kafka.GroupProtocol(p, report.Fingerprint)); err != nil {
 			return err
 		}
 		var err error
@@ -55,7 +55,7 @@ func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafka
 	}
 	selected, err := p.Partitions.Select(topic.Partitions)
 	if err != nil {
-		return &kafkaport.Conflict{Err: err}
+		return &kafka.Conflict{Err: err}
 	}
 	if p.Offsets != nil || len(p.PartitionOffsets) > 0 {
 		report.StartRule = "OFFSET"

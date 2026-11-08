@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pagrus7/kaferry/src/internal/kafkaport"
+	"github.com/pagrus7/kaferry/src/internal/kafka"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/fx"
@@ -12,10 +12,10 @@ import (
 
 type replacementLookup struct {
 	calls   []string
-	queries []kafkaport.TimestampOffsetQuery
+	queries []kafka.TimestampOffsetQuery
 }
 
-func (r *replacementLookup) New(kafkaport.OffsetReader, kafkaport.TimeReader) kafkaport.OffsetLookup {
+func (r *replacementLookup) New(kafka.OffsetReader, kafka.TimeReader) kafka.OffsetLookup {
 	return r
 }
 func (r *replacementLookup) Earliest(context.Context, []int32) (map[int32]int64, error) {
@@ -30,16 +30,16 @@ func (r *replacementLookup) ReadableEnd(context.Context, []int32) (map[int32]int
 	r.calls = append(r.calls, "readable")
 	return map[int32]int64{0: 9}, nil
 }
-func (r *replacementLookup) AtOrAfterTimestamp(_ context.Context, q []kafkaport.TimestampOffsetQuery) ([]kafkaport.TimestampOffsetMatch, error) {
+func (r *replacementLookup) AtOrAfterTimestamp(_ context.Context, q []kafka.TimestampOffsetQuery) ([]kafka.TimestampOffsetMatch, error) {
 	r.queries = q
-	return []kafkaport.TimestampOffsetMatch{{Partition: 0, Offset: 7, Found: true}}, nil
+	return []kafka.TimestampOffsetMatch{{Partition: 0, Offset: 7, Found: true}}, nil
 }
 func TestFxOffsetLookupCanBeReplacedIndependently(t *testing.T) {
 	// Given a replacement lookup factory, without a real broker backend.
 	fake := &replacementLookup{}
-	var factory kafkaport.PositionerFactory
+	var factory kafka.PositionerFactory
 	app := fx.New(fx.NopLogger, ClockModule, LoggingModule, PositioningModule,
-		fx.Decorate(func(kafkaport.OffsetLookupFactory) kafkaport.OffsetLookupFactory { return fake }), fx.Populate(&factory))
+		fx.Decorate(func(kafka.OffsetLookupFactory) kafka.OffsetLookupFactory { return fake }), fx.Populate(&factory))
 	require.NoError(t, app.Err())
 	// When resolving a timestamp start, then every lookup uses the injected component and explicit timestamp parameter.
 	p := plan.Plan{Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 1234}}}
@@ -47,5 +47,5 @@ func TestFxOffsetLookupCanBeReplacedIndependently(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 7, got.Assignments[0].Cursor.Position)
 	require.Equal(t, []string{"earliest", "replicated"}, fake.calls)
-	require.Equal(t, []kafkaport.TimestampOffsetQuery{{Partition: 0, TimestampMS: 1234}}, fake.queries)
+	require.Equal(t, []kafka.TimestampOffsetQuery{{Partition: 0, TimestampMS: 1234}}, fake.queries)
 }

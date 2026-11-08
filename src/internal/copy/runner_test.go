@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pagrus7/kaferry/src/internal/config"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -136,7 +135,17 @@ func fixture(t *testing.T) (*Runner, *testSource, *testSink, *testStore, *testCl
 	s := &testSource{clock: c, paused: make(map[int32]bool), assignments: []Assignment{{Cursor: Cursor{Partition: 0, Position: 0}}}}
 	d := &testSink{reports: make(chan Delivery, 100)}
 	p := &testStore{}
-	r := NewRunner(s, d, p, c, slog.New(slog.NewTextHandler(io.Discard, nil)), plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE"}}, config.Defaults(t.TempDir()).Worker, NewTracker(), NoopStopObserver{}, nil)
+	settings := Settings{
+		PartitionRecordCap: 5000,
+		PartitionByteCap:   16 << 20,
+		RecordCap:          20000,
+		ByteCap:            128 << 20,
+		DeliveryTimeout:    time.Minute,
+		IdleExit:           30 * time.Second,
+		TipWait:            15 * time.Minute,
+		ProgressInterval:   30 * time.Second,
+	}
+	r := NewRunner(s, d, p, c, slog.New(slog.NewTextHandler(io.Discard, nil)), plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE"}}, settings, NewTracker(), NoopStopObserver{}, nil)
 	return r, s, d, p, c
 }
 func incoming(id int32, position int64, size int) Input {
@@ -358,7 +367,7 @@ func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 	hi := int64(1000)
 	r.plan.Source.Kind = "TOPIC"
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: hi}
-	r.limits.TipWait.Duration = 1 * time.Second
+	r.limits.TipWait = 1 * time.Second
 	_ = r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &hi}}})
 	s.high = 2
 	_ = r.eof(Cursor{Partition: 0, Position: 0})
@@ -384,7 +393,7 @@ func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 func TestIdleExitRequiresProcessedEmptyAssignment(t *testing.T) {
 	// Given a bounded worker that has never received an assignment.
 	r, _, _, _, c := fixture(t)
-	r.limits.IdleExit.Duration = 1 * time.Second
+	r.limits.IdleExit = 1 * time.Second
 	c.Sleep(time.Hour)
 
 	// When its idle deadline elapses before assignment.
@@ -658,7 +667,7 @@ func capturedTipCompletion(t *testing.T, gap bool) {
 	stamp := int64(500)
 	r.plan.Source.Kind = "TOPIC"
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: hi}
-	r.limits.TipWait.Duration = 1 * time.Second
+	r.limits.TipWait = 1 * time.Second
 	s.assignments[0].Window.Upper = &hi
 	first := incoming(0, 0, 1)
 	first.Record.TimestampMS = &stamp

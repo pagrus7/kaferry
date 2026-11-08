@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pagrus7/kaferry/src/internal/archiveio"
+	"github.com/pagrus7/kaferry/src/internal/archive/io"
 	"github.com/pagrus7/kaferry/src/internal/config"
 	core "github.com/pagrus7/kaferry/src/internal/copy"
-	"github.com/pagrus7/kaferry/src/internal/kafkaport"
+	"github.com/pagrus7/kaferry/src/internal/kafka"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/fx"
@@ -28,12 +28,12 @@ type engineFixture struct {
 	source         *engineSource
 	store          core.ProgressStore
 	groups         []string
-	saved          map[int32]kafkaport.SavedProgress
+	saved          map[int32]kafka.SavedProgress
 	onStage        func(string)
 	partitions     map[string][]int32
 	partitionReads []string
 	partitionCount int
-	routing        kafkaport.PartitionValidator
+	routing        kafka.PartitionValidator
 }
 
 func newEngineFixture() *engineFixture {
@@ -53,7 +53,7 @@ func (f *engineFixture) stage(name string) error {
 	}
 	return nil
 }
-func (f *engineFixture) Open(_ context.Context, endpoint plan.Endpoint) (kafkaport.Connection, error) {
+func (f *engineFixture) Open(_ context.Context, endpoint plan.Endpoint) (kafka.Connection, error) {
 	if err := f.stage("open-" + endpoint.Name); err != nil {
 		return nil, err
 	}
@@ -82,8 +82,8 @@ type engineConnection struct {
 	name    string
 }
 
-func (c *engineConnection) Describe(context.Context, bool) (kafkaport.TopicDescription, error) {
-	return kafkaport.TopicDescription{ClusterID: c.name + "-cluster", TopicID: c.name + "-id"}, c.fixture.stage("cluster-" + c.name)
+func (c *engineConnection) Describe(context.Context, bool) (kafka.TopicDescription, error) {
+	return kafka.TopicDescription{ClusterID: c.name + "-cluster", TopicID: c.name + "-id"}, c.fixture.stage("cluster-" + c.name)
 }
 func (c *engineConnection) Partitions(context.Context) ([]int32, error) {
 	c.fixture.partitionReads = append(c.fixture.partitionReads, c.name)
@@ -103,10 +103,10 @@ func (c *engineConnection) ValidatePartitions(context.Context, []int32) error { 
 func (c *engineConnection) CheckMembers(context.Context, string, string) error {
 	return c.fixture.stage("members")
 }
-func (c *engineConnection) ReadProgress(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafkaport.SavedProgress, error) {
+func (c *engineConnection) ReadProgress(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafka.SavedProgress, error) {
 	return c.fixture.saved, c.fixture.stage("progress")
 }
-func (c *engineConnection) Source(_ context.Context, _ plan.Plan, _ string, _ config.Worker, routing kafkaport.PartitionValidator) (core.Source, core.ProgressStore, error) {
+func (c *engineConnection) Source(_ context.Context, _ plan.Plan, _ string, _ config.Worker, routing kafka.PartitionValidator) (core.Source, core.ProgressStore, error) {
 	c.fixture.routing = routing
 	return c.fixture.source, c.fixture.store, c.fixture.stage("topic-input")
 }
@@ -209,7 +209,7 @@ func TestRuntimeCompositionAcceptsReplacementFactories(t *testing.T) {
 			var engine Engine
 			graph := fx.New(fx.NopLogger, RuntimeModules, fx.Decorate(
 				func(KafkaFactory) KafkaFactory { return f },
-				func(FileFactory) FileFactory { return f },
+				func(ArchiveFactory) ArchiveFactory { return f },
 				func(RunnerFactory) RunnerFactory { return f },
 				func(*slog.Logger) *slog.Logger { return engineLogger() },
 			), fx.Populate(&engine))
@@ -387,12 +387,12 @@ func TestCleanupFailurePreservesTheFirstExitCode(t *testing.T) {
 	}{
 		{"copy succeeded", nil, 1},
 		{"runtime failure", errors.New("broker unavailable"), 1},
-		{"startup conflict", &kafkaport.Conflict{Err: errors.New("foreign progress")}, 2},
+		{"startup conflict", &kafka.Conflict{Err: errors.New("foreign progress")}, 2},
 		{"runtime conflict", &core.Exit{Code: 1, Err: errors.New("changed topic")}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given a close operation that fails with a classified error after the primary outcome.
-			cleanup := &kafkaport.Conflict{Err: errors.New("close failed")}
+			cleanup := &kafka.Conflict{Err: errors.New("close failed")}
 			// When combining cleanup with the copy result.
 			err := core.CleanupResult(tc.primary, "close Kafka input", cleanup)
 			// Then both causes remain available and cleanup cannot replace the primary exit code.

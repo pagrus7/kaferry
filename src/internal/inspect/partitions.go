@@ -3,11 +3,11 @@ package inspect
 import (
 	"fmt"
 
-	"github.com/pagrus7/kaferry/src/internal/kafkaport"
+	"github.com/pagrus7/kaferry/src/internal/kafka"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 )
 
-func partitionRows(p plan.Plan, located kafkaport.Positioning, saved map[int32]kafkaport.SavedProgress) ([]Partition, []string) {
+func partitionRows(p plan.Plan, located kafka.Positioning, saved map[int32]kafka.SavedProgress) ([]Partition, []string) {
 	rows := make([]Partition, 0, len(located.Assignments))
 	var warnings []string
 	for _, assignment := range located.Assignments {
@@ -38,7 +38,7 @@ func windowOrigin(window plan.WindowSpec, saved, hasSaved bool) string {
 	}
 	return "resolved"
 }
-func offsetEndOrigin(p plan.Plan, id int32, end *int64, progress kafkaport.SavedProgress) string {
+func offsetEndOrigin(p plan.Plan, id int32, end *int64, progress kafka.SavedProgress) string {
 	if end == nil {
 		return ""
 	}

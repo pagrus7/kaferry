@@ -7,10 +7,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/pagrus7/kaferry/src/internal/archiveio"
+	"github.com/pagrus7/kaferry/src/internal/archive/io"
 	"github.com/pagrus7/kaferry/src/internal/config"
 	core "github.com/pagrus7/kaferry/src/internal/copy"
-	"github.com/pagrus7/kaferry/src/internal/kafkaport"
+	"github.com/pagrus7/kaferry/src/internal/kafka"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 )
 
@@ -101,15 +101,15 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 	report.Source.PartitionFilter = p.Partitions
 	report.Fingerprint, err = p.Fingerprint(sourceInfo.ClusterID, destinationInfo.ClusterID, destinationInfo.TopicID)
 	if err != nil {
-		return report, &kafkaport.Conflict{Err: err}
+		return report, &kafka.Conflict{Err: err}
 	}
 	stop.Stage("reading saved status")
 	if source != nil {
 		err = s.topicStatus(ctx, p, source, &report)
 	} else {
-		err = s.fileStatus(p, limits, &report)
+		err = s.archiveStatus(p, limits, &report)
 	}
-	var kafkaConflict *kafkaport.Conflict
+	var kafkaConflict *kafka.Conflict
 	var archiveConflict *archiveio.Conflict
 	if errors.As(err, &kafkaConflict) || errors.As(err, &archiveConflict) {
 		report.Verdict = "unknown"
@@ -124,8 +124,8 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 	return report, err
 }
 
-func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.InspectionConnection, r *StatusReport) error {
-	before, err := c.Membership(ctx, p.Group, kafkaport.GroupProtocol(p, r.Fingerprint))
+func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafka.InspectionConnection, r *StatusReport) error {
+	before, err := c.Membership(ctx, p.Group, kafka.GroupProtocol(p, r.Fingerprint))
 	if err != nil {
 		return err
 	}
@@ -133,7 +133,7 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 	if progressErr != nil && !errors.Is(progressErr, plan.ErrFingerprintMismatch) {
 		return progressErr
 	}
-	after, err := c.Membership(ctx, p.Group, kafkaport.GroupProtocol(p, r.Fingerprint))
+	after, err := c.Membership(ctx, p.Group, kafka.GroupProtocol(p, r.Fingerprint))
 	if err != nil {
 		return err
 	}
@@ -142,12 +142,12 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 		return err
 	}
 	if topic.TopicID != r.Source.TopicID {
-		return &kafkaport.Conflict{Err: fmt.Errorf("source topic identity changed")}
+		return &kafka.Conflict{Err: fmt.Errorf("source topic identity changed")}
 	}
 	r.Source.PartitionCount = len(topic.Partitions)
 	selected, err := p.Partitions.Select(topic.Partitions)
 	if err != nil {
-		return &kafkaport.Conflict{Err: err}
+		return &kafka.Conflict{Err: err}
 	}
 	if progressErr != nil {
 		selected = topic.Partitions
@@ -171,7 +171,7 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafkaport.Insp
 	return nil
 }
 
-func savedPartitionRows(selected []int32, saved map[int32]kafkaport.SavedProgress) []SavedPartition {
+func savedPartitionRows(selected []int32, saved map[int32]kafka.SavedProgress) []SavedPartition {
 	var rows []SavedPartition
 	for _, id := range selected {
 		row := SavedPartition{ID: id}
@@ -186,11 +186,11 @@ func savedPartitionRows(selected []int32, saved map[int32]kafkaport.SavedProgres
 	}
 	return rows
 }
-func membershipChanged(before, after kafkaport.Membership) bool {
+func membershipChanged(before, after kafka.Membership) bool {
 	return !before.Idle || !after.Idle || before.State != after.State
 }
 
-func (r *StatusReport) observed(before, after kafkaport.Membership, p plan.Plan) {
+func (r *StatusReport) observed(before, after kafka.Membership, p plan.Plan) {
 	switch {
 	case before.Foreign || after.Foreign:
 		r.Verdict, r.Reason = "unknown", "group has an incompatible active member"
@@ -201,12 +201,12 @@ func (r *StatusReport) observed(before, after kafkaport.Membership, p plan.Plan)
 	}
 }
 
-func (s *Service) fileStatus(p plan.Plan, limits config.Worker, r *StatusReport) error {
-	info, err := s.files.Source(p, r.Fingerprint, limits)
+func (s *Service) archiveStatus(p plan.Plan, limits config.Worker, r *StatusReport) error {
+	info, err := s.archives.Source(p, r.Fingerprint, limits)
 	if err != nil && !errors.Is(err, plan.ErrFingerprintMismatch) {
 		return err
 	}
-	r.Source.File = fileSummary(info.ArchiveInspection)
+	r.Source.File = archiveSummary(info.ArchiveInspection)
 	r.Source.File.PositionRecords = &info.Position
 	r.Meaning = StatusMeaning + "\nArchive completion applies to this group’s fixed file selection. A new group selects current completed files."
 	row := SavedPartition{ID: 0}

@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pagrus7/kaferry/src/internal/archiveio"
+	"github.com/pagrus7/kaferry/src/internal/archive/io"
 	"github.com/pagrus7/kaferry/src/internal/config"
 	core "github.com/pagrus7/kaferry/src/internal/copy"
-	"github.com/pagrus7/kaferry/src/internal/kafkaport"
+	"github.com/pagrus7/kaferry/src/internal/kafka"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -28,11 +28,11 @@ func number(n int64) *int64            { return &n }
 
 type topicMock struct {
 	afterSaved      func()
-	memberships     []kafkaport.Membership
+	memberships     []kafka.Membership
 	observations    []string
 	membershipReads int
-	info            kafkaport.TopicDescription
-	saved           map[int32]kafkaport.SavedProgress
+	info            kafka.TopicDescription
+	saved           map[int32]kafka.SavedProgress
 	low, high       map[int32]int64
 	stable          map[int32]int64
 	times           func(map[int32]int64) map[int32]int64
@@ -50,7 +50,7 @@ func (m *topicMock) err(stage string) error {
 	}
 	return nil
 }
-func (m *topicMock) Describe(context.Context, bool) (kafkaport.TopicDescription, error) {
+func (m *topicMock) Describe(context.Context, bool) (kafka.TopicDescription, error) {
 	m.observations = append(m.observations, "describe")
 	info := m.info
 	info.Partitions = slices.Clone(info.Partitions)
@@ -60,16 +60,16 @@ func (m *topicMock) CheckMembers(context.Context, string, string) error {
 	m.memberChecks++
 	return m.err("members")
 }
-func (m *topicMock) Membership(context.Context, string, string) (kafkaport.Membership, error) {
+func (m *topicMock) Membership(context.Context, string, string) (kafka.Membership, error) {
 	m.observations = append(m.observations, "members")
-	observation := kafkaport.Membership{Idle: true}
+	observation := kafka.Membership{Idle: true}
 	if len(m.memberships) > 0 {
 		observation = m.memberships[min(m.membershipReads, len(m.memberships)-1)]
 	}
 	m.membershipReads++
 	return observation, m.err("members")
 }
-func (m *topicMock) Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafkaport.SavedProgress, error) {
+func (m *topicMock) Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafka.SavedProgress, error) {
 	m.groupReads++
 	m.observations = append(m.observations, "saved")
 	if m.afterSaved != nil {
@@ -77,11 +77,11 @@ func (m *topicMock) Saved(context.Context, string, string, plan.WindowSpec, int6
 	}
 	return m.saved, m.err("saved")
 }
-func (m *topicMock) Offsets(_ context.Context, _ []int32, kind kafkaport.OffsetKind, committed bool) (map[int32]int64, error) {
+func (m *topicMock) Offsets(_ context.Context, _ []int32, kind kafka.OffsetKind, committed bool) (map[int32]int64, error) {
 	if err := m.err("offsets"); err != nil {
 		return nil, err
 	}
-	if kind == kafkaport.EarliestOffset {
+	if kind == kafka.EarliestOffset {
 		return m.low, nil
 	}
 	if committed {
@@ -102,7 +102,7 @@ type factoryMock struct {
 	opened      int
 }
 
-func (f *factoryMock) OpenInspection(_ context.Context, endpoint plan.Endpoint) (kafkaport.InspectionConnection, error) {
+func (f *factoryMock) OpenInspection(_ context.Context, endpoint plan.Endpoint) (kafka.InspectionConnection, error) {
 	f.opened++
 	if f.fail == endpoint.Name {
 		return nil, f.failure
@@ -110,24 +110,24 @@ func (f *factoryMock) OpenInspection(_ context.Context, endpoint plan.Endpoint) 
 	return f.connections[endpoint.Name], nil
 }
 
-type filesMock struct {
+type archivesMock struct {
 	source      archiveio.SourceInspection
 	destination archiveio.ArchiveInspection
 	failSource  error
 	failOutput  error
 }
 
-func (f *filesMock) Source(plan.Plan, string, config.Worker) (archiveio.SourceInspection, error) {
+func (f *archivesMock) Source(plan.Plan, string, config.Worker) (archiveio.SourceInspection, error) {
 	return f.source, f.failSource
 }
-func (f *filesMock) Destination(string) (archiveio.ArchiveInspection, error) {
+func (f *archivesMock) Destination(string) (archiveio.ArchiveInspection, error) {
 	return f.destination, f.failOutput
 }
 
-func fixture() (*Service, plan.Plan, *factoryMock, *filesMock) {
+func fixture() (*Service, plan.Plan, *factoryMock, *archivesMock) {
 	p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC", Name: "input"}, Destination: plan.Endpoint{Kind: "TOPIC", Name: "output", Partitioning: plan.Key}, Group: "g", Policies: plan.Policies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}, Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 100}, Upper: &plan.Expression{LiteralMS: 1000}}, MaxStalenessMS: 20}
 	topic := func(name string) *topicMock {
-		return &topicMock{info: kafkaport.TopicDescription{ClusterID: "cluster", TopicID: name, Partitions: []int32{1, 0}, TimestampType: "CreateTime"}, saved: map[int32]kafkaport.SavedProgress{}, low: map[int32]int64{0: 0, 1: 0}, high: map[int32]int64{0: 10, 1: 11}, stable: map[int32]int64{0: 9, 1: 10}, failure: errors.New("injected"), times: func(queries map[int32]int64) map[int32]int64 {
+		return &topicMock{info: kafka.TopicDescription{ClusterID: "cluster", TopicID: name, Partitions: []int32{1, 0}, TimestampType: "CreateTime"}, saved: map[int32]kafka.SavedProgress{}, low: map[int32]int64{0: 0, 1: 0}, high: map[int32]int64{0: 10, 1: 11}, stable: map[int32]int64{0: 9, 1: 10}, failure: errors.New("injected"), times: func(queries map[int32]int64) map[int32]int64 {
 			found := make(map[int32]int64)
 			for id := range queries {
 				found[id] = int64(id) + 2
@@ -136,9 +136,9 @@ func fixture() (*Service, plan.Plan, *factoryMock, *filesMock) {
 		}}
 	}
 	factory := &factoryMock{connections: map[string]*topicMock{"input": topic("input-id"), "output": topic("output-id")}, failure: errors.New("open failed")}
-	files := &filesMock{}
-	positioning := kafkaport.NewPositionerFactory(fixedClock{time.UnixMilli(5000)}, slog.New(slog.NewTextHandler(io.Discard, nil)), kafkaport.NewOffsetLookupFactory())
-	return NewExplainer(factory, files, positioning), p, factory, files
+	archives := &archivesMock{}
+	positioning := kafka.NewPositionerFactory(fixedClock{time.UnixMilli(5000)}, slog.New(slog.NewTextHandler(io.Discard, nil)), kafka.NewOffsetLookupFactory())
+	return NewExplainer(factory, archives, positioning), p, factory, archives
 }
 
 func preview(t *testing.T, service *Service, p plan.Plan) Report {
@@ -152,7 +152,7 @@ func TestTopicPreviewUsesSavedPositionsAndOnlyRequiredStartLookups(t *testing.T)
 	// Given two partitions, one saved position, and different destination routing.
 	service, p, factory, _ := fixture()
 	source := factory.connections["input"]
-	source.saved[0] = kafkaport.SavedProgress{Position: 4, Progress: kafkaport.Progress{End: number(8)}}
+	source.saved[0] = kafka.SavedProgress{Position: 4, Progress: kafka.Progress{End: number(8)}}
 	factory.connections["output"].info.Partitions = []int32{0, 1, 2}
 	factory.connections["output"].info.TimestampType = "LogAppendTime"
 	// When previewing through the real shared positioner with mocked metadata ports.
@@ -173,7 +173,7 @@ func TestTopicPreviewUsesSavedPositionsAndOnlyRequiredStartLookups(t *testing.T)
 	require.EqualValues(t, 100, source.queries[0][1])
 	require.EqualValues(t, 1, source.memberChecks)
 	require.EqualValues(t, 1, source.groupReads)
-	require.Equal(t, map[int32]kafkaport.SavedProgress{0: {Position: 4, Progress: kafkaport.Progress{End: number(8)}}}, source.saved)
+	require.Equal(t, map[int32]kafka.SavedProgress{0: {Position: 4, Progress: kafka.Progress{End: number(8)}}}, source.saved)
 	require.EqualValues(t, 1, source.closed)
 	require.EqualValues(t, 1, factory.connections["output"].closed)
 	require.Contains(t, strings.Join(report.Warnings, " "), "LogAppendTime")
@@ -206,7 +206,7 @@ func TestRelativeWindowsPreserveSavedAndAdoptedBounds(t *testing.T) {
 	source := factory.connections["input"]
 	source.info.Partitions = []int32{2, 1, 0}
 	source.low[2], source.high[2] = 0, 12
-	source.saved = map[int32]kafkaport.SavedProgress{0: {Position: 4, Progress: kafkaport.Progress{Window: &plan.Window{Lower: number(100), Upper: number(1000)}}}, 1: {Position: 5, Progress: kafkaport.Progress{Window: &plan.Window{Lower: number(200), Upper: number(2000)}}}}
+	source.saved = map[int32]kafka.SavedProgress{0: {Position: 4, Progress: kafka.Progress{Window: &plan.Window{Lower: number(100), Upper: number(1000)}}}, 1: {Position: 5, Progress: kafka.Progress{Window: &plan.Window{Lower: number(200), Upper: number(2000)}}}}
 	// When inspecting, then old partitions keep their windows and the new one adopts the lowest partition's window.
 	report := preview(t, service, p)
 	require.EqualValues(t, 2000, *report.Partitions[1].Window.Upper)
@@ -234,11 +234,11 @@ func TestOneOffDoesNotReadOrGenerateAConsumerGroup(t *testing.T) {
 
 func TestArchiveInspectionCarriesSnapshotAndReplayPosition(t *testing.T) {
 	// Given a saved archive selection and its destination directory.
-	service, p, factory, files := fixture()
+	service, p, factory, archives := fixture()
 	p.Source.Kind, p.Destination.Kind = "ARCHIVE", "ARCHIVE"
 	p.Source.Format, p.Destination.Format = "avro", "avro"
-	files.source = archiveio.SourceInspection{ArchiveInspection: archiveio.ArchiveInspection{Exists: true, Size: 250, FileCount: 2}, Position: 200, Saved: true, CheckpointPath: "checkpoint.json"}
-	files.destination = archiveio.ArchiveInspection{Exists: true}
+	archives.source = archiveio.SourceInspection{ArchiveInspection: archiveio.ArchiveInspection{Exists: true, Size: 250, FileCount: 2}, Position: 200, Saved: true, CheckpointPath: "checkpoint.json"}
+	archives.destination = archiveio.ArchiveInspection{Exists: true}
 	// When inspecting both endpoints.
 	report := preview(t, service, p)
 	// Then positions count records, sizes describe the selection, and Kafka is untouched.
@@ -254,7 +254,7 @@ func TestInspectionFailuresCloseOnlyAcquiredConnections(t *testing.T) {
 	for _, failure := range []string{"source open", "source describe", "destination open", "destination describe", "source refresh", "members", "saved", "offsets", "times", "file output", "close"} {
 		t.Run(failure, func(t *testing.T) {
 			// Given a failure at one acquisition, positioning or cleanup boundary.
-			service, p, factory, files := fixture()
+			service, p, factory, archives := fixture()
 			source, destination := factory.connections["input"], factory.connections["output"]
 			wantSource, wantDestination := 1, 1
 			injected := source.failure
@@ -270,7 +270,7 @@ func TestInspectionFailuresCloseOnlyAcquiredConnections(t *testing.T) {
 			case "source refresh":
 				source.afterSaved = func() { source.fail = "describe" }
 			case "file output":
-				p.Destination.Kind, files.failOutput, wantDestination = "ARCHIVE", injected, 0
+				p.Destination.Kind, archives.failOutput, wantDestination = "ARCHIVE", injected, 0
 			default:
 				source.fail = failure
 			}
@@ -291,7 +291,7 @@ func TestInvalidSavedPositionsAndWindowOverflowFailBeforeLookup(t *testing.T) {
 			source := factory.connections["input"]
 			switch invalid {
 			case "past log end":
-				source.saved[0] = kafkaport.SavedProgress{Position: 100}
+				source.saved[0] = kafka.SavedProgress{Position: 100}
 			case "overflow":
 				p.Window.Upper.LiteralMS = math.MaxInt64
 			case "missing lookup":
@@ -323,7 +323,7 @@ func TestExpiredPositionStartsAtLogStartWithOneWarning(t *testing.T) {
 	p.Window, p.Start = plan.WindowSpec{}, "EARLIEST"
 	source := factory.connections["input"]
 	source.low[0] = 3
-	source.saved[0] = kafkaport.SavedProgress{Position: 1}
+	source.saved[0] = kafka.SavedProgress{Position: 1}
 	// When previewing, then show the actual resumed start and the skipped offset range.
 	report := preview(t, service, p)
 	require.EqualValues(t, 3, report.Partitions[0].Start)
@@ -347,7 +347,7 @@ func TestPreviewReportsNewPartitionFallbackAndEffectiveRecordPolicies(t *testing
 	p.Window, p.Start = plan.WindowSpec{}, "LATEST"
 	p.Policies.MissingTimestamp = "SKIP"
 	source := factory.connections["input"]
-	source.saved[0] = kafkaport.SavedProgress{Position: 4}
+	source.saved[0] = kafka.SavedProgress{Position: 4}
 	// When inspecting, then new partitions start earliest and the actual policy is exposed.
 	report := preview(t, service, p)
 	require.Equal(t, "EARLIEST", report.StartRule)
@@ -359,19 +359,19 @@ func TestFilePreviewPreservesFreshAndSavedRelativeWindows(t *testing.T) {
 	for _, saved := range []bool{false, true} {
 		t.Run(fmt.Sprint(saved), func(t *testing.T) {
 			// Given a file inspector's resolved NOW bounds, record position and checkpoint state.
-			service, p, factory, files := fixture()
+			service, p, factory, archives := fixture()
 			p.Source.Kind = "ARCHIVE"
 			p.Window = plan.WindowSpec{Upper: &plan.Expression{Now: true}}
 			upper, origin := int64(5000), "resolved"
 			if saved {
 				upper, origin = 1000, "saved"
 			}
-			files.source = archiveio.SourceInspection{ArchiveInspection: archiveio.ArchiveInspection{Exists: true, Size: 300}, Position: 200, Saved: saved, Window: plan.Window{Upper: &upper}, CheckpointPath: "checkpoint.json"}
+			archives.source = archiveio.SourceInspection{ArchiveInspection: archiveio.ArchiveInspection{Exists: true, Size: 300}, Position: 200, Saved: saved, Window: plan.Window{Upper: &upper}, CheckpointPath: "checkpoint.json"}
 			// When composing the preview, then retain the inspector's bounds and describe their origin accurately.
 			report := preview(t, service, p)
 			info := report.Source.File
 			require.Equal(t, origin, info.WindowOrigin)
-			require.Equal(t, files.source.Window, *info.Window)
+			require.Equal(t, archives.source.Window, *info.Window)
 			require.EqualValues(t, 200, *info.PositionRecords)
 			require.Equal(t, saved, *info.CheckpointExists)
 			require.Equal(t, "checkpoint.json", info.Checkpoint)
@@ -407,11 +407,11 @@ func TestExplainChecksEverySourcePartitionForPreservedRouting(t *testing.T) {
 
 func TestExplainUsesArchiveProvenanceAndReportsDestinationRouting(t *testing.T) {
 	// Given a fixed archive selection originally captured from partition 5.
-	service, p, factory, files := fixture()
+	service, p, factory, archives := fixture()
 	p.Source.Kind = "ARCHIVE"
 	p.Source.Format = "avro"
 	p.Destination.Partitioning = plan.Preserve
-	files.source.Partitions = []int32{0, 5}
+	archives.source.Partitions = []int32{0, 5}
 	_, err := service.Explain(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
 	require.ErrorContains(t, err, "original partition 5")
 	// When expanded, then preview succeeds and identifies preserved routing only on the sink.

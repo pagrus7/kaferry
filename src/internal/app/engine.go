@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/pagrus7/kaferry/src/internal/archiveio"
+	"github.com/pagrus7/kaferry/src/internal/archive/io"
 	"github.com/pagrus7/kaferry/src/internal/config"
 	copy "github.com/pagrus7/kaferry/src/internal/copy"
-	"github.com/pagrus7/kaferry/src/internal/kafkaport"
+	"github.com/pagrus7/kaferry/src/internal/kafka"
 	"github.com/pagrus7/kaferry/src/internal/observability"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 )
@@ -19,9 +19,9 @@ type Engine interface {
 	Run(context.Context, plan.Plan, config.Config, Shutdown) error
 }
 type KafkaFactory interface {
-	Open(context.Context, plan.Endpoint) (kafkaport.Connection, error)
+	Open(context.Context, plan.Endpoint) (kafka.Connection, error)
 }
-type FileFactory interface {
+type ArchiveFactory interface {
 	OpenSource(plan.Plan, string, config.Worker, int) (archiveio.Input, error)
 	OpenOutput(plan.Endpoint, config.Worker) (archiveio.Output, error)
 }
@@ -35,15 +35,15 @@ type MetricsFactory interface {
 }
 
 type runtimeEngine struct {
-	kafka   KafkaFactory
-	files   FileFactory
-	runner  RunnerFactory
-	log     *slog.Logger
-	metrics MetricsFactory
+	kafka    KafkaFactory
+	archives ArchiveFactory
+	runner   RunnerFactory
+	log      *slog.Logger
+	metrics  MetricsFactory
 }
 
-func newEngine(kafka KafkaFactory, files FileFactory, runner RunnerFactory, logger *slog.Logger, metrics MetricsFactory) Engine {
-	return &runtimeEngine{kafka: kafka, files: files, runner: runner, log: logger, metrics: metrics}
+func newEngine(kafkaFactory KafkaFactory, archives ArchiveFactory, runner RunnerFactory, logger *slog.Logger, metrics MetricsFactory) Engine {
+	return &runtimeEngine{kafka: kafkaFactory, archives: archives, runner: runner, log: logger, metrics: metrics}
 }
 
 func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config, stop Shutdown) (result error) {
@@ -79,7 +79,7 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 	}()
 	fp, err := p.Fingerprint(sourceEndpoint.clusterID, destinationEndpoint.clusterID, destinationEndpoint.topicID)
 	if err != nil {
-		return &kafkaport.Conflict{Err: err}
+		return &kafka.Conflict{Err: err}
 	}
 	partitionCount, err := validateRouting(ctx, p, sourceEndpoint.connection, destinationEndpoint.connection)
 	if err != nil {
@@ -87,7 +87,7 @@ func (e *runtimeEngine) Run(ctx context.Context, p plan.Plan, cfg config.Config,
 	}
 	return e.runInput(ctx, p, fp, limits, sourceEndpoint.connection, destinationEndpoint.connection, partitionCount, stop, observer)
 }
-func (e *runtimeEngine) runInput(ctx context.Context, p plan.Plan, fp string, limits config.Worker, sourceConnection, destinationConnection kafkaport.Connection, partitionCount int, stop Shutdown, observer copy.Observer) (result error) {
+func (e *runtimeEngine) runInput(ctx context.Context, p plan.Plan, fp string, limits config.Worker, sourceConnection, destinationConnection kafka.Connection, partitionCount int, stop Shutdown, observer copy.Observer) (result error) {
 	input, err := e.prepareSource(ctx, p, fp, limits, sourceConnection, partitionCount)
 	if err != nil {
 		return err
@@ -171,7 +171,7 @@ func oneOffGroup() string {
 }
 
 type inspectedEndpoint struct {
-	connection kafkaport.Connection
+	connection kafka.Connection
 	clusterID  string
 	topicID    string
 }
@@ -205,11 +205,11 @@ func (e *inspectedEndpoint) close(stop copy.StopObserver) error {
 	return nil
 }
 
-func (e *runtimeEngine) prepareSource(ctx context.Context, p plan.Plan, fp string, limits config.Worker, connection kafkaport.Connection, partitionCount int) (archiveio.Input, error) {
+func (e *runtimeEngine) prepareSource(ctx context.Context, p plan.Plan, fp string, limits config.Worker, connection kafka.Connection, partitionCount int) (archiveio.Input, error) {
 	if p.Source.Kind == "ARCHIVE" {
-		return e.files.OpenSource(p, fp, limits, partitionCount)
+		return e.archives.OpenSource(p, fp, limits, partitionCount)
 	}
-	if err := connection.CheckMembers(ctx, p.Group, kafkaport.GroupProtocol(p, fp)); err != nil {
+	if err := connection.CheckMembers(ctx, p.Group, kafka.GroupProtocol(p, fp)); err != nil {
 		return nil, err
 	}
 	saved, err := connection.ReadProgress(ctx, p.Group, fp, p.Window, p.MaxStalenessMS)
@@ -220,21 +220,21 @@ func (e *runtimeEngine) prepareSource(ctx context.Context, p plan.Plan, fp strin
 	return nil, nil
 }
 
-func (e *runtimeEngine) openSink(ctx context.Context, p plan.Plan, limits config.Worker, connection kafkaport.Connection) (copy.Sink, error) {
+func (e *runtimeEngine) openSink(ctx context.Context, p plan.Plan, limits config.Worker, connection kafka.Connection) (copy.Sink, error) {
 	if p.Destination.Kind == "ARCHIVE" {
-		return e.files.OpenOutput(p.Destination, limits)
+		return e.archives.OpenOutput(p.Destination, limits)
 	}
 	return connection.Sink(ctx, limits)
 }
 
-func routingValidator(p plan.Plan, destination kafkaport.Connection) kafkaport.PartitionValidator {
+func routingValidator(p plan.Plan, destination kafka.Connection) kafka.PartitionValidator {
 	if p.Destination.PreservesPartitions() {
 		return destination
 	}
 	return nil
 }
 
-func validateRouting(ctx context.Context, p plan.Plan, source, destination kafkaport.Connection) (int, error) {
+func validateRouting(ctx context.Context, p plan.Plan, source, destination kafka.Connection) (int, error) {
 	var ids []int32
 	if p.Source.Kind == "TOPIC" && (p.Partitions != nil || p.Destination.PreservesPartitions()) {
 		available, err := source.Partitions(ctx)
@@ -243,7 +243,7 @@ func validateRouting(ctx context.Context, p plan.Plan, source, destination kafka
 		}
 		ids, err = p.Partitions.Select(available)
 		if err != nil {
-			return 0, &kafkaport.Conflict{Err: err}
+			return 0, &kafka.Conflict{Err: err}
 		}
 	}
 	if !p.Destination.PreservesPartitions() {
@@ -255,7 +255,7 @@ func validateRouting(ctx context.Context, p plan.Plan, source, destination kafka
 	}
 	if p.Source.Kind == "TOPIC" {
 		if err = plan.CheckPartitions(ids, count); err != nil {
-			return 0, &kafkaport.Conflict{Err: err}
+			return 0, &kafka.Conflict{Err: err}
 		}
 	}
 	return count, nil

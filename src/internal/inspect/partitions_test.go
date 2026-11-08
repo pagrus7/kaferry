@@ -5,7 +5,7 @@ import (
 
 	"github.com/pagrus7/kaferry/src/internal/config"
 	core "github.com/pagrus7/kaferry/src/internal/copy"
-	"github.com/pagrus7/kaferry/src/internal/kafkaport"
+	"github.com/pagrus7/kaferry/src/internal/kafka"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +17,7 @@ func TestInspectionUsesSelectedPartitionsForPositioningRoutingAndStatus(t *testi
 	p.Destination.Partitioning = plan.Preserve
 	f.connections["output"].info.Partitions = []int32{0}
 	source := f.connections["input"]
-	source.saved[0] = kafkaport.SavedProgress{Position: 5, Progress: kafkaport.Progress{Stop: &core.Stop{Reason: "tip", At: 5}}}
+	source.saved[0] = kafka.SavedProgress{Position: 5, Progress: kafka.Progress{Stop: &core.Stop{Reason: "tip", At: 5}}}
 	// When inspecting, then excluded partitions need no destination ID, lookup or saved stop.
 	r := preview(t, s, p)
 	require.Equal(t, []string{"describe", "saved", "describe"}, source.observations)
