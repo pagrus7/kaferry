@@ -77,7 +77,7 @@ python3 -m unittest discover -s tools -t .
 | `make qualification` | Authentication, ACLs and replicated failover; starts its own fixtures |
 | `make fuzz`, `make benchmark` | Parser/archive/lifecycle fuzzing and codec/replay benchmarks |
 
-For broker matrices, endurance runs and retained evidence, use the [qualification guide](docs/design/qualification.md). For a performance comparison, add `ci:performance` to the PR or use the [local comparison command](docs/design/qualification.md#paired-performance).
+For broker matrices, endurance runs and retained evidence, use the [qualification guide](docs/design/qualification.md). To request performance checks in CI, add `ci:performance` to the PR. To compare revisions locally, use the [comparison command](docs/design/qualification.md#paired-performance).
 
 ## Submit a change
 
