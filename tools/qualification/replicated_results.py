@@ -166,13 +166,13 @@ def copy_case(directory, id, identity):
     case = json.loads((root/(family+'-'+name)/('replicated-'+family+'.json')).read_text())
     if (case['id'] != id or case['source_partitions'] != 24 or
             case['timeout_milliseconds'] != fault_timeout_catalog()[id]):
-        raise ValueError('replicated broker case differs from its registered configuration')
+        raise ValueError('replicated fault case differs from its registered configuration')
     safety_path = observation_path(root, case['safety_case'], 'case.json')
     safety = validate_case(safety_path)
     if (safety['id'] != id or safety['execution'] != 'candidate CLI' or
             safety['parameters'] != dict(source_partitions=24, routing='PRESERVE') or
             any(safety[key] != identity[key] for key in IDENTITY)):
-        raise ValueError('replicated broker proof differs from the selected executable identity')
+        raise ValueError('replicated fault proof differs from the selected executable identity')
     publication = case['publishing']
     if (not vector(publication['offered_by_partition']) or
             not 0 < publication['max_offer_gap_seconds'] <= 2 or
@@ -184,11 +184,11 @@ def copy_case(directory, id, identity):
         raise ValueError('source publications were not completely drained and reconciled')
     baseline = case['baseline']
     if not healthy_copy(baseline):
-        raise ValueError('broker fault lacks healthy copying and a nonempty saved baseline on every partition')
+        raise ValueError('replicated fault lacks healthy copying and a nonempty saved baseline on every partition')
     workers = case['worker_measurements']
     if (not workers or len(workers) > len(case['events'])+1 or case['restarts'] != len(workers)-1 or
             case['restart_scope'] != 'same selected binary, SQL, group and worker1 route'):
-        raise ValueError('broker fault has an unsupported worker restart scope')
+        raise ValueError('replicated fault has an unsupported worker restart scope')
     for index, worker in enumerate(workers):
         if (type(worker['pid']) is not int or worker['pid'] <= 0 or
                 worker['binary_sha256'] != identity['binary_sha256'] or worker['worker_route'] != 1 or
@@ -198,15 +198,15 @@ def copy_case(directory, id, identity):
                 worker['record_cap'] != 1024 or worker['byte_cap'] != 128*1024**2 or
                 not safety['started_at'] <= stamp(worker['started_at']) < stamp(worker['stopped_at']) <= safety['writers_stopped_at'] or
                 not worker['reason']):
-            raise ValueError('broker fault worker exits or resource caps are invalid')
+            raise ValueError('replicated fault worker exits or resource caps are invalid')
         witness, raw = load_lifecycle(root/(family+'-'+name), worker)
         if (worker['lifetime'] != index+1 or stamp(witness['recorded_at']) < stamp(worker['stopped_at'])):
             raise ValueError('broker lifecycle was not observed after its sole Wait')
         worker_work(case, worker, witness, raw)
     if case['exact_lifetime_work_caps_qualified'] is not all(w['lifetime_highwater_available'] for w in workers):
-        raise ValueError('broker case exact lifetime cap claim differs from available measurements')
+        raise ValueError('replicated case exact lifetime cap claim differs from available measurements')
     if {(w['pid'], w['exit_code']) for w in workers} != {(w['pid'], w['exit_code']) for w in safety['writer_observations']}:
-        raise ValueError('broker fault worker measurements differ from independent exit observations')
+        raise ValueError('replicated fault worker measurements differ from independent exit observations')
     return case, safety, safety_path
 
 

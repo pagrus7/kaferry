@@ -128,7 +128,7 @@ func replicatedNetworkFault(t *testing.T, name string) {
 	exited := observeReplicatedExit(s.workers[0])
 	injection, window := s.networkInject(role, fault)
 	injected := s.wait("independent state after worker route injection", false, func(_ context.Context, _ brokerObservation) bool { return true })
-	var affected, unaffected []int
+	affected, unaffected := make([]int, 0, replicatedPartitions), make([]int, 0, replicatedPartitions)
 	for partition, part := range injected.Topology["destination"] {
 		blocked := slices.ContainsFunc(injection.Event.Targets, func(target faults.Target) bool { return target.Broker == part.Leader })
 		if blocked {
