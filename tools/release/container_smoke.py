@@ -1,6 +1,7 @@
 """Check image identity, non-root execution, exact packaged bytes and file copying."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -39,37 +40,42 @@ def check_tutorial(image):
         subprocess.run(["docker", "volume", "rm", volume], check=True, stdout=subprocess.DEVNULL)
 
 
-def check_demo(image):
-    # Given the published demo entrypoint with no host files, ports or external network.
-    def run(arguments=()):
-        name = "kaferry-demo-" + uuid.uuid4().hex
-        try:
-            return subprocess.run(["docker", "run", "--rm", "--network=none", "--name", name, *arguments, image],
-                                  text=True, capture_output=True, timeout=210)
-        finally:
-            subprocess.run(["docker", "rm", "--force", "--volumes", name],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def run_demo(image, arguments=()):
+    name = "kaferry-demo-" + uuid.uuid4().hex
+    try:
+        return subprocess.run(["docker", "run", "--rm", "--network=none", "--name", name, *arguments, image],
+                              text=True, capture_output=True, timeout=210)
+    finally:
+        subprocess.run(["docker", "rm", "--force", "--volumes", name],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    for _ in range(2):
-        # When each fresh container completes, then verify the copy and independently read records.
-        result = run()
-        if result.returncode:
-            raise ValueError(f"demo failed: {result}")
-        summaries = [json.loads(line) for line in result.stderr.splitlines() if line.startswith('{')]
-        summaries = [entry for entry in summaries if entry.get("msg") == "copy summary"]
-        if len(summaries) != 1 or summaries[0]["confirmed"] != 3 or summaries[0]["submitted"] != 3:
-            raise ValueError(f"demo did not copy three fresh records: {result.stderr}")
-        if "order-1\norder-2\norder-3\n" not in result.stdout or "Demo passed:" not in result.stdout:
-            raise ValueError(f"demo did not verify its output: {result.stdout}")
-        print(result.stdout, end="")
+
+def check_demo_fresh(image):
+    # When each fresh container completes, then verify the copy and independently read records.
+    result = run_demo(image)
+    if result.returncode:
+        raise ValueError(f"demo failed: {result}")
+    summaries = [json.loads(line) for line in result.stderr.splitlines() if line.startswith('{')]
+    summaries = [entry for entry in summaries if entry.get("msg") == "copy summary"]
+    if len(summaries) != 1 or summaries[0]["confirmed"] != 3 or summaries[0]["submitted"] != 3:
+        raise ValueError(f"demo did not copy three fresh records: {result.stderr}")
+    if "order-1\norder-2\norder-3\n" not in result.stdout or "Demo passed:" not in result.stdout:
+        raise ValueError(f"demo did not verify its output: {result.stdout}")
+    print(result.stdout, end="")
+
+
+def check_demo_corruption(image):
     # Given a consumer returning corrupted output, a successful copy alone must not pass the demo.
     with tempfile.TemporaryDirectory() as name:
         consumer = Path(name) / "consumer.sh"
         consumer.write_text("#!/bin/sh\nprintf 'order-1\\norder-2\\nWRONG\\n'\n")
         consumer.chmod(0o755)
-        result = run(["--mount", f"type=bind,src={consumer},dst=/opt/kafka/bin/kafka-console-consumer.sh,readonly"])
+        result = run_demo(image, ["--mount", f"type=bind,src={consumer},dst=/opt/kafka/bin/kafka-console-consumer.sh,readonly"])
         if result.returncode != 1 or "WRONG" not in result.stdout or "Demo passed:" in result.stdout:
             raise ValueError(f"demo accepted corrupted destination output: {result}")
+
+
+def check_demo_cancellation(image):
     # Given a running broker, cancellation must stop the container promptly with a failed result.
     container = subprocess.check_output(["docker", "run", "--detach", "--network=none", image], text=True).strip()
     try:
@@ -87,6 +93,22 @@ def check_demo(image):
             raise ValueError(f"demo cancellation returned {code}, expected 143")
     finally:
         subprocess.run(["docker", "rm", "--force", "--volumes", container], check=True, stdout=subprocess.DEVNULL)
+
+
+def check_demo(image):
+    # Given four independent containers with no host ports or external network.
+    checks = [("fresh run 1", check_demo_fresh), ("fresh run 2", check_demo_fresh),
+              ("corrupted output", check_demo_corruption), ("cancellation", check_demo_cancellation)]
+    errors = []
+    with ThreadPoolExecutor(max_workers=len(checks)) as pool:
+        results = [(name, pool.submit(check, image)) for name, check in checks]
+        for name, result in results:
+            try:
+                result.result()
+            except Exception as error:
+                errors.append(f"{name}: {error}")
+    if errors:
+        raise ValueError("demo checks failed:\n" + "\n".join(errors))
 
 
 def main():

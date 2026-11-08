@@ -1,15 +1,49 @@
-"""The container wrapper keeps relative input paths usable from a nested directory."""
+"""Container checks preserve wrapper arguments and collect concurrent demo results."""
 
 import os
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 import unittest
+from unittest.mock import patch
 
-from tools.release.container_smoke import write_wrapper
+from tools.release.container_smoke import check_demo, write_wrapper
 
 
 class ContainerWrapperTest(unittest.TestCase):
+    def test_demo_checks_overlap_and_collect_every_failure(self):
+        for fail in (False, True):
+            with self.subTest(fail=fail):
+                # Given checks that cannot finish until all four containers have started.
+                barrier = threading.Barrier(4, timeout=5)
+                lock = threading.Lock()
+                observed = []
+
+                def check(name):
+                    def run(image):
+                        self.assertEqual('demo:fixture', image)
+                        barrier.wait()
+                        with lock:
+                            observed.append(name)
+                        if fail:
+                            raise ValueError(name + ' assertion failed')
+                    return run
+
+                with patch('tools.release.container_smoke.check_demo_fresh', side_effect=check('fresh')), \
+                     patch('tools.release.container_smoke.check_demo_corruption', side_effect=check('corruption')), \
+                     patch('tools.release.container_smoke.check_demo_cancellation', side_effect=check('cancellation')):
+                    # When checks run together, then success waits for all and failure names every case.
+                    if fail:
+                        with self.assertRaises(ValueError) as raised:
+                            check_demo('demo:fixture')
+                        for name in ('fresh run 1', 'fresh run 2', 'corrupted output', 'cancellation'):
+                            self.assertIn(name + ':', str(raised.exception))
+                        self.assertEqual(4, str(raised.exception).count('assertion failed'))
+                    else:
+                        check_demo('demo:fixture')
+                self.assertCountEqual(['fresh', 'fresh', 'corruption', 'cancellation'], observed)
+
     def test_runtime_working_directory_and_arguments_survive_shell_quoting(self):
         # Given a wrapper and a nested tutorial directory containing relative input files.
         with tempfile.TemporaryDirectory() as name:
