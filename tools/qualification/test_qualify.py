@@ -36,6 +36,25 @@ class MatrixTest(unittest.TestCase):
             self.assertEqual(count, len({c['id'] for c in cases}))
         self.assertIn(('4.4.0', '3.9.2'), {(c['source'], c['destination']) for c in plan('pr')})
 
+    def test_only_pr_capture_sets_a_shorter_duration(self):
+        # Given each tier, when planning, then only PR capture requests one minute.
+        for tier in ('pr', 'nightly', 'full'):
+            with self.subTest(tier=tier):
+                cases = plan(tier)
+                capture = next(case for case in cases if case['suite'] == 'capture')
+                self.assertEqual(60 if tier == 'pr' else None, capture.get('duration'))
+                self.assertTrue(all('duration' not in case for case in cases if case['suite'] != 'capture'))
+
+    def test_matrix_uses_planned_duration_and_preserves_explicit_override(self):
+        # Given local matrix requests, when run, then duration defaults match CI's plan.
+        for tier, override, expected in [('pr', [], 60), ('nightly', [], 120),
+                                          ('full', [], 120), ('pr', ['--duration', '90s'], 90)]:
+            with self.subTest(tier=tier, override=override), tempfile.TemporaryDirectory() as temporary:
+                with patch('tools.qualification.qualify.run_suite') as run, patch('tools.qualification.qualify.report', return_value=0):
+                    main(['matrix', '--tier', tier, '--output', str(Path(temporary) / 'matrix'), *override])
+                capture = next(call.args[0] for call in run.call_args_list if call.args[0].suite == 'capture')
+                self.assertEqual(expected, capture.duration)
+
     def test_recovery_runs_bounded_repetitions_separately_from_uptime(self):
         # Given a standalone recovery request, its default is two hours.
         with patch('tools.qualification.qualify.run_suite') as run:
@@ -290,7 +309,7 @@ class MatrixTest(unittest.TestCase):
                     row = dict(case, schema=1, status='failed' if problem == 'failed' and index == 0 else 'passed',
                                binary_sha256='other' if problem == 'digest' and index == 0 else 'a' * 64,
                                source_commit='other' if problem == 'commit' and index == 0 else 'b' * 40,
-                               elapsed_seconds=1)
+                               elapsed_seconds=1, requested_seconds=case.get('duration', 120) if case['suite'] == 'capture' else None)
                     folder = directory / str(index)
                     folder.mkdir()
                     (folder / 'manifest.json').write_text(json.dumps(row))
