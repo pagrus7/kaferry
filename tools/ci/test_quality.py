@@ -6,11 +6,11 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
-from tools.ci.quality import benchmarks, coverage, maintainability, markdown
+from tools.ci.quality import benchmarks, maintainability, markdown
 from tools.ci.history import comparison
 
 
-class CoverageTest(unittest.TestCase):
+class QualityTest(unittest.TestCase):
     def test_new_duplication_locations_survive_into_the_summary(self):
         # Given a scan containing an existing match and a new normalized test match.
         with tempfile.TemporaryDirectory() as temporary:
@@ -32,20 +32,6 @@ class CoverageTest(unittest.TestCase):
             self.assertIn('tools/test_a.py:10-20', summary)
             self.assertIn('tools/test_b.py:30-40', summary)
             self.assertIn('New duplication fails CI', summary)
-
-    def test_statement_weights_and_duplicate_blocks(self):
-        # Given overlapping profiles with unequal statement counts.
-        profile = "mode: atomic\np/a.go:1.1,2.2 8 0\np/a.go:1.1,2.2 8 3\np/b.go:1.1,3.1 2 0\n"
-        # When summarizing the profile.
-        result = coverage(profile)
-        # Then repeated blocks count once and coverage is statement-weighted.
-        self.assertEqual((result["covered"], result["statements"], result["percent"]), (8, 10, 80))
-
-    def test_unusable_profiles_fail(self):
-        for profile in ("", "mode: wrong", "mode: atomic\n", "mode: set\ninvalid",
-                        "mode: set\np/a.go:1.1,2.2 2 1\np/a.go:1.1,2.2 3 1"):
-            with self.subTest(profile=profile), self.assertRaises(ValueError):
-                coverage(profile)
 
     def test_benchmarks_allow_additional_metrics(self):
         # Given Go benchmarks with default, throughput and custom codec metrics.

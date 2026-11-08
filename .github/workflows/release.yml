@@ -154,6 +154,10 @@ jobs:
       artifact: release-linux-amd64
   compatibility:
     needs: build
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     uses: ./.github/workflows/compatibility.yml
     with:
       artifact: release-linux-amd64
