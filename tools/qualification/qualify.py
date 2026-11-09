@@ -862,6 +862,8 @@ def run_suite_attempt(args, *, fixture=None, cancelled=None, lease_held=False, i
     write_json(args.output / 'manifest.json', receipt)
     try:
         spec = resolve_run(args, receipt, fixture)
+        if identity is not None and (identity['working_tree_dirty'] or receipt['working_tree_dirty']):
+            raise ValueError('automatic qualification retry requires a clean unchanged checkout')
         if identity is not None and any(identity[key] != receipt[key] for key in
                 ('source_commit', 'working_tree_dirty', 'binary_sha256', 'binary_platform', 'execution_platform')):
             raise ValueError('qualification identity changed between attempts')

@@ -535,18 +535,24 @@ class MatrixTest(unittest.TestCase):
     def test_network_precondition_reruns_once_and_keeps_each_attempt_under_one_lease(self):
         selected = 'network/destination-leaders-outage'
         test = 'TestReplicatedNetworkFaults/destination-leaders-outage'
-        scenarios = [(['inconclusive', 'passed'], 'passed', None),
+        scenarios = [(['inconclusive', 'passed'], 'passed', None), (['passed-dirty'], 'passed', None),
                      (['inconclusive', 'inconclusive'], 'inconclusive', InconclusivePrecondition),
                      (['product'], 'failed', RuntimeError), (['cancel'], 'interrupted', InterruptedError),
                      (['cleanup'], 'failed', RuntimeError), (['safety'], 'failed', ValueError),
                      (['other-fail'], 'failed', ValueError), (['identity'], 'failed', ValueError),
-                     (['cancel-after-precondition'], 'interrupted', InterruptedError)]
+                     (['cancel-after-precondition'], 'interrupted', InterruptedError), (['dirty-source'], 'failed', ValueError)]
         for outcomes, expected_status, error in scenarios:
             with self.subTest(outcomes=outcomes), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 args = self.suite_args(root, 'fault-replicated', source='4.4.0', destination='4.4.0', case=selected)
                 sequence, runs = [], []
                 cancelled = threading.Event()
+                tracked_source = root/'fixture.go'
+                tracked_source.write_text('first fixture')
+                def capture(command):
+                    if command[:3] == ['git', 'status', '--porcelain']:
+                        return ' M fixture.go' if outcomes[0] in ('dirty-source', 'passed-dirty') else ''
+                    return 'fixture'
                 @contextmanager
                 def fixture(attempt, spec, receipt, assigned, cancelled, *, lease_held):
                     self.assertTrue(lease_held)
@@ -567,11 +573,13 @@ class MatrixTest(unittest.TestCase):
                     number = len(runs)
                     runs.append((output, env.copy()))
                     outcome = outcomes[number]
-                    action = 'pass' if outcome == 'passed' else 'skip'
+                    action = 'pass' if outcome in ('passed', 'passed-dirty') else 'skip'
                     events = [dict(Action=action, Test=test), dict(Action='pass', Test='TestReplicatedNetworkFaults'), dict(Action='pass')]
                     if outcome == 'other-fail':
                         events.append(dict(Action='fail', Test='UnrelatedCleanup'))
                     (output/'suite.log').write_text(''.join(json.dumps(event)+'\n' for event in events))
+                    if outcome == 'dirty-source':
+                        tracked_source.write_text('changed fixture')
                     if outcome == 'identity':
                         Path(args.binary).write_bytes(b'changed candidate')
                     if outcome == 'product':
@@ -581,11 +589,11 @@ class MatrixTest(unittest.TestCase):
                 def collect(*unused):
                     if outcomes[len(runs)-1] == 'safety':
                         raise ValueError('unsafe saved prefix')
-                    return [dict(id=selected, status='passed' if outcomes[len(runs)-1] == 'passed' else 'inconclusive')]
+                    return [dict(id=selected, status='passed' if outcomes[len(runs)-1] in ('passed', 'passed-dirty') else 'inconclusive')]
                 # Given a completed low-rate attempt or an independent failure,
                 # when qualification finishes, then only the former can retry.
                 with patch('tools.qualification.qualify.LAB_LOCK', root/'host.lock'), \
-                     patch('tools.qualification.qualify.capture', return_value='fixture'), \
+                     patch('tools.qualification.qualify.capture', side_effect=capture), \
                      patch('tools.qualification.fault_results.configure', side_effect=lambda env: env.update(KAFERRY_ORACLE_RUN=os.urandom(4).hex())), \
                      patch('tools.qualification.qualify.broker_fixture', side_effect=fixture), \
                      patch('tools.qualification.qualify.logged', side_effect=command), \
@@ -606,7 +614,17 @@ class MatrixTest(unittest.TestCase):
                     self.assertEqual(f'attempt-{number}', output.name)
                     self.assertEqual(attempt['status'], receipt['attempts'][number-1]['status'])
                     self.assertEqual(hashlib.sha256(b'fixture').hexdigest(), attempt['binary_sha256'])
+                    self.assertEqual(outcomes[0] in ('dirty-source', 'passed-dirty'), attempt['working_tree_dirty'])
                     self.assertTrue((output/'suite.log').is_file())
+                if outcomes == ['dirty-source']:
+                    # Then changing tracked source while HEAD and the dirty bit
+                    # stay identical cannot start a second fixture or erase proof.
+                    first, second = receipt['attempts']
+                    self.assertEqual('changed fixture', tracked_source.read_text())
+                    self.assertEqual(first['source_commit'], second['source_commit'])
+                    self.assertTrue(first['working_tree_dirty'] and second['working_tree_dirty'])
+                    self.assertEqual(('inconclusive', 'failed'), (first['status'], second['status']))
+                    self.assertIn('requires a clean unchanged checkout', receipt['error'])
                 if len(runs) == 2:
                     self.assertEqual('inconclusive', receipt['attempts'][0]['status'])
                     self.assertIn('"Action": "skip"', (runs[0][0]/'suite.log').read_text())
