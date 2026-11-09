@@ -14,6 +14,8 @@ from tools.qualification.broker_lifecycle import (FORCED_COPY_PHASES, SAMPLED_SC
 IDENTITY = ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')
 NEGOTIATION_EOF = ('broker closed the connection immediately during api versions negotiation, which often happens '
                    'when the broker requires TLS but the client is using plaintext: is TLS missing?')
+FIRST_RESPONSE_EOF = ('broker closed the connection immediately after a request was issued, which often happens '
+                      'when SASL is required but not provided: is SASL missing?')
 SOURCE_OPERATION_EOFS = tuple(label+NEGOTIATION_EOF for label in ('poll source: ', 'save progress: ', 'poll source: save progress: '))
 EXACT_SCOPE = 'exact lifetime highwater from final copy summary'
 BROKER_ERRORS = ('context deadline exceeded', 'REQUEST_TIMED_OUT', 'NOT_COORDINATOR', 'COORDINATOR_NOT_AVAILABLE',
@@ -102,6 +104,7 @@ def forced_copy_failure(case, worker, witness, raw):
 def worker_work(case, worker, witness, raw):
     available, summary = worker['lifetime_highwater_available'], worker['copy_summary']
     terminal = worker.get('terminal_error', '')
+    terminal_lines = terminal.splitlines()
     if (type(available) is not bool or type(worker['progress_observations']) is not int or worker['progress_observations'] <= 0 or
             type(worker['sampled_max_pending_entries']) is not int or not 0 <= worker['sampled_max_pending_entries'] <= 1024 or
             type(worker['sampled_max_pending_estimated_bytes']) is not int or not 0 <= worker['sampled_max_pending_estimated_bytes'] <= 128*1024**2):
@@ -126,17 +129,19 @@ def worker_work(case, worker, witness, raw):
     if worker['exit_code'] == 0:
         if terminal:
             raise ValueError('completed broker worker has a terminal failure')
-    elif terminal in SOURCE_OPERATION_EOFS:
+    elif terminal in SOURCE_OPERATION_EOFS or terminal == '\n'.join([SOURCE_OPERATION_EOFS[1]]*2):
         if (summary['submitted'] <= 0 or summary['submitted'] != summary['confirmed'] or
                 not source_operation_failure(case, worker, witness, raw)):
             raise ValueError('labelled source/save EOF lacks a bound all-confirmed active source fault')
-    elif terminal and all(line == NEGOTIATION_EOF for line in terminal.splitlines()):
+    elif (terminal_lines and terminal_lines[0] in (NEGOTIATION_EOF, FIRST_RESPONSE_EOF) and
+          all(line == terminal_lines[0] for line in terminal_lines)):
+        diagnostic = terminal_lines[0]
         context = (network_outage_exit(case, worker, witness, raw) and
-                   raw.split(b'\n').count(NEGOTIATION_EOF.encode()) == len(terminal.splitlines())
-                   if case['id'].startswith('network/') else affected_failure(case, worker, 'destination'))
-        if len(terminal.splitlines()) != summary['submitted']-summary['confirmed'] or not context:
+                   raw.split(b'\n').count(diagnostic.encode()) == len(terminal_lines)
+                   if case['id'].startswith('network/') else diagnostic == NEGOTIATION_EOF and affected_failure(case, worker, 'destination'))
+        if len(terminal_lines) != summary['submitted']-summary['confirmed'] or not context:
             raise ValueError('negotiation EOF lacks every failed write and an affected active plaintext destination fault')
-    elif not terminal or NEGOTIATION_EOF in terminal or any(line.startswith('shutdown timed out while ') or not any(message in line for message in BROKER_ERRORS) for line in terminal.splitlines()):
+    elif not terminal or any(diagnostic in terminal for diagnostic in (NEGOTIATION_EOF, FIRST_RESPONSE_EOF)) or any(line.startswith('shutdown timed out while ') or not any(message in line for message in BROKER_ERRORS) for line in terminal_lines):
         raise ValueError('broker worker has an unsupported terminal failure')
 
 
