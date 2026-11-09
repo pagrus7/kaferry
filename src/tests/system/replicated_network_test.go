@@ -141,7 +141,7 @@ func replicatedNetworkFault(t *testing.T, name string) {
 	baseline := s.wait("source schedule caught up and output backlog drained before healthy measurement", false,
 		func(_ context.Context, state brokerObservation) bool { return networkMeasurementReady(state) })
 	healthy := s.networkSpan(baseline, span, false)
-	require.GreaterOrEqual(t, healthy.rate(), .95*float64(replicatedPartitions)*10, "healthy fixture did not sustain scheduled input")
+	require.GreaterOrEqual(t, healthy.rate(), .95*float64(replicatedPartitions)*10, "healthy destination output fell below the scheduled rate gate")
 	role := faults.Role{Kind: "worker-destination", Cluster: "destination", Worker: 1}
 	fault := faults.Fault{Kind: "cut"}
 	switch name {

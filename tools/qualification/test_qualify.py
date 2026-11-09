@@ -13,10 +13,11 @@ import threading
 import time
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from tools.qualification.qualify import cleanup_container_state, cleanup_replicated, duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, suite_command, valid_receipts, parallel_allowance, parallel_capacity, parallel_run
+from tools.qualification.qualify import broker_fixture, cleanup_container_state, cleanup_replicated, duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, suite_command, valid_receipts, parallel_allowance, parallel_capacity, parallel_run
 from tools.qualification.broker_probe import logical, reconcile, records, replicated_topology, topic_ready
 
 
@@ -657,6 +658,56 @@ class MatrixTest(unittest.TestCase):
                     replicated_storage(output, ['compose'], {}, {'required_broker_bytes': 4096}, None)
             self.assertEqual(1, execute.call_count)
             self.assertEqual(1024, json.loads((output / 'capacity.json').read_text())['broker_free_bytes'])
+
+    def test_fault_diagnostics_join_before_teardown_without_changing_failure_or_endurance(self):
+        # Given a replicated fault failure or an ordinary replicated endurance run.
+        for suite in ('fault-replicated', 'endurance'):
+            with self.subTest(suite=suite), tempfile.TemporaryDirectory() as temporary:
+                root, events, receipt = Path(temporary), [], {}
+                args = SimpleNamespace(suite=suite, output=root, topology='replicated', duration=60)
+                spec = SimpleNamespace(compose=['docker', 'compose', '-p', 'owned'], env={})
+                @contextmanager
+                def observations(*_):
+                    events.append('monitor-start')
+                    state = {}
+                    try:
+                        yield state
+                    finally:
+                        state['status'] = 'completed'
+                        events.append('monitor-stop')
+                def command(_command, _output, label, *_args, **_kwargs):
+                    events.append(label)
+                    if label == 'proxy-proof':
+                        (root / 'proxy-proof.log').write_text('{"Action":"pass","Test":"TestReplicatedProxyRoutes"}\n')
+                def cleanup(*_):
+                    events.append('cleanup')
+                    return []
+                failure = RuntimeError('original assertion')
+                with patch('tools.qualification.qualify.LAB_LOCK', root / 'host.lock'), \
+                     patch('tools.qualification.qualify.replicated_admission', return_value={}), \
+                     patch('tools.qualification.qualify.replicated_storage'), \
+                     patch('tools.qualification.qualify.logged', side_effect=command), \
+                     patch('tools.qualification.qualify.cleanup_replicated', side_effect=cleanup), \
+                     patch('tools.qualification.qualify.subprocess.run'), \
+                     patch('tools.qualification.qualify.runtime_observations', side_effect=observations) as observe:
+                    # When the suite finishes, then diagnostics stop before any
+                    # writer cleanup and cannot replace its original exception.
+                    try:
+                        with broker_fixture(args, spec, receipt, None, None):
+                            events.append('suite')
+                            if suite == 'fault-replicated':
+                                raise failure
+                    except RuntimeError as error:
+                        self.assertIs(failure, error)
+                if suite == 'fault-replicated':
+                    self.assertEqual('original assertion', receipt['suite_error'])
+                    self.assertEqual('completed', receipt['runtime_observations']['status'])
+                    self.assertLess(events.index('monitor-start'), events.index('proxy-proof'))
+                    self.assertLess(events.index('suite'), events.index('monitor-stop'))
+                    self.assertLess(events.index('monitor-stop'), events.index('cleanup'))
+                else:
+                    observe.assert_not_called()
+                    self.assertNotIn('runtime_observations', receipt)
 
     def test_replicated_uses_the_same_host_lease_before_any_fixture_mutation(self):
         with tempfile.TemporaryDirectory() as temporary:
