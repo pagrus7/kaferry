@@ -213,8 +213,6 @@ func (s *brokerCopy) start() {
 	process := startCLI(s.t, s.ctx, testBinary(s.t), "", "run", "-e", s.statement, "-c", s.config)
 	s.workers = append(s.workers, process)
 	s.identities = append(s.identities, brokerLifetime{Number: len(s.workers), PID: process.pid(), Started: time.Now().UTC(), Binary: os.Getenv("KAFERRY_EXPECT_BINARY_SHA256")})
-	s.memories = append(s.memories, watchReplicatedRSS(s.t, process))
-	s.oracle.writer(process)
 	logPath := filepath.Join(s.directory, fmt.Sprintf("worker-%d.cli.log", len(s.workers)))
 	s.t.Cleanup(func() {
 		if !process.finished() {
@@ -234,6 +232,8 @@ func (s *brokerCopy) start() {
 			s.t.Error("retain selected worker log: ", err)
 		}
 	})
+	s.memories = append(s.memories, watchReplicatedRSS(s.t, process))
+	s.oracle.writer(process)
 	waitMembers(s.t, s.metadata["source"].Client, s.group, 1, replicatedPartitions, nil)
 }
 

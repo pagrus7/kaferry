@@ -164,9 +164,13 @@ def write_lifecycles(directory, case):
         log_name = f'worker-{number}.exited.cli.log'
         (directory/log_name).write_bytes(raw)
         active = copy.deepcopy(worker.get('failure_context'))
+        if case['id'] == 'network/destination-outage' and number == 1 and active:
+            active['heal'] = '0001-01-01T00:00:00Z'
         witness = dict(lifetime=lifetime(worker),stopped_at=worker['stopped_at'],recorded_at=worker['stopped_at'],exit_code=worker['exit_code'],
                        wait_error='exit status 1' if worker['exit_code'] else '', termination_signal='',driver_intent_before_wait=[],
                        terminal_lines=terminal.splitlines(), raw_log=dict(observations=log_name,sha256=checksum(raw)),raw_log_bytes=len(raw),raw_log_error='',active_fault=active)
+        if case['id'].startswith('network/'):
+            witness['rss'] = dict(samples=worker['rss_samples'],failures=worker['rss_failures'],sampled_peak_rss_bytes=worker['sampled_peak_rss_bytes'])
         if active:
             worker['failure_context']['exit_witness'] = witness
         name = f'worker-{number}.lifecycle.json'
@@ -236,7 +240,8 @@ def network_proof(id):
         event['connection_effect'] = dict(exit_observed_at=stamp(80))
         first['failure_context'] = dict(case=id,recovery_milliseconds=sum(case['timeout_milliseconds'].values()),window=0,
                                         role=copy.deepcopy(role),kind='cut',start=fault['start'],heal=fault['heal'],
-                                        observed_exit_at=first['stopped_at'],before=copy.deepcopy(event['healthy']['after']),transport='plaintext')
+                                        observed_exit_at=first['stopped_at'],before=copy.deepcopy(event['healthy']['after']),transport='plaintext',
+                                        targets=copy.deepcopy(targets),timeout_milliseconds=copy.deepcopy(case['timeout_milliseconds']))
         for boundary in event['recovery'].values():
             boundary['worker']['lifetime'] = lifetime(second)
     if name == 'slow-close':
@@ -246,6 +251,13 @@ def network_proof(id):
         window['injections'].append(dict(kind='timeout',target={k:v for k,v in stimulus.items() if k != 'heal'},at=19.3))
     case['events'], safety['fault_events'] = [event], [window]
     return case, safety
+
+
+def network_hard_exit(case, terminal):
+    worker = case['worker_measurements'][0]
+    worker.update(terminal_error=terminal,unavailable_highwater_phase=FORCED_COPY_PHASES[terminal],lifetime_highwater_available=False,
+                  copy_summary=None,peak_uncommitted_records=None,peak_uncommitted_bytes=None,cap_measurement_scope=SAMPLED_SCOPE)
+    case['exact_lifetime_work_caps_qualified'] = False
 
 
 def validate_proof(id, case, safety, validator, artifacts=None):
@@ -728,23 +740,79 @@ class NetworkResultsTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 collect(root,['network/bandwidth'],{},'fresh')
 
-    def test_network_cut_requires_exact_lifetime_peaks_for_both_forced_copy_phases(self):
-        # Given a destination network cut with passing independent safety,
-        # when its receipt substitutes sampled work for exact lifetime peaks,
-        # then neither literal forced-copy diagnostic can qualify it.
+    def test_whole_outage_hard_exit_excludes_only_first_lifetime_exact_peaks(self):
+        # Given full exposure/restart/recovery and independent reconciliation,
+        # when only the first lifetime has a bound documented hard exit, then
+        # its samples never become exact peaks and the replacement stays exact.
         for terminal, phase in FORCED_COPY_PHASES.items():
-            def sampled(case, safety):
-                worker = case['worker_measurements'][0]
-                fault = case['events'][0]['fault']
-                worker.update(terminal_error=terminal,unavailable_highwater_phase=phase,lifetime_highwater_available=False,
-                              copy_summary=None,peak_uncommitted_records=None,peak_uncommitted_bytes=None,cap_measurement_scope=SAMPLED_SCOPE,
-                              failure_context=dict(window=0,role=fault['role'],kind='cut',start=fault['start'],heal=fault['heal'],
-                                                   observed_exit_at=worker['stopped_at'],before=case['baseline'],transport='plaintext'))
-                case['exact_lifetime_work_caps_qualified'] = False
-            with self.subTest(phase=phase), self.assertRaises(ValueError):
-                self.validate('destination-outage',sampled)
+            with self.subTest(phase=phase):
+                result = self.validate('destination-outage',lambda c,s:network_hard_exit(c,terminal))['network_exposure']
+                self.assertIs(False,result['exact_lifetime_work_caps_qualified'])
+                self.assertIsNone(result['worker_measurements'][0]['peak_uncommitted_records'])
+                self.assertIsNone(result['worker_measurements'][0]['peak_uncommitted_bytes'])
+                self.assertTrue(result['worker_measurements'][1]['lifetime_highwater_available'])
         with self.assertRaises(ValueError):
             self.validate('latency',lambda c,s:c.update(exact_lifetime_work_caps_qualified=False))
+
+    def test_whole_outage_hard_exit_requires_frozen_context_and_truthful_cap_scope(self):
+        # Given rehashed real-format lifecycle/raw files, when scope, catalog,
+        # phase or replacement claims are forged, then samples cannot qualify.
+        def stopped(second):
+            def edit(case,worker):
+                worker['stopped_at'] = worker['failure_context']['observed_exit_at'] = stamp(second)
+            return edit
+        edits = [lambda c,w:w.update(terminal_error='unknown forced exit'),
+                 lambda c,w:w.update(terminal_error=w['terminal_error']+'\nauthentication failed'),
+                 lambda c,w:w.update(unavailable_highwater_phase='saving progress'),
+                 lambda c,w:w['failure_context'].update(before=copy.deepcopy(c['baseline'])),
+                 lambda c,w:w['failure_context'].update(window=1),
+                 lambda c,w:w['failure_context']['role'].update(worker=2),
+                 lambda c,w:w['failure_context']['targets'][0].update(container='different-container'),
+                 lambda c,w:w['failure_context']['timeout_milliseconds'].update(shutdown_timeout=5001),
+                 stopped(17),stopped(88),
+                 lambda c,w:c.update(exact_lifetime_work_caps_qualified=True),
+                 lambda c,w:w.update(peak_uncommitted_records=128),
+                 lambda c,w:c['worker_measurements'][1].update(copy_summary=None,lifetime_highwater_available=False,
+                     peak_uncommitted_records=None,peak_uncommitted_bytes=None,cap_measurement_scope=SAMPLED_SCOPE)]
+        for edit in edits:
+            def change(case,safety):
+                network_hard_exit(case,next(iter(FORCED_COPY_PHASES)))
+                edit(case,case['worker_measurements'][0])
+            with self.subTest(edit=edit), self.assertRaises(ValueError):
+                self.validate('destination-outage',change)
+
+    def test_whole_outage_hard_exit_does_not_shorten_hold_or_skip_restart(self):
+        # Given an eligible hard exit, when cleanup heals after44.679seconds,
+        # then complete raw proof still cannot replace the full66second hold.
+        def early(case,safety):
+            network_hard_exit(case,next(iter(FORCED_COPY_PHASES)))
+            event,worker = case['events'][0],case['worker_measurements'][0]
+            worker['stopped_at'] = worker['failure_context']['observed_exit_at'] = stamp(62.568)
+            event['connection_effect']['exit_observed_at'] = stamp(62.57)
+            event['fault']['heal'] = worker['failure_context']['heal'] = stamp(62.679)
+            event['during']['after']['at'] = stamp(62.6)
+        with self.assertRaisesRegex(ValueError,'shortened its configured interval'):
+            self.validate('destination-outage',early)
+        def no_restart(case,safety):
+            network_hard_exit(case,next(iter(FORCED_COPY_PHASES)))
+            case['worker_measurements'].pop()
+            case['restarts'] = 0
+        with self.assertRaises(ValueError):
+            self.validate('destination-outage',no_restart)
+
+    def test_network_hard_exit_keeps_rss_immutable_and_other_cases_exact(self):
+        # Given retained RSS before classification, when its snapshot is missing
+        # or contradictory, or another network case omits a summary, fail closed.
+        for edit in [lambda w:w.pop('rss'),lambda w:w['rss'].update(samples=1),
+                     lambda w:w.update(driver_intent_before_wait=[dict(at=stamp(79),signal='',reason='context cancellation')]),
+                     lambda w:w.update(termination_signal='killed'),lambda w:w.update(wait_error='')]:
+            def artifacts(directory,case):
+                rewrite_lifecycle(directory,case['worker_measurements'][0],edit)
+            with self.subTest(edit=edit),self.assertRaises(ValueError):
+                self.validate('destination-outage',lambda c,s:network_hard_exit(c,next(iter(FORCED_COPY_PHASES))),artifacts)
+        for name in ('latency','bandwidth','slow-close','destination-leaders-outage'):
+            with self.subTest(name=name),self.assertRaises(ValueError):
+                self.validate(name,lambda c,s:network_hard_exit(c,next(iter(FORCED_COPY_PHASES))))
 
 
 if __name__ == '__main__':

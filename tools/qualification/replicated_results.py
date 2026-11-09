@@ -110,7 +110,8 @@ def worker_work(case, worker, witness, raw):
         if (summary is not None or worker['peak_uncommitted_records'] is not None or worker['peak_uncommitted_bytes'] is not None or
                 worker['cap_measurement_scope'] != SAMPLED_SCOPE or worker['exit_code'] != 1 or terminal not in FORCED_COPY_PHASES or
                 worker['unavailable_highwater_phase'] != FORCED_COPY_PHASES[terminal] or
-                not forced_copy_failure(case, worker, witness, raw)):
+                not (network_forced_copy_failure(case, worker, witness, raw) if case['id'] == 'network/destination-outage'
+                     else forced_copy_failure(case, worker, witness, raw))):
             raise ValueError('unavailable lifetime highwater requires the bound active forced-copy exit')
         return
     if (worker['unavailable_highwater_phase'] or worker['cap_measurement_scope'] != EXACT_SCOPE or not isinstance(summary, dict) or summary['msg'] != 'copy summary' or
@@ -202,6 +203,8 @@ def copy_case(directory, id, identity):
                 not worker['reason']):
             raise ValueError('replicated fault worker exits or resource caps are invalid')
         witness, raw = load_lifecycle(root/(family+'-'+name), worker)
+        if family == 'network' and not network_rss_matches(worker, witness):
+            raise ValueError('network RSS measurement differs from its immutable exit snapshot')
         if (worker['lifetime'] != index+1 or stamp(witness['recorded_at']) < stamp(worker['stopped_at'])):
             raise ValueError('broker lifecycle was not observed after its sole Wait')
         worker_work(case, worker, witness, raw)
@@ -213,6 +216,35 @@ def copy_case(directory, id, identity):
     for reference in (safety['safety'], safety['bootstrap']):
         reference['observations'] = (safety_path.parent/reference['observations']).resolve().relative_to(root.resolve()).as_posix()
     return case, safety, lifecycles
+
+
+def network_rss_matches(worker, witness):
+    rss = witness.get('rss')
+    expected = dict(samples=worker['rss_samples'], failures=worker['rss_failures'],
+                    sampled_peak_rss_bytes=worker['sampled_peak_rss_bytes'])
+    return (isinstance(rss, dict) and rss == expected and
+            all(type(value) is int for value in [*rss.values(), *expected.values()]))
+
+
+def network_forced_copy_failure(case, worker, witness, raw):
+    if (case['id'] != 'network/destination-outage' or len(case['worker_measurements']) != 2 or worker['lifetime'] != 1 or
+            worker['terminal_error'] not in FORCED_COPY_PHASES or witness['terminal_lines'] != [worker['terminal_error']]):
+        return False
+    event = case['events'][0]
+    fault, before = event['fault'], event['healthy']['after']
+    expected = dict(case=case['id'], recovery_milliseconds=sum(case['timeout_milliseconds'].values()), window=0,
+                    role=dict(kind='worker-destination', cluster='destination', worker=1, partition=0), kind='cut',
+                    start=fault['start'], observed_exit_at=worker['stopped_at'], before=before, transport='plaintext',
+                    targets=fault['targets'], timeout_milliseconds=fault_timeout_catalog()[case['id']])
+    proof, active = worker['failure_context'], witness['active_fault']
+    return (fault['role'] == expected['role'] and fault['fault'] == dict(kind='cut') and
+            all(isinstance(context, dict) and all(context.get(key) == value for key, value in expected.items())
+                for context in (proof, active)) and proof['exit_witness'] == witness and proof['heal'] == fault['heal'] and
+            active['heal'] in ('0001-01-01T00:00:00Z', fault['heal']) and
+            witness['exit_code'] == 1 and witness['wait_error'] == 'exit status 1' and not witness['termination_signal'] and
+            not witness['driver_intent_before_wait'] and healthy_copy(before) and vector(before['destination_ends']) and
+            all(saved <= end for saved,end in zip(before['saved'],before['destination_ends'])) and binds_before(witness, raw, before) and
+            stamp(worker['started_at']) < stamp(before['at']) < stamp(fault['start']) < stamp(worker['stopped_at']) < stamp(fault['heal']))
 
 
 def broker_case(directory, id, identity):
@@ -353,7 +385,8 @@ def network_outage_lifetimes(case, event, lifecycles):
         raise ValueError('destination outage lacks an unintentional sole-Wait fault exit and live recovered lifetime')
     expected = dict(case=case['id'], recovery_milliseconds=sum(case['timeout_milliseconds'].values()), window=0,
                     role=fault['role'], kind=fault['fault']['kind'], start=fault['start'], observed_exit_at=first['stopped_at'],
-                    before=healthy['after'], transport='plaintext')
+                    before=healthy['after'], transport='plaintext', targets=fault['targets'],
+                    timeout_milliseconds=fault_timeout_catalog()[case['id']])
     proof, active = first['failure_context'], witness['active_fault']
     if (any(not isinstance(context, dict) or any(context.get(key) != value for key, value in expected.items()) for context in (proof, active)) or
             proof['heal'] != fault['heal'] or proof['exit_witness'] != witness or
@@ -365,8 +398,8 @@ def network_case(directory, id, identity):
     case, safety, lifecycles = copy_case(directory, id, identity)
     if not id.startswith('network/') or id not in REPLICATED_CASES:
         raise ValueError('unknown network fault exposure')
-    if case['exact_lifetime_work_caps_qualified'] is not True:
-        raise ValueError('network qualification requires exact lifetime work-cap evidence for every worker')
+    if id != 'network/destination-outage' and case['exact_lifetime_work_caps_qualified'] is not True:
+        raise ValueError('same-process network cases require exact lifetime work-cap evidence for every worker')
     events, windows, workers = case['events'], safety['fault_events'], case['worker_measurements']
     if len(events) != 1 or len(windows) != 1:
         raise ValueError('network case requires exactly one fault window')
