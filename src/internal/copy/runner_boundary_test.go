@@ -111,6 +111,41 @@ func TestRunnerReportsWriteAndFinalSaveFailures(t *testing.T) {
 	if !errors.Is(err, writeErr) || !errors.Is(err, saveErr) || !errors.As(err, &exit) || exit.Code != 1 || r.tracker.Saved(0) != 0 || !reflect.DeepEqual(store.saves, [][]Cursor{{{Partition: 0, Position: 1}}}) {
 		t.Fatal("failure hid final save error or saved unsafe progress", err, store.saves)
 	}
+	require.EqualError(t, err, "write failed\nsave progress: final save failed")
+	require.Equal(t, uint64(2), r.submitted)
+	require.Equal(t, uint64(1), r.confirmed, "failed delivery was confirmed")
+}
+
+func TestRunnerPollFailureDrainsAcceptedWritesAndPreservesCause(t *testing.T) {
+	// Given an accepted write and a typed source failure on the next poll.
+	r, source, sink, store, clock := fixture(t)
+	input := incoming(0, 0, 1)
+	r.plan.Source.Kind = "TOPIC"
+	r.flow.lastCommit = clock.Now()
+	source.events = []Event{{Input: &input}}
+	failure := operatorConflict{}
+	source.pollErr = failure
+	sink.flush = func() error {
+		require.Equal(t, uint64(1), r.submitted)
+		require.Zero(t, r.confirmed, "accepted write was already drained before the failure")
+		sink.reports <- Delivery{Token: sink.writes[0]}
+		sink.flush = nil
+		return nil
+	}
+
+	// When polling fails after intake, then accepted output drains before exit 1.
+	err := r.Run(context.Background())
+	require.EqualError(t, err, "poll source: fingerprint mismatch")
+	require.ErrorIs(t, err, failure)
+	var original operatorConflict
+	require.ErrorAs(t, err, &original)
+	var exit *Exit
+	require.ErrorAs(t, err, &exit)
+	require.Equal(t, 1, exit.Code)
+	require.Equal(t, uint64(1), r.submitted)
+	require.Equal(t, r.submitted, r.confirmed)
+	require.Equal(t, int64(1), r.tracker.Saved(0))
+	require.Equal(t, [][]Cursor{{{Partition: 0, Position: 1}}}, store.saves)
 }
 
 func TestDrainTimeoutReportsWriteAndFinalSaveFailures(t *testing.T) {
@@ -187,8 +222,9 @@ func TestProgressFactoryDoesNotShareWorkBetweenQueries(t *testing.T) {
 }
 
 func TestRunnerStopsBeforeNextInputWhenPeriodicCheckpointFails(t *testing.T) {
-	for _, stage := range []string{"save", "flush"} {
-		t.Run(stage, func(t *testing.T) {
+	for _, tc := range []struct{ stage, prefix string }{{"save", "save progress: "}, {"flush", ""}} {
+		t.Run(tc.stage, func(t *testing.T) {
+			stage := tc.stage
 			// Given one confirmed record, a periodic save due, and an unread next record.
 			r, source, sink, store, clock := fixture(t)
 			r.plan.Source.Kind = "TOPIC"
@@ -227,6 +263,7 @@ func TestRunnerStopsBeforeNextInputWhenPeriodicCheckpointFails(t *testing.T) {
 
 			// Then the original failure remains fatal even after cleanup saves the prefix.
 			require.ErrorIs(t, err, failure)
+			require.EqualError(t, err, tc.prefix+failure.Error())
 			var exit *Exit
 			require.ErrorAs(t, err, &exit)
 			require.Equal(t, 1, exit.Code)
@@ -234,10 +271,53 @@ func TestRunnerStopsBeforeNextInputWhenPeriodicCheckpointFails(t *testing.T) {
 			require.Equal(t, []Event{{Input: &next}}, source.events)
 			require.Equal(t, int64(1), r.tracker.Saved(0))
 			wantSaves := [][]Cursor{{{Partition: 0, Position: 1}}}
-			if stage == "save" {
+			if stage != "flush" {
 				wantSaves = append(wantSaves, []Cursor{{Partition: 0, Position: 1}})
 			}
 			require.Equal(t, wantSaves, store.saves)
 		})
 	}
+}
+
+func TestRunnerSaveRequestFailureRemainsFatalAfterCleanupSucceeds(t *testing.T) {
+	// Given confirmed output and a request-level failure on the first periodic save.
+	r, source, sink, store, clock := fixture(t)
+	r.plan.Source.Kind = "TOPIC"
+	first, unread := incoming(0, 0, 1), incoming(0, 1, 1)
+	source.events = []Event{{Input: &first}, {Input: &unread}}
+	failure := errors.New("coordinator request failed")
+	r.flow.lastCommit = clock.Now()
+	sink.submit = func(_ Record, token Token) error {
+		sink.reports <- Delivery{Token: token}
+		clock.now = clock.now.Add(time.Second)
+		return nil
+	}
+	failed := false
+	r.store = saveFunc(func(ctx context.Context, cursors []Cursor) (map[int32]error, error) {
+		results, err := store.Save(ctx, cursors)
+		if !failed {
+			failed = true
+			return nil, failure
+		}
+		return results, err
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	deadline := clock.Now().Add(5 * time.Second)
+	clock.tick = func() {
+		if !clock.Now().Before(deadline) {
+			cancel()
+		}
+	}
+
+	// When the request fails, then cleanup saves only the confirmed prefix and exit 1 retains the cause.
+	err := r.Run(ctx)
+	require.EqualError(t, err, "save progress: coordinator request failed")
+	require.ErrorIs(t, err, failure)
+	require.Equal(t, 1, exitCode(err))
+	require.Equal(t, []Event{{Input: &unread}}, source.events)
+	require.Equal(t, uint64(1), r.submitted)
+	require.Equal(t, r.submitted, r.confirmed)
+	require.Equal(t, int64(1), r.tracker.Saved(0))
+	require.Equal(t, [][]Cursor{{{Partition: 0, Position: 1}}, {{Partition: 0, Position: 1}}}, store.saves)
 }

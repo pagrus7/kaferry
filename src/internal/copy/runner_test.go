@@ -61,6 +61,7 @@ type testSource struct {
 	clock       *testClock
 	assignments []Assignment
 	events      []Event
+	pollErr     error
 	paused      map[int32]bool
 	high        int64
 }
@@ -71,7 +72,7 @@ func (s *testSource) Start(_ context.Context, l Lifecycle, _ Observer) error {
 func (s *testSource) Poll(_ context.Context, d time.Duration) (Event, error) {
 	s.clock.Sleep(d)
 	if len(s.events) == 0 {
-		return Event{}, nil
+		return Event{}, s.pollErr
 	}
 	e := s.events[0]
 	if e.Input != nil && s.paused[e.Input.Cursor.Partition] {

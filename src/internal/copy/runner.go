@@ -151,7 +151,7 @@ func (r *Runner) step(ctx context.Context) (bool, error) {
 		return false, nil // A signal during Poll must not submit its input.
 	}
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("poll source: %w", err)
 	}
 	return false, r.accept(ctx, event)
 }
