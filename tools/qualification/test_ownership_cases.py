@@ -204,13 +204,18 @@ class OwnershipCasesTest(unittest.TestCase):
         worker['lifecycle']['sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+    def protocol_rows(self, path):
+        rows = ownership.records(ownership.segments(path))
+        for row in rows:
+            row['at'] = row.pop('completed_at')
+            row.pop('received_at')
+        return rows
+
     def delay_protocol_start(self,fixture,api):
         path=fixture[1]/'source-2.final.requests.log'
-        rows=ownership.records(ownership.segments(path))
+        rows=self.protocol_rows(path)
         edited=0
         for row in rows:
-            row['at']=row.pop('completed_at')
-            row.pop('received_at')
             if row['requestHeader']['clientId'] == 'kaferry-group-selected-worker2' and row['requestHeader']['requestApiKeyName'] == api:
                 row['totalTimeMs']=9500
                 edited+=1
@@ -300,6 +305,60 @@ class OwnershipCasesTest(unittest.TestCase):
         with patch.object(ownership,'validate_case',return_value=safety):
             self.assertEqual(case['id'],collect(root,[case['id']],identity,'fresh')[0]['id'])
 
+
+    def test_raw_sync_assignment_must_match_the_valid_described_member(self):
+        fixture = self.fixture('worker-kill-rebalance')
+        # Given a valid receipt, DESCRIBE response and accepted generation.
+        self.validate(fixture)
+        path = fixture[1]/'source-2.final.requests.log'
+        rows = self.protocol_rows(path)
+        syncs = [row for row in rows if row['requestHeader']['requestApiKeyName'] == 'SYNC_GROUP' and
+                 row['request']['generationId'] == 2 and row['response']['errorCode'] == 0]
+        self.assertEqual(1, len(syncs))
+        # When only one successful SYNC returns another valid encoded assignment,
+        # renewed checksums cannot repair the receipt's otherwise valid binding.
+        syncs[0]['response']['assignment'] = encoded_assignment(range(23))
+        path.write_bytes(audit_fixture.encode(rows))
+        with self.assertRaisesRegex(ValueError, 'current generation does not assign the described partitions'):
+            self.validate(fixture)
+
+    def test_empty_intermediate_members_allow_null_only_with_matching_raw_empty_group(self):
+        fixture = self.fixture('coordinator-kill-rebalance')
+        _, directory, case, _, _ = fixture
+        self.validate(fixture)
+        restored = case['states']['broker_restored']
+        # Given Go's nil slices in intermediate Empty group descriptions.
+        for label in ('coordinator_replacement', 'broker_api_ready', 'broker_restored'):
+            case['states'][label].update(state='Empty', members=None)
+        with self.assertRaisesRegex(ValueError, 'raw successful broker group description'):
+            self.validate(fixture)
+        path = directory/'source-3.final.requests.log'
+        rows = self.protocol_rows(path)
+        descriptions = [row for row in rows if row['requestHeader']['requestApiKeyName'] == 'DESCRIBE_GROUPS' and
+                        row['response']['groups'][0]['groupState'] == 'PreparingRebalance']
+        self.assertEqual(3, len(descriptions))
+        for row in descriptions:
+            row['response']['groups'][0].update(groupState='Empty', members=[])
+        path.write_bytes(audit_fixture.encode(rows))
+        # When the raw broker responses independently agree, collection accepts
+        # these metadata states and still verifies final Stable ownership.
+        self.validate(fixture)
+        restored['state'] = 'Stable'
+        with self.assertRaisesRegex(ValueError, 'members are not an array'):
+            self.validate(fixture)
+        restored['state'] = 'Empty'
+        original = ownership.audit(directory, case)
+        # Neither nullable nor empty members, even with matching raw metadata,
+        # can establish the final Stable routes, generation and assignments.
+        for state_name, items in (('Stable', None), ('Stable', []), ('Empty', None)):
+            state = copy.deepcopy(case['states']['recovered'])
+            state.update(state=state_name, members=items)
+            observed = copy.deepcopy(original)
+            for row in observed:
+                if row['requestHeader']['requestApiKeyName'] == 'DESCRIBE_GROUPS' and ownership.stamp(state['started']) <= row['completed_at'] <= ownership.stamp(state['finished']):
+                    row['response']['groups'][0].update(groupState=state_name, members=[])
+            with self.subTest(state=state_name, members=items), self.assertRaises(ValueError):
+                ownership.snapshot(case, state, observed, [1, 2], case['states']['baseline'], restored)
 
     def test_independent_generation_assignment_and_commit_chain_reject_self_attestation(self):
         # Given checksummed raw protocol, when a receipt invents a generation
