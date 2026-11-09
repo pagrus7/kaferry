@@ -26,7 +26,7 @@ Run one coordinator per host across all checkouts. Commands run sequentially und
 
 Start with one workload, eight available CPUs, 16–20 GiB available RAM and 100 GiB free test storage; long endurance needs substantially more disk as described below. These are starting allocations, not capacity guarantees. Broker heaps are capped at 512 MiB, with four internal offset/transaction partitions.
 
-`--output` must name a fresh evidence directory. It also selects archive/checkpoint output where used; broker data stays on local Docker storage. A NAS evidence directory does not supply broker disk capacity. Existing output paths are refused so failures cannot be overwritten.
+`--output` must name a fresh evidence directory. It also selects archive/checkpoint output where used; broker data stays on local Docker storage. A NAS evidence directory does not supply broker disk capacity. Existing output paths are refused so failures cannot be overwritten. Archive output requires the [archive filesystem contract](archive.md#layout-and-ownership).
 
 ## Choose a run
 
@@ -188,6 +188,8 @@ python3 -m tools.qualification.qualify run endurance --binary bin/kaferry --outp
 python3 -m tools.qualification.qualify run endurance --topology replicated --binary bin/kaferry --output build-results/replicated-endurance-24h
 ```
 
+For a topology comparison, run the single-broker baseline with `--source 4.4.0 --destination 4.4.0` to match the replicated fixture’s Kafka version.
+
 The default owns `kaferry-endurance`; RF3 uses the dedicated replicated fixture and requires ISR=3/minimum ISR=2 before copying. The workload and gates remain identical:
 
 | Gate | Requirement |
@@ -311,4 +313,4 @@ python3 -m tools.qualification.qualify setup --cloud
 python3 -m tools.qualification.qualify run cloud --config /private/path/qualification.json
 ```
 
-One cluster can test both sides through separate topics; cross-cluster/region claims need those endpoints. Temporary credentials stay outside evidence, but retained CLI errors need inspection before sharing. Use sandbox credentials, short/low-volume batches and same-VPC clients for private MSK; delete temporary infrastructure separately. Deployment-specific power-loss/shared-filesystem claims require that deployment's evidence. Archive output still requires the [archive filesystem contract](archive.md#layout-and-ownership).
+One cluster can test both sides through separate topics; cross-cluster/region claims need those endpoints. Temporary credentials stay outside evidence, but retained CLI errors need inspection before sharing. Use sandbox credentials, short/low-volume batches and same-VPC clients for private MSK; delete temporary infrastructure separately. Deployment-specific power-loss/shared-filesystem claims require that deployment's evidence.
