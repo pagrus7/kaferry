@@ -71,13 +71,17 @@ python3 -m unittest -v tools.qualification.storage_census_images_test
 
 This check runs isolated containers with no network and stays outside Docker-free Python test discovery. Missing images fail the check.
 
-The same workflow checks source-port reservation in the pinned Toxiproxy image. With that image cached, run:
+The replicated fixture and [proxy probe coverage](.github/workflows/proxy-probe.yml) workflows check source-port reservation in the pinned Toxiproxy image. With that image cached, run:
 
 ```sh
 python3 -m unittest -v tools.qualification.proxy_port_reservation_images_test
 ```
 
-This broker-free check uses disposable private network namespaces. A finite test-only source-port pool reproduces the unreserved collision, then verifies the default and isolated project reservations against the running kernel while upstream sockets remain open. The instrumented probe retains raw Go counters and a coverage profile under `build-results/proxy-port-reservation/`; the workflow uploads that profile alongside the ordinary Go coverage.
+This broker-free check uses disposable private network namespaces. A finite test-only source-port pool reproduces the unreserved collision, then verifies the default and isolated project reservations against the running kernel while upstream sockets remain open. The instrumented probe retains raw Go counters and a coverage profile under `build-results/proxy-port-reservation/`. Both workflows upload that profile with the `proxy-port-reservation` flag, scoped to `src/tests/replicated/portprobe/` in `codecov.yml`. Codecov joins it with the ordinary Go coverage and [carries it forward](https://docs.codecov.com/docs/carryforward-flags) when the probe has no current upload. The three normal `go` uploads and coverage thresholds apply to every PR/main check as before.
+
+The proxy probe workflow refreshes coverage on `main` when its helper, proof, fixture, module, setup or coverage configuration inputs change. The same paths select PR validation; manual dispatch can refresh any selected revision. It pulls only the pinned Toxiproxy image and starts no Kafka brokers.
+
+Carryforward needs an initial successful upload under this flag. When enabling it or recovering missing coverage, run `proxy-probe.yml` on `main` if its path-gated push run has not supplied that seed. Verify the artifact's raw counters/profile and Codecov upload belong to the same main commit. On a later main commit with no probe upload, check Codecov's Build tab shows the flag carried from that seed and joined with the three current `go` uploads. A passing workflow alone does not establish carryforward.
 
 ### Test targets
 

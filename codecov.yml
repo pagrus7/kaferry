@@ -1,6 +1,11 @@
 codecov:
   notify:
     after_n_builds: 3
+flags:
+  proxy-port-reservation:
+    paths:
+      - src/tests/replicated/portprobe/
+    carryforward: true
 coverage:
   status:
     project:

@@ -54,6 +54,20 @@ HELPERS = (
 
 
 class ReplicatedHelpersTest(unittest.TestCase):
+    def workflow_paths(self, name, event):
+        workflow = (ROOT/f'.github/workflows/{name}.yml').read_text()
+        section = re.search(rf"(?m)^  {event}:\n(?:    branches: \[main\]\n)?    paths:\n((?:      - '[^']+'\n)+)", workflow)
+        self.assertIsNotNone(section, f'read the actual {event} paths')
+        patterns = re.findall(r"      - '([^']+)'", section[1])
+        # These workflows use positive literals, * and terminal **. GitHub
+        # matches the whole rooted path; * excludes slash and ** includes it.
+        # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#filter-pattern-cheat-sheet
+        for pattern in patterns:
+            self.assertNotRegex(pattern, r'[!?+\[\]]')
+            self.assertTrue('**' not in pattern or pattern.endswith('**'))
+        return ['.*'.join(re.escape(part).replace(r'\*', '[^/]*')
+                          for part in pattern.split('**')) for pattern in patterns]
+
     def test_shared_fast_target_requires_exact_completed_helper_passes(self):
         # Given a Go command that exits zero with actual, absent or wrong events.
         with tempfile.TemporaryDirectory() as temporary:
@@ -98,18 +112,7 @@ class ReplicatedHelpersTest(unittest.TestCase):
                    if isinstance(node, ast.ImportFrom) and node.module and
                    node.module.startswith('tools.qualification.broker_')}
         self.assertGreaterEqual(len(helpers), 2)
-        workflow = (ROOT/'.github/workflows/replicated-lab.yml').read_text()
-        section = re.search(r"(?m)^  pull_request:\n    paths:\n((?:      - '[^']+'\n)+)(?=permissions:\n)", workflow)
-        self.assertIsNotNone(section, 'read the actual PR paths, not another event or job')
-        patterns = re.findall(r"      - '([^']+)'", section[1])
-        # This workflow uses only positive literals, * and terminal **. GitHub
-        # matches the whole rooted path; * excludes slash and ** includes it.
-        # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#filter-pattern-cheat-sheet
-        for pattern in patterns:
-            self.assertNotRegex(pattern, r'[!?+\[\]]')
-            self.assertTrue('**' not in pattern or pattern.endswith('**'))
-        expressions = ['.*'.join(re.escape(part).replace(r'\*', '[^/]*')
-                                 for part in pattern.split('**')) for pattern in patterns]
+        expressions = self.workflow_paths('replicated-lab', 'pull_request')
         for changed, expected in [*((path, True) for path in sorted(helpers)),
                                   ('tools/qualification/storage_census_images_test.py', True),
                                   ('src/tests/qualification/matrix.json', True),
@@ -120,6 +123,31 @@ class ReplicatedHelpersTest(unittest.TestCase):
                                   ('docs/design/qualification.md', False)]:
             with self.subTest(single_file_change=changed):
                 self.assertEqual(expected, any(re.fullmatch(expression, changed) for expression in expressions))
+
+    def test_proxy_probe_inputs_refresh_main_and_validate_prs(self):
+        # Given the proof's imported project module and its compile/render inputs.
+        proof = 'tools/qualification/proxy_port_reservation_images_test.py'
+        parsed = ast.parse((ROOT/proof).read_text())
+        imports = {node.module.replace('.', '/')+'/'+alias.name+'.py'
+                   for node in ast.walk(parsed) if isinstance(node, ast.ImportFrom)
+                   and node.module == 'tools.qualification' for alias in node.names}
+        self.assertTrue(imports)
+        inputs = imports | {proof, 'src/tests/replicated/compose.yaml', 'go.mod', 'go.sum',
+                            'tools/__init__.py', 'tools/qualification/__init__.py',
+                            '.github/actions/setup-go/action.yml', 'codecov.yml',
+                            '.github/workflows/proxy-probe.yml'}
+        inputs.update(str(path.relative_to(ROOT)) for path in (ROOT/'src/tests/replicated/portprobe').glob('*.go'))
+        # When any input alone changes, then refresh coverage on main and test
+        # the same job on PRs; unrelated product, broker and docs edits stay out.
+        for event in ('push', 'pull_request'):
+            expressions = self.workflow_paths('proxy-probe', event)
+            for changed, expected in [*((path, True) for path in sorted(inputs)),
+                                      ('src/internal/copy/runner.go', False),
+                                      ('src/tests/system/replicated_broker.go', False),
+                                      ('tools/qualification/storage_census_images_test.py', False),
+                                      ('docs/design/qualification.md', False)]:
+                with self.subTest(event=event, single_file_change=changed):
+                    self.assertEqual(expected, any(re.fullmatch(expression, changed) for expression in expressions))
 
     def test_local_and_hosted_fast_checks_share_the_target(self):
         # Given the two fast entrypoints, when inspected, then both delegate the

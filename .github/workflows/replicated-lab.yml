@@ -109,7 +109,7 @@ jobs:
         with:
           files: build-results/proxy-port-reservation/coverage.out
           disable_search: true
-          flags: go
+          flags: proxy-port-reservation
           use_oidc: true
           version: v11.3.1
           fail_ci_if_error: true
