@@ -204,6 +204,23 @@ func TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions(
 			require.NotNil(t, s.exits[process], "exit witness is retained before resource checks")
 		})
 	}
+	t.Run("scoped driver intent", func(t *testing.T) {
+		// Given an accepted current-lifetime exit 1 inside its recorded fault.
+		process := brokerLogChild(t, "save progress: transport unavailable")
+		s := brokerFaultChildCopy(t, process)
+		require.NoError(t, process.stdin.Close())
+		require.Error(t, process.wait())
+		proof := s.failureProof(process)
+		_, err := completedBrokerFailure(process, true, proof)
+		require.NoError(t, err)
+		// When the driver requested a stop before that exit, then this otherwise
+		// valid fault proof cannot authorize a replacement worker.
+		proof.Exit.DriverIntent = []cliSignalIntent{{At: proof.Before.At, Signal: "interrupt", Reason: "driver requested stop"}}
+		restarts := 0
+		err = restartBrokerWorker(process, true, func() { restarts++ }, proof)
+		require.Error(t, err)
+		require.Zero(t, restarts)
+	})
 	for _, intentional := range []bool{false, true} {
 		t.Run(fmt.Sprint(intentional), func(t *testing.T) {
 			// Given a real live worker, when it exits with an unsupported terminal
