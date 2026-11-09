@@ -21,6 +21,7 @@ REPLICATED_HELPER_TESTS := \
 	TestReplicatedBrokerPublisherErrorDrainsDelayedOffers \
 	TestNetworkMeasurementRequiresCaughtUpSourceAndOutput \
 	TestNetworkOutageForcedExitBindsOwnedCutAndRetainedRSS \
+	TestNetworkOutageNegotiationEOFRequiresCompleteBoundWriteFailures \
 	TestBrokerFaultRestartRequiresClassifiedTerminalFailure \
 	TestBrokerCurrentProgressDoesNotWaitForChildExit \
 	TestBrokerCurrentProgressRequiresReadableCompleteEvidence \

@@ -187,12 +187,12 @@ func brokerContextualFailure(logs string, proof *brokerFailureProof) (string, bo
 	}
 	if len(terminal) == 1 && brokerForcedCopyPhase(terminal[0]) != "" {
 		return terminal[0], work.Summary == nil && strings.Contains("\n"+logs, "\n"+terminal[0]+"\n") &&
-			(proof.forcedCopy(logs) || proof.networkOutageForced(logs))
+			(proof.forcedCopy(logs) || proof.networkOutageExit(logs))
 	}
 	if proof.sourceOperationExit(logs, strings.Join(terminal, "\n"), work.Summary) {
 		return terminal[0], true
 	}
-	if work.Summary == nil || !proof.affected("destination") || len(terminal) != work.Summary.Submitted-work.Summary.Confirmed {
+	if work.Summary == nil || !proof.negotiationEOFContext(logs, len(terminal)) || len(terminal) != work.Summary.Submitted-work.Summary.Confirmed {
 		return "", false
 	}
 	for _, line := range terminal {

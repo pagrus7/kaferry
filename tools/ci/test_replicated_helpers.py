@@ -21,6 +21,7 @@ HELPERS = (
     'TestReplicatedBrokerPublisherErrorDrainsDelayedOffers',
     'TestNetworkMeasurementRequiresCaughtUpSourceAndOutput',
     'TestNetworkOutageForcedExitBindsOwnedCutAndRetainedRSS',
+    'TestNetworkOutageNegotiationEOFRequiresCompleteBoundWriteFailures',
     'TestBrokerFaultRestartRequiresClassifiedTerminalFailure',
     'TestBrokerCurrentProgressDoesNotWaitForChildExit',
     'TestBrokerCurrentProgressRequiresReadableCompleteEvidence',

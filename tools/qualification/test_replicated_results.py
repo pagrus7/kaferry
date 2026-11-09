@@ -260,6 +260,13 @@ def network_hard_exit(case, terminal):
     case['exact_lifetime_work_caps_qualified'] = False
 
 
+def network_negotiation_exit(case):
+    worker = case['worker_measurements'][0]
+    worker['terminal_error'] = '\n'.join([NEGOTIATION_EOF]*72)
+    worker['copy_summary'] = dict(worker['copy_summary'],submitted=4416,confirmed=4344,peak_uncommitted_records=415,peak_uncommitted_bytes=948515)
+    worker.update(peak_uncommitted_records=415,peak_uncommitted_bytes=948515)
+
+
 def validate_proof(id, case, safety, validator, artifacts=None):
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -566,6 +573,54 @@ class NetworkResultsTest(unittest.TestCase):
         case, safety = network_proof(id)
         if change: change(case,safety)
         return validate_proof(id, case, safety, network_case, artifacts)
+
+    def test_whole_cut_negotiation_eof_keeps_exact_summary_and_strict_active_scope(self):
+        # Given the retained72-failure counters and complete exact summary,
+        # when the known EOF occurs inside the owned whole cut, qualify only
+        # its normal-summary restart scope, with all exact peaks retained.
+        result = self.validate('destination-outage',lambda c,s:network_negotiation_exit(c))['network_exposure']
+        self.assertTrue(result['exact_lifetime_work_caps_qualified'])
+        self.assertTrue(result['worker_measurements'][0]['lifetime_highwater_available'])
+        self.assertEqual(415,result['worker_measurements'][0]['peak_uncommitted_records'])
+        def stopped(second):
+            def edit(case,worker):
+                worker['stopped_at'] = worker['failure_context']['observed_exit_at'] = stamp(second)
+            return edit
+        # Then before-cut/no-cut/other-case or incomplete write evidence cannot
+        # use a known string to bypass ownership, clock, resource or cap proof.
+        edits = [stopped(17),stopped(88),
+                 lambda c,w:w.update(terminal_error='\n'.join([NEGOTIATION_EOF]*71)),
+                 lambda c,w:w.update(terminal_error=w['terminal_error'].replace(NEGOTIATION_EOF,'authentication failed',1)),
+                 lambda c,w:w['failure_context'].update(kind='kill'),
+                 lambda c,w:w['failure_context']['role'].update(worker=2),
+                 lambda c,w:w.update(copy_summary=None,lifetime_highwater_available=False,peak_uncommitted_records=None,
+                                     peak_uncommitted_bytes=None,cap_measurement_scope=SAMPLED_SCOPE)]
+        for edit in edits:
+            def change(case,safety):
+                network_negotiation_exit(case)
+                edit(case,case['worker_measurements'][0])
+            with self.subTest(edit=edit),self.assertRaises(ValueError):
+                self.validate('destination-outage',change)
+        for name in ('latency','bandwidth','slow-close','destination-leaders-outage'):
+            with self.subTest(name=name),self.assertRaises(ValueError):
+                self.validate(name,lambda c,s:network_negotiation_exit(c))
+        def no_rss(directory,case):
+            rewrite_lifecycle(directory,case['worker_measurements'][0],lambda w:w.pop('rss'))
+        with self.assertRaises(ValueError):
+            self.validate('destination-outage',lambda c,s:network_negotiation_exit(c),no_rss)
+        def padded_terminal(directory,case):
+            worker = case['worker_measurements'][0]
+            def edit(witness):
+                path = directory/witness['raw_log']['observations']
+                changed = path.read_bytes().replace(NEGOTIATION_EOF.encode(),b' '+NEGOTIATION_EOF.encode(),1)
+                path.write_bytes(changed)
+                witness['raw_log']['sha256'],witness['raw_log_bytes'] = checksum(changed),len(changed)
+            rewrite_lifecycle(directory,worker,edit)
+            witness,raw = load_lifecycle(directory,worker)
+            self.assertEqual([NEGOTIATION_EOF]*72,witness['terminal_lines'])
+            self.assertTrue(binds_before(witness,raw,case['events'][0]['healthy']['after']))
+        with self.assertRaisesRegex(ValueError,'negotiation EOF lacks every failed write'):
+            self.validate('destination-outage',lambda c,s:network_negotiation_exit(c),padded_terminal)
 
     def test_measurement_starts_reject_past_debt_and_output_backlog(self):
         # Given regenerated physical lifecycle/raw checksums and valid spans,

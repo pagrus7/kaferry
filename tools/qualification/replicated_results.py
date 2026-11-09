@@ -131,7 +131,10 @@ def worker_work(case, worker, witness, raw):
                 not source_operation_failure(case, worker, witness, raw)):
             raise ValueError('labelled source/save EOF lacks a bound all-confirmed active source fault')
     elif terminal and all(line == NEGOTIATION_EOF for line in terminal.splitlines()):
-        if len(terminal.splitlines()) != summary['submitted']-summary['confirmed'] or not affected_failure(case, worker, 'destination'):
+        context = (network_outage_exit(case, worker, witness, raw) and
+                   raw.split(b'\n').count(NEGOTIATION_EOF.encode()) == len(terminal.splitlines())
+                   if case['id'].startswith('network/') else affected_failure(case, worker, 'destination'))
+        if len(terminal.splitlines()) != summary['submitted']-summary['confirmed'] or not context:
             raise ValueError('negotiation EOF lacks every failed write and an affected active plaintext destination fault')
     elif not terminal or NEGOTIATION_EOF in terminal or any(line.startswith('shutdown timed out while ') or not any(message in line for message in BROKER_ERRORS) for line in terminal.splitlines()):
         raise ValueError('broker worker has an unsupported terminal failure')
@@ -227,9 +230,12 @@ def network_rss_matches(worker, witness):
 
 
 def network_forced_copy_failure(case, worker, witness, raw):
-    if (case['id'] != 'network/destination-outage' or len(case['worker_measurements']) != 2 or worker['lifetime'] != 1 or
-            worker['terminal_error'] not in FORCED_COPY_PHASES or witness['terminal_lines'] != [worker['terminal_error']] or
-            ('\n'+worker['terminal_error']+'\n').encode() not in b'\n'+raw):
+    return (worker['terminal_error'] in FORCED_COPY_PHASES and witness['terminal_lines'] == [worker['terminal_error']] and
+            ('\n'+worker['terminal_error']+'\n').encode() in b'\n'+raw and network_outage_exit(case, worker, witness, raw))
+
+
+def network_outage_exit(case, worker, witness, raw):
+    if case['id'] != 'network/destination-outage' or len(case['worker_measurements']) != 2 or worker['lifetime'] != 1:
         return False
     event = case['events'][0]
     fault, before = event['fault'], event['healthy']['after']
@@ -243,7 +249,9 @@ def network_forced_copy_failure(case, worker, witness, raw):
                 for context in (proof, active)) and proof['exit_witness'] == witness and proof['heal'] == fault['heal'] and
             active['heal'] in ('0001-01-01T00:00:00Z', fault['heal']) and
             witness['exit_code'] == 1 and witness['wait_error'] == 'exit status 1' and not witness['termination_signal'] and
-            not witness['driver_intent_before_wait'] and healthy_copy(before) and vector(before['destination_ends']) and
+            not witness['driver_intent_before_wait'] and network_rss_matches(worker, witness) and
+            witness['rss']['samples'] > 0 and witness['rss']['failures'] == 0 and 0 < witness['rss']['sampled_peak_rss_bytes'] <= 512*1024**2 and
+            healthy_copy(before) and vector(before['destination_ends']) and
             all(saved <= end for saved,end in zip(before['saved'],before['destination_ends'])) and binds_before(witness, raw, before) and
             stamp(worker['started_at']) < stamp(before['at']) < stamp(fault['start']) < stamp(worker['stopped_at']) < stamp(fault['heal']))
 

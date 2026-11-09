@@ -158,7 +158,8 @@ func replicatedNetworkFault(t *testing.T, name string) {
 	// retain the original targets and the state immediately after injection.
 	exited := observeReplicatedExit(s.workers[0])
 	injection, window := s.networkInject(role, fault, healthy.After)
-	injected := s.wait("independent state after worker route injection", false, func(_ context.Context, _ brokerObservation) bool { return true })
+	allowFailure := s.caseID == "network/destination-outage"
+	injected := s.wait("independent state after worker route injection", allowFailure, func(_ context.Context, _ brokerObservation) bool { return true })
 	affected, unaffected := make([]int, 0, replicatedPartitions), make([]int, 0, replicatedPartitions)
 	for partition, part := range injected.Topology["destination"] {
 		blocked := slices.ContainsFunc(injection.Event.Targets, func(target faults.Target) bool { return target.Broker == part.Leader })
@@ -200,7 +201,6 @@ func replicatedNetworkFault(t *testing.T, name string) {
 		injected = s.wait("independent state after EOF stimulus", false, func(_ context.Context, _ brokerObservation) bool { return true })
 	}
 	duration := span
-	allowFailure := name == "destination-outage"
 	if allowFailure {
 		duration += s.timeouts["delivery_timeout"]
 	}

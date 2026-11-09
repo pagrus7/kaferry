@@ -15,9 +15,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A hard exit identifies its shutdown phase, not the initiating RPC failure.
 // Only the first lifetime of the complete owned destination cut has this scope.
-func (p *brokerFailureProof) networkOutageForced(logs string) bool {
+// Callers separately require an exact known diagnostic and its work evidence.
+func (p *brokerFailureProof) networkOutageExit(logs string) bool {
 	if p == nil || p.Case != "network/destination-outage" || p.Window != 0 || p.Kind != "cut" || p.Transport != "plaintext" ||
 		p.Role != (faults.Role{Kind: "worker-destination", Cluster: "destination", Worker: 1}) ||
 		!brokerHealthyCopy(p.Before) || len(p.Before.Ends) != replicatedPartitions || !p.Before.At.Before(p.Start) || !p.Start.Before(p.ObservedExit) ||
@@ -46,6 +46,19 @@ func (p *brokerFailureProof) networkOutageForced(logs string) bool {
 		(active.Heal.IsZero() || active.Heal.Equal(p.Heal))
 }
 
+func (p *brokerFailureProof) negotiationEOFContext(logs string, failures int) bool {
+	if p != nil && strings.HasPrefix(p.Case, "network/") {
+		exact := 0
+		for _, line := range strings.Split(logs, "\n") {
+			if line == brokerNegotiationEOF {
+				exact++
+			}
+		}
+		return p.networkOutageExit(logs) && exact == failures
+	}
+	return p.affected("destination")
+}
+
 func networkOutageTargets(targets []faults.Target) bool {
 	if len(targets) != 3 {
 		return false
@@ -63,31 +76,37 @@ func networkOutageTargets(targets []faults.Target) bool {
 	return true
 }
 
+func networkOutageChild(t *testing.T, tail string) (*brokerCopy, *cliProcess) {
+	t.Helper()
+	process := brokerLogChild(t, tail)
+	binary, err := os.ReadFile(process.command.Path)
+	require.NoError(t, err)
+	s := &brokerCopy{t: t, caseID: "network/destination-outage", directory: t.TempDir(), workers: []*cliProcess{process},
+		identities: []brokerLifetime{{Number: 1, PID: process.pid(), Started: time.Now().UTC().Add(-time.Second), Binary: brokerDigest(string(binary))}},
+		memories:   []func() rssPeak{func() rssPeak { return rssPeak{peak: 4096, samples: 2} }}}
+	s.timeouts = faultTimeouts(t, s.caseID)
+	s.beforeFault = brokerEvidenceProof("destination").Before
+	s.beforeFault.Ends = append([]int64(nil), s.beforeFault.Saved...)
+	progress, prefix, found, err := s.currentProgress(process)
+	require.NoError(t, err)
+	require.True(t, found)
+	s.beforeFault.At, s.beforeFault.Pending, s.beforeFault.Worker = time.Now().UTC(), progress, prefix
+	event := faults.Event{Role: faults.Role{Kind: "worker-destination", Cluster: "destination", Worker: 1},
+		Fault: faults.Fault{Kind: "cut"}, Start: s.beforeFault.At.Add(time.Nanosecond)}
+	for broker := int32(1); broker <= 3; broker++ {
+		event.Targets = append(event.Targets, faults.Target{Cluster: "destination", Broker: broker, Listener: "worker1",
+			Service: fmt.Sprintf("destination-%d", broker), Container: fmt.Sprint(broker), Proxy: fmt.Sprintf("destination-%d-worker1", broker), ProxyContainer: "owned-proxy"})
+	}
+	s.active = &faults.Injection{Event: event}
+	return s, process
+}
+
 func TestNetworkOutageForcedExitBindsOwnedCutAndRetainedRSS(t *testing.T) {
 	for _, terminal := range []string{brokerForcedWritesExit, brokerForcedSaveExit, "unexpected invariant failure"} {
 		t.Run(terminal, func(t *testing.T) {
 			// Given an actual controlled child lifetime, retain its live progress,
 			// sampled memory and frozen all-destination cut before classification.
-			process := brokerLogChild(t, terminal)
-			binary, err := os.ReadFile(process.command.Path)
-			require.NoError(t, err)
-			s := &brokerCopy{t: t, caseID: "network/destination-outage", directory: t.TempDir(), workers: []*cliProcess{process},
-				identities: []brokerLifetime{{Number: 1, PID: process.pid(), Started: time.Now().UTC().Add(-time.Second), Binary: brokerDigest(string(binary))}},
-				memories:   []func() rssPeak{func() rssPeak { return rssPeak{peak: 4096, samples: 2} }}}
-			s.timeouts = faultTimeouts(t, s.caseID)
-			s.beforeFault = brokerEvidenceProof("destination").Before
-			s.beforeFault.Ends = append([]int64(nil), s.beforeFault.Saved...)
-			progress, prefix, found, err := s.currentProgress(process)
-			require.NoError(t, err)
-			require.True(t, found)
-			s.beforeFault.At, s.beforeFault.Pending, s.beforeFault.Worker = time.Now().UTC(), progress, prefix
-			event := faults.Event{Role: faults.Role{Kind: "worker-destination", Cluster: "destination", Worker: 1},
-				Fault: faults.Fault{Kind: "cut"}, Start: s.beforeFault.At.Add(time.Nanosecond)}
-			for broker := int32(1); broker <= 3; broker++ {
-				event.Targets = append(event.Targets, faults.Target{Cluster: "destination", Broker: broker, Listener: "worker1",
-					Service: fmt.Sprintf("destination-%d", broker), Container: fmt.Sprint(broker), Proxy: fmt.Sprintf("destination-%d-worker1", broker), ProxyContainer: "owned-proxy"})
-			}
-			s.active = &faults.Injection{Event: event}
+			s, process := networkOutageChild(t, terminal)
 			require.NoError(t, process.stdin.Close())
 			require.Error(t, process.wait())
 			proof := s.failureProof(process)
@@ -124,6 +143,7 @@ func networkOutageProofMutations(t *testing.T, proof *brokerFailureProof, logs s
 		func(p *brokerFailureProof) { p.Role.Worker = 2 },
 		func(p *brokerFailureProof) { p.Kind = "kill" },
 		func(p *brokerFailureProof) { p.Window = 1 },
+		func(p *brokerFailureProof) { p.Exit.Window = nil },
 		func(p *brokerFailureProof) { p.Targets = p.Targets[:2] },
 		func(p *brokerFailureProof) { p.Targets[0].Listener = "admin"; p.Exit.Window.Targets[0] = p.Targets[0] },
 		func(p *brokerFailureProof) {
@@ -153,5 +173,45 @@ func networkOutageProofMutations(t *testing.T, proof *brokerFailureProof, logs s
 		mutate(&changed)
 		_, accepted := brokerContextualFailure(logs, &changed)
 		require.False(t, accepted, "mutation %d", index)
+	}
+}
+
+func TestNetworkOutageNegotiationEOFRequiresCompleteBoundWriteFailures(t *testing.T) {
+	// Given the retained failure's72unconfirmed writes and exact final peaks,
+	// reproduce a real child exit one second after the owned cut begins.
+	summary := `{"msg":"copy summary","submitted":4416,"confirmed":4344,"peak_uncommitted_records":415,"peak_uncommitted_bytes":948515}` + "\n"
+	s, process := networkOutageChild(t, summary+strings.Repeat(brokerNegotiationEOF+"\n", 72))
+	time.Sleep(time.Second)
+	require.NoError(t, process.stdin.Close())
+	require.Error(t, process.wait())
+	proof := s.failureProof(process)
+	logs, err := process.currentLogs()
+	require.NoError(t, err)
+	// When the same strict whole-cut policy handles either post-injection wait,
+	// accept exactly the known per-write failure, retaining complete exact peaks.
+	_, err = completedBrokerFailure(process, true, proof)
+	require.NoError(t, err)
+	_, err = completedBrokerFailure(process, false, proof)
+	require.Error(t, err, "pre-fault, other-case and replacement waits still reject exits")
+	work, err := brokerWork(logs)
+	require.NoError(t, err)
+	require.NotNil(t, work.Summary)
+	require.Equal(t, 415, work.Summary.PeakRecords)
+	require.EqualValues(t, 948515, work.Summary.PeakBytes)
+	// Then before-cut, no-cut, other-case, RSS and identity mutations still fail;
+	// rehashing a missing/unknown/whitespace terminal cannot replace a failed write.
+	networkOutageProofMutations(t, proof, logs)
+	for _, changedLogs := range []string{
+		strings.Replace(logs, brokerNegotiationEOF+"\n", "", 1),
+		strings.Replace(logs, brokerNegotiationEOF, "authentication failed", 1),
+		strings.Replace(logs, brokerNegotiationEOF, " "+brokerNegotiationEOF, 1),
+	} {
+		data, err := json.Marshal(proof)
+		require.NoError(t, err)
+		var changed brokerFailureProof
+		require.NoError(t, json.Unmarshal(data, &changed))
+		changed.Exit.Log.SHA256, changed.Exit.LogBytes, changed.Exit.Terminal = brokerDigest(changedLogs), len(changedLogs), brokerTerminals(changedLogs)
+		_, accepted := brokerContextualFailure(changedLogs, &changed)
+		require.False(t, accepted)
 	}
 }
