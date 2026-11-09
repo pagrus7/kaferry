@@ -6,18 +6,17 @@ from pathlib import Path
 
 from tools.ci.suites import REPLICATED_CASES, fault_timeout_catalog
 from tools.qualification.fault_results import observation_path, validate_case
+from tools.qualification.broker_lifecycle import (FORCED_COPY_PHASES, SAMPLED_SCOPE, binds_before, load_lifecycle)
 
 
 IDENTITY = ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')
-FORCED_SAVE_EXIT = 'shutdown timed out while saving progress; exiting without further cleanup'
 NEGOTIATION_EOF = ('broker closed the connection immediately during api versions negotiation, which often happens '
                    'when the broker requires TLS but the client is using plaintext: is TLS missing?')
-SAMPLED_SCOPE = 'sampled progress only; forced save exit omits final lifetime highwater'
 EXACT_SCOPE = 'exact lifetime highwater from final copy summary'
 BROKER_ERRORS = ('context deadline exceeded', 'REQUEST_TIMED_OUT', 'NOT_COORDINATOR', 'COORDINATOR_NOT_AVAILABLE',
                 'UNKNOWN_MEMBER_ID', 'ILLEGAL_GENERATION', 'NOT_LEADER_OR_FOLLOWER', 'BROKER_NOT_AVAILABLE',
                 'connection refused', 'i/o timeout', 'EOF', 'delivery timeout',
-                'outstanding writes did not finish within 10 seconds', 'shutdown timed out while finishing writes')
+                'outstanding writes did not finish within 10 seconds')
 
 
 def stamp(value):
@@ -64,7 +63,40 @@ def affected_failure(case, worker, side):
             stamp(before['at']) < stamp(proof['start']) < stamp(proof['observed_exit_at']) <= stamp(proof['heal']))
 
 
-def worker_work(case, worker):
+def forced_copy_failure(case, worker, witness, raw):
+    proof = worker['failure_context']
+    window = proof['window']
+    if type(window) is not int or not 0 <= window < len(case['events']):
+        return False
+    event, active = case['events'][window], witness['active_fault']
+    fault = event['fault']
+    before = event.get('before', case['baseline'])
+    registered = {
+        'broker/source-leader': ('source', 'leader', 'kill'),
+        'broker/destination-leader': ('destination', 'leader', 'kill'),
+        'broker/rolling-source': ('source', 'broker', 'restart'),
+        'broker/rolling-destination': ('destination', 'broker', 'restart'),
+    }
+    rule = registered.get(case['id'])
+    recovery = sum(case['timeout_milliseconds'].values())
+    if (not rule or (proof['role']['cluster'], proof['role']['kind'], proof['kind']) != rule or
+            proof['case'] != case['id'] or proof['recovery_milliseconds'] != recovery or
+            proof['role'] != fault['role'] or proof['kind'] != fault['fault']['kind'] or
+            proof['start'] != fault['start'] or proof['heal'] != fault['heal'] or
+            proof['observed_exit_at'] != witness['stopped_at'] or proof['before'] != before or
+            proof['transport'] != 'plaintext' or proof['exit_witness'] != witness or
+            ('\n'+worker['terminal_error']+'\n').encode() not in b'\n'+raw or
+            witness['exit_code'] != 1 or witness['wait_error'] != 'exit status 1' or witness['termination_signal'] or
+            witness['driver_intent_before_wait'] or not active or
+            any(active[key] != proof[key] for key in ('case', 'recovery_milliseconds', 'window', 'role', 'kind', 'start', 'observed_exit_at', 'before', 'transport')) or
+            active['heal'] not in ('0001-01-01T00:00:00Z', proof['heal']) or not healthy_copy(before) or
+            not stamp(witness['lifetime']['started_at']) < stamp(before['at']) < stamp(proof['start']) < stamp(witness['stopped_at']) <= stamp(proof['heal'])+recovery/1000 or
+            not binds_before(witness, raw, before)):
+        return False
+    return True
+
+
+def worker_work(case, worker, witness, raw):
     available, summary = worker['lifetime_highwater_available'], worker['copy_summary']
     terminal = worker.get('terminal_error', '')
     if (type(available) is not bool or type(worker['progress_observations']) is not int or worker['progress_observations'] <= 0 or
@@ -73,11 +105,12 @@ def worker_work(case, worker):
         raise ValueError('broker worker lacks observed current-work cap evidence')
     if not available:
         if (summary is not None or worker['peak_uncommitted_records'] is not None or worker['peak_uncommitted_bytes'] is not None or
-                worker['cap_measurement_scope'] != SAMPLED_SCOPE or worker['exit_code'] != 1 or terminal != FORCED_SAVE_EXIT or
-                not affected_failure(case, worker, 'source')):
-            raise ValueError('unavailable lifetime highwater requires the documented active source forced-save exit')
+                worker['cap_measurement_scope'] != SAMPLED_SCOPE or worker['exit_code'] != 1 or terminal not in FORCED_COPY_PHASES or
+                worker['unavailable_highwater_phase'] != FORCED_COPY_PHASES[terminal] or
+                not forced_copy_failure(case, worker, witness, raw)):
+            raise ValueError('unavailable lifetime highwater requires the bound active forced-copy exit')
         return
-    if (worker['cap_measurement_scope'] != EXACT_SCOPE or summary['msg'] != 'copy summary' or
+    if (worker['unavailable_highwater_phase'] or worker['cap_measurement_scope'] != EXACT_SCOPE or summary['msg'] != 'copy summary' or
             type(summary['submitted']) is not int or type(summary['confirmed']) is not int or
             not 0 <= summary['confirmed'] <= summary['submitted'] or
             type(worker['peak_uncommitted_records']) is not int or type(worker['peak_uncommitted_bytes']) is not int or
@@ -92,7 +125,7 @@ def worker_work(case, worker):
     elif terminal and all(line == NEGOTIATION_EOF for line in terminal.splitlines()):
         if len(terminal.splitlines()) != summary['submitted']-summary['confirmed'] or not affected_failure(case, worker, 'destination'):
             raise ValueError('negotiation EOF lacks every failed write and an affected active plaintext destination fault')
-    elif not terminal or any(not any(message in line for message in BROKER_ERRORS) for line in terminal.splitlines()):
+    elif not terminal or any(line.startswith('shutdown timed out while ') or not any(message in line for message in BROKER_ERRORS) for line in terminal.splitlines()):
         raise ValueError('broker worker has an unsupported terminal failure')
 
 
@@ -134,7 +167,10 @@ def broker_case(directory, id, identity):
                 not safety['started_at'] <= stamp(worker['started_at']) < stamp(worker['stopped_at']) <= safety['writers_stopped_at'] or
                 not worker['reason']):
             raise ValueError('broker fault worker exits or resource caps are invalid')
-        worker_work(case, worker)
+        witness, raw = load_lifecycle(root/('broker-'+id.split('/')[1]), worker)
+        if (worker['lifetime'] != index+1 or stamp(witness['recorded_at']) < stamp(worker['stopped_at'])):
+            raise ValueError('broker lifecycle was not observed after its sole Wait')
+        worker_work(case, worker, witness, raw)
     if case['exact_lifetime_work_caps_qualified'] is not all(w['lifetime_highwater_available'] for w in workers):
         raise ValueError('broker case exact lifetime cap claim differs from available measurements')
     if {(w['pid'], w['exit_code']) for w in workers} != {(w['pid'], w['exit_code']) for w in safety['writer_observations']}:

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -19,14 +20,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type cliSignalIntent struct {
+	At     time.Time `json:"at"`
+	Signal string    `json:"signal"`
+	Reason string    `json:"reason"`
+}
+
 // cliProcess owns one Wait call; completion publishes its output and exit status.
 type cliProcess struct {
-	command *exec.Cmd
-	stdin   io.WriteCloser
-	done    chan struct{}
-	output  string
-	err     error
-	stopped time.Time
+	command    *exec.Cmd
+	stdin      io.WriteCloser
+	done       chan struct{}
+	output     string
+	err        error
+	stopped    time.Time
+	intentMu   sync.Mutex
+	intent     []cliSignalIntent
+	exitIntent []cliSignalIntent
 }
 
 func startCLI(t *testing.T, ctx context.Context, binary, input string, args ...string) *cliProcess {
@@ -81,11 +91,26 @@ func (p *cliProcess) start(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, log.Close()) })
 	p.command.Stderr = log
 	p.command.Stdout = log
+	if p.command.Cancel != nil {
+		p.command.Cancel = func() error { return p.signal(os.Kill, "context cancellation") }
+	}
 	require.NoError(t, p.command.Start())
-	go func() { p.err = p.command.Wait(); p.stopped = time.Now().UTC(); close(p.done) }()
+	go func() {
+		p.err = p.command.Wait()
+		stopped := time.Now().UTC()
+		p.intentMu.Lock()
+		p.stopped, p.exitIntent = stopped, []cliSignalIntent{}
+		for _, intent := range p.intent {
+			if !intent.At.After(stopped) {
+				p.exitIntent = append(p.exitIntent, intent)
+			}
+		}
+		p.intentMu.Unlock()
+		close(p.done)
+	}()
 	t.Cleanup(func() {
 		if !p.finished() {
-			_ = p.command.Process.Kill()
+			_ = p.signal(os.Kill, "test cleanup")
 		}
 		_ = p.wait()
 		if t.Failed() {
@@ -110,9 +135,21 @@ func (p *cliProcess) finished() bool {
 		return false
 	}
 }
-func (p *cliProcess) wait() error                   { <-p.done; return p.err }
-func (p *cliProcess) signal(signal os.Signal) error { return p.command.Process.Signal(signal) }
-func (p *cliProcess) pid() int                      { return p.command.Process.Pid }
+func (p *cliProcess) wait() error { <-p.done; return p.err }
+
+// Record intent before sending, including a failed request racing with exit.
+// Wait freezes only requests made before its observed completion.
+func (p *cliProcess) signal(signal os.Signal, reason ...string) error {
+	intent := "driver signal"
+	if len(reason) == 1 {
+		intent = reason[0]
+	}
+	p.intentMu.Lock()
+	defer p.intentMu.Unlock()
+	p.intent = append(p.intent, cliSignalIntent{At: time.Now().UTC(), Signal: signal.String(), Reason: intent})
+	return p.command.Process.Signal(signal)
+}
+func (p *cliProcess) pid() int { return p.command.Process.Pid }
 func (p *cliProcess) logs() string {
 	_ = p.wait()
 	data, err := os.ReadFile(p.output)

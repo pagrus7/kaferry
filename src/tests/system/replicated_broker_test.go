@@ -27,6 +27,7 @@ func TestReplicatedBrokerFaults(t *testing.T) {
 }
 
 type brokerObservation struct {
+	Worker        *brokerProgressWitness        `json:"worker"`
 	At            time.Time                     `json:"at"`
 	Saved         []int64                       `json:"saved"`
 	Ends          []int64                       `json:"destination_ends"`
@@ -43,12 +44,14 @@ type brokerCopy struct {
 	lab                                           *faults.Lab
 	metadata                                      faults.KafkaMetadata
 	src, dst, group, directory, config, statement string
+	caseID                                        string
+	exits                                         map[*cliProcess]*brokerRetainedExit
 	timeouts                                      map[string]time.Duration
 	oracle                                        *faultOracle
 	publisher                                     *replicatedPublisher
 	workers                                       []*cliProcess
 	memories                                      []func() rssPeak
-	starts                                        []time.Time
+	identities                                    []brokerLifetime
 	measurements                                  []map[string]any
 	events                                        []map[string]any
 	active                                        *faults.Injection
@@ -84,7 +87,7 @@ func replicatedBrokerFault(t *testing.T, name string) {
 	metadata, err := faults.NewMetadata()
 	require.NoError(t, err)
 	t.Cleanup(metadata.Close)
-	s := &brokerCopy{t: t, ctx: ctx, metadata: metadata, timeouts: timeouts, directory: directory}
+	s := &brokerCopy{caseID: "broker/" + name, t: t, ctx: ctx, metadata: metadata, timeouts: timeouts, directory: directory}
 	t.Cleanup(s.retainPolls)
 	s.lab = &faults.Lab{Project: os.Getenv("KAFERRY_FIXTURE_PROJECT"), API: os.Getenv("KAFERRY_TOXIPROXY_API"), Metadata: metadata}
 	prefix := fmt.Sprintf("kaferry-broker-%d", time.Now().UnixNano())
@@ -122,7 +125,7 @@ func replicatedBrokerFault(t *testing.T, name string) {
 		return slices.Equal(state.Saved, publication.Acknowledged)
 	})
 	process := s.workers[len(s.workers)-1]
-	require.NoError(t, process.signal(os.Interrupt))
+	require.NoError(t, process.signal(os.Interrupt, "completed copy requested by driver"))
 	waitErr := process.wait()
 	logs, err := process.currentLogs()
 	require.NoError(t, err)
@@ -192,15 +195,19 @@ func configValue(configs []kadm.Config, key string) string {
 func (s *brokerCopy) start() {
 	process := startCLI(s.t, s.ctx, testBinary(s.t), "", "run", "-e", s.statement, "-c", s.config)
 	s.workers = append(s.workers, process)
-	s.starts = append(s.starts, time.Now().UTC())
+	s.identities = append(s.identities, brokerLifetime{Number: len(s.workers), PID: process.pid(), Started: time.Now().UTC(), Binary: os.Getenv("KAFERRY_EXPECT_BINARY_SHA256")})
 	s.memories = append(s.memories, watchReplicatedRSS(s.t, process))
 	s.oracle.writer(process)
 	logPath := filepath.Join(s.directory, fmt.Sprintf("worker-%d.cli.log", len(s.workers)))
 	s.t.Cleanup(func() {
 		if !process.finished() {
-			_ = process.command.Process.Kill()
+			_ = process.signal(os.Kill, "broker test cleanup")
 		}
 		_ = process.wait()
+		_, err := s.retainExit(process)
+		if err != nil {
+			s.t.Error("retain worker lifecycle: ", err)
+		}
 		logs, err := process.currentLogs()
 		if err != nil {
 			s.t.Error("read selected worker log: ", err)
@@ -217,6 +224,8 @@ func (s *brokerCopy) measureLast(reason string) {
 	i := len(s.workers) - 1
 	process := s.workers[i]
 	require.True(s.t, process.finished())
+	exit, err := s.retainExit(process)
+	require.NoError(s.t, err)
 	memory := s.memories[i]()
 	require.Positive(s.t, memory.samples)
 	require.Zero(s.t, memory.failures)
@@ -232,15 +241,18 @@ func (s *brokerCopy) measureLast(reason string) {
 		require.NoError(s.t, err)
 	}
 	available := work.Summary != nil
-	require.True(s.t, available || terminal == brokerForcedSaveExit, "CLI omitted copy summary without the documented forced-save exit")
-	measurement := map[string]any{"pid": process.pid(), "started_at": s.starts[i], "stopped_at": process.stopped,
-		"binary_sha256": os.Getenv("KAFERRY_EXPECT_BINARY_SHA256"), "worker_route": 1,
+	require.True(s.t, available || brokerForcedCopyPhase(terminal) != "", "CLI omitted copy summary without an eligible documented forced-copy exit")
+	measurement := map[string]any{"lifetime": i + 1, "lifecycle": exit.Reference, "unavailable_highwater_phase": "", "pid": process.pid(), "started_at": s.identities[i].Started, "stopped_at": process.stopped,
+		"binary_sha256": s.identities[i].Binary, "worker_route": 1,
 		"terminal_error": terminal, "failure_context": proof, "copy_summary": work.Summary,
 		"exit_code": process.command.ProcessState.ExitCode(), "reason": reason, "sampled_peak_rss_bytes": memory.peak * 1024, "rss_samples": memory.samples,
 		"rss_failures": memory.failures, "record_cap": 1024, "byte_cap": 134217728,
 		"lifetime_highwater_available": available, "peak_uncommitted_records": nil, "peak_uncommitted_bytes": nil,
 		"progress_observations": work.ProgressSamples, "sampled_max_pending_entries": work.SampledPending,
 		"sampled_max_pending_estimated_bytes": work.SampledPendingBytes, "cap_measurement_scope": brokerSampledWorkScope}
+	if !available {
+		measurement["unavailable_highwater_phase"] = brokerForcedCopyPhase(terminal)
+	}
 	if available {
 		measurement["peak_uncommitted_records"], measurement["peak_uncommitted_bytes"] = work.Summary.PeakRecords, work.Summary.PeakBytes
 		measurement["cap_measurement_scope"] = brokerExactWorkScope
@@ -253,6 +265,10 @@ func (s *brokerCopy) live(allowFailure bool) {
 	process := s.workers[len(s.workers)-1]
 	if !process.finished() {
 		return
+	}
+	if s.directory != "" {
+		_, err := s.retainExit(process)
+		require.NoError(s.t, err)
 	}
 	_, err := completedBrokerFailure(process, allowFailure, s.failureProof(process))
 	require.NoError(s.t, err)
@@ -296,8 +312,11 @@ func brokerTerminalFailure(logs string) (string, bool) {
 		if line == "" || json.Valid([]byte(line)) {
 			continue
 		}
+		if strings.HasPrefix(line, "shutdown timed out while ") {
+			return line, false
+		}
 		known := false
-		for _, message := range []string{"context deadline exceeded", "REQUEST_TIMED_OUT", "NOT_COORDINATOR", "COORDINATOR_NOT_AVAILABLE", "UNKNOWN_MEMBER_ID", "ILLEGAL_GENERATION", "NOT_LEADER_OR_FOLLOWER", "BROKER_NOT_AVAILABLE", "connection refused", "i/o timeout", "EOF", "delivery timeout", "outstanding writes did not finish within 10 seconds", "shutdown timed out while finishing writes"} {
+		for _, message := range []string{"context deadline exceeded", "REQUEST_TIMED_OUT", "NOT_COORDINATOR", "COORDINATOR_NOT_AVAILABLE", "UNKNOWN_MEMBER_ID", "ILLEGAL_GENERATION", "NOT_LEADER_OR_FOLLOWER", "BROKER_NOT_AVAILABLE", "connection refused", "i/o timeout", "EOF", "delivery timeout", "outstanding writes did not finish within 10 seconds"} {
 			known = known || strings.Contains(line, message)
 		}
 		terminal = append(terminal, line)
@@ -336,7 +355,7 @@ func (s *brokerCopy) observe(ctx context.Context) (brokerObservation, bool) {
 	}
 	var err error
 	var found bool
-	state.Pending, found, err = currentCopyProgress(s.workers[len(s.workers)-1])
+	state.Pending, state.Worker, found, err = s.currentProgress(s.workers[len(s.workers)-1])
 	require.NoError(s.t, err, "read current broker worker progress")
 	if !found {
 		state.QueryErrors = append(state.QueryErrors, "CLI has not emitted complete progress")
@@ -479,6 +498,10 @@ func (s *brokerCopy) healthy(ctx context.Context, targets ...faults.Target) bool
 
 func (s *brokerCopy) inject(role faults.Role, kind string, before brokerObservation) (*faults.Injection, int) {
 	require.True(s.t, brokerHealthyCopy(before), "fault requires healthy verified plaintext copying before injection")
+	process := s.workers[len(s.workers)-1]
+	require.False(s.t, process.finished(), "fault requires a live current worker")
+	require.NotNil(s.t, before.Worker)
+	require.Equal(s.t, s.lifetime(process), before.Worker.Lifetime, "fault baseline must belong to this worker lifetime")
 	window := s.oracle.begin(s.t, kind, role, kind != "cut", s.timeouts, "nonempty saved prefix on every source partition; steady acknowledged source input")
 	injection, err := s.lab.Inject(s.ctx, role, faults.Fault{Kind: kind})
 	if injection != nil {

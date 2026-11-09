@@ -3,14 +3,27 @@
 import copy
 from datetime import datetime, timezone
 import json
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from tools.ci.suites import REPLICATED_CASES, fault_timeout_catalog
-from tools.qualification.replicated_results import (EXACT_SCOPE, FORCED_SAVE_EXIT, NEGOTIATION_EOF,
+from tools.qualification.replicated_results import (EXACT_SCOPE, NEGOTIATION_EOF,
                                                   SAMPLED_SCOPE, broker_case, collect)
+from tools.qualification.broker_lifecycle import FORCED_COPY_PHASES
+
+FORCED_SAVE_EXIT = next(key for key, phase in FORCED_COPY_PHASES.items() if phase == "saving progress")
+BINARY = "a"*64
+RAW_PROGRESS = dict(msg="progress", submitted=100, confirmed=90, pending_entries=128, pending_estimated_bytes=1024)
+PROGRESS_BYTES = (json.dumps(RAW_PROGRESS)+"\n").encode()
+
+def checksum(data):
+    return hashlib.sha256(data).hexdigest()
+
+def lifetime(worker):
+    return dict(number=worker["lifetime"], pid=worker["pid"], started_at=worker["started_at"], binary_sha256=worker["binary_sha256"])
 
 
 def stamp(second):
@@ -21,7 +34,8 @@ def state(second, count):
     return dict(at=stamp(second), saved=[count]*24, destination_ends=[count]*24,
                 topology={side: [dict(Leader=1, ISR=[1, 2, 3]) for _ in range(24)] for side in ('source', 'destination')},
                 publishing=dict(acknowledged_by_partition=[count]*24), broker_healthy=True,
-                cli_progress=dict(submitted=100, confirmed=90))
+                cli_progress=dict(msg='progress', submitted=100, confirmed=90, peak_uncommitted_records=0,peak_uncommitted_bytes=0),
+                worker=dict(lifetime=dict(number=1,pid=123,started_at=stamp(2),binary_sha256=BINARY),log_prefix_bytes=len(PROGRESS_BYTES),log_prefix_sha256=checksum(PROGRESS_BYTES)))
 
 
 def proof(id):
@@ -32,14 +46,14 @@ def proof(id):
                 restarts=0, restart_scope='same selected binary, SQL, group and worker1 route', exact_lifetime_work_caps_qualified=True,
                 safety_case=dict(observations='fault-oracle/fresh/case/observations/case.json', sha256='checksum'),
                 publishing=dict(started=stamp(5), stopped=stamp(499), offered_by_partition=[10]*24, acknowledged_by_partition=[10]*24,max_offer_gap_seconds=0.1),
-                worker_measurements=[dict(pid=123, binary_sha256='binary',worker_route=1,exit_code=0, rss_samples=10, rss_failures=0, sampled_peak_rss_bytes=100,
+                worker_measurements=[dict(lifetime=1, unavailable_highwater_phase='', pid=123, binary_sha256=BINARY,worker_route=1,exit_code=0, rss_samples=10, rss_failures=0, sampled_peak_rss_bytes=100,
                     record_cap=1024, byte_cap=128*1024**2, peak_uncommitted_records=1024, peak_uncommitted_bytes=128*1024**2,
                     lifetime_highwater_available=True, cap_measurement_scope=EXACT_SCOPE, progress_observations=10,
                     sampled_max_pending_entries=128, sampled_max_pending_estimated_bytes=1024,
                     copy_summary=dict(msg='copy summary', submitted=100,confirmed=100,peak_uncommitted_records=1024,peak_uncommitted_bytes=128*1024**2),
                     started_at=stamp(2), stopped_at=stamp(500), reason='completed')])
     safety = dict(id=id, execution='candidate CLI', parameters=dict(source_partitions=24, routing='PRESERVE'),
-                  source_commit='commit', binary_sha256='binary', binary_platform='linux-amd64', execution_platform='linux-amd64',
+                  source_commit='commit', binary_sha256=BINARY, binary_platform='linux-amd64', execution_platform='linux-amd64',
                   started_at=0, writers_stopped_at=501, fault_events=[], writer_observations=[dict(pid=123, exit_code=0)],
                   independent_reconciliation=dict(partitions=[dict(partition=n, expected=10) for n in range(24)]),
                   safety=dict(observations='samples.jsonl'), bootstrap=dict(observations='bootstrap.jsonl'))
@@ -84,13 +98,13 @@ def proof(id):
 def failed_worker(case, safety, forced):
     worker = case['worker_measurements'][0]
     replacement = copy.deepcopy(worker)
-    replacement.update(pid=124, started_at=stamp(26))
+    replacement.update(lifetime=2, pid=124, started_at=stamp(26))
     worker.update(exit_code=1, stopped_at=stamp(23), terminal_error=FORCED_SAVE_EXIT if forced else NEGOTIATION_EOF+'\n'+NEGOTIATION_EOF)
     fault = case['events'][0]['fault']
-    worker['failure_context'] = dict(window=0,role=fault['role'],kind=fault['fault']['kind'], start=fault['start'],heal=fault['heal'],
+    worker['failure_context'] = dict(case=case['id'], recovery_milliseconds=sum(case['timeout_milliseconds'].values()),window=0,role=fault['role'],kind=fault['fault']['kind'], start=fault['start'],heal=fault['heal'],
                                      observed_exit_at=worker['stopped_at'],before=copy.deepcopy(case['baseline']),transport='plaintext')
     if forced:
-        worker.update(lifetime_highwater_available=False,copy_summary=None,peak_uncommitted_records=None,peak_uncommitted_bytes=None,cap_measurement_scope=SAMPLED_SCOPE)
+        worker.update(unavailable_highwater_phase="saving progress",lifetime_highwater_available=False,copy_summary=None,peak_uncommitted_records=None,peak_uncommitted_bytes=None,cap_measurement_scope=SAMPLED_SCOPE)
         case['exact_lifetime_work_caps_qualified'] = False
     else:
         worker['copy_summary']['confirmed'] = 98
@@ -100,8 +114,31 @@ def failed_worker(case, safety, forced):
     return worker
 
 
+def write_lifecycles(directory, case):
+    for worker in case['worker_measurements']:
+        number = worker['lifetime']
+        terminal = worker.get('terminal_error', '')
+        raw = PROGRESS_BYTES*10
+        if worker['copy_summary'] is not None:
+            raw += (json.dumps(worker['copy_summary'])+'\n').encode()
+        if terminal:
+            raw += (terminal+'\n').encode()
+        log_name = f'worker-{number}.exited.cli.log'
+        (directory/log_name).write_bytes(raw)
+        active = copy.deepcopy(worker.get('failure_context'))
+        witness = dict(lifetime=lifetime(worker),stopped_at=worker['stopped_at'],recorded_at=worker['stopped_at'],exit_code=worker['exit_code'],
+                       wait_error='exit status 1' if worker['exit_code'] else '', termination_signal='',driver_intent_before_wait=[],
+                       terminal_lines=terminal.splitlines(), raw_log=dict(observations=log_name,sha256=checksum(raw)),raw_log_bytes=len(raw),raw_log_error='',active_fault=active)
+        if active:
+            worker['failure_context']['exit_witness'] = witness
+        name = f'worker-{number}.lifecycle.json'
+        data = json.dumps(witness).encode()
+        (directory/name).write_bytes(data)
+        worker['lifecycle'] = dict(observations=name,sha256=checksum(data))
+
+
 class ReplicatedResultsTest(unittest.TestCase):
-    def validate(self, id, change=None):
+    def validate(self, id, change=None, artifacts=None):
         case, safety = proof(id)
         if change:
             change(case, safety)
@@ -109,10 +146,16 @@ class ReplicatedResultsTest(unittest.TestCase):
             root = Path(temporary)
             directory = root/('broker-'+id.split('/')[1])
             directory.mkdir()
+            write_lifecycles(directory,case)
+            if artifacts:
+                artifacts(directory,case)
             (directory/'replicated-broker.json').write_text(json.dumps(case))
             path = root/'fault-oracle/fresh/case/observations/case.json'
-            with patch('tools.qualification.replicated_results.observation_path', return_value=path), \
-                 patch('tools.qualification.replicated_results.validate_case', return_value=safety):
+            path.parent.mkdir(parents=True)
+            path.write_text('{}')
+            case['safety_case']['sha256'] = checksum(path.read_bytes())
+            (directory/'replicated-broker.json').write_text(json.dumps(case))
+            with patch('tools.qualification.replicated_results.validate_case', return_value=safety):
                 return broker_case(root, id, {key:safety[key] for key in ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')})
 
     def test_each_broker_exposure_requires_its_actual_observations(self):
@@ -160,15 +203,29 @@ class ReplicatedResultsTest(unittest.TestCase):
                 with self.subTest(selected=selected), self.assertRaises(ValueError):
                     collect(temporary,selected,{},'fresh')
 
-    def test_forced_source_exit_preserves_no_loss_scope_without_claiming_exact_lifetime_caps(self):
+    def test_forced_copy_phases_bind_current_lifetime_without_claiming_exact_caps(self):
         # Given documented forced-save exit 1, when independent safety passes,
         # then sampled work stays separate and lifetime peaks are explicitly null.
-        result = self.validate('broker/source-leader', lambda c,s:failed_worker(c,s,True))
+        for id in ('broker/source-leader', 'broker/destination-leader', 'broker/rolling-source', 'broker/rolling-destination'):
+            for terminal, phase in FORCED_COPY_PHASES.items():
+                def change(case,safety):
+                    worker = failed_worker(case,safety,True)
+                    worker.update(terminal_error=terminal,unavailable_highwater_phase=phase)
+                with self.subTest(id=id,phase=phase):
+                    result = self.validate(id,change)
         exposure = result['broker_exposure']
         self.assertFalse(exposure['exact_lifetime_work_caps_qualified'])
         self.assertIsNone(exposure['worker_measurements'][0]['peak_uncommitted_records'])
         for mutate in (
             lambda c,w:w.update(terminal_error='unknown forced exit'),
+            lambda c,w:w.update(terminal_error=' '+FORCED_SAVE_EXIT),
+            lambda c,w:w.update(terminal_error=FORCED_SAVE_EXIT+'\ncontext deadline exceeded'),
+            lambda c,w:w.update(unavailable_highwater_phase='finishing writes'),
+            lambda c,w:w['failure_context'].update(case='broker/unknown'),
+            lambda c,w:w['failure_context']['before']['worker']['lifetime'].update(pid=999),
+            lambda c,w:w['failure_context']['before']['worker']['lifetime'].update(number=2),
+            lambda c,w:w['failure_context']['before']['worker']['lifetime'].update(binary_sha256='b'*64),
+            lambda c,w:w['failure_context']['before']['worker'].update(log_prefix_sha256='b'*64),
             lambda c,w:w.update(peak_uncommitted_records=w['sampled_max_pending_entries']),
             lambda c,w:w.update(copy_summary=dict(msg='copy summary')),
             lambda c,w:w.update(lifetime_highwater_available=True),
@@ -183,6 +240,59 @@ class ReplicatedResultsTest(unittest.TestCase):
                 mutate(case,worker)
             with self.subTest(mutate=mutate), self.assertRaises(ValueError):
                 self.validate('broker/source-leader',change)
+
+    def test_forced_copy_requires_real_raw_and_lifecycle_bindings(self):
+        # Given physically retained exit evidence, when bytes, identity, timing,
+        # signal intent or the active window contradict eligibility, then hashes
+        # and raw prefix checks reject the proof even with independent safety.
+        def failed(case,safety):
+            failed_worker(case,safety,True)
+        def edit_witness(edit):
+            def artifacts(directory,case):
+                worker = case['worker_measurements'][0]
+                path = directory/worker['lifecycle']['observations']
+                witness = json.loads(path.read_text())
+                edit(witness)
+                data = json.dumps(witness).encode()
+                path.write_bytes(data)
+                worker['lifecycle']['sha256'] = checksum(data)
+                worker['failure_context']['exit_witness'] = witness
+            return artifacts
+        mutations = [
+            lambda w:w.update(driver_intent_before_wait=[dict(at=stamp(22),signal='interrupt',reason='cleanup')]),
+            lambda w:w.update(termination_signal='killed'),
+            lambda w:w.update(exit_code=0),
+            lambda w:w.update(wait_error=''),
+            lambda w:w.update(recorded_at=stamp(22)),
+            lambda w:w.update(raw_log_error='unreadable'),
+            lambda w:w['lifetime'].update(pid=999),
+            lambda w:w.update(active_fault=None),
+            lambda w:w['active_fault'].update(window=1),
+            lambda w:w.update(terminal_lines=['unknown failure']),
+        ]
+        for edit in mutations:
+            with self.subTest(edit=edit), self.assertRaises(ValueError):
+                self.validate('broker/source-leader',failed,edit_witness(edit))
+        for name in ('worker-1.lifecycle.json','worker-1.exited.cli.log'):
+            def corrupt(directory,case):
+                with (directory/name).open('ab') as stream:
+                    stream.write(b'corruption')
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.validate('broker/source-leader',failed,corrupt)
+        def after_recovery(case,safety):
+            worker = failed_worker(case,safety,True)
+            worker.update(stopped_at=stamp(144))
+            worker['failure_context']['observed_exit_at'] = stamp(144)
+            case['worker_measurements'][1]['started_at'] = stamp(145)
+        with self.assertRaises(ValueError):
+            self.validate('broker/source-leader',after_recovery)
+        def recovered_exit(case,safety):
+            worker = failed_worker(case,safety,True)
+            worker.update(stopped_at=stamp(25))
+            worker['failure_context']['observed_exit_at'] = stamp(25)
+        self.validate('broker/source-leader',recovered_exit)
+        with self.assertRaises(ValueError):
+            self.validate('broker/destination-isr-loss',failed)
 
     def test_destination_eof_requires_exact_unconfirmed_count_and_active_plain_fault(self):
         # Given exact summary highwater and two failed writes, when every terminal
