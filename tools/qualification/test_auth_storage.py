@@ -177,6 +177,12 @@ class AuthStorageShellTest(unittest.TestCase):
                     'alive = pathlib.Path(os.environ["ALIVE"])\n'
                     'assert os.environ["KAFERRY_AUTH_IMAGE"] == os.environ["EXPECTED_AUTH_IMAGE"]\n'
                     'with open(os.environ["CALLS"], "a") as log: log.write(json.dumps(dict(args=sys.argv[1:], cert=str(cert))) + "\\n")\n'
+                    'if sys.argv[1:3] == ["image", "inspect"]:\n'
+                    '    assert os.environ["EXTERNAL"] == "1" and not alive.exists()\n'
+                    '    assert cert == pathlib.Path("/tmp")\n'
+                    '    assert sys.argv[3:] == ["--format", "{{.Id}}", os.environ["EXPECTED_AUTH_IMAGE"]]\n'
+                    '    print("sha256:" + "a" * 64)\n'
+                    '    sys.exit(0)\n'
                     'if "up" in sys.argv:\n'
                     '    alive.touch()\n'
                     '    assert (cert / "ca.pem").is_file()\n'
@@ -234,7 +240,15 @@ class AuthStorageShellTest(unittest.TestCase):
                 calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
                 startup = next(call['args'] for call in calls if 'up' in call['args'])
                 self.assertEqual(['up', '-d', '--build', '--wait', '--wait-timeout', '90'], startup[startup.index('up'):])
+                self.assertEqual(int(bool(storage_env)), sum(call['args'][:2] == ['image', 'inspect'] for call in calls))
                 for call in calls:
-                    self.assertEqual(bool(storage_env), 'src/tests/qualification/broker-storage.compose.yaml' in call['args'])
+                    if call['args'][:2] == ['image', 'inspect']:
+                        self.assertTrue(storage_env)
+                        self.assertEqual(['--format', '{{.Id}}', IMAGES['3.9.2']], call['args'][2:])
+                        self.assertEqual('/tmp', call['cert'])
+                    else:
+                        self.assertEqual('compose', call['args'][0])
+                        self.assertEqual('kaferry-qualification', call['args'][call['args'].index('-p') + 1])
+                        self.assertEqual(bool(storage_env), 'src/tests/qualification/broker-storage.compose.yaml' in call['args'])
                     if call['cert'] != '/tmp':
                         self.assertFalse(Path(call['cert']).exists(), 'private fixture certificates must be removed')
