@@ -16,6 +16,7 @@ HELPERS = (
     'TestOwnershipCaseRejectsUnprovedMembership',
     'TestOwnershipCoordinatorRestartRequiresTerminalCause',
     'TestOwnershipKilledWorkerKeepsEarlierPeak',
+) + (
     'TestReplicatedPublisherAcknowledgesAllPartitionsAndStops',
     'TestReplicatedPublisherStopsAfterRejectedBatch',
     'TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites',
