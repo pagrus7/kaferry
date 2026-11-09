@@ -175,8 +175,8 @@ class RuntimeObservations:
             self.summary['status'] = 'recording'
             for target in (self.health, self.stats):
                 thread = threading.Thread(target=target, daemon=True)
-                self.threads.append(thread)
                 thread.start()
+                self.threads.append(thread)
         except (OSError, ValueError, KeyError, IndexError, TypeError, subprocess.SubprocessError, TimeoutError, RuntimeError) as error:
             self.error('startup: ' + str(error))
 

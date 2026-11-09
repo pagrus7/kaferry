@@ -5,11 +5,12 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
 
-from tools.qualification.runtime_observations import runtime_observations, SERVICES
+from tools.qualification.runtime_observations import RuntimeObservations, runtime_observations, SERVICES
 
 
 FAKE_DOCKER = r'''
@@ -25,6 +26,8 @@ if sys.argv[1] == 'compose':
 elif sys.argv[1] == 'inspect':
     if options.get('inspect_sleep'):
         time.sleep(options['inspect_sleep'])
+    if options.get('health_sleep') and (root / 'processes.jsonl').read_text().count('"inspect"') > 1:
+        time.sleep(options['health_sleep'])
     for identifier, service in zip(ids, options['services']):
         row = dict(id=identifier, project='foreign' if options.get('foreign') else 'owned',
                    service=service, running=True, started_at='2026-11-09T00:00:00Z', restart_count=0,
@@ -159,6 +162,40 @@ class RuntimeObservationsTest(unittest.TestCase):
             self.assertEqual('incomplete', summary['status'])
             self.assertIn('summary: disk full', summary['errors'])
             self.assert_joined(root)
+
+    def test_thread_start_failures_preserve_the_suite_error_and_finish_cleanup(self):
+        # Given failure to start either sampler, including a health command
+        # already running when the second thread cannot start.
+        real_start = threading.Thread.start
+        for failing in (1, 2):
+            with self.subTest(failing=failing), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                env = self.fixture(root, health_sleep=2)
+                observer = RuntimeObservations(root, ['docker', 'compose', '-p', 'owned'], env)
+                started = []
+                def start(thread):
+                    if len(started) + 1 == failing:
+                        if started:
+                            self.wait_for(lambda: (root / 'processes.jsonl').read_text().count('"inspect"') > 1)
+                        raise RuntimeError('thread creation unavailable')
+                    real_start(thread)
+                    started.append(thread)
+                failure = RuntimeError('original suite failure')
+                with patch('tools.qualification.runtime_observations.RuntimeObservations', return_value=observer), \
+                     patch.object(threading.Thread, 'start', start):
+                    # When the suite fails too, then cleanup joins only actual
+                    # threads, reaps every command, closes output and saves status.
+                    with self.assertRaises(RuntimeError) as caught:
+                        with runtime_observations(root, ['docker', 'compose', '-p', 'owned'], env):
+                            raise failure
+                self.assertIs(failure, caught.exception)
+                self.assertEqual(failing - 1, len(observer.threads))
+                self.assertTrue(all(not thread.is_alive() for thread in started))
+                self.assertTrue(observer.stream.closed)
+                summary = json.loads((root / 'replicated-runtime.json').read_text())
+                self.assertEqual('incomplete', summary['status'])
+                self.assertIn('startup: thread creation unavailable', summary['errors'])
+                self.assert_joined(root)
 
 
 if __name__ == '__main__':
