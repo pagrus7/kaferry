@@ -15,7 +15,7 @@ from tools.ci import suites
 from tools.qualification import ownership_cases as ownership
 from tools.qualification import ownership_coordinator_exit as coordinator_exit
 from tools.qualification import test_ownership_audit as audit_fixture
-from tools.qualification.replicated_results import SOURCE_OPERATION_EOFS, collect
+from tools.qualification.replicated_results import FIRST_RESPONSE_EOF, SOURCE_OPERATION_EOFS, collect
 from tools.qualification.broker_readiness import CRITERION
 from tools.qualification.test_replicated_results import readiness
 
@@ -324,6 +324,54 @@ class OwnershipCasesTest(unittest.TestCase):
         fixture[2]['complete']=False
         with self.assertRaisesRegex(ValueError,'selected configuration'):
             self.validate(fixture)
+
+    def test_mixed_eof_cannot_use_generic_coordinator_restart(self):
+        # Given rebound raw CLI/wait/protocol evidence, known-cause substrings
+        # cannot rescue malformed EOF text or replace a missing phase proof.
+        for diagnostic in (coordinator_exit.NEGOTIATION_EOF,FIRST_RESPONSE_EOF):
+            for terminal in (coordinator_exit.JOIN.replace(coordinator_exit.NEGOTIATION_EOF,diagnostic)+' context deadline exceeded',
+                             diagnostic+' ILLEGAL_GENERATION\ncontext deadline exceeded',
+                             'context deadline exceeded\n'+diagnostic+' UNKNOWN_MEMBER_ID'):
+                for pending,swapped in itertools.product((False,True),repeat=2):
+                    fixture=self.fixture('coordinator-kill-rebalance',restart=True,eof=pending)
+                    index=1 if pending else 0
+                    worker=fixture[2]['worker_measurements'][index]
+                    old=worker['terminal_error']
+                    self.rebound_exit_log(fixture,index,lambda raw:raw.replace(old,terminal))
+                    worker.pop('coordinator_exit_phase',None)
+                    if pending:
+                        def broken_proof(rows):
+                            for row in rows:
+                                if row['requestHeader']['clientId'].endswith('worker2') and row['requestHeader']['requestApiKeyName']=='API_VERSIONS':
+                                    row['response']['errorCode']=58
+                        self.rebound_protocol(fixture,broken_proof)
+                    if swapped:
+                        def work_swap(raw):
+                            lines=[]
+                            for line in raw.splitlines():
+                                if line.startswith('{') and (row:=json.loads(line)).get('msg') in ('progress','copy summary'):
+                                    row['submitted']=row['confirmed']=10 if pending else 0
+                                    if not pending:
+                                        for key in ('pending_entries','pending_estimated_bytes','peak_uncommitted_records','peak_uncommitted_bytes'):
+                                            if key in row:
+                                                row[key]=0
+                                    line=json.dumps(row)
+                                lines.append(line)
+                            return '\n'.join(lines)+'\n'
+                        self.rebound_exit_log(fixture,index,work_swap,mirror_summary=True)
+                        counts=ownership.work((fixture[1]/worker['log']).read_text())
+                        worker.update(sampled_max_pending_entries=counts[0],sampled_max_pending_estimated_bytes=counts[1])
+                    with self.subTest(diagnostic=diagnostic,terminal=terminal,pending=pending,swapped=swapped),self.assertRaises(ValueError):
+                        self.validate(fixture)
+
+    def test_structured_eof_warning_does_not_change_generic_restart(self):
+        # Given a real generic coordinator cause, a structured warning alone
+        # cannot turn its terminal classification into an EOF exception.
+        for diagnostic in (coordinator_exit.NEGOTIATION_EOF,FIRST_RESPONSE_EOF):
+            fixture=self.fixture('coordinator-kill-rebalance',restart=True)
+            warning=json.dumps(dict(msg='source warning',error=diagnostic))+'\n'
+            self.rebound_exit_log(fixture,0,lambda raw:warning+raw)
+            self.assertIn('ownership_exposure',self.validate(fixture))
 
     def test_coordinator_operation_and_optional_join_cleanup_bind_full_recovery(self):
         # Given the established operation stages and a peer whose close may

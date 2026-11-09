@@ -742,10 +742,8 @@ func (s *ownershipCase) live(allowFaultExit bool) {
 		require.NoError(s.t, retainErr, "retain ownership sole-Wait evidence before classification")
 		require.True(s.t, allowFaultExit && !s.failedAfter.IsZero(), "unexplained or premature CLI exit: %s", worker.process.logs())
 		require.Equal(s.t, 1, worker.process.command.ProcessState.ExitCode(), worker.process.logs())
-		terminal, known := ownershipCoordinatorFailure(worker.process.logs())
-		if !known {
-			terminal, worker.coordinatorPhase, known = s.coordinatorEOF(worker, exit.Witness, worker.process.logs())
-		}
+		terminal, phase, known := s.coordinatorFailure(worker, exit.Witness, worker.process.logs())
+		worker.coordinatorPhase = phase
 		require.True(s.t, known, "coordinator fault produced an unexplained terminal failure: %s", worker.process.logs())
 		worker.reason, worker.terminal = "coordinator fault fail-fast exit", terminal
 		s.measure(worker, false)
@@ -774,6 +772,9 @@ func ownershipCoordinatorFailure(logs string) (string, bool) {
 		line = strings.TrimSpace(line)
 		if line == "" || json.Valid([]byte(line)) {
 			continue
+		}
+		if strings.Contains(line, brokerNegotiationEOF) || strings.Contains(line, networkFirstResponseEOF) {
+			return strings.Join(append(terminal, line), "\n"), false
 		}
 		known := false
 		for _, cause := range []string{"NOT_COORDINATOR", "COORDINATOR_NOT_AVAILABLE", "COORDINATOR_LOAD_IN_PROGRESS", "UNKNOWN_MEMBER_ID", "ILLEGAL_GENERATION", "REBALANCE_IN_PROGRESS", "consumer group ownership unavailable for commit", "context deadline exceeded"} {

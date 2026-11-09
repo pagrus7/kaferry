@@ -14,7 +14,7 @@ from tools.qualification.fault_results import observation_path, validate_case
 from tools.qualification.broker_lifecycle import load_lifecycle
 from tools.qualification.broker_readiness import validate as validate_readiness
 from tools.qualification.ownership_audit import commits, integer, logging_configuration, records, segments, stamp
-from tools.qualification.replicated_results import EXACT_SCOPE, advances, vector
+from tools.qualification.replicated_results import EXACT_SCOPE, FIRST_RESPONSE_EOF, NEGOTIATION_EOF, advances, vector
 
 
 IDENTITY = ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')
@@ -299,7 +299,8 @@ def workers(directory, case, safety, identity):
                       'ILLEGAL_GENERATION', 'REBALANCE_IN_PROGRESS', 'consumer group ownership unavailable for commit', 'context deadline exceeded')
             from tools.qualification.ownership_coordinator_exit import phase
             observed_phase = phase(raw.decode('utf-8'), counts[3])
-            known = all(any(cause in line for cause in causes) for line in counts[4].splitlines())
+            known = (not any(diagnostic in counts[4] for diagnostic in (NEGOTIATION_EOF,FIRST_RESPONSE_EOF)) and
+                     all(any(cause in line for cause in causes) for line in counts[4].splitlines()))
             require(counts[4] and counts[4] == worker['terminal_error'] and
                     ((observed_phase and case['id'] == 'ownership/coordinator-kill-rebalance' and
                       worker.get('coordinator_exit_phase') == observed_phase) or

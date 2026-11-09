@@ -101,7 +101,11 @@ func ownershipPhaseMember(state ownershipCaseObservation, route int) (ownershipM
 	return ownershipMember{}, false
 }
 
-func (s *ownershipCase) coordinatorEOF(worker *ownershipCaseWorker, exit *brokerExitWitness, logs string) (string, string, bool) {
+func (s *ownershipCase) coordinatorFailure(worker *ownershipCaseWorker, exit *brokerExitWitness, logs string) (string, string, bool) {
+	terminal, known := ownershipCoordinatorFailure(logs)
+	if known {
+		return terminal, "", true
+	}
 	work, ready, err := ownershipCaseWork(logs)
 	if err != nil || !ready {
 		return "", "", false
@@ -381,7 +385,7 @@ func (s *ownershipCase) validateCoordinatorEOFExits() {
 	for _, worker := range candidates {
 		exit, retainErr := s.lifecycle.retainExit(worker.process)
 		require.NoError(s.t, retainErr)
-		_, phase, valid := s.coordinatorEOF(worker, exit.Witness, worker.process.logs())
+		_, phase, valid := s.coordinatorFailure(worker, exit.Witness, worker.process.logs())
 		require.True(s.t, valid && phase == worker.coordinatorPhase, "coordinator EOF exit failed conclusive physical-window validation")
 		if phase == ownershipJoiningEOF {
 			member, found := ownershipPhaseMember(s.states["at_kill"], worker.route)
@@ -480,6 +484,7 @@ func rewriteOwnershipCoordinatorPrefix(t *testing.T, s *ownershipCase, old, new 
 
 func TestOwnershipCoordinatorEOFRequiresRawBoundPhase(t *testing.T) {
 	ownershipCoordinatorChildOutput(t)
+	ownershipCoordinatorFallbackMutations(t)
 	save, closeInput := "save progress: "+brokerNegotiationEOF, "close Kafka input: "+brokerNegotiationEOF
 	join := "poll source: unable to join group session: " + brokerNegotiationEOF
 	cases := []struct{ name, phase, terminal string }{
@@ -495,15 +500,15 @@ func TestOwnershipCoordinatorEOFRequiresRawBoundPhase(t *testing.T) {
 			// when physical healing is known, then only its strict window qualifies.
 			s, w, exit, logs := ownershipCoordinatorFixture(t, tc.phase)
 			logs = strings.Replace(logs, strings.Join(brokerTerminals(logs), "\n"), tc.terminal, 1)
-			_, observed, valid := s.coordinatorEOF(w, exit, logs)
+			_, observed, valid := s.coordinatorFailure(w, exit, logs)
 			require.True(t, valid)
 			require.Equal(t, tc.phase, observed)
 			ownershipCoordinatorOwnedChild(t, logs, tc.phase)
 			s.coordinatorFault.Event.Heal = time.Time{}
-			_, _, valid = s.coordinatorEOF(w, exit, logs)
+			_, _, valid = s.coordinatorFailure(w, exit, logs)
 			require.True(t, valid, "early admission remains provisional")
 			s.coordinatorFault.Event.Heal = exit.Stopped
-			_, _, valid = s.coordinatorEOF(w, exit, logs)
+			_, _, valid = s.coordinatorFailure(w, exit, logs)
 			require.False(t, valid, "physical-heal equality must reject during conclusive revalidation")
 		})
 	}
@@ -522,7 +527,7 @@ func TestOwnershipCoordinatorEOFRequiresRawBoundPhase(t *testing.T) {
 				} else {
 					logs = strings.NewReplacer(`"submitted":0`, `"submitted":10`, `"confirmed":0`, `"confirmed":10`).Replace(logs)
 				}
-				_, _, valid := s.coordinatorEOF(worker, exit, logs)
+				_, _, valid := s.coordinatorFailure(worker, exit, logs)
 				require.False(t, valid)
 			})
 		}
@@ -542,20 +547,20 @@ func TestOwnershipCoordinatorEOFRequiresRawBoundPhase(t *testing.T) {
 			// Given the full pending protocol proof, when its raw work or terminal
 			// stages differ, then the contextual phase remains fail closed.
 			s, worker, exit, logs := ownershipCoordinatorFixture(t, ownershipJoiningEOF)
-			_, _, valid := s.coordinatorEOF(worker, exit, change(logs))
+			_, _, valid := s.coordinatorFailure(worker, exit, change(logs))
 			require.False(t, valid)
 		})
 	}
 	t.Run("established progress remains required", func(t *testing.T) {
 		s, w, exit, logs := ownershipCoordinatorFixture(t, ownershipEstablishedEOF)
 		rewriteOwnershipCoordinatorPrefix(t, s, `"committedOffset":6`, `"committedOffset":0`)
-		_, _, valid := s.coordinatorEOF(w, exit, logs)
+		_, _, valid := s.coordinatorFailure(w, exit, logs)
 		require.False(t, valid, "one missing owned partition cannot authorize the established member")
 	})
 	t.Run("established summary remains all confirmed", func(t *testing.T) {
 		s, w, exit, logs := ownershipCoordinatorFixture(t, ownershipEstablishedEOF)
 		logs = strings.Replace(logs, `"confirmed":10`, `"confirmed":9`, 1)
-		_, _, valid := s.coordinatorEOF(w, exit, logs)
+		_, _, valid := s.coordinatorFailure(w, exit, logs)
 		require.False(t, valid)
 	})
 	for name, edit := range ownershipCoordinatorExitMutations() {
@@ -564,9 +569,52 @@ func TestOwnershipCoordinatorEOFRequiresRawBoundPhase(t *testing.T) {
 			// then rehashing cannot authorize the pending member's EOF.
 			s, w, exit, logs := ownershipCoordinatorFixture(t, ownershipJoiningEOF)
 			edit(t, s, w, exit, &logs)
-			_, _, valid := s.coordinatorEOF(w, exit, logs)
+			_, _, valid := s.coordinatorFailure(w, exit, logs)
 			require.False(t, valid)
 		})
+	}
+}
+
+func ownershipCoordinatorFallbackMutations(t *testing.T) {
+	t.Helper()
+	variants := []struct {
+		phase   string
+		swapped bool
+	}{{ownershipEstablishedEOF, false}, {ownershipEstablishedEOF, true}, {ownershipJoiningEOF, false}, {ownershipJoiningEOF, true}}
+	for _, diagnostic := range []string{brokerNegotiationEOF, networkFirstResponseEOF} {
+		for _, variant := range variants {
+			for _, malformed := range []string{
+				"poll source: unable to join group session: " + diagnostic + " context deadline exceeded",
+				diagnostic + " ILLEGAL_GENERATION\ncontext deadline exceeded",
+				"context deadline exceeded\n" + diagnostic + " UNKNOWN_MEMBER_ID",
+			} {
+				t.Run(fmt.Sprintf("%s/mixed EOF %s/swapped-%t", variant.phase, strings.ReplaceAll(malformed, diagnostic, "EOF"), variant.swapped), func(t *testing.T) {
+					// Given malformed EOF text and a known-cause suffix, when the same
+					// classifier used by live considers it, phase proof cannot be bypassed.
+					s, worker, exit, logs := ownershipCoordinatorFixture(t, variant.phase)
+					logs = strings.Replace(logs, strings.Join(brokerTerminals(logs), "\n"), malformed, 1)
+					if !variant.swapped {
+						s.coordinatorAudit = nil
+					} else if variant.phase == ownershipEstablishedEOF {
+						logs = strings.NewReplacer(`"submitted":10`, `"submitted":0`, `"confirmed":8`, `"confirmed":0`, `"confirmed":10`, `"confirmed":0`,
+							`"pending_entries":2`, `"pending_entries":0`, `"pending_estimated_bytes":20`, `"pending_estimated_bytes":0`,
+							`"peak_uncommitted_records":2`, `"peak_uncommitted_records":0`, `"peak_uncommitted_bytes":20`, `"peak_uncommitted_bytes":0`).Replace(logs)
+					} else {
+						logs = strings.NewReplacer(`"submitted":0`, `"submitted":10`, `"confirmed":0`, `"confirmed":10`).Replace(logs)
+					}
+					_, _, valid := s.coordinatorFailure(worker, exit, logs)
+					require.False(t, valid, "a known-cause substring cannot authorize a reserved EOF without matching proof")
+				})
+			}
+		}
+		warning := fmt.Sprintf("{\"msg\":\"source warning\",\"error\":%q}\n", diagnostic)
+		// Given an EOF only in structured diagnostics, a genuine generic terminal
+		// cause still follows the unchanged known-cause path.
+		s := &ownershipCase{}
+		terminal, phase, valid := s.coordinatorFailure(nil, nil, warning+"recoverable operation: ILLEGAL_GENERATION\n")
+		require.True(t, valid)
+		require.Empty(t, phase)
+		require.Equal(t, "recoverable operation: ILLEGAL_GENERATION", terminal)
 	}
 }
 
