@@ -19,6 +19,8 @@ import (
 
 	"github.com/pagrus7/kaferry/src/tests/system/faults"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 const ownershipKilledWorkScope = "sampled progress only; SIGKILL omits final lifetime highwater"
@@ -78,6 +80,7 @@ type ownershipCase struct {
 	complete                            bool
 	coordinatorFault                    *faults.Injection
 	coordinatorAudit                    *ownershipCoordinatorAudit
+	sourceID                            [16]byte
 }
 
 func replicatedOwnershipCase(t *testing.T, name string) {
@@ -120,6 +123,10 @@ func replicatedOwnershipCase(t *testing.T, name string) {
 	s.src, s.dst, s.group = s.prefix+"-source", s.prefix+"-destination", s.prefix+"-group"
 	replicatedTopic(ctx, t, metadata["source"].Client, s.src)
 	replicatedTopic(ctx, t, metadata["destination"].Client, s.dst)
+	source, err := metadata["source"].Metadata(ctx, s.src)
+	require.NoError(t, err)
+	s.sourceID = source.Topics[s.src].ID
+	require.NotZero(t, s.sourceID, "the selected source topic must have an independent identity")
 	if name == "coordinator-kill-rebalance" {
 		s.readiness = &brokerCopy{lab: s.lab, metadata: metadata, src: s.src, dst: s.dst}
 		for side, topic := range map[string]string{"source": s.src, "destination": s.dst} {
@@ -209,12 +216,12 @@ func (s *ownershipCase) observe(ctx context.Context) ownershipCaseObservation {
 		state.Alive[worker.process.pid()] = !worker.process.finished()
 	}
 	var err error
-	state.State, state.Members, err = s.groupMembers(ctx)
+	state.Coordinator, err = s.metadata.Coordinator(ctx, "source", s.group)
 	if err == nil {
-		state.Coordinator, err = s.metadata.Coordinator(ctx, "source", s.group)
+		state.State, state.Members, err = s.groupMembers(ctx, state.Coordinator)
 	}
 	if err == nil {
-		state.Saved, err = s.savedOffsets(ctx)
+		state.Saved, err = s.savedOffsets(ctx, state.Coordinator)
 	}
 	if err != nil {
 		state.Error = err.Error()
@@ -223,52 +230,100 @@ func (s *ownershipCase) observe(ctx context.Context) ownershipCaseObservation {
 	return state
 }
 
-func (s *ownershipCase) groupMembers(ctx context.Context) (string, []ownershipMember, error) {
-	groups, err := s.metadata["source"].DescribeGroups(ctx, s.group)
+func (s *ownershipCase) groupMembers(ctx context.Context, coordinator int32) (string, []ownershipMember, error) {
+	request := kmsg.NewPtrDescribeGroupsRequest()
+	request.Groups = []string{s.group}
+	result, err := s.metadata["source"].RequestBroker(ctx, coordinator, request)
 	if err != nil {
 		return "", nil, err
 	}
-	group, ok := groups[s.group]
-	if !ok {
+	groups := result.(*kmsg.DescribeGroupsResponse).Groups
+	if len(groups) != 1 || groups[0].Group != s.group {
 		return "", nil, fmt.Errorf("independent group describe omitted the selected group")
 	}
-	if group.Err != nil {
-		return "", nil, group.Err
+	group := groups[0]
+	if groupErr := kerr.ErrorForCode(group.ErrorCode); groupErr != nil {
+		return "", nil, groupErr
+	}
+	if group.ProtocolType != "consumer" {
+		return "", nil, fmt.Errorf("independent group describe returned protocol %q", group.ProtocolType)
 	}
 	var members []ownershipMember
 	for _, member := range group.Members {
 		owned := ownershipMember{ClientID: member.ClientID, MemberID: member.MemberID}
-		assignment, assigned := member.Assigned.AsConsumer()
-		if !assigned {
-			members = append(members, owned)
-			continue
+		owned.Partitions, err = ownershipAssignedPartitions(member.MemberAssignment, s.src)
+		if err != nil {
+			return "", nil, err
 		}
-		for _, topic := range assignment.Topics {
-			if topic.Topic != s.src {
-				return "", nil, fmt.Errorf("group member owns unexpected topic %q", topic.Topic)
-			}
-			owned.Partitions = append(owned.Partitions, topic.Partitions...)
-		}
-		slices.Sort(owned.Partitions)
 		members = append(members, owned)
 	}
 	return group.State, members, nil
 }
 
-func (s *ownershipCase) savedOffsets(ctx context.Context) ([]int64, error) {
-	parts, err := s.metadata["source"].FetchOffsetsForTopics(ctx, s.group, s.src)
+func ownershipAssignedPartitions(encoded []byte, source string) ([]int32, error) {
+	if len(encoded) == 0 {
+		return nil, nil
+	}
+	var assignment kmsg.ConsumerMemberAssignment
+	if err := assignment.ReadFrom(encoded); err != nil {
+		return nil, fmt.Errorf("decode independent group assignment: %w", err)
+	}
+	var partitions []int32
+	for _, topic := range assignment.Topics {
+		if topic.Topic != source {
+			return nil, fmt.Errorf("group member owns unexpected topic %q", topic.Topic)
+		}
+		partitions = append(partitions, topic.Partitions...)
+	}
+	slices.Sort(partitions)
+	return partitions, nil
+}
+
+func (s *ownershipCase) savedOffsets(ctx context.Context, coordinator int32) ([]int64, error) {
+	request := kmsg.NewPtrOffsetFetchRequest()
+	request.Group = s.group
+	group := kmsg.NewOffsetFetchRequestGroup()
+	group.Group = s.group
+	request.Groups = []kmsg.OffsetFetchRequestGroup{group}
+	result, err := s.metadata["source"].RequestBroker(ctx, coordinator, request)
 	if err != nil {
 		return nil, err
 	}
-	if offsetsErr := parts.Error(); offsetsErr != nil {
-		return nil, offsetsErr
+	response := result.(*kmsg.OffsetFetchResponse)
+	if err := kerr.ErrorForCode(response.ErrorCode); err != nil {
+		return nil, err
 	}
-	if len(parts[s.src]) != replicatedPartitions {
+	if len(response.Groups) != 1 || response.Groups[0].Group != s.group {
+		return nil, fmt.Errorf("independent offset fetch omitted the selected group")
+	}
+	observed := response.Groups[0]
+	if err := kerr.ErrorForCode(observed.ErrorCode); err != nil {
+		return nil, err
+	}
+	if len(observed.Topics) != 1 {
+		return nil, nil
+	}
+	topic := observed.Topics[0]
+	selected := topic.Topic == s.src
+	if response.Version >= 10 {
+		selected = topic.TopicID == s.sourceID
+	}
+	if !selected {
+		return nil, fmt.Errorf("independent offset fetch returned an unexpected topic")
+	}
+	if len(topic.Partitions) != replicatedPartitions {
 		return nil, nil
 	}
 	saved := make([]int64, replicatedPartitions)
-	for partition, part := range parts[s.src] {
-		saved[partition] = part.At
+	seen := make(map[int32]bool)
+	for _, part := range topic.Partitions {
+		if !ownershipDistinctParts([]int32{part.Partition}, seen) {
+			return nil, fmt.Errorf("independent offset fetch returned invalid or repeated partition %d", part.Partition)
+		}
+		if err := kerr.ErrorForCode(part.ErrorCode); err != nil {
+			return nil, err
+		}
+		saved[part.Partition] = part.Offset
 	}
 	return saved, nil
 }
@@ -283,8 +338,13 @@ func (s *ownershipCase) poll(label string, allowFaultExit bool, condition func(c
 		require.NoError(s.t, s.publisher.snapshot().err, "steady independent publisher failed")
 		query, done := context.WithTimeout(deadline, 2*time.Second)
 		state := s.observe(query)
-		s.journal(state)
 		ready := state.Error == "" && condition(query, state)
+		if err := query.Err(); err != nil {
+			state.Error = err.Error()
+			ready = false
+		}
+		state.Finished = time.Now().UTC()
+		s.journal(state)
 		done()
 		if ready {
 			state.Finished = time.Now().UTC()
@@ -379,13 +439,23 @@ func (s *ownershipCase) acceptedGenerations(ctx context.Context, members map[int
 		run = faults.Docker
 	}
 	all, err := readAuditRequests(ctx, s.audit.targets, run)
+	if ctx.Err() != nil {
+		return nil
+	}
+	require.NoError(s.t, err, "actual accepted generation audit unavailable")
+	rows, err := decodeOwnershipAudit(ctx, all)
+	if ctx.Err() != nil {
+		return nil
+	}
 	require.NoError(s.t, err, "actual accepted generation audit unavailable")
 	generations := make(map[string]int32)
 	var current int32
 	for _, member := range members {
-		observed, ready, err := currentGenerationSaved(all, member.ClientID, s.group, member.MemberID, member.Partitions, minimum, time.Time{})
+		observed, ready, err := currentGenerationSavedRows(rows, member.ClientID, s.group, member.MemberID, member.Partitions, minimum, time.Time{})
 		require.NoError(s.t, err, "actual accepted generation audit unavailable")
-		require.NoError(s.t, context.Cause(ctx), "actual accepted generation audit unavailable")
+		if ctx.Err() != nil {
+			return nil
+		}
 		if !ready || observed <= generation || current != 0 && current != observed {
 			return nil
 		}
@@ -420,6 +490,24 @@ func TestOwnershipGenerationsReuseOneAuditSnapshot(t *testing.T) {
 			}
 		})
 	}
+	t.Run("expired-read-is-unavailable", func(t *testing.T) {
+		// Given a complete cohort whose bounded read consumes this poll's budget.
+		query, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		members := ownershipGenerationMembers()
+		run, calls := ownershipGenerationReader(query, ownershipGenerationRows(members, 0, 3))
+		s := &ownershipCase{t: t, group: "group", audit: &replicatedAudit{targets: readinessTargets()}, lab: &faults.Lab{}}
+		s.lab.Docker = func(ctx context.Context, args ...string) ([]byte, error) {
+			data, err := run(ctx, args...)
+			cancel()
+			return data, err
+		}
+		// When the read joins, then this attempt is unavailable without failing
+		// the case or accepting proof after the observation context expired.
+		require.Nil(t, s.acceptedGenerations(query, members, make([]int64, replicatedPartitions), 2))
+		require.ErrorIs(t, query.Err(), context.Canceled)
+		require.Equal(t, map[string]int{"one": 1, "two": 1, "three": 1}, calls)
+	})
 }
 
 func ownershipGenerationMembers() map[int]ownershipMember {

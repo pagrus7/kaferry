@@ -17,6 +17,7 @@ HELPERS = (
     'TestOwnershipCoordinatorRestartRequiresTerminalCause',
     'TestOwnershipKilledWorkerKeepsEarlierPeak',
     'TestOwnershipGenerationsReuseOneAuditSnapshot',
+    'TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy',
     'TestOwnershipCoordinatorEOFRequiresRawBoundPhase',
 ) + (
     'TestReplicatedPublisherAcknowledgesAllPartitionsAndStops',
@@ -55,6 +56,7 @@ HELPERS = (
     'TestReplicatedAuditReadinessReadsEveryBrokerConcurrently',
     'TestReplicatedAuditReadinessRejectsIncompleteBrokerReads',
     'TestReplicatedAuditReadinessSharesCancellation',
+    'TestReplicatedAuditCohortUsesOneCompleteParsedSnapshot',
     'TestReplicatedZombieRSSStopsAtProcessExit',
     'TestReplicatedZombieExposureSpansSessionWithinSaveDeadline',
 )

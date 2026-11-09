@@ -17,6 +17,7 @@ REPLICATED_HELPER_TESTS := \
 	TestOwnershipCoordinatorRestartRequiresTerminalCause \
 	TestOwnershipKilledWorkerKeepsEarlierPeak \
 	TestOwnershipGenerationsReuseOneAuditSnapshot \
+	TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy \
 	TestOwnershipCoordinatorEOFRequiresRawBoundPhase \
 	TestReplicatedPublisherAcknowledgesAllPartitionsAndStops \
 	TestReplicatedPublisherStopsAfterRejectedBatch \
@@ -52,6 +53,7 @@ REPLICATED_HELPER_TESTS := \
 	TestReplicatedAuditReadinessReadsEveryBrokerConcurrently \
 	TestReplicatedAuditReadinessRejectsIncompleteBrokerReads \
 	TestReplicatedAuditReadinessSharesCancellation \
+	TestReplicatedAuditCohortUsesOneCompleteParsedSnapshot \
 	TestReplicatedZombieRSSStopsAtProcessExit \
 	TestReplicatedZombieExposureSpansSessionWithinSaveDeadline
 ifeq ($(KAFERRY_TEST_BINARY),)

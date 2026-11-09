@@ -89,7 +89,7 @@ func (c *MetadataClient) ProbeMetadata(ctx context.Context, target Target) (resp
 	}
 	request := kmsg.NewPtrMetadataRequest() // nil Topics means all; empty means none.
 	var raw kmsg.Response
-	raw, err = c.raw.Broker(int(target.Broker)).Request(ctx, request)
+	raw, err = c.RequestBroker(ctx, target.Broker, request)
 	if err != nil {
 		return
 	}
@@ -130,6 +130,14 @@ func (c *MetadataClient) AdminRoutes() map[int32]string {
 		routes[broker] = address
 	}
 	return routes
+}
+
+// RequestBroker bypasses coordinator caching for independently resolved reads.
+func (c *MetadataClient) RequestBroker(ctx context.Context, broker int32, request kmsg.Request) (kmsg.Response, error) {
+	if c.raw == nil || c.expected[broker] == "" {
+		return nil, errors.New("observation broker is outside the selected ADMIN routes")
+	}
+	return c.raw.Broker(int(broker)).Request(ctx, request)
 }
 
 // NewMetadata uses the independent admin route. Worker-route cuts do not cut

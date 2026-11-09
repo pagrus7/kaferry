@@ -321,10 +321,15 @@ func decodeOwnershipAuditRecord(line string) (ownershipAuditRecord, bool, error)
 // join generation. A nonzero barrier also requires receipt after that observation;
 // a request received earlier cannot qualify just because its response was later.
 func currentGenerationSaved(data []byte, client, group, member string, owned []int32, minimum map[int32]int64, receivedAfter time.Time) (int32, bool, error) {
-	rows, generation, err := currentGenerationRows(data, client, group, member)
+	rows, err := decodeOwnershipAudit(context.Background(), data)
 	if err != nil {
 		return 0, false, err
 	}
+	return currentGenerationSavedRows(rows, client, group, member, owned, minimum, receivedAfter)
+}
+
+func currentGenerationSavedRows(all []ownershipAuditRecord, client, group, member string, owned []int32, minimum map[int32]int64, receivedAfter time.Time) (int32, bool, error) {
+	rows, generation := currentGenerationRows(all, client, group, member)
 	accepted := make(map[int32]bool)
 	for _, row := range rows {
 		if row.Header.RequestAPIKeyName != "OFFSET_COMMIT" || row.Request.MemberID != member || row.Request.Generation != generation {
@@ -351,17 +356,10 @@ func currentGenerationSaved(data []byte, client, group, member string, owned []i
 	return generation, generation >= 0 && len(owned) > 0, nil
 }
 
-func currentGenerationRows(data []byte, client, group, member string) ([]ownershipAuditRecord, int32, error) {
+func currentGenerationRows(all []ownershipAuditRecord, client, group, member string) ([]ownershipAuditRecord, int32) {
 	var rows []ownershipAuditRecord
 	generation := int32(-1)
-	for _, line := range strings.Split(string(data), "\n") {
-		row, ok, err := decodeOwnershipAuditRecord(line)
-		if err != nil {
-			return nil, 0, err
-		}
-		if !ok {
-			continue
-		}
+	for _, row := range all {
 		if row.Header.ClientID != client || row.Request.GroupID != group || row.Response == nil {
 			continue
 		}
@@ -370,7 +368,27 @@ func currentGenerationRows(data []byte, client, group, member string) ([]ownersh
 			generation = max(generation, row.Response.GenerationID)
 		}
 	}
-	return rows, generation, nil
+	return rows, generation
+}
+
+// Decode the complete bounded audit once before checking the selected cohort.
+// Irrelevant request bodies are still validated; no partial snapshot is proof.
+func decodeOwnershipAudit(ctx context.Context, data []byte) ([]ownershipAuditRecord, error) {
+	var rows []ownershipAuditRecord
+	for _, line := range strings.Split(string(data), "\n") {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		row, ok, err := decodeOwnershipAuditRecord(line)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	return rows, ctx.Err()
 }
 
 // Completion can follow the transfer even when the broker received the request
