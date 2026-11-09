@@ -204,6 +204,29 @@ class OwnershipCasesTest(unittest.TestCase):
         with patch.object(ownership,'validate_case',return_value=copy.deepcopy(safety)):
             return ownership.validate(root,case['id'],identity)
 
+    def move_birth(self,fixture,worker_index,start,matching_identity=True):
+        worker=fixture[2]['worker_measurements'][worker_index]
+        worker['started_at']=when(start)
+        path=fixture[1]/worker['lifecycle']['observations']
+        witness=json.loads(path.read_text())
+        if matching_identity:
+            witness['lifetime']['started_at']=worker['started_at']
+        path.write_text(json.dumps(witness))
+        worker['lifecycle']['sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def delay_protocol_start(self,fixture,api):
+        path=fixture[1]/'source-2.final.requests.log'
+        rows=ownership.records(ownership.segments(path))
+        edited=0
+        for row in rows:
+            row['at']=row.pop('completed_at')
+            row.pop('received_at')
+            if row['requestHeader']['clientId'] == 'kaferry-group-selected-worker2' and row['requestHeader']['requestApiKeyName'] == api:
+                row['totalTimeMs']=9500
+                edited+=1
+        self.assertEqual(1,edited)
+        path.write_bytes(audit_fixture.encode(rows))
+
     def test_all_three_cases_require_raw_group_generations_and_os_observations(self):
         # Given raw broker/CLI/Docker fixtures, when their observations agree,
         # then each supported exposure, including bounded restart, validates.
@@ -212,6 +235,48 @@ class OwnershipCasesTest(unittest.TestCase):
             self.assertIn('ownership_exposure',result,result['id'])
         restarted=self.validate(self.fixture('coordinator-kill-rebalance',restart=True))
         self.assertIn('ownership_exposure',restarted)
+
+    def test_selected_members_and_protocol_must_belong_to_retained_lifetimes(self):
+        # Given valid raw proof and immutable sidecars, when a claimed peer or
+        # replacement is born after its proof, rechecksumming cannot qualify it.
+        for name,index,start,restart in (
+            ('worker-scale',1,22,False),
+            ('worker-scale',2,22,False),
+            ('worker-scale',1,19.5,False),
+            ('coordinator-kill-rebalance',2,24,True),
+        ):
+            fixture=self.fixture(name,restart=restart)
+            self.move_birth(fixture,index,start)
+            with self.subTest(name=name,index=index,start=start),self.assertRaisesRegex(ValueError,'route lifetime'):
+                self.validate(fixture)
+        # When JOIN, SYNC or commit starts before its retained CLI lifetime,
+        # then a later completion and valid membership snapshot cannot repair it.
+        for api in ('JOIN_GROUP','SYNC_GROUP','OFFSET_COMMIT'):
+            fixture=self.fixture('worker-scale')
+            self.delay_protocol_start(fixture,api)
+            with self.subTest(api=api),self.assertRaisesRegex(ValueError,'member protocol'):
+                self.validate(fixture)
+        # Updating only one copy of the lifetime identity remains invalid too.
+        fixture=self.fixture('worker-scale')
+        self.move_birth(fixture,1,22,matching_identity=False)
+        with self.assertRaisesRegex(ValueError,'lifecycle differs'):
+            self.validate(fixture)
+
+    def test_retained_dead_member_metadata_is_not_live_ownership_proof(self):
+        # Given a failed old CLI still listed by its coordinator until expiry,
+        # when metadata proves broker recovery, then that observation is valid.
+        fixture=self.fixture('coordinator-kill-rebalance',restart=True)
+        self.validate(fixture)
+        _,directory,case,_,_=fixture
+        rows=ownership.audit(directory,case)
+        for name in ('coordinator_replacement','broker_restored'):
+            state=case['states'][name]
+            self.assertLess(ownership.stamp(case['worker_measurements'][0]['stopped_at']),ownership.stamp(state['started']))
+            self.assertEqual(2,len(ownership.group_description(case,state,rows)))
+            # Promoting retained broker membership into a claim of live CLI
+            # ownership cannot bypass the actual selected lifetime boundary.
+            with self.subTest(name=name),self.assertRaisesRegex(ValueError,'retained selected route lifetime'):
+                ownership.snapshot(case,state,rows)
 
     def test_self_attested_membership_generation_and_kill_are_insufficient(self):
         # Given otherwise valid checksummed evidence, when a summary invents a

@@ -96,7 +96,7 @@ def audit(directory, case):
     return rows
 
 
-def snapshot(case, state, rows, routes=None, previous=None, progress_before=None):
+def group_description(case, state, rows):
     begin, end = stamp(state['started']), stamp(state['finished'])
     require(begin <= end and not state.get('error') and type(state['coordinator']) is int and state['coordinator'] in (1, 2, 3), 'ownership observation failed')
     selected = members(state['members'])
@@ -114,6 +114,27 @@ def snapshot(case, state, rows, routes=None, previous=None, progress_before=None
             if sorted(observed) == selected:
                 descriptions.append(row)
     require(descriptions, 'ownership state lacks its raw successful broker group description')
+    return selected
+
+
+def selected_lifetime(case, state, client):
+    begin, end = stamp(state['started']), stamp(state['finished'])
+    lifetimes = [worker for worker in case['worker_measurements'] if worker['route'] == route(client) and
+                 stamp(worker['started_at']) <= begin <= end < stamp(worker['stopped_at'])]
+    require(len(lifetimes) == 1, 'ownership snapshot is not covered by one retained selected route lifetime')
+    return lifetimes[0]
+
+
+def member_protocol(row, lifetime, client, end):
+    require(row['listener'] == 'WORKER'+str(route(client)) and
+            stamp(lifetime['started_at']) <= row['received_at'] <= row['completed_at'] <= end < stamp(lifetime['stopped_at']),
+            'selected member protocol lies outside its actual route lifetime')
+
+
+def snapshot(case, state, rows, routes=None, previous=None, progress_before=None):
+    selected = group_description(case, state, rows)
+    lifetimes = {client:selected_lifetime(case,state,client) for client,_,_ in selected}
+    end = stamp(state['finished'])
     if routes is None:
         return
     require(state['state'] == 'Stable' and len(selected) == len(routes) and
@@ -133,11 +154,15 @@ def snapshot(case, state, rows, routes=None, previous=None, progress_before=None
                 stamp(before['finished']) <= stamp(state['started']),
                 'membership generation or publication did not advance')
     for client, member, owned in selected:
+        lifetime = lifetimes[client]
         joins = [row for row in rows if row['requestHeader']['clientId'] == client and
                  row['requestHeader']['requestApiKeyName'] == 'JOIN_GROUP' and row['request']['groupId'] == case['group'] and
                  row['response']['errorCode'] == 0 and row['response']['memberId'] == member and row['completed_at'] <= end]
         require(joins and max(integer(row['response']['generationId']) for row in joins) == epochs[client],
                 'reported generation differs from the actual selected member join')
+        for row in joins:
+            if integer(row['response']['generationId']) == epochs[client]:
+                member_protocol(row,lifetime,client,end)
         require(all(row['request']['sessionTimeoutMs'] == case['timeout_milliseconds']['session.timeout.ms'] and
                     row['request']['rebalanceTimeoutMs'] == case['timeout_milliseconds']['max.poll.interval.ms'] for row in joins),
                 'actual group session or rebalance timeout differs from the configured window')
@@ -147,6 +172,8 @@ def snapshot(case, state, rows, routes=None, previous=None, progress_before=None
                  row['response']['errorCode'] == 0 and row['completed_at'] <= end]
         require(syncs and assignment(max(syncs, key=lambda row: row['completed_at'])['response']['assignment'], case['source_topic']) == sorted(owned),
                 'current generation does not assign the described partitions to this selected member')
+        for row in syncs:
+            member_protocol(row,lifetime,client,end)
         synced_at = max(row['completed_at'] for row in syncs)
         accepted = set()
         topic_ids = {topic['topicId'] for row in rows if row['requestHeader']['requestApiKeyName'] == 'METADATA'
@@ -156,7 +183,7 @@ def snapshot(case, state, rows, routes=None, previous=None, progress_before=None
             if (row['requestHeader']['clientId'] == client and row['requestHeader']['requestApiKeyName'] == 'OFFSET_COMMIT' and
                     row['request']['groupId'] == case['group'] and row['request']['memberId'] == member and
                     integer(row['request']['generationIdOrMemberEpoch']) == epochs[client] and synced_at <= row['completed_at'] <= end):
-                require(row['listener'] == 'WORKER'+str(route(client)), 'selected CLI bypassed its worker route')
+                member_protocol(row,lifetime,client,end)
                 require({topic['topicId'] for topic in row['request']['topics']} == topic_ids and
                         {topic['topicId'] for topic in row['response']['topics']} == topic_ids,
                         'accepted commit names another source topic identity')
@@ -453,8 +480,11 @@ def coordinator_case(directory, case, rows, values, window, identity):
     require(stamp(fault['start']) <= stamp(states['at_kill']['started']) <= stamp(states['at_kill']['finished']) <=
             stamp(command['coordinator_kill_started']) <= stamp(command['coordinator_kill_finished']) <= injection['at'], 'coordinator command did not follow the actual rebalance recheck')
     replacement, restored = states['coordinator_replacement'], states['broker_restored']
-    snapshot(case, replacement, rows)
-    snapshot(case, restored, rows)
+    # Broker metadata may retain a dead member until session expiry. These
+    # observations prove coordinator/health only; accepted recovered ownership
+    # is checked separately against its live CLI lifetime and protocol chain.
+    group_description(case, replacement, rows)
+    group_description(case, restored, rows)
     require(injection['at'] <= stamp(replacement['started']) <= stamp(replacement['finished']) <= stamp(fault['heal']) <= stamp(restored['started']) and
             replacement['coordinator'] != broker and advances(replacement['publishing']['acknowledged_by_partition'], states['at_kill']['publishing']['acknowledged_by_partition']),
             'coordinator replacement was not observed while the original broker was stopped')

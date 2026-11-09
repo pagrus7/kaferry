@@ -114,6 +114,8 @@ Each case retains `ownership-CASE/replicated-ownership-case.json`, checksummed r
 
 Immutable lifecycle sidecars bind each CLI's raw log and exit to its PID, executable and sole OS wait. Driver cancellation recorded before that wait, or a signal request that does not match the case's controlled events, fails qualification. SIGKILL requires the explicit worker-kill exposure and its observed rebalance; generic driver intent cannot authorize it.
 
+Stable ownership and its supporting join, assignment and commit records must fit one retained CLI lifetime on the selected route. Intermediate coordinator and health descriptions may retain an exited member until session expiry; they establish broker state, not live ownership or accepted recovery progress.
+
 Each worker has the same 512 MiB sampled RSS ceiling and configured 1,024-record/128 MiB caps. Successful and fail-fast exits require final peak summaries. SIGKILL cannot emit a final summary: its receipt sets `lifetime_highwater_available=false`, leaves exact lifetime peaks null and reports sampled pending work separately. It also sets `exact_lifetime_work_caps_qualified=false`; no exact lifetime cap claim follows from those samples. Other missing ownership-worker summaries fail. These cases do not establish continuous process uptime. Only a completed passing receipt qualifies the recorded executable.
 
 ## Broker storage
