@@ -131,7 +131,7 @@ func failedMetadataResponse(cluster *kfake.Cluster, mode string, request kmsg.Re
 func TestPinnedMetadataProbeUsesFreshSelectedTransportAndAllTopics(t *testing.T) {
 	// Given three brokers and an already learned healthy topology, when the
 	// explicit target stops replying, then peer/cached metadata cannot pass it.
-	for _, mode := range []string{"reused connection", "blocked target", "cancelled", "wrong cluster", "wrong broker", "wrong route"} {
+	for _, mode := range []string{"reused connection", "blocked target", "cancelled", "wrong cluster", "wrong broker", "wrong route", "unselected live broker"} {
 		t.Run(mode, func(t *testing.T) {
 			testPinnedMetadata(t, mode)
 		})
@@ -159,6 +159,11 @@ func testPinnedMetadata(t *testing.T, mode string) {
 		if mode == "wrong route" {
 			response.Brokers[1].Port = response.Brokers[0].Port
 		}
+		if mode == "unselected live broker" {
+			host, port, _ := net.SplitHostPort(cluster.ListenAddrs()[0])
+			number, _ := strconv.Atoi(port)
+			response.Brokers = append(response.Brokers, kmsg.MetadataResponseBroker{NodeID: 0, Host: host, Port: int32(number)})
+		}
 		return response, nil, true
 	})
 	client, err := NewMetadataClient("source", routes...)
@@ -173,6 +178,21 @@ func testPinnedMetadata(t *testing.T, mode string) {
 		require.Equal(t, routes[1], initial.RemoteAddress)
 		require.Equal(t, int32(2), initial.TransportBroker)
 		require.True(t, initial.AllTopics)
+	}
+	if mode == "unselected live broker" {
+		// Given a live broker learned from metadata but outside the selected
+		// ADMIN routes, prove that the raw client can reach its real endpoint.
+		_, rawErr := client.raw.Broker(0).Request(ctx, kmsg.NewPtrMetadataRequest())
+		require.NoError(t, rawErr)
+		before := requests[0].Load()
+		require.Positive(t, before)
+		require.NotContains(t, client.AdminRoutes(), int32(0))
+		// When the observer requests that broker, then reject it before sending
+		// another request, even though cached metadata permits a direct request.
+		_, rejected := client.RequestBroker(ctx, 0, kmsg.NewPtrMetadataRequest())
+		require.ErrorContains(t, rejected, "outside the selected ADMIN routes")
+		require.Equal(t, before, requests[0].Load())
+		return
 	}
 	switch mode {
 	case "blocked target":

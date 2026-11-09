@@ -63,7 +63,11 @@ def route(client):
     return int(match[1])
 
 
-def members(items):
+def members(state):
+    items = state['members']
+    if items is None and state['state'] == 'Empty':
+        items = []
+    require(isinstance(items, list), 'ownership members are not an array')
     return sorted((item['client_id'], item['member_id'], sorted(item['partitions'] or [])) for item in items)
 
 
@@ -100,7 +104,7 @@ def audit(directory, case):
 def group_description(case, state, rows):
     begin, end = stamp(state['started']), stamp(state['finished'])
     require(begin <= end and not state.get('error') and type(state['coordinator']) is int and state['coordinator'] in (1, 2, 3), 'ownership observation failed')
-    selected = members(state['members'])
+    selected = members(state)
     # Millisecond broker timestamps round down. Require a complete successful
     # response inside the actual independent observation, not a nearby summary.
     descriptions = []
@@ -379,7 +383,7 @@ def _validate(root, id, identity):
     require(settings == dict(worker=dict(record_cap=1024,partition_record_cap=128,byte_cap=134217728,partition_byte_cap=8388608,
             progress_interval='100ms',delivery_timeout='1m0s',shutdown_timeout='5s')), 'selected worker settings differ from the measured caps and deadlines')
     for worker_route in {worker['route'] for worker in case['worker_measurements']}:
-        clients = {member['client_id'] for state in case['states'].values() for member in state['members'] if route(member['client_id']) == worker_route}
+        clients = {client for state in case['states'].values() for client, _, _ in members(state) if route(client) == worker_route}
         prefix = 'kaferry-'+case['group']+'-'
         require(len(clients) == 1 and next(iter(clients)).startswith(prefix), 'worker client identity changed across its selected route')
         marker = next(iter(clients))[len(prefix):]
@@ -395,7 +399,7 @@ def _validate(root, id, identity):
     require(case['observations'] == 'ownership-observations.jsonl', 'ownership journal path differs')
     journal = [json.loads(line) for line in (directory/case['observations']).read_text().splitlines()]
     require(journal and all(any(not row.get('error') and row['started'] == state['started'] and row['state'] == state['state'] and
-            row['coordinator'] == state['coordinator'] and members(row['members']) == members(state['members']) for row in journal)
+            row['coordinator'] == state['coordinator'] and members(row) == members(state) for row in journal)
             for state in states.values()), 'ownership journal omitted a required observation')
     baseline, recovered = states['baseline'], states['recovered']
     snapshot(case, baseline, rows, [1])

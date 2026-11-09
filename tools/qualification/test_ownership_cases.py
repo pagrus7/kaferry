@@ -599,6 +599,56 @@ class OwnershipCasesTest(unittest.TestCase):
             with self.subTest(name=name),self.assertRaisesRegex(ValueError,'retained selected route lifetime'):
                 ownership.snapshot(case,state,rows)
 
+    def test_empty_coordinator_observations_bind_nullable_members_to_raw_empty_group(self):
+        # Given Go's nil slice in an intermediate Empty group observation,
+        # when collection rechecks it, then the actual raw response must agree.
+        labels=('coordinator_replacement','broker_api_ready','broker_restored')
+        for bind_raw in (True,False):
+            fixture=self.fixture('coordinator-kill-rebalance',restart=True)
+            _,directory,case,_,_=fixture
+            for label in labels:
+                case['states'][label].update(state='Empty',members=None)
+            (directory/'ownership-observations.jsonl').write_text(''.join(json.dumps(state)+'\n' for state in case['states'].values()))
+            if bind_raw:
+                path=directory/'source-3.final.requests.log'
+                changed=0
+                output=[]
+                for line in path.read_text().splitlines(keepends=True):
+                    prefix,marker,payload=line.partition('Completed request:')
+                    if marker:
+                        row,end=json.JSONDecoder().raw_decode(payload)
+                        if row['requestHeader']['requestApiKeyName'] == 'DESCRIBE_GROUPS':
+                            for group in row['response']['groups']:
+                                if group['groupId'] == case['group'] and group['groupState'] == 'PreparingRebalance':
+                                    group.update(groupState='Empty',members=[])
+                                    changed+=1
+                        line=prefix+marker+json.dumps(row,separators=(',',':'))+payload[end:]
+                    output.append(line)
+                self.assertEqual(len(labels),changed)
+                path.write_text(''.join(output))
+            with self.subTest(raw_empty_group=bind_raw):
+                if bind_raw:
+                    self.assertIn('ownership_exposure',self.validate(fixture))
+                else:
+                    with self.assertRaisesRegex(ValueError,'raw successful broker group description'):
+                        self.validate(fixture)
+
+    def test_empty_members_cannot_establish_final_stable_ownership(self):
+        # Given a complete final snapshot and matching raw empty membership,
+        # when no selected owner remains, then nullable encoding cannot pass it.
+        _,directory,case,_,_=self.fixture('worker-scale')
+        original=ownership.audit(directory,case)
+        for state_name,items in (('Stable',None),('Stable',[]),('Empty',None)):
+            state=copy.deepcopy(case['states']['recovered'])
+            state.update(state=state_name,members=items)
+            rows=copy.deepcopy(original)
+            for row in rows:
+                if row['requestHeader']['requestApiKeyName'] == 'DESCRIBE_GROUPS' and ownership.stamp(state['started']) <= row['completed_at'] <= ownership.stamp(state['finished']):
+                    for group in row['response']['groups']:
+                        group.update(groupState=state_name,members=[])
+            with self.subTest(state=state_name,members=items),self.assertRaises(ValueError):
+                ownership.snapshot(case,state,rows,[1])
+
     def test_coordinator_recovery_requires_actual_fresh_target_metadata_and_isr(self):
         # Given checksummed broker-only observations, when fresh API or target
         # proof is missing or contradicted, Docker health cannot establish recovery.
