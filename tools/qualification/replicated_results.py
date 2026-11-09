@@ -13,6 +13,7 @@ from tools.qualification.broker_lifecycle import (FORCED_COPY_PHASES, SAMPLED_SC
 IDENTITY = ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')
 NEGOTIATION_EOF = ('broker closed the connection immediately during api versions negotiation, which often happens '
                    'when the broker requires TLS but the client is using plaintext: is TLS missing?')
+SOURCE_OPERATION_EOFS = tuple(label+NEGOTIATION_EOF for label in ('poll source: ', 'save progress: ', 'poll source: save progress: '))
 EXACT_SCOPE = 'exact lifetime highwater from final copy summary'
 BROKER_ERRORS = ('context deadline exceeded', 'REQUEST_TIMED_OUT', 'NOT_COORDINATOR', 'COORDINATOR_NOT_AVAILABLE',
                 'UNKNOWN_MEMBER_ID', 'ILLEGAL_GENERATION', 'NOT_LEADER_OR_FOLLOWER', 'BROKER_NOT_AVAILABLE',
@@ -111,7 +112,7 @@ def worker_work(case, worker, witness, raw):
                 not forced_copy_failure(case, worker, witness, raw)):
             raise ValueError('unavailable lifetime highwater requires the bound active forced-copy exit')
         return
-    if (worker['unavailable_highwater_phase'] or worker['cap_measurement_scope'] != EXACT_SCOPE or summary['msg'] != 'copy summary' or
+    if (worker['unavailable_highwater_phase'] or worker['cap_measurement_scope'] != EXACT_SCOPE or not isinstance(summary, dict) or summary['msg'] != 'copy summary' or
             type(summary['submitted']) is not int or type(summary['confirmed']) is not int or
             not 0 <= summary['confirmed'] <= summary['submitted'] or
             type(worker['peak_uncommitted_records']) is not int or type(worker['peak_uncommitted_bytes']) is not int or
@@ -123,11 +124,40 @@ def worker_work(case, worker, witness, raw):
     if worker['exit_code'] == 0:
         if terminal:
             raise ValueError('completed broker worker has a terminal failure')
+    elif terminal in SOURCE_OPERATION_EOFS:
+        if (summary['submitted'] <= 0 or summary['submitted'] != summary['confirmed'] or
+                not source_operation_failure(case, worker, witness, raw)):
+            raise ValueError('labelled source/save EOF lacks a bound all-confirmed active source fault')
     elif terminal and all(line == NEGOTIATION_EOF for line in terminal.splitlines()):
         if len(terminal.splitlines()) != summary['submitted']-summary['confirmed'] or not affected_failure(case, worker, 'destination'):
             raise ValueError('negotiation EOF lacks every failed write and an affected active plaintext destination fault')
-    elif not terminal or any(line.startswith('shutdown timed out while ') or not any(message in line for message in BROKER_ERRORS) for line in terminal.splitlines()):
+    elif not terminal or NEGOTIATION_EOF in terminal or any(line.startswith('shutdown timed out while ') or not any(message in line for message in BROKER_ERRORS) for line in terminal.splitlines()):
         raise ValueError('broker worker has an unsupported terminal failure')
+
+
+def source_operation_failure(case, worker, witness, raw):
+    proof = worker['failure_context']
+    if (case['id'] not in ('broker/source-leader', 'broker/rolling-source') or
+            not forced_copy_failure(case, worker, witness, raw) or
+            not stamp(proof['observed_exit_at']) < stamp(proof['heal']) or
+            proof['role']['partition'] != 0 or any(proof['role'].get(key) for key in ('worker', 'listener', 'group'))):
+        return False
+    targets = case['events'][proof['window']]['fault']['targets']
+    if (proof['targets'] != targets or witness['active_fault']['targets'] != targets or
+            proof['timeout_milliseconds'] != case['timeout_milliseconds'] or
+            witness['active_fault']['timeout_milliseconds'] != case['timeout_milliseconds'] or
+            len(targets) != 6):
+        return False
+    first = targets[0]
+    listeners = {'internal', 'controller', 'admin', 'worker1', 'worker2', 'worker3'}
+    return (type(first['broker']) is int and 1 <= first['broker'] <= 3 and
+            isinstance(first['container'], str) and bool(first['container']) and
+            isinstance(first['proxy_container'], str) and bool(first['proxy_container']) and
+            {target['listener'] for target in targets} == listeners and
+            all(target['cluster'] == 'source' and type(target['broker']) is int and target['broker'] == first['broker'] and
+                target['container'] == first['container'] and target['proxy_container'] == first['proxy_container'] and
+                target['service'] == f'source-{first["broker"]}' and
+                target['proxy'] == target['service']+'-'+target['listener'] for target in targets))
 
 
 def broker_case(directory, id, identity):

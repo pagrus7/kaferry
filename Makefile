@@ -22,6 +22,7 @@ REPLICATED_HELPER_TESTS := \
 	TestBrokerCurrentProgressRejectsMalformedCompleteRows \
 	TestBrokerRestartRechecksFailureAfterHealthObservation \
 	TestBrokerNegotiationEOFRequiresAffectedPlainCopyAndEveryUnconfirmedError \
+	TestBrokerLabelledSourceEOFRequiresBoundAllConfirmedExit \
 	TestBrokerForcedCopyExitLeavesLifetimeHighwaterUnavailable \
 	TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions \
 	TestBrokerISRSelectionRequiresActiveSameLeaderBacklog \
