@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from tools.ci.suites import REPLICATED_CASES, fault_timeout_catalog
 from tools.qualification.replicated_results import (EXACT_SCOPE, NEGOTIATION_EOF,
-                                                  SAMPLED_SCOPE, broker_case, collect)
+                                                  SAMPLED_SCOPE, SOURCE_OPERATION_EOFS, broker_case, collect)
 from tools.qualification.broker_lifecycle import FORCED_COPY_PHASES
 from tools.qualification.broker_readiness import CRITERION, admin
 
@@ -141,6 +141,17 @@ def failed_worker(case, safety, forced):
     return worker
 
 
+def labelled_source_worker(case, safety, terminal=SOURCE_OPERATION_EOFS[0]):
+    worker = failed_worker(case, safety, False)
+    worker['copy_summary']['confirmed'] = worker['copy_summary']['submitted']
+    worker['terminal_error'] = terminal
+    for target in case['events'][0]['fault']['targets']:
+        target['proxy_container'] = 'owned-proxy'
+    worker['failure_context'].update(targets=copy.deepcopy(case['events'][0]['fault']['targets']),
+                                     timeout_milliseconds=copy.deepcopy(case['timeout_milliseconds']))
+    return worker
+
+
 def write_lifecycles(directory, case):
     for worker in case['worker_measurements']:
         number = worker['lifetime']
@@ -162,6 +173,19 @@ def write_lifecycles(directory, case):
         data = json.dumps(witness).encode()
         (directory/name).write_bytes(data)
         worker['lifecycle'] = dict(observations=name,sha256=checksum(data))
+
+
+def rewrite_witness(edit):
+    def artifacts(directory,case):
+        worker = case['worker_measurements'][0]
+        path = directory/worker['lifecycle']['observations']
+        witness = json.loads(path.read_text())
+        edit(witness)
+        data = json.dumps(witness).encode()
+        path.write_bytes(data)
+        worker['lifecycle']['sha256'] = checksum(data)
+        worker['failure_context']['exit_witness'] = witness
+    return artifacts
 
 
 class ReplicatedResultsTest(unittest.TestCase):
@@ -317,17 +341,6 @@ class ReplicatedResultsTest(unittest.TestCase):
         # and raw prefix checks reject the proof even with independent safety.
         def failed(case,safety):
             failed_worker(case,safety,True)
-        def edit_witness(edit):
-            def artifacts(directory,case):
-                worker = case['worker_measurements'][0]
-                path = directory/worker['lifecycle']['observations']
-                witness = json.loads(path.read_text())
-                edit(witness)
-                data = json.dumps(witness).encode()
-                path.write_bytes(data)
-                worker['lifecycle']['sha256'] = checksum(data)
-                worker['failure_context']['exit_witness'] = witness
-            return artifacts
         mutations = [
             lambda w:w.update(driver_intent_before_wait=[dict(at=stamp(22),signal='interrupt',reason='cleanup')]),
             lambda w:w.update(termination_signal='killed'),
@@ -342,7 +355,7 @@ class ReplicatedResultsTest(unittest.TestCase):
         ]
         for edit in mutations:
             with self.subTest(edit=edit), self.assertRaises(ValueError):
-                self.validate('broker/source-leader',failed,edit_witness(edit))
+                self.validate('broker/source-leader',failed,rewrite_witness(edit))
         for name in ('worker-1.lifecycle.json','worker-1.exited.cli.log'):
             def corrupt(directory,case):
                 with (directory/name).open('ab') as stream:
@@ -384,6 +397,69 @@ class ReplicatedResultsTest(unittest.TestCase):
                 mutate(worker)
             with self.subTest(mutate=mutate), self.assertRaises(ValueError):
                 self.validate('broker/destination-leader',change)
+
+    def test_labelled_source_eof_requires_all_confirmed_and_bound_physical_source_fault(self):
+        # Given exact all-confirmed output, when the failed operation is labelled,
+        # then only its same healthy lifetime inside a source fault is admissible.
+        for id in ('broker/source-leader', 'broker/rolling-source'):
+            for terminal in SOURCE_OPERATION_EOFS:
+                with self.subTest(id=id, terminal=terminal):
+                    result = self.validate(id, lambda c,s:labelled_source_worker(c,s,terminal))
+                    self.assertTrue(result['broker_exposure']['exact_lifetime_work_caps_qualified'])
+        for mutate in (
+            lambda c,w:w.update(terminal_error=NEGOTIATION_EOF),
+            lambda c,w:w.update(terminal_error=SOURCE_OPERATION_EOFS[0]+' context deadline exceeded'),
+            lambda c,w:w.update(terminal_error=SOURCE_OPERATION_EOFS[0]+'\ncontext deadline exceeded'),
+            lambda c,w:w.update(terminal_error=' '+SOURCE_OPERATION_EOFS[0]),
+            lambda c,w:w.update(terminal_error=SOURCE_OPERATION_EOFS[0]+' '),
+            lambda c,w:w.update(terminal_error='poll source: TLS handshake failed'),
+            lambda c,w:w['copy_summary'].update(confirmed=99),
+            lambda c,w:w.update(copy_summary=None),
+            lambda c,w:w['failure_context'].update(transport='TLS'),
+            lambda c,w:w['failure_context'].update(case='broker/destination-isr-loss',kind='cut'),
+            lambda c,w:w['failure_context'].update(observed_exit_at=stamp(20)),
+            lambda c,w:w['failure_context'].update(observed_exit_at=stamp(24)),
+            lambda c,w:w['failure_context']['before']['cli_progress'].update(confirmed=0),
+            lambda c,w:w['failure_context']['before']['worker']['lifetime'].update(number=2),
+            lambda c,w:w['failure_context']['before']['worker'].update(log_prefix_sha256='b'*64),
+            lambda c,w:w['failure_context']['targets'].pop(),
+            lambda c,w:w['failure_context']['targets'][0].update(listener='worker2'),
+            lambda c,w:w['failure_context']['targets'][0].update(container='unowned'),
+            lambda c,w:w['failure_context']['timeout_milliseconds'].update(shutdown_timeout=5001),
+        ):
+            def change(case,safety):
+                worker = labelled_source_worker(case,safety)
+                mutate(case,worker)
+            with self.subTest(mutate=mutate), self.assertRaises((ValueError,KeyError)):
+                self.validate('broker/source-leader',change)
+        # The physical files and outer references are recreated for each mutation.
+        # Changing a sole-Wait witness must still fail with freshly valid hashes.
+        for edit in (
+            lambda w:w.update(driver_intent_before_wait=[dict(at=stamp(22),signal='',reason='context cancellation')]),
+            lambda w:w.update(termination_signal='killed'),
+            lambda w:w.update(wait_error=''),
+            lambda w:w.update(recorded_at=stamp(22)),
+            lambda w:w.update(active_fault=None),
+            lambda w:w['active_fault']['targets'][0].update(container='other'),
+            lambda w:w['active_fault']['timeout_milliseconds'].update(shutdown_timeout=5001),
+        ):
+            with self.subTest(edit=edit), self.assertRaises(ValueError):
+                self.validate('broker/source-leader',labelled_source_worker,rewrite_witness(edit))
+        with self.assertRaises(ValueError):
+            self.validate('broker/destination-leader',labelled_source_worker)
+        # Given an otherwise consistent exit exactly at or just after physical
+        # healing, when worker, proof and sole-Wait times agree, then the strict
+        # source boundary rejects it even within the existing recovery budget.
+        for stopped in (24,25):
+            def at_or_after_heal(case,safety):
+                worker = labelled_source_worker(case,safety)
+                worker['stopped_at'] = stamp(stopped)
+                worker['failure_context']['observed_exit_at'] = worker['stopped_at']
+                # validate writes fresh raw/lifecycle files: active exit, sole
+                # Wait, recorded time, byte lengths and all hashes agree.
+            with self.subTest(stopped=stopped), self.assertRaisesRegex(
+                    ValueError, 'labelled source/save EOF lacks a bound all-confirmed active source fault'):
+                self.validate('broker/source-leader',at_or_after_heal)
 
     def test_collection_binds_each_proof_to_this_observer_run(self):
         # Given two selected broker cases from this observer run, when collecting,

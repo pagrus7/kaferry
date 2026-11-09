@@ -113,6 +113,8 @@ Final SQL `OPTIONS` defaults to `FAIL`. `ON_ERROR` cannot be combined with the s
 
 Asynchronous broker failures, authentication/authorization errors, out-of-range positions during copying, archive corruption and changed source files always stop copying. Earlier confirmed output remains; resume with the same group after fixing the cause. Counts appear in `copy summary`.
 
+The labels `poll source` and `save progress` identify source polling and saving confirmed progress. Polling can include assignment, position and destination-routing checks; these labels identify the operation, not the failed broker or network path.
+
 On assignment or restart, saved Kafka progress below the retained log start resumes at that log start and logs `expired source position` with `partition`, `saved`, `log_start` and `offset_gap`. The gap is an offset difference, not a lost-record count; deleted input cannot be recovered. Saved progress above log end fails. A saved captured end outside retained positions also fails. Fresh explicit offset bounds outside retained positions fail instead of skipping.
 
 ### Worker settings

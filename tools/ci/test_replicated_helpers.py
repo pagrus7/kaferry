@@ -22,6 +22,7 @@ HELPERS = (
     'TestBrokerCurrentProgressRejectsMalformedCompleteRows',
     'TestBrokerRestartRechecksFailureAfterHealthObservation',
     'TestBrokerNegotiationEOFRequiresAffectedPlainCopyAndEveryUnconfirmedError',
+    'TestBrokerLabelledSourceEOFRequiresBoundAllConfirmedExit',
     'TestBrokerForcedCopyExitLeavesLifetimeHighwaterUnavailable',
     'TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions',
     'TestBrokerISRSelectionRequiresActiveSameLeaderBacklog',

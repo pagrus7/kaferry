@@ -44,6 +44,8 @@ type brokerFailureProof struct {
 	ObservedExit time.Time          `json:"observed_exit_at"`
 	Before       brokerObservation  `json:"before"`
 	Transport    string             `json:"transport"`
+	Targets      []faults.Target    `json:"targets,omitempty"`
+	Timeouts     map[string]int64   `json:"timeout_milliseconds,omitempty"`
 }
 
 func (p *brokerFailureProof) affected(side string) bool {
@@ -70,8 +72,13 @@ func (s *brokerCopy) activeProof(process *cliProcess) *brokerFailureProof {
 	for _, timeout := range s.timeouts {
 		recovery += timeout
 	}
-	return &brokerFailureProof{Case: s.caseID, RecoveryMS: recovery.Milliseconds(), Window: s.activeWindow, Role: event.Role, Kind: event.Fault.Kind,
+	proof := &brokerFailureProof{Case: s.caseID, RecoveryMS: recovery.Milliseconds(), Window: s.activeWindow, Role: event.Role, Kind: event.Fault.Kind,
 		Start: event.Start, Heal: event.Heal, ObservedExit: process.stopped, Before: s.beforeFault, Transport: "plaintext"}
+	if s.caseID == "broker/source-leader" || s.caseID == "broker/rolling-source" {
+		proof.Targets = append([]faults.Target(nil), event.Targets...)
+		proof.Timeouts = durationMilliseconds(s.timeouts)
+	}
+	return proof
 }
 
 func (s *brokerCopy) failureProof(process *cliProcess) *brokerFailureProof {
@@ -180,6 +187,9 @@ func brokerContextualFailure(logs string, proof *brokerFailureProof) (string, bo
 	}
 	if len(terminal) == 1 && brokerForcedCopyPhase(terminal[0]) != "" {
 		return terminal[0], work.Summary == nil && strings.Contains("\n"+logs, "\n"+terminal[0]+"\n") && proof.forcedCopy(logs)
+	}
+	if proof.sourceOperationExit(logs, strings.Join(terminal, "\n"), work.Summary) {
+		return terminal[0], true
 	}
 	if work.Summary == nil || !proof.affected("destination") || len(terminal) != work.Summary.Submitted-work.Summary.Confirmed {
 		return "", false

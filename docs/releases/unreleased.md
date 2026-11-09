@@ -5,6 +5,7 @@
 - Organize application code and tests under `src/`, documentation under `docs/`, and repository tooling under `tools/`. Keep runnable tutorial inputs under `examples/` and one Go module at the repository root.
 - Run rebalance churn qualification with the selected executable, including release archives, so its record and saved-progress checks cover that binary rather than an in-process build of the checkout.
 - Retain qualification storage ownership markers when data deletion fails, so remaining data can still be checked before later cleanup.
+- Identify source polling and progress saving in copy errors, while preserving the underlying failure and existing exit behavior.
 
 ## Upgrade
 
