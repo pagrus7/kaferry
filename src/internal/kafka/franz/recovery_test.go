@@ -174,7 +174,14 @@ func TestProductionSinkNegotiationEOFRetriesRemainBounded(t *testing.T) {
 			require.NoError(t, sink.Submit(t.Context(), core.Record{Value: []byte("unconfirmed")}, token))
 			await(t, cut, "replacement negotiation")
 			if closing {
-				sink.Close()
+				// Release fake connections before sink cleanup if close does not return.
+				t.Cleanup(cluster.Close)
+				closed := make(chan struct{})
+				go func() {
+					sink.Close()
+					close(closed)
+				}()
+				await(t, closed, "sink close")
 			}
 			// Then a failed delivery remains visible, does not append output and finishes promptly.
 			delivery := receiveDelivery(t, sink)
