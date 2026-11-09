@@ -311,7 +311,7 @@ func (s *zombieOwnership) generationReady(ctx context.Context, t *testing.T) boo
 		if member.ClientID == s.clients[0] {
 			var ready bool
 			var err error
-			s.generation, ready, err = s.audit.ready(ctx, s.clients[0], s.group, member.MemberID, member.Partitions, nil)
+			s.generation, ready, err = s.audit.ready(ctx, s.clients[0], s.group, member.MemberID, member.Partitions, nil, time.Time{})
 			require.NoError(t, err)
 			return ready
 		}
@@ -347,7 +347,7 @@ func (s *zombieOwnership) peerReady(ctx context.Context, t *testing.T) bool {
 		}
 	}
 	peerGeneration, accepted, queryErr := s.audit.ready(ctx, s.clients[1], s.group, s.peerProgress.Members[0].MemberID,
-		s.peerProgress.Members[0].Partitions, minimum)
+		s.peerProgress.Members[0].Partitions, minimum, s.transfer.Finished)
 	require.NoError(t, queryErr)
 	return accepted && peerGeneration > s.generation
 }

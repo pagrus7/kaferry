@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -269,8 +270,10 @@ func (a *replicatedAudit) mark(ctx context.Context, t *testing.T, phase string) 
 }
 
 type ownershipAuditRecord struct {
-	Header  struct{ ClientID, RequestAPIKeyName string } `json:"requestHeader"`
-	Request struct {
+	TotalTime        json.RawMessage `json:"totalTimeMs"`
+	completionPrefix string
+	Header           struct{ ClientID, RequestAPIKeyName string } `json:"requestHeader"`
+	Request          struct {
 		GroupID, MemberID string
 		Generation        int32 `json:"generationIdOrMemberEpoch"`
 		Topics            []struct {
@@ -293,10 +296,10 @@ type ownershipAuditRecord struct {
 	} `json:"response"`
 }
 
-// currentGenerationSaved gates injection on actual accepted commits in the
-// worker's latest successful join generation. Old committed group offsets alone
-// cannot show that the worker has saved in its current generation.
-func currentGenerationSaved(data []byte, client, group, member string, owned []int32, minimum map[int32]int64) (int32, bool, error) {
+// currentGenerationSaved requires accepted commits in the latest successful
+// join generation. A nonzero barrier also requires receipt after that observation;
+// a request received earlier cannot qualify just because its response was later.
+func currentGenerationSaved(data []byte, client, group, member string, owned []int32, minimum map[int32]int64, receivedAfter time.Time) (int32, bool, error) {
 	rows, generation, err := currentGenerationRows(data, client, group, member)
 	if err != nil {
 		return 0, false, err
@@ -304,6 +307,13 @@ func currentGenerationSaved(data []byte, client, group, member string, owned []i
 	accepted := make(map[int32]bool)
 	for _, row := range rows {
 		if row.Header.RequestAPIKeyName != "OFFSET_COMMIT" || row.Request.MemberID != member || row.Request.Generation != generation {
+			continue
+		}
+		fresh, timingErr := auditReceivedAfter(row, receivedAfter)
+		if timingErr != nil {
+			return 0, false, timingErr
+		}
+		if !fresh {
 			continue
 		}
 		parts, parseErr := auditAcceptedParts(row, minimum)
@@ -324,7 +334,7 @@ func currentGenerationRows(data []byte, client, group, member string) ([]ownersh
 	var rows []ownershipAuditRecord
 	generation := int32(-1)
 	for _, line := range strings.Split(string(data), "\n") {
-		_, payload, ok := strings.Cut(line, "Completed request:")
+		prefix, payload, ok := strings.Cut(line, "Completed request:")
 		if !ok {
 			continue
 		}
@@ -335,12 +345,34 @@ func currentGenerationRows(data []byte, client, group, member string) ([]ownersh
 		if row.Header.ClientID != client || row.Request.GroupID != group || row.Response == nil {
 			continue
 		}
+		row.completionPrefix = prefix
 		rows = append(rows, row)
 		if row.Header.RequestAPIKeyName == "JOIN_GROUP" && row.Response.ErrorCode == 0 && row.Response.MemberID == member {
 			generation = max(generation, row.Response.GenerationID)
 		}
 	}
 	return rows, generation, nil
+}
+
+// Completion can follow the transfer even when the broker received the request
+// before it. Use the same completion-minus-total-time receipt as the final audit.
+func auditReceivedAfter(row ownershipAuditRecord, barrier time.Time) (bool, error) {
+	if barrier.IsZero() {
+		return true, nil
+	}
+	completed, err := time.Parse("[2006-01-02 15:04:05,000] DEBUG ", row.completionPrefix)
+	if err != nil {
+		return false, fmt.Errorf("commit completion timestamp: %w", err)
+	}
+	milliseconds, err := strconv.ParseFloat(string(row.TotalTime), 64)
+	if err != nil || milliseconds < 0 {
+		return false, fmt.Errorf("commit total request time is unavailable or invalid: %q", row.TotalTime)
+	}
+	elapsed, err := time.ParseDuration(strconv.FormatFloat(milliseconds, 'f', -1, 64) + "ms")
+	if err != nil || elapsed < 0 {
+		return false, fmt.Errorf("commit total request time is unavailable or invalid: %q", row.TotalTime)
+	}
+	return !completed.Add(-elapsed).Before(barrier), nil
 }
 
 func auditAcceptedParts(row ownershipAuditRecord, minimum map[int32]int64) (map[int32]bool, error) {
@@ -364,12 +396,17 @@ func auditAcceptedParts(row ownershipAuditRecord, minimum map[int32]int64) (map[
 	return accepted, nil
 }
 
-func (a *replicatedAudit) ready(ctx context.Context, client, group, member string, owned []int32, minimum map[int32]int64) (int32, bool, error) {
+func (a *replicatedAudit) ready(ctx context.Context, client, group, member string, owned []int32, minimum map[int32]int64, receivedAfter time.Time) (int32, bool, error) {
+	if err := context.Cause(ctx); err != nil {
+		return 0, false, err
+	}
 	all, err := readAuditRequests(ctx, a.targets, faults.Docker)
 	if err != nil {
 		return 0, false, err
 	}
-	return currentGenerationSaved(all, client, group, member, owned, minimum)
+	generation, ready, err := currentGenerationSaved(all, client, group, member, owned, minimum, receivedAfter)
+	err = errors.Join(err, context.Cause(ctx))
+	return generation, ready && err == nil, err
 }
 
 // Read every broker concurrently within the caller's existing polling context.
