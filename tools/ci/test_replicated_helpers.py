@@ -13,6 +13,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 HELPERS = (
+    'TestOwnershipCaseRejectsUnprovedMembership',
+    'TestOwnershipCoordinatorRestartRequiresTerminalCause',
+    'TestOwnershipKilledWorkerKeepsEarlierPeak',
     'TestReplicatedPublisherAcknowledgesAllPartitionsAndStops',
     'TestReplicatedPublisherStopsAfterRejectedBatch',
     'TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites',
@@ -67,7 +70,7 @@ class ReplicatedHelpersTest(unittest.TestCase):
                             'for name in json.loads(os.environ["HELPER_EVENTS"]):\n'
                             '    print(json.dumps(dict(Action="pass", Test=name)))\n')
             fake.chmod(0o700)
-            for emitted in (HELPERS, (), HELPERS[:-1], ('TestDifferent',)):
+            for emitted in (HELPERS, (), HELPERS[3:], HELPERS[:-1], ('TestDifferent',)):
                 with self.subTest(emitted=emitted):
                     env = dict(os.environ, KAFERRY_REPORT_DIR=str(directory/'results'),
                                HELPER_ARGUMENTS=str(arguments), HELPER_EVENTS=json.dumps(emitted))
