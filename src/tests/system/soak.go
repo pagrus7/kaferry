@@ -158,6 +158,10 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	bursts := 0
 	stalls := &destinationStalls{brokers: stalledBrokers, next: nextStall, record: trace}
 	monitor := soakMonitor{next: nextSample, kafka: !archiveMode, endurance: report.Endurance}
+	var recoveryRecord func(enduranceRecoveryObservation)
+	if endurance {
+		recoveryRecord = recoveryTrace(t)
+	}
 	reconciled := false
 	report.PublishingSeconds, report.DrainSeconds = duration.Seconds(), soakDrainDuration.Seconds()
 	t.Cleanup(func() {
@@ -209,7 +213,7 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		wasPaused := stalls.paused()
 		stalls.step(t, now, now.Sub(start) < duration)
 		if endurance && wasPaused && !stalls.paused() {
-			report.Endurance.recoveryAt = time.Now()
+			report.Endurance.beginRecovery(time.Now(), records, &monitor.operations, recoveryRecord)
 		}
 		if endurance {
 			e := report.Endurance
@@ -220,13 +224,7 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 			require.NoError(t, e.check(now.Sub(start), duration, records.published, records.acknowledged))
 			require.Zero(t, records.publishErrors, "endurance producer rejected input")
 			if !e.recoveryAt.IsZero() {
-				recovery := time.Since(e.recoveryAt)
-				require.LessOrEqual(t, recovery, 15*time.Second, "backlog failed to recover after destination stall")
-				if records.acknowledged-records.unique <= rate/10 {
-					e.MaxRecoverySeconds = max(e.MaxRecoverySeconds, recovery.Seconds())
-					e.Recoveries++
-					e.recoveryAt = time.Time{}
-				}
+				e.checkRecovery(t, time.Since(e.recoveryAt), records, monitor.operations, rate, recoveryRecord)
 			}
 		}
 		if endurance && now.Sub(start) < duration+5*time.Second {
@@ -267,7 +265,9 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 			records.drainReports(t, reports)
 			time.Sleep(5 * time.Millisecond)
 		} else {
-			records.catchUp(t, c, reports)
+			pollDuration := records.catchUp(t, c, reports)
+			monitor.operations.Poll.record(pollDuration)
+			monitor.operations.Verify.record(time.Since(verifyStart) - pollDuration)
 		}
 		if endurance {
 			report.Endurance.VerifierSeconds += time.Since(verifyStart).Seconds()
@@ -275,7 +275,9 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 		sampleStart := time.Now()
 		var destinationEnds map[int32]int64
 		if !archiveMode && !stalls.paused() && !now.Before(monitor.next) {
+			queryStarted := time.Now()
 			destinationEnds = destinationOffsets(t, destinationAdmin, dst, destinationPartitions)
+			monitor.operations.DestinationEnds.record(time.Since(queryStarted))
 		}
 		monitor.sample(t, now, process.pid(), a, group, src, records, destinationEnds,
 			!time.Now().Before(consumeOnlyStart(scheduledEnd, lastPublish)) && !published)
@@ -403,6 +405,7 @@ func (s *destinationStalls) step(t *testing.T, now time.Time, publishing bool) {
 }
 
 type soakMonitor struct {
+	operations                 soakOperationTimes
 	endurance                  *enduranceEvidence
 	next                       time.Time
 	rss                        []int64
@@ -446,18 +449,22 @@ func (m *soakMonitor) sample(t *testing.T, now time.Time, pid int, admin *kadm.C
 	if now.Before(m.next) {
 		return
 	}
+	rssStarted := time.Now()
 	rss, err := rssSample(pid)
+	m.operations.RSS.record(time.Since(rssStarted))
 	require.NoError(t, err, "RSS sampling failed")
 	m.recordRSS(rss, idle)
 	committed := 0
+	commitStarted := time.Now()
 	for _, part := range committedPartitions(t, admin, group, source, len(records.receipts.next)) {
 		committed += int(part.At)
 	}
+	m.operations.SavedOffsets.record(time.Since(commitStarted))
 	lag := records.published - committed
 	if lag < 0 {
 		t.Fatal("committed work never published to the source")
 	}
-	sample := map[string]any{"at": now.UTC(), "rss_kib": rss, "commit_lag": lag, "submitted": records.published, "delivery": records.delivery(false)}
+	sample := map[string]any{"at": now.UTC(), "rss_kib": rss, "commit_lag": lag, "submitted": records.published, "delivery": records.delivery(false), "operations": m.operations}
 	if m.endurance != nil {
 		sample["endurance"] = m.endurance
 	}
