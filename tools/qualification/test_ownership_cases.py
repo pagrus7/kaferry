@@ -15,6 +15,8 @@ from tools.ci import suites
 from tools.qualification import ownership_cases as ownership
 from tools.qualification import test_ownership_audit as audit_fixture
 from tools.qualification.replicated_results import collect
+from tools.qualification.broker_readiness import CRITERION
+from tools.qualification.test_replicated_results import readiness
 
 
 when = audit_fixture.when
@@ -130,12 +132,22 @@ class OwnershipCasesTest(unittest.TestCase):
                 case['events'] += [dict(fault=fault),dict(coordinator_kill_started=when(13.1),coordinator_kill_finished=when(13.2),container='container2'),dict(restart_routes=[1] if restart else [])]
                 signal(18,original,13.3)
                 replacement=state('coordinator_replacement',16,17,[1,2],20,broker=3,preparing=True)
+                api_ready=state('broker_api_ready',17.55,17.95,[1,2],20,broker=3,preparing=True)
                 restored=state('broker_restored',18,19,[1,2],20,broker=3,preparing=True)
                 restored['source_topology']=[dict(Leader=3,ISR=[1,2,3]) for _ in range(24)]
+                case.update(readiness_criterion=CRITERION,cluster_ids=dict(source='source-id',destination='destination-id'))
+                for observation,at in ((api_ready,17.6),(restored,18.1)):
+                    evidence=dict(topology=dict(source=restored['source_topology']))
+                    readiness(case,evidence,[targets[0]],at)
+                    observation['broker_readiness']=evidence['broker_readiness']
+                    check=observation['broker_readiness'][0]
+                    check['details'][0]['StartedAt']=when(17.5)
+                    check['api_probes'][0]['connected_at']=when(17.55)
+                case['events'].append(dict(broker=2,audit_logging_reenabled_at=when(17.97)))
                 row(18.5,'observer','METADATA',{},dict(topics=[dict(name='source',topicId=topic_id,errorCode=0,partitions=[dict(partitionIndex=p,errorCode=0,leaderId=3,isrNodes=[1,2,3]) for p in range(24)])]),3)
                 for running,label,interval in ((False,'stopped',replacement),(True,'restored',restored)):
                     filename=f'coordinator-{label}.inspect.json'
-                    (directory/filename).write_text(json.dumps(dict(id='container2',project='fixture',service='source-2',running=running,health='healthy' if running else 'unhealthy')))
+                    (directory/filename).write_text(json.dumps(dict(id='container2',project='fixture',service='source-2',running=running,health='starting' if running else 'unhealthy')))
                     case['events'].append(dict(broker_inspection=filename,container='container2',started=interval['started'],finished=interval['finished']))
                 state('recovered',22,23,[1,2],40,2,broker=3)
                 window('held-worker-rebalance',stimulus,8,13.5,24,'coordinator-kill',{k:v for k,v in fault.items() if k != 'heal'},True)
@@ -277,6 +289,46 @@ class OwnershipCasesTest(unittest.TestCase):
             # ownership cannot bypass the actual selected lifetime boundary.
             with self.subTest(name=name),self.assertRaisesRegex(ValueError,'retained selected route lifetime'):
                 ownership.snapshot(case,state,rows)
+
+    def test_coordinator_recovery_requires_actual_fresh_target_metadata_and_isr(self):
+        # Given checksummed broker-only observations, when fresh API or target
+        # proof is missing or contradicted, Docker health cannot establish recovery.
+        for label in ('broker_api_ready','broker_restored'):
+            for change in (
+                lambda state:state.pop('broker_readiness'),
+                lambda state:state.update(broker_readiness=[dict(passed=True)]),
+                lambda state:state['broker_readiness'][0]['api_probes'][0].update(response_at=when(17)),
+                lambda state:state['broker_readiness'][0]['api_probes'][0].update(transport_broker=3),
+                lambda state:state['broker_readiness'][0]['api_probes'][0].update(remote_address='127.0.0.1:46393'),
+                lambda state:state['broker_readiness'][0]['api_probes'][0].update(response_json='{}'),
+                lambda state:state['broker_readiness'][0]['details'][0].update(Running=False),
+            ):
+                fixture=self.fixture('coordinator-kill-rebalance',restart=True)
+                change(fixture[2]['states'][label])
+                with self.subTest(label=label,change=change),self.assertRaises(ValueError):
+                    self.validate(fixture)
+            # When the raw response and its digest agree but ISR or cluster is
+            # wrong, a rechecksummed receipt still cannot promote it to readiness.
+            for change in (
+                lambda response:response['Topics'][0]['Partitions'][0].update(ISR=[1,2]),
+                lambda response:response['Topics'][0]['Partitions'].pop(),
+                lambda response:response.update(ClusterID='other-cluster'),
+            ):
+                fixture=self.fixture('coordinator-kill-rebalance',restart=True)
+                probe=fixture[2]['states'][label]['broker_readiness'][0]['api_probes'][0]
+                response=json.loads(probe['response_json'])
+                change(response)
+                probe['response_json']=json.dumps(response)
+                probe['response_sha256']=hashlib.sha256(probe['response_json'].encode()).hexdigest()
+                with self.subTest(label=label,change=change),self.assertRaisesRegex(ValueError,'required cluster, routes, workload or ISR'):
+                    self.validate(fixture)
+        # The initial API proof must precede re-enabling request logging and
+        # the later raw topology capture; an invented ordering cannot qualify.
+        fixture=self.fixture('coordinator-kill-rebalance')
+        event=next(event for event in fixture[2]['events'] if 'audit_logging_reenabled_at' in event)
+        event['audit_logging_reenabled_at']=when(17.6)
+        with self.assertRaisesRegex(ValueError,'scoped logging'):
+            self.validate(fixture)
 
     def test_self_attested_membership_generation_and_kill_are_insufficient(self):
         # Given otherwise valid checksummed evidence, when a summary invents a

@@ -41,6 +41,7 @@ type ownershipCaseObservation struct {
 	Alive           map[int]bool         `json:"processes_alive"`
 	Error           string               `json:"error,omitempty"`
 	SourceTopology  []faults.Partition   `json:"source_topology,omitempty"`
+	Readiness       []brokerHealthCheck  `json:"broker_readiness,omitempty"`
 }
 
 type ownershipCaseWorker struct {
@@ -67,6 +68,7 @@ type ownershipCase struct {
 	publisher                           *replicatedPublisher
 	workers                             []*ownershipCaseWorker
 	lifecycle                           *brokerCopy
+	readiness                           *brokerCopy
 	states                              map[string]ownershipCaseObservation
 	events                              []map[string]any
 	failedAfter                         time.Time
@@ -112,9 +114,14 @@ func replicatedOwnershipCase(t *testing.T, name string) {
 	s.lifecycle = &brokerCopy{directory: directory}
 	s.lab = &faults.Lab{Project: os.Getenv("KAFERRY_FIXTURE_PROJECT"), API: os.Getenv("KAFERRY_TOXIPROXY_API"), Metadata: metadata}
 	s.src, s.dst, s.group = s.prefix+"-source", s.prefix+"-destination", s.prefix+"-group"
-	replicatedTopic(ctx, t, metadata["source"], s.src)
-	replicatedTopic(ctx, t, metadata["destination"], s.dst)
+	replicatedTopic(ctx, t, metadata["source"].Client, s.src)
+	replicatedTopic(ctx, t, metadata["destination"].Client, s.dst)
 	if name == "coordinator-kill-rebalance" {
+		s.readiness = &brokerCopy{lab: s.lab, metadata: metadata, src: s.src, dst: s.dst}
+		for side, topic := range map[string]string{"source": s.src, "destination": s.dst} {
+			_, topologyErr := s.readiness.topology(ctx, side, topic)
+			require.NoError(t, topologyErr, "retain baseline cluster identity before the coordinator fault")
+		}
 		configs, configErr := metadata["source"].DescribeBrokerConfigs(ctx, 1, 2, 3)
 		require.NoError(t, configErr)
 		require.Len(t, configs, 3)
@@ -503,9 +510,14 @@ func (s *ownershipCase) killCoordinator(window int, old *ownershipCaseWorker) {
 				s.brokerInspection(query, killed, false, "coordinator-stopped.inspect.json")
 		})
 	require.NoError(s.t, injection.Heal(s.ctx))
-	s.poll("restored broker API readiness before scoped logging", true, func(query context.Context, _ ownershipCaseObservation) bool {
-		return (&brokerCopy{}).healthy(query, killed)
+	probe := s.readiness
+	apiReady := s.poll("restored broker API readiness before scoped logging", true, func(query context.Context, _ ownershipCaseObservation) bool {
+		probe.healthChecks = nil
+		return probe.healthy(query, killed) && brokerReadinessISR(probe.healthChecks, "source", -1, 3, -1)
 	})
+	apiReady.Readiness = slices.Clone(probe.healthChecks)
+	s.states["broker_api_ready"] = apiReady
+	s.journal(apiReady)
 	// Reapply scoped logging before the metadata used for recovery proof, as
 	// well as the accepted post-recovery generations and final capture guards.
 	require.NoError(s.t, s.audit.level(s.ctx, killed.Broker, requestLogger, "DEBUG"))
@@ -514,7 +526,7 @@ func (s *ownershipCase) killCoordinator(window int, old *ownershipCaseWorker) {
 	var restoredTopology []faults.Partition
 	s.states["broker_restored"] = s.poll("restored coordinator broker health and all 24 ISR sets", true,
 		func(query context.Context, state ownershipCaseObservation) bool {
-			probe := &brokerCopy{metadata: s.metadata, src: s.src, dst: s.dst}
+			probe.healthChecks = nil
 			parts, topologyErr := probe.topology(query, "source", s.src)
 			if topologyErr != nil {
 				state.Error, state.Finished = topologyErr.Error(), time.Now().UTC()
@@ -522,7 +534,7 @@ func (s *ownershipCase) killCoordinator(window int, old *ownershipCaseWorker) {
 				return false
 			}
 			observed := brokerObservation{Topology: map[string][]faults.Partition{"source": parts}}
-			if !probe.healthy(query, killed) || !fullyReplicated(observed, "source") {
+			if !probe.healthy(query, killed) || !fullyReplicated(observed, "source") || !brokerReadinessISR(probe.healthChecks, "source", -1, 3, -1) {
 				return false
 			}
 			restoredTopology = parts
@@ -530,7 +542,9 @@ func (s *ownershipCase) killCoordinator(window int, old *ownershipCaseWorker) {
 		})
 	restored := s.states["broker_restored"]
 	restored.SourceTopology = restoredTopology
+	restored.Readiness = slices.Clone(probe.healthChecks)
 	s.states["broker_restored"] = restored
+	s.journal(restored)
 	// A coordinator error may terminate a periodic save under the existing
 	// product contract. Restart each affected route at most once, after health
 	// and ISR recovery, with its exact binary, SQL, configuration and group.
@@ -565,7 +579,7 @@ func (s *ownershipCase) brokerInspection(ctx context.Context, target faults.Targ
 	}
 	require.NoError(s.t, json.Unmarshal(data, &observed))
 	if observed.ID != target.Container || observed.Project != s.lab.Project || observed.Service != target.Service ||
-		observed.Running != running || running && observed.Health != "healthy" {
+		observed.Running != running || running && !slices.Contains([]string{"starting", "healthy", "unhealthy"}, observed.Health) {
 		return false
 	}
 	require.NoError(s.t, os.WriteFile(filepath.Join(s.directory, name), data, 0600))
@@ -744,13 +758,17 @@ func (s *ownershipCase) retain() {
 		publishing = s.publisher.snapshot()
 	}
 	artifacts := s.artifactChecksums()
-	data, err := json.MarshalIndent(map[string]any{"schema": 1, "id": s.id, "complete": s.complete && !s.t.Failed(), "case_failed": s.t.Failed(),
+	receipt := map[string]any{"schema": 1, "id": s.id, "complete": s.complete && !s.t.Failed(), "case_failed": s.t.Failed(),
 		"source_partitions": replicatedPartitions, "source_topic": s.src, "destination_topic": s.dst, "group": s.group,
 		"binary_sha256": os.Getenv("KAFERRY_EXPECT_BINARY_SHA256"), "states": s.states, "events": s.events, "publishing": publishing,
 		"timeout_milliseconds": durationMilliseconds(s.timeouts), "required_recovery_seconds": s.oracle.recovery.Seconds(),
 		"worker_measurements": measurements, "safety_case": s.safety, "audit_guard": s.audit.guard, "audit_marks": s.audit.marks,
 		"exact_lifetime_work_caps_qualified": exactCaps,
-		"fixture_project":                    s.lab.Project, "artifacts": artifacts, "observations": "ownership-observations.jsonl"}, "", "  ")
+		"fixture_project":                    s.lab.Project, "artifacts": artifacts, "observations": "ownership-observations.jsonl"}
+	if s.readiness != nil {
+		receipt["cluster_ids"], receipt["readiness_criterion"] = s.readiness.clusters, brokerReadinessCriterion
+	}
+	data, err := json.MarshalIndent(receipt, "", "  ")
 	if err == nil {
 		err = os.WriteFile(filepath.Join(s.directory, "replicated-ownership-case.json"), append(data, '\n'), 0600)
 	}

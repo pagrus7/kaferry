@@ -12,6 +12,7 @@ import tomllib
 from tools.ci.suites import fault_timeout_catalog
 from tools.qualification.fault_results import observation_path, validate_case
 from tools.qualification.broker_lifecycle import load_lifecycle
+from tools.qualification.broker_readiness import validate as validate_readiness
 from tools.qualification.ownership_audit import commits, integer, logging_configuration, records, segments, stamp
 from tools.qualification.replicated_results import EXACT_SCOPE, advances, vector
 
@@ -317,7 +318,7 @@ def broker_inspection(directory, case, name, target, running, interval):
     observed = json.loads((directory/name).read_text())
     require(observed['id'] == target['container'] and observed['project'] == case['fixture_project'] and
             observed['service'] == target['service'] and observed['running'] is running and
-            (not running or observed['health'] == 'healthy'), 'raw Docker inspection does not prove the resolved broker state')
+            (not running or observed['health'] in ('starting', 'healthy', 'unhealthy')), 'raw Docker inspection does not prove the resolved broker state')
     events = [event for event in case['events'] if event.get('broker_inspection') == name]
     require(len(events) == 1 and events[0]['container'] == target['container'] and
             stamp(interval['started']) <= stamp(events[0]['started']) <= stamp(events[0]['finished']) <= stamp(interval['finished']),
@@ -479,15 +480,21 @@ def coordinator_case(directory, case, rows, values, window, identity):
             'physical target differs from the actual coordinator and independent injection')
     require(stamp(fault['start']) <= stamp(states['at_kill']['started']) <= stamp(states['at_kill']['finished']) <=
             stamp(command['coordinator_kill_started']) <= stamp(command['coordinator_kill_finished']) <= injection['at'], 'coordinator command did not follow the actual rebalance recheck')
-    replacement, restored = states['coordinator_replacement'], states['broker_restored']
+    replacement, api_ready, restored = (states[name] for name in ('coordinator_replacement', 'broker_api_ready', 'broker_restored'))
     # Broker metadata may retain a dead member until session expiry. These
     # observations prove coordinator/health only; accepted recovered ownership
     # is checked separately against its live CLI lifetime and protocol chain.
     group_description(case, replacement, rows)
     group_description(case, restored, rows)
-    require(injection['at'] <= stamp(replacement['started']) <= stamp(replacement['finished']) <= stamp(fault['heal']) <= stamp(restored['started']) and
+    require(injection['at'] <= stamp(replacement['started']) <= stamp(replacement['finished']) <= stamp(fault['heal']) <= stamp(api_ready['started']) <= stamp(api_ready['finished']) <= stamp(restored['started']) and
             replacement['coordinator'] != broker and advances(replacement['publishing']['acknowledged_by_partition'], states['at_kill']['publishing']['acknowledged_by_partition']),
             'coordinator replacement was not observed while the original broker was stopped')
+    for state in (api_ready, restored):
+        validate_readiness(case, state, [targets[0]], stamp(state['started']), stamp(state['finished']))
+    logging = [event for event in case['events'] if 'audit_logging_reenabled_at' in event]
+    require(len(logging) == 1 and logging[0]['broker'] == broker and
+            stamp(api_ready['finished']) <= stamp(logging[0]['audit_logging_reenabled_at']) <= stamp(restored['started']),
+            'restored scoped logging does not follow fresh API readiness')
     broker_inspection(directory, case, 'coordinator-stopped.inspect.json', targets[0], False, replacement)
     broker_inspection(directory, case, 'coordinator-restored.inspect.json', targets[0], True, restored)
     topology = restored['source_topology']
