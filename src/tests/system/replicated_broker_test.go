@@ -36,6 +36,13 @@ type brokerObservation struct {
 	Publishing    replicatedPublishing          `json:"publishing"`
 	QueryErrors   []string                      `json:"query_errors,omitempty"`
 	Readiness     []brokerHealthCheck           `json:"broker_readiness,omitempty"`
+	Queries       []brokerQueryTiming           `json:"query_timings,omitempty"`
+}
+
+type brokerQueryTiming struct {
+	Operation string    `json:"operation"`
+	Started   time.Time `json:"started_at"`
+	Finished  time.Time `json:"finished_at"`
 }
 
 type brokerCopy struct {
@@ -364,7 +371,9 @@ func (s *brokerCopy) observe(ctx context.Context) (brokerObservation, bool) {
 	state.Topology = make(map[string][]faults.Partition)
 	for side, topic := range map[string]string{"source": s.src, "destination": s.dst} {
 		var err error
+		started := time.Now().UTC()
 		state.Topology[side], err = s.topology(ctx, side, topic)
+		state.Queries = append(state.Queries, brokerQueryTiming{side + " topology", started, time.Now().UTC()})
 		if err != nil {
 			state.QueryErrors = append(state.QueryErrors, brokerDiagnosticText(err.Error()))
 			return state, false
@@ -378,7 +387,9 @@ func (s *brokerCopy) observe(ctx context.Context) (brokerObservation, bool) {
 		state.QueryErrors = append(state.QueryErrors, "CLI has not emitted complete progress")
 		return state, false
 	}
+	started := time.Now().UTC()
 	parts, err := s.metadata["source"].FetchOffsetsForTopics(ctx, s.group, s.src)
+	state.Queries = append(state.Queries, brokerQueryTiming{"source saved offsets", started, time.Now().UTC()})
 	if err != nil || parts.Error() != nil || len(parts[s.src]) != replicatedPartitions {
 		state.QueryErrors = append(state.QueryErrors, brokerDiagnosticText(fmt.Sprintf("source saved offsets: request=%v partitions=%v count=%d", err, parts.Error(), len(parts[s.src]))))
 		return state, false
@@ -387,7 +398,9 @@ func (s *brokerCopy) observe(ctx context.Context) (brokerObservation, bool) {
 	for partition, part := range parts[s.src] {
 		state.Saved[partition] = part.At
 	}
+	started = time.Now().UTC()
 	ends, err := s.metadata["destination"].ListEndOffsets(ctx, s.dst)
+	state.Queries = append(state.Queries, brokerQueryTiming{"destination end offsets", started, time.Now().UTC()})
 	if err != nil || ends.Error() != nil || len(ends[s.dst]) != replicatedPartitions {
 		state.QueryErrors = append(state.QueryErrors, brokerDiagnosticText(fmt.Sprintf("destination end offsets: request=%v partitions=%v count=%d", err, ends.Error(), len(ends[s.dst]))))
 		return state, false

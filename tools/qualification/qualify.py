@@ -27,6 +27,7 @@ import venv
 from tools.ci.ci import capture, verify_tests
 from tools.ci.suites import command as go_suite, EXPECTED, REPLICATED_CASES, replicated_execution_seconds
 from tools.qualification import network
+from tools.qualification.runtime_observations import runtime_observations
 
 ROOT = Path(__file__).resolve().parents[2]
 IMAGES = json.loads((ROOT / 'src/tests/qualification/matrix.json').read_text())
@@ -679,20 +680,24 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
                        'brokers-up', spec.env, timeout=180, cancelled=cancelled)
                 startup_complete = True
                 receipt['broker_images'] = fixture_images(spec)
-            if args.suite in REPLICATED_SUITES:
-                logged([spec.env.get('GO', 'go'), 'test', '-count=1', '-json', '-tags=integration',
-                        '-timeout=3m', '-run', '^TestReplicatedProxyRoutes$', './src/tests/system/faults'],
-                       args.output, 'proxy-proof', spec.env, timeout=210, cancelled=cancelled)
-                verify_tests((args.output / 'proxy-proof.log').read_text(), ['TestReplicatedProxyRoutes'])
-                receipt['proxy_path_check'] = 'passed'
-            if fixture is not None:
-                receipt['parallel_capacity'] = parallel_capacity(fixture['reserved_bytes'], args.output, spec.compose, spec.env)
-                write_json(args.output / 'manifest.json', receipt)
-            if args.suite == 'endurance':
-                if not replicated_fixture(args):
-                    receipt['capacity'] = endurance_capacity(args.duration, args.output, spec.compose, spec.env)
-                write_json(args.output / 'manifest.json', receipt)
-            yield
+            observations = runtime_observations(args.output, spec.compose, spec.env) if args.suite == 'fault-replicated' else nullcontext()
+            with observations as observation:
+                if observation is not None:
+                    receipt['runtime_observations'] = observation
+                if args.suite in REPLICATED_SUITES:
+                    logged([spec.env.get('GO', 'go'), 'test', '-count=1', '-json', '-tags=integration',
+                            '-timeout=3m', '-run', '^TestReplicatedProxyRoutes$', './src/tests/system/faults'],
+                           args.output, 'proxy-proof', spec.env, timeout=210, cancelled=cancelled)
+                    verify_tests((args.output / 'proxy-proof.log').read_text(), ['TestReplicatedProxyRoutes'])
+                    receipt['proxy_path_check'] = 'passed'
+                if fixture is not None:
+                    receipt['parallel_capacity'] = parallel_capacity(fixture['reserved_bytes'], args.output, spec.compose, spec.env)
+                    write_json(args.output / 'manifest.json', receipt)
+                if args.suite == 'endurance':
+                    if not replicated_fixture(args):
+                        receipt['capacity'] = endurance_capacity(args.duration, args.output, spec.compose, spec.env)
+                    write_json(args.output / 'manifest.json', receipt)
+                yield
         except (Exception, KeyboardInterrupt) as error:
             receipt['suite_error'] = str(error) or 'interrupted'
             raise
