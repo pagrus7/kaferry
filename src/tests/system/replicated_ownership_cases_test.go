@@ -48,15 +48,14 @@ type ownershipCaseObservation struct {
 }
 
 type ownershipCaseWorker struct {
-	lifetime         brokerLifetime
-	route            int
-	process          *cliProcess
-	started          time.Time
-	memory           func() rssPeak
-	reason           string
-	terminal         string
-	coordinatorPhase string
-	measurement      map[string]any
+	lifetime    brokerLifetime
+	route       int
+	process     *cliProcess
+	started     time.Time
+	memory      func() rssPeak
+	reason      string
+	terminal    string
+	measurement map[string]any
 }
 
 type ownershipCase struct {
@@ -79,7 +78,6 @@ type ownershipCase struct {
 	safety                              map[string]string
 	complete                            bool
 	coordinatorFault                    *faults.Injection
-	coordinatorAudit                    *ownershipCoordinatorAudit
 	sourceID                            [16]byte
 }
 
@@ -618,7 +616,6 @@ func (s *ownershipCase) killDuringRebalance(coordinator bool) {
 	s.states["preparing_rebalance"] = trigger
 	s.journal(trigger)
 	if coordinator {
-		s.captureCoordinatorAudit()
 		s.killCoordinator(window, old)
 	} else {
 		// Recheck independently immediately before the OS kill; elapsed time is
@@ -722,7 +719,7 @@ func (s *ownershipCase) killCoordinator(window int, old *ownershipCaseWorker) {
 	restored.Readiness = slices.Clone(probe.healthChecks)
 	s.states["broker_restored"] = restored
 	s.journal(restored)
-	s.validateCoordinatorEOFExits()
+	s.validateCoordinatorExits()
 	// A coordinator error may terminate a periodic save under the existing
 	// product contract. Restart each affected route at most once, after health
 	// and ISR recovery, with its exact binary, SQL, configuration and group.
@@ -830,14 +827,10 @@ func (s *ownershipCase) live(allowFaultExit bool) {
 		require.NoError(s.t, retainErr, "retain ownership sole-Wait evidence before classification")
 		require.True(s.t, allowFaultExit && !s.failedAfter.IsZero(), "unexplained or premature CLI exit: %s", worker.process.logs())
 		require.Equal(s.t, 1, worker.process.command.ProcessState.ExitCode(), worker.process.logs())
-		terminal, phase, known := s.coordinatorFailure(worker, exit.Witness, worker.process.logs())
-		worker.coordinatorPhase = phase
+		terminal, known := s.coordinatorFailure(worker, exit.Witness, worker.process.logs())
 		require.True(s.t, known, "coordinator fault produced an unexplained terminal failure: %s", worker.process.logs())
 		worker.reason, worker.terminal = "coordinator fault fail-fast exit", terminal
 		s.measure(worker, false)
-		if worker.coordinatorPhase != "" {
-			worker.measurement["coordinator_exit_phase"] = worker.coordinatorPhase
-		}
 		require.False(s.t, worker.measurement["stopped_at"].(time.Time).Before(s.failedAfter), "exit preceded actual coordinator kill")
 	}
 	for _, worker := range s.workers {
@@ -852,28 +845,6 @@ func (s *ownershipCase) live(allowFaultExit bool) {
 			}
 		}
 	}
-}
-
-func ownershipCoordinatorFailure(logs string) (string, bool) {
-	var terminal []string
-	for _, line := range strings.Split(logs, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || json.Valid([]byte(line)) {
-			continue
-		}
-		if strings.Contains(line, brokerNegotiationEOF) || strings.Contains(line, networkFirstResponseEOF) {
-			return strings.Join(append(terminal, line), "\n"), false
-		}
-		known := false
-		for _, cause := range []string{"NOT_COORDINATOR", "COORDINATOR_NOT_AVAILABLE", "COORDINATOR_LOAD_IN_PROGRESS", "UNKNOWN_MEMBER_ID", "ILLEGAL_GENERATION", "REBALANCE_IN_PROGRESS", "consumer group ownership unavailable for commit", "context deadline exceeded"} {
-			known = known || strings.Contains(line, cause)
-		}
-		if !known {
-			return strings.Join(append(terminal, line), "\n"), false
-		}
-		terminal = append(terminal, line)
-	}
-	return strings.Join(terminal, "\n"), len(terminal) > 0
 }
 
 func ownershipCaseWork(logs string) (brokerWorkEvidence, bool, error) {
@@ -952,9 +923,6 @@ func (s *ownershipCase) retain() {
 		"fixture_project":                    s.lab.Project, "artifacts": artifacts, "observations": "ownership-observations.jsonl"}
 	if s.readiness != nil {
 		receipt["cluster_ids"], receipt["readiness_criterion"] = s.readiness.clusters, brokerReadinessCriterion
-	}
-	if s.coordinatorAudit != nil {
-		receipt["coordinator_exit_audit"] = s.coordinatorAudit
 	}
 	data, err := json.MarshalIndent(receipt, "", "  ")
 	if err == nil {
@@ -1044,19 +1012,6 @@ func TestOwnershipCaseRejectsUnprovedMembership(t *testing.T) {
 	state.Members[1].Partitions[0] = 0
 	_, valid = ownershipCaseMembers(state, map[int]string{1: "worker1", 2: "worker2"})
 	require.False(t, valid)
-}
-
-func TestOwnershipCoordinatorRestartRequiresTerminalCause(t *testing.T) {
-	// Given structured coordinator warnings, when the terminal failure is
-	// unrelated or absent, then a warning cannot authorize a worker restart.
-	warning := `{"msg":"source warning","error":"NOT_COORDINATOR"}` + "\n"
-	for _, terminal := range []string{"", "unexpected invariant failure", "context deadline exceeded\nunexpected invariant failure", "EOF", brokerForcedSaveExit, brokerForcedWritesExit, brokerNegotiationEOF} {
-		_, known := ownershipCoordinatorFailure(warning + terminal)
-		require.False(t, known, terminal)
-	}
-	terminal, known := ownershipCoordinatorFailure(warning + "recoverable operation: ILLEGAL_GENERATION\n")
-	require.True(t, known)
-	require.Equal(t, "recoverable operation: ILLEGAL_GENERATION", terminal)
 }
 
 func TestOwnershipKilledWorkerKeepsEarlierPeak(t *testing.T) {

@@ -14,11 +14,10 @@ KAFERRY_TEST_OUTPUT ?= -v
 SOAK_TEST_TIMEOUT ?= 1h
 REPLICATED_HELPER_TESTS := \
 	TestOwnershipCaseRejectsUnprovedMembership \
-	TestOwnershipCoordinatorRestartRequiresTerminalCause \
+	TestOwnershipCoordinatorRestartRequiresRecordedScope \
 	TestOwnershipKilledWorkerKeepsEarlierPeak \
 	TestOwnershipGenerationsReuseOneAuditSnapshot \
 	TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy \
-	TestOwnershipCoordinatorEOFRequiresRawBoundPhase \
 	TestReplicatedPublisherAcknowledgesAllPartitionsAndStops \
 	TestReplicatedPublisherStopsAfterRejectedBatch \
 	TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites \

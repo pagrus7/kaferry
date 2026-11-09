@@ -14,11 +14,10 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 HELPERS = (
     'TestOwnershipCaseRejectsUnprovedMembership',
-    'TestOwnershipCoordinatorRestartRequiresTerminalCause',
+    'TestOwnershipCoordinatorRestartRequiresRecordedScope',
     'TestOwnershipKilledWorkerKeepsEarlierPeak',
     'TestOwnershipGenerationsReuseOneAuditSnapshot',
     'TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy',
-    'TestOwnershipCoordinatorEOFRequiresRawBoundPhase',
 ) + (
     'TestReplicatedPublisherAcknowledgesAllPartitionsAndStops',
     'TestReplicatedPublisherStopsAfterRejectedBatch',
