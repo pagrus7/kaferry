@@ -40,6 +40,8 @@ type enduranceEvidence struct {
 	lastExpected, lastAcknowledged int
 	endRecorded, graceChecked      bool
 	recoveryAt                     time.Time
+
+	Recovery *enduranceRecoveryObservation `json:"last_recovery,omitempty"`
 }
 
 func newEnduranceEvidence(duration time.Duration) *enduranceEvidence {
