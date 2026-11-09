@@ -243,14 +243,9 @@ func ownershipPhaseRows(data []byte, client string, birth, end time.Time) ([]own
 		if !found || row.Header.ClientID != client {
 			continue
 		}
-		prefix, _, _ := strings.Cut(line, "Completed request:")
-		if len(prefix) >= 25 && prefix[0] == '[' && prefix[24] == ']' {
-			row.Completed, _ = time.Parse("2006-01-02 15:04:05,000", prefix[1:24])
-			elapsed, timingErr := auditRequestDuration(row.TotalTime)
-			if timingErr != nil {
-				return nil, timingErr
-			}
-			row.Received = row.Completed.Add(-elapsed)
+		row.Completed, row.Received, err = auditRequestTimes(row)
+		if err != nil {
+			return nil, err
 		}
 		if row.Completed.After(end) {
 			continue
@@ -485,6 +480,7 @@ func rewriteOwnershipCoordinatorPrefix(t *testing.T, s *ownershipCase, old, new 
 func TestOwnershipCoordinatorEOFRequiresRawBoundPhase(t *testing.T) {
 	ownershipCoordinatorChildOutput(t)
 	ownershipCoordinatorFallbackMutations(t)
+	ownershipCoordinatorTimingInputs(t)
 	save, closeInput := "save progress: "+brokerNegotiationEOF, "close Kafka input: "+brokerNegotiationEOF
 	join := "poll source: unable to join group session: " + brokerNegotiationEOF
 	cases := []struct{ name, phase, terminal string }{
@@ -725,5 +721,37 @@ func ownershipCoordinatorExitMutations() map[string]func(*testing.T, *ownershipC
 		"positive progress": func(_ *testing.T, _ *ownershipCase, _ *ownershipCaseWorker, _ *brokerExitWitness, logs *string) {
 			*logs = strings.Replace(*logs, `"submitted":0`, `"submitted":1`, 1)
 		},
+	}
+}
+
+func ownershipCoordinatorTimingInputs(t *testing.T) {
+	t.Helper()
+	for _, phase := range []string{ownershipEstablishedEOF, ownershipJoiningEOF} {
+		for _, tc := range []struct {
+			name, old, replacement string
+			valid                  bool
+		}{
+			{name: "fractional time", old: `"totalTimeMs":0`, replacement: `"totalTimeMs":0.125`, valid: true},
+			{name: "exponent time", old: `"totalTimeMs":0`, replacement: `"totalTimeMs":1.25e-1`, valid: true},
+			{name: "missing time", old: `"totalTimeMs":0`, replacement: `"unrelated":0`},
+			{name: "null time", old: `"totalTimeMs":0`, replacement: `"totalTimeMs":null`},
+			{name: "quoted time", old: `"totalTimeMs":0`, replacement: `"totalTimeMs":"0"`},
+			{name: "negative fractional time", old: `"totalTimeMs":0`, replacement: `"totalTimeMs":-0.0000001`},
+			{name: "overflow time", old: `"totalTimeMs":0`, replacement: `"totalTimeMs":1e100`},
+			{name: "unknown completion", old: "] DEBUG Completed request:", replacement: "] INFO Completed request:"},
+		} {
+			t.Run(phase+"/raw timing/"+tc.name, func(t *testing.T) {
+				// Given complete phase-bound proof, when its raw request timing is
+				// decoded, then valid fractional numbers survive and unknown timing fails.
+				s, worker, exit, logs := ownershipCoordinatorFixture(t, phase)
+				entry := s.coordinatorAudit.Brokers[1]
+				data, err := os.ReadFile(filepath.Join(s.directory, entry.Raw.Path))
+				require.NoError(t, err)
+				changed := strings.ReplaceAll(string(data), tc.old, tc.replacement)
+				rewriteOwnershipCoordinatorPrefix(t, s, string(data), changed)
+				_, _, valid := s.coordinatorFailure(worker, exit, logs)
+				require.Equal(t, tc.valid, valid)
+			})
+		}
 	}
 }

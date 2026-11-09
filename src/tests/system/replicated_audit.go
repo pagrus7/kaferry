@@ -397,27 +397,24 @@ func auditReceivedAfter(row ownershipAuditRecord, barrier time.Time) (bool, erro
 	if barrier.IsZero() {
 		return true, nil
 	}
-	completed, err := time.Parse("[2006-01-02 15:04:05,000] DEBUG ", row.completionPrefix)
-	if err != nil {
-		return false, fmt.Errorf("commit completion timestamp: %w", err)
-	}
-	elapsed, err := auditRequestDuration(row.TotalTime)
-	if err != nil {
-		return false, err
-	}
-	return !completed.Add(-elapsed).Before(barrier), nil
+	_, received, err := auditRequestTimes(row)
+	return err == nil && !received.Before(barrier), err
 }
 
-func auditRequestDuration(totalTime json.RawMessage) (time.Duration, error) {
-	milliseconds, err := strconv.ParseFloat(string(totalTime), 64)
+func auditRequestTimes(row ownershipAuditRecord) (completed, received time.Time, err error) {
+	completed, err = time.Parse("[2006-01-02 15:04:05,000] DEBUG ", row.completionPrefix)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("commit completion timestamp: %w", err)
+	}
+	milliseconds, err := strconv.ParseFloat(string(row.TotalTime), 64)
 	if err != nil || milliseconds < 0 {
-		return 0, fmt.Errorf("commit total request time is unavailable or invalid: %q", totalTime)
+		return time.Time{}, time.Time{}, fmt.Errorf("commit total request time is unavailable or invalid: %q", row.TotalTime)
 	}
 	elapsed, err := time.ParseDuration(strconv.FormatFloat(milliseconds, 'f', -1, 64) + "ms")
 	if err != nil || elapsed < 0 {
-		return 0, fmt.Errorf("commit total request time is unavailable or invalid: %q", totalTime)
+		return time.Time{}, time.Time{}, fmt.Errorf("commit total request time is unavailable or invalid: %q", row.TotalTime)
 	}
-	return elapsed, nil
+	return completed, completed.Add(-elapsed), nil
 }
 
 func auditAcceptedParts(row ownershipAuditRecord, minimum map[int32]int64) (map[int32]bool, error) {
