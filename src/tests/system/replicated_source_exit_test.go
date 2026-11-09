@@ -21,9 +21,17 @@ import (
 )
 
 func brokerSourceOperationEOF(terminal string) bool {
-	return terminal == "poll source: "+brokerNegotiationEOF || terminal == "save progress: "+brokerNegotiationEOF ||
-		terminal == "poll source: save progress: "+brokerNegotiationEOF ||
-		terminal == "save progress: "+brokerNegotiationEOF+"\nsave progress: "+brokerNegotiationEOF
+	lines := strings.Split(terminal, "\n")
+	switch lines[0] {
+	case "poll source: " + brokerNegotiationEOF, "save progress: " + brokerNegotiationEOF, "poll source: save progress: " + brokerNegotiationEOF:
+	default:
+		return false
+	}
+	remaining := lines[1:]
+	if len(remaining) > 0 && remaining[0] == "save progress: "+brokerNegotiationEOF {
+		remaining = remaining[1:]
+	}
+	return len(remaining) == 0 || len(remaining) == 1 && remaining[0] == "close Kafka input: "+brokerNegotiationEOF
 }
 
 func (p *brokerFailureProof) sourceOperationExit(logs, terminal string, summary *copySummary) bool {
@@ -86,9 +94,8 @@ func TestBrokerLabelledSourceEOFRequiresBoundAllConfirmedExit(t *testing.T) {
 		require.ErrorIs(t, err, io.EOF)
 		require.EqualError(t, err, brokerNegotiationEOF)
 	})
-	for _, terminal := range []string{"poll source: " + brokerNegotiationEOF, "save progress: " + brokerNegotiationEOF,
-		"poll source: save progress: " + brokerNegotiationEOF, "save progress: " + brokerNegotiationEOF + "\nsave progress: " + brokerNegotiationEOF} {
-		t.Run(terminal, func(t *testing.T) {
+	for _, terminal := range sourceExitTerminals() {
+		t.Run(strings.ReplaceAll(terminal, brokerNegotiationEOF, "EOF"), func(t *testing.T) {
 			// Given live healthy progress from this controlled child, when a
 			// registered source restart is followed by a labelled all-confirmed
 			// exit, then the same binary/group restart gate can classify it.
@@ -135,15 +142,8 @@ func sourceExitMutations(t *testing.T, proof *brokerFailureProof, logs, terminal
 	for _, replacement := range []string{brokerNegotiationEOF, strings.ReplaceAll(terminal, brokerNegotiationEOF, networkFirstResponseEOF), terminal + " context deadline exceeded", terminal + "\ncontext deadline exceeded", " " + terminal, terminal + " ", "poll source: TLS handshake failed"} {
 		changedLogs = append(changedLogs, strings.ReplaceAll(logs, terminal, replacement))
 	}
-	save := "save progress: " + brokerNegotiationEOF
-	changedLogs = append(changedLogs, strings.ReplaceAll(logs, terminal, save+"\n"+save+"\n"+save))
-	for _, first := range []string{"poll source: ", "save progress: ", "poll source: save progress: "} {
-		for _, second := range []string{"poll source: ", "save progress: ", "poll source: save progress: "} {
-			if first != "save progress: " || second != first {
-				pair := first + brokerNegotiationEOF + "\n" + second + brokerNegotiationEOF
-				changedLogs = append(changedLogs, strings.ReplaceAll(logs, terminal, pair))
-			}
-		}
+	for _, invalid := range sourceExitInvalidTerminals() {
+		changedLogs = append(changedLogs, strings.ReplaceAll(logs, terminal, invalid))
 	}
 	for _, changed := range changedLogs {
 		data, err := json.Marshal(proof)
@@ -202,4 +202,25 @@ func sourceExitMutations(t *testing.T, proof *brokerFailureProof, logs, terminal
 	require.True(t, atHeal.affected("source"), "the existing inclusive fault check admits equality")
 	_, known := brokerContextualFailure(logs, &atHeal)
 	require.False(t, known, "labelled source EOF must precede physical healing")
+}
+
+func sourceExitTerminals() []string {
+	var terminals []string
+	for _, primary := range []string{"poll source: ", "save progress: ", "poll source: save progress: "} {
+		for _, save := range []string{"", "\nsave progress: " + brokerNegotiationEOF} {
+			for _, closeInput := range []string{"", "\nclose Kafka input: " + brokerNegotiationEOF} {
+				terminals = append(terminals, primary+brokerNegotiationEOF+save+closeInput)
+			}
+		}
+	}
+	return terminals
+}
+
+func sourceExitInvalidTerminals() []string {
+	poll, save, closeInput := "poll source: "+brokerNegotiationEOF, "save progress: "+brokerNegotiationEOF, "close Kafka input: "+brokerNegotiationEOF
+	return []string{closeInput, closeInput + "\n" + save, poll + "\n" + poll, save + "\n" + poll,
+		poll + "\n" + closeInput + "\n" + save, save + "\n" + save + "\n" + save,
+		save + "\n" + closeInput + "\n" + closeInput, save + "\n" + save + "\n" + closeInput + "\n" + save,
+		poll + "\npoll source: save progress: " + brokerNegotiationEOF,
+		save + "\nsave progress: " + networkFirstResponseEOF, save + "\nclose Kafka input: " + networkFirstResponseEOF}
 }

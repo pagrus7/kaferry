@@ -141,7 +141,7 @@ def failed_worker(case, safety, forced):
     return worker
 
 
-def labelled_source_worker(case, safety, terminal='\n'.join([SOURCE_OPERATION_EOFS[1]]*2)):
+def labelled_source_worker(case, safety, terminal='\n'.join([SOURCE_OPERATION_EOFS[1]]*2+['close Kafka input: '+NEGOTIATION_EOF])):
     worker = failed_worker(case, safety, False)
     worker['copy_summary']['confirmed'] = worker['copy_summary']['submitted']
     worker['terminal_error'] = terminal
@@ -486,15 +486,20 @@ class ReplicatedResultsTest(unittest.TestCase):
         # Given exact all-confirmed output, when the failed operation is labelled,
         # then only its same healthy lifetime inside a source fault is admissible.
         for id in ('broker/source-leader', 'broker/rolling-source'):
-            for terminal in (*SOURCE_OPERATION_EOFS, SOURCE_OPERATION_EOFS[1]+'\n'+SOURCE_OPERATION_EOFS[1]):
+            for terminal in (primary+save+close_input for primary in SOURCE_OPERATION_EOFS
+                             for save in ('', '\n'+SOURCE_OPERATION_EOFS[1])
+                             for close_input in ('', '\nclose Kafka input: '+NEGOTIATION_EOF)):
                 with self.subTest(id=id, terminal=terminal):
                     result = self.validate(id, lambda c,s:labelled_source_worker(c,s,terminal))
                     self.assertTrue(result['broker_exposure']['exact_lifetime_work_caps_qualified'])
-        # Given freshly hashed physical evidence, then only the observed save+save
-        # pair is admitted; other labelled pairs and a third save still fail.
-        invalid = [first+'\n'+second for first in SOURCE_OPERATION_EOFS for second in SOURCE_OPERATION_EOFS
-                   if first != SOURCE_OPERATION_EOFS[1] or second != first]
-        invalid.append('\n'.join([SOURCE_OPERATION_EOFS[1]]*3))
+        # Given freshly hashed physical evidence, then cleanup-only, reordered,
+        # repeated and excess components remain outside the product's three phases.
+        poll, save, close_input = SOURCE_OPERATION_EOFS[0], SOURCE_OPERATION_EOFS[1], 'close Kafka input: '+NEGOTIATION_EOF
+        invalid = [close_input, close_input+'\n'+save, poll+'\n'+poll, save+'\n'+poll,
+                   poll+'\n'+close_input+'\n'+save, '\n'.join([save]*3),
+                   save+'\n'+close_input+'\n'+close_input, '\n'.join([save, save, close_input, save]),
+                   poll+'\n'+SOURCE_OPERATION_EOFS[2], save+'\nsave progress: '+FIRST_RESPONSE_EOF,
+                   save+'\nclose Kafka input: '+FIRST_RESPONSE_EOF]
         for terminal in invalid:
             with self.subTest(terminal=terminal), self.assertRaisesRegex(ValueError, 'unsupported terminal failure'):
                 self.validate('broker/source-leader', lambda c,s:labelled_source_worker(c,s,terminal))

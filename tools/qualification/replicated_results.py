@@ -101,6 +101,16 @@ def forced_copy_failure(case, worker, witness, raw):
     return True
 
 
+def source_operation_eof(terminal):
+    lines = terminal.split('\n')
+    if lines[0] not in SOURCE_OPERATION_EOFS:
+        return False
+    remaining = lines[1:]
+    if remaining and remaining[0] == SOURCE_OPERATION_EOFS[1]:
+        remaining = remaining[1:]
+    return remaining in ([], ['close Kafka input: '+NEGOTIATION_EOF])
+
+
 def worker_work(case, worker, witness, raw):
     available, summary = worker['lifetime_highwater_available'], worker['copy_summary']
     terminal = worker.get('terminal_error', '')
@@ -129,7 +139,7 @@ def worker_work(case, worker, witness, raw):
     if worker['exit_code'] == 0:
         if terminal:
             raise ValueError('completed broker worker has a terminal failure')
-    elif terminal in SOURCE_OPERATION_EOFS or terminal == '\n'.join([SOURCE_OPERATION_EOFS[1]]*2):
+    elif source_operation_eof(terminal):
         if (summary['submitted'] <= 0 or summary['submitted'] != summary['confirmed'] or
                 not source_operation_failure(case, worker, witness, raw)):
             raise ValueError('labelled source/save EOF lacks a bound all-confirmed active source fault')
