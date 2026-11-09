@@ -47,6 +47,23 @@ func networkBacklog(state brokerObservation) int64 {
 	return max(0, networkTotal(state.Publishing.Acknowledged)-networkTotal(state.Ends))
 }
 
+func networkMeasurementReady(state brokerObservation) bool {
+	publication := state.Publishing
+	if !brokerHealthyCopy(state) || networkBacklog(state) > replicatedPartitions ||
+		len(publication.Offered) != replicatedPartitions || publication.Started.IsZero() ||
+		publication.Started.After(state.At) || publication.Observed.Before(state.At) {
+		return false
+	}
+	due := int64(publication.Observed.Sub(publication.Started) / (100 * time.Millisecond))
+	for partition, acknowledged := range publication.Acknowledged {
+		offered := publication.Offered[partition]
+		if acknowledged < due-1 || acknowledged > due || offered < acknowledged || offered > due || offered-acknowledged > 1 {
+			return false
+		}
+	}
+	return true
+}
+
 // Hold the actual configured interval while continuing independent observations.
 // Returning early on the desired effect would shorten the claimed exposure.
 func (s *brokerCopy) networkSpan(before brokerObservation, duration time.Duration, allowFailure bool) networkInterval {
@@ -121,6 +138,8 @@ func replicatedNetworkFault(t *testing.T, name string) {
 	// admin, publisher and continuous librdkafka routes, measure healthy output.
 	s, baseline := startReplicatedFaultCopy(t, "network/"+name)
 	span := s.timeouts["session.timeout.ms"]
+	baseline = s.wait("source schedule caught up and output backlog drained before healthy measurement", false,
+		func(_ context.Context, state brokerObservation) bool { return networkMeasurementReady(state) })
 	healthy := s.networkSpan(baseline, span, false)
 	require.GreaterOrEqual(t, healthy.rate(), .95*float64(replicatedPartitions)*10, "healthy fixture did not sustain scheduled input")
 	role := faults.Role{Kind: "worker-destination", Cluster: "destination", Worker: 1}
@@ -221,7 +240,7 @@ func replicatedNetworkFault(t *testing.T, name string) {
 		closeProof["stimulus"] = stimulus.Event
 	}
 	recovered := s.wait("every partition resumes saved progress after worker route healing", false, func(_ context.Context, state brokerObservation) bool {
-		return allAbove(state.Saved, during.After.Saved, 2) && networkBacklog(state) <= replicatedPartitions
+		return allAbove(state.Saved, during.After.Saved, 2) && networkMeasurementReady(state)
 	})
 	recovery := s.networkSpan(recovered, span, false)
 	require.GreaterOrEqual(t, recovery.rate(), .95*healthy.rate(), "measured output throughput did not recover after toxic removal")

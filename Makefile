@@ -19,6 +19,7 @@ REPLICATED_HELPER_TESTS := \
 	TestReplicatedBrokerPublisherCatchesUpDelayedSchedule \
 	TestReplicatedBrokerPublisherCancellationDrainsDelayedOffers \
 	TestReplicatedBrokerPublisherErrorDrainsDelayedOffers \
+	TestNetworkMeasurementRequiresCaughtUpSourceAndOutput \
 	TestBrokerFaultRestartRequiresClassifiedTerminalFailure \
 	TestBrokerCurrentProgressDoesNotWaitForChildExit \
 	TestBrokerCurrentProgressRequiresReadableCompleteEvidence \

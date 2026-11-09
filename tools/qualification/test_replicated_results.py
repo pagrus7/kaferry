@@ -195,9 +195,12 @@ def rewrite_lifecycle(directory, worker, edit):
 def network_proof(id):
     case, safety = proof(id)
     case.pop('readiness_criterion')
+    publishing_start = 5
     name = id.split('/')[1]
     def observed(second, count):
+        count -= publishing_start*10
         result = state(second, count)
+        result['publishing'].update(started=stamp(publishing_start), observed=stamp(second), offered_by_partition=[count]*24)
         result['broker_healthy'] = False
         result['topology']['destination'] = [dict(Leader=n%3+1, ISR=[1,2,3]) for n in range(24)]
         return result
@@ -217,7 +220,7 @@ def network_proof(id):
     before, after = observed(20,200), observed(86 if outage else 26,860 if outage else 260)
     affected = [n for n in range(24) if not leader or n%3 == 0]
     for partition in affected:
-        after['saved'][partition] = after['destination_ends'][partition] = 240 if name in ('latency','bandwidth') else 200
+        after['saved'][partition] = after['destination_ends'][partition] = (240 if name in ('latency','bandwidth') else 200)-publishing_start*10
     event = dict(fault=fault,healthy=dict(before=case['baseline'],after=observed(16,160)),during=dict(before=before,after=after),
                  recovery=dict(before=observed(90 if outage else 30,900 if outage else 300),after=observed(96 if outage else 36,960 if outage else 360)),
                  affected_partitions=affected,unaffected_partitions=sorted(set(range(24))-set(affected)),connection_effect=None)
@@ -552,6 +555,82 @@ class NetworkResultsTest(unittest.TestCase):
         if change: change(case,safety)
         return validate_proof(id, case, safety, network_case, artifacts)
 
+    def test_measurement_starts_reject_past_debt_and_output_backlog(self):
+        # Given regenerated physical lifecycle/raw checksums and valid spans,
+        # when a startpoint retains old debt or output, reject that state itself.
+        def lag(state, count, partitions):
+            for partition in range(partitions):
+                for values in (state['saved'], state['destination_ends'],
+                               state['publishing']['acknowledged_by_partition'], state['publishing']['offered_by_partition']):
+                    values[partition] -= count
+        for phase in ('healthy', 'recovery'):
+            for kind in ('source-debt', 'output-backlog'):
+                def change(case, safety):
+                    state = case['events'][0][phase]['before']
+                    if kind == 'source-debt':
+                        lag(state, 4, 8)
+                    else:
+                        state['destination_ends'][0] -= 25
+                        state['saved'][0] -= 25
+                with self.subTest(phase=phase, kind=kind), self.assertRaisesRegex(ValueError, 'network measurement start'):
+                    self.validate('latency', change)
+
+        def inflated(case, safety):
+            event = case['events'][0]
+            for phase in ('healthy', 'recovery'):
+                lag(event[phase]['before'], 14, 8)
+                before, after = event[phase]['before'], event[phase]['after']
+                rate = (sum(after['destination_ends'])-sum(before['destination_ends']))/6
+                self.assertAlmostEqual(258.6666666667, rate)
+            self.assertGreater(.95*rate, 240)
+        # Both lower-bound checks and the relative recovery bar accept
+        # matching catch-up bursts; neither proves a steady measurement start.
+        with self.assertRaisesRegex(ValueError, 'network measurement start'):
+            self.validate('latency', inflated)
+
+    def test_measurement_start_allows_only_current_slot_and_existing_backlog_limit(self):
+        # Given actual publisher timestamps and counters, when only one current
+        # slot or at most24output records remain, retain the existing limits.
+        for phase in ('healthy', 'recovery'):
+            def pending(case, safety):
+                state = case['events'][0][phase]['before']
+                state['publishing']['acknowledged_by_partition'][0] -= 1
+                state['saved'][0] -= 1
+                state['destination_ends'][0] -= 1
+            def backlog(case, safety):
+                state = case['events'][0][phase]['before']
+                state['saved'][0] -= 24
+                state['destination_ends'][0] -= 24
+            for change in (pending, backlog):
+                with self.subTest(phase=phase, change=change):
+                    self.validate('latency', change)
+
+    def test_measurement_start_requires_the_actual_publisher_clock_and_offers(self):
+        # Given otherwise matching receipts and freshly rehashed physical proof,
+        # when publisher identity, time or bounded offers contradict the start,
+        # then collection must fail before those counts define a reference.
+        edits = [lambda p:p.update(started=stamp(1)), lambda p:p.update(observed=stamp(9)),
+                 lambda p:p.update(offered_by_partition=[102]*24),
+                 lambda p:p.pop('observed'), lambda p:p.pop('offered_by_partition')]
+        for edit in edits:
+            def change(case, safety):
+                edit(case['events'][0]['healthy']['before']['publishing'])
+            with self.subTest(edit=edit), self.assertRaises((ValueError, KeyError)):
+                self.validate('latency', change)
+
+    def test_measurement_start_preserves_nanoseconds_at_schedule_boundaries(self):
+        # Given a publisher origin and snapshots with equal nanosecond tails,
+        # when elapsed time is exactly a whole slot, float rounding or datetime
+        # truncation must not reject its actual caught-up acknowledgement count.
+        def precise(case, safety):
+            origin = '1970-01-01T00:00:05.000000009Z'
+            case['publishing']['started'] = origin
+            for phase in ('healthy', 'during', 'recovery'):
+                for state in case['events'][0][phase].values():
+                    state['publishing']['started'] = origin
+                    state['publishing']['observed'] = state['at'].replace('+00:00', '.000000009Z')
+        self.validate('latency', precise)
+
     def test_outage_sole_wait_and_replacement_lifetimes_bound_observed_windows(self):
         # Given physically regenerated lifecycle/raw files, when the actual
         # first exit or replacement lifetime contradicts the measured window,
@@ -615,12 +694,12 @@ class NetworkResultsTest(unittest.TestCase):
             ('destination-outage',lambda c,s:c['events'][0]['connection_effect'].update(exit_observed_at=stamp(17))),
             ('destination-outage',lambda c,s:c['worker_measurements'][1].update(started_at=stamp(85))),
             ('destination-outage',lambda c,s:c['events'][0]['fault']['targets'][0].update(listener='admin')),
-            ('destination-leaders-outage',lambda c,s:c['events'][0]['during']['after']['saved'].__setitem__(1,200)),
+            ('destination-leaders-outage',lambda c,s:c['events'][0]['during']['after']['saved'].__setitem__(1,150)),
             ('destination-leaders-outage',lambda c,s:c['events'][0].update(unaffected_partitions=[])),
-            ('latency',lambda c,s:c['events'][0]['during']['after'].update(destination_ends=[260]*24)),
+            ('latency',lambda c,s:c['events'][0]['during']['after'].update(destination_ends=[210]*24)),
             ('latency',lambda c,s:c['events'][0]['fault']['fault'].update(stream='downstream')),
-            ('bandwidth',lambda c,s:c['events'][0]['recovery']['after'].update(destination_ends=[301]*24)),
-            ('bandwidth',lambda c,s:c['events'][0]['during']['after'].update(destination_ends=[250]*24)),
+            ('bandwidth',lambda c,s:c['events'][0]['recovery']['after'].update(destination_ends=[251]*24)),
+            ('bandwidth',lambda c,s:c['events'][0]['during']['after'].update(destination_ends=[200]*24)),
             ('slow-close',lambda c,s:c['events'][0]['connection_effect'].update(delayed_until=stamp(20))),
             ('slow-close',lambda c,s:c['events'][0]['connection_effect'].pop('stimulus')),
             ('slow-close',lambda c,s:c['events'][0]['connection_effect'].update(eof_observed_at=stamp(26.8))),

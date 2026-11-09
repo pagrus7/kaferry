@@ -1,6 +1,7 @@
 """Validate selected replicated fault exposures against independent safety proof."""
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -315,6 +316,28 @@ def backlog(state):
     return max(0, sum(state['publishing']['acknowledged_by_partition'])-sum(state['destination_ends']))
 
 
+def network_stamp_ns(value):
+    # Go receipts retain nanoseconds; floating epoch seconds and Python's
+    # microsecond truncation must not move an observation across a100ms slot.
+    match = re.fullmatch(r'(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)', value)
+    if not match:
+        raise ValueError('network measurement start has an invalid publisher timestamp')
+    whole = datetime.fromisoformat((match[1]+match[3]).replace('Z', '+00:00'))
+    return int(whole.timestamp())*1_000_000_000+int((match[2] or '').ljust(9, '0'))
+
+
+def network_measurement_start(case, state):
+    publication = state['publishing']
+    started, observed = (network_stamp_ns(publication[key]) for key in ('started', 'observed'))
+    due = (observed-started)//100_000_000
+    acknowledged, offered = (publication[key] for key in ('acknowledged_by_partition', 'offered_by_partition'))
+    if (not healthy_copy(state) or backlog(state) > 24 or not vector(offered) or
+            publication['started'] != case['publishing']['started'] or
+            not started <= network_stamp_ns(state['at']) <= observed or
+            any(not due-1 <= ack <= offer <= due or offer-ack > 1 for ack, offer in zip(acknowledged, offered))):
+        raise ValueError('network measurement start retains past source debt, output backlog or inconsistent publisher proof')
+
+
 def network_outage_lifetimes(case, event, lifecycles):
     first, replacement = case['worker_measurements']
     witness, raw = lifecycles[0]
@@ -374,6 +397,8 @@ def network_case(directory, id, identity):
             injections[0]['kind'] != expected_fault['kind'] or
             any(injections[0]['target'][key] != fault[key] for key in ('role', 'fault', 'targets', 'start'))):
         raise ValueError('network exposure differs from the independent fault window')
+    for phase in ('healthy', 'recovery'):
+        network_measurement_start(case, event[phase]['before'])
     healthy_before, healthy_after, healthy_rate = interval(event['healthy'], budgets['session.timeout.ms'])
     during_before, during_after, during_rate = interval(event['during'], budgets['session.timeout.ms']+(budgets['delivery_timeout'] if outage else 0))
     recovery_before, recovery_after, recovery_rate = interval(event['recovery'], budgets['session.timeout.ms'])
