@@ -74,7 +74,7 @@ func (s *brokerCopy) activeProof(process *cliProcess) *brokerFailureProof {
 	}
 	proof := &brokerFailureProof{Case: s.caseID, RecoveryMS: recovery.Milliseconds(), Window: s.activeWindow, Role: event.Role, Kind: event.Fault.Kind,
 		Start: event.Start, Heal: event.Heal, ObservedExit: process.stopped, Before: s.beforeFault, Transport: "plaintext"}
-	if s.caseID == "broker/source-leader" || s.caseID == "broker/rolling-source" {
+	if s.caseID == "broker/source-leader" || s.caseID == "broker/rolling-source" || s.caseID == "network/destination-outage" {
 		proof.Targets = append([]faults.Target(nil), event.Targets...)
 		proof.Timeouts = durationMilliseconds(s.timeouts)
 	}
@@ -186,12 +186,13 @@ func brokerContextualFailure(logs string, proof *brokerFailureProof) (string, bo
 		return "", false
 	}
 	if len(terminal) == 1 && brokerForcedCopyPhase(terminal[0]) != "" {
-		return terminal[0], work.Summary == nil && strings.Contains("\n"+logs, "\n"+terminal[0]+"\n") && proof.forcedCopy(logs)
+		return terminal[0], work.Summary == nil && strings.Contains("\n"+logs, "\n"+terminal[0]+"\n") &&
+			(proof.forcedCopy(logs) || proof.networkOutageExit(logs))
 	}
 	if proof.sourceOperationExit(logs, strings.Join(terminal, "\n"), work.Summary) {
 		return terminal[0], true
 	}
-	if work.Summary == nil || !proof.affected("destination") || len(terminal) != work.Summary.Submitted-work.Summary.Confirmed {
+	if work.Summary == nil || !proof.negotiationEOFContext(logs, len(terminal)) || len(terminal) != work.Summary.Submitted-work.Summary.Confirmed {
 		return "", false
 	}
 	for _, line := range terminal {

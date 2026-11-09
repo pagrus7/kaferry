@@ -52,6 +52,13 @@ type brokerExitWitness struct {
 	LogBytes     int                 `json:"raw_log_bytes"`
 	LogError     string              `json:"raw_log_error"`
 	Window       *brokerFailureProof `json:"active_fault"`
+	RSS          *brokerExitRSS      `json:"rss,omitempty"`
+}
+
+type brokerExitRSS struct {
+	Samples  int   `json:"samples"`
+	Failures int   `json:"failures"`
+	Peak     int64 `json:"sampled_peak_rss_bytes"`
 }
 
 type brokerRetainedExit struct {
@@ -113,6 +120,15 @@ func (s *brokerCopy) retainExit(process *cliProcess) (*brokerRetainedExit, error
 	w := &brokerExitWitness{Lifetime: s.lifetime(process), Stopped: process.stopped, Recorded: time.Now().UTC(),
 		ExitCode: process.command.ProcessState.ExitCode(), DriverIntent: process.exitIntent,
 		Window: s.activeProof(process)}
+	if strings.HasPrefix(s.caseID, "network/") {
+		w.RSS = &brokerExitRSS{}
+		for index, worker := range s.workers {
+			if worker == process && index < len(s.memories) {
+				memory := s.memories[index]()
+				w.RSS = &brokerExitRSS{Samples: memory.samples, Failures: memory.failures, Peak: memory.peak * 1024}
+			}
+		}
+	}
 	if process.err != nil {
 		w.WaitError = process.err.Error()
 	}

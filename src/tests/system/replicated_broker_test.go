@@ -65,30 +65,45 @@ type brokerCopy struct {
 }
 
 func replicatedBrokerFault(t *testing.T, name string) {
+	s, baseline := startReplicatedFaultCopy(t, "broker/"+name)
+	// When the registered fault is injected at an independently observed state,
+	// retain its exact targets and require recovery before the next transition.
+	switch name {
+	case "destination-isr-loss":
+		s.isrLoss(baseline)
+	case "source-leader", "destination-leader":
+		s.leaderLoss(strings.TrimSuffix(name, "-leader"), baseline)
+	default:
+		s.rolling(strings.TrimPrefix(name, "rolling-"))
+	}
+	s.finishReplicatedFault("broker/"+name, baseline, "replicated-broker.json")
+}
+
+func startReplicatedFaultCopy(t *testing.T, id string) (*brokerCopy, brokerObservation) {
 	// Given the selected executable, one worker and steady offers across all 24
 	// RF=3/minISR=2 partitions on independent publisher and observer routes.
 	require.NotEmpty(t, os.Getenv("KAFERRY_FIXTURE_PROJECT"))
 	require.NotEmpty(t, os.Getenv("KAFERRY_TOXIPROXY_API"))
 	require.NotEmpty(t, os.Getenv("KAFERRY_TEST_BINARY"))
 	require.NotEmpty(t, os.Getenv("KAFERRY_EXPECT_BINARY_SHA256"))
-	timeouts := faultTimeouts(t, "broker/"+name)
+	timeouts := faultTimeouts(t, id)
 	var recovery time.Duration
 	for _, timeout := range timeouts {
 		recovery += timeout
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute+recovery)
-	defer cancel()
+	t.Cleanup(cancel)
 	directory := os.Getenv("KAFERRY_REPORT_DIR")
 	if directory == "" {
 		directory = t.TempDir()
 	}
-	directory, err := filepath.Abs(filepath.Join(directory, "broker-"+name))
+	directory, err := filepath.Abs(filepath.Join(directory, strings.ReplaceAll(id, "/", "-")))
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(directory, 0700))
 	metadata, err := faults.NewMetadata()
 	require.NoError(t, err)
 	t.Cleanup(metadata.Close)
-	s := &brokerCopy{caseID: "broker/" + name, t: t, ctx: ctx, metadata: metadata, timeouts: timeouts, directory: directory}
+	s := &brokerCopy{caseID: id, t: t, ctx: ctx, metadata: metadata, timeouts: timeouts, directory: directory}
 	t.Cleanup(s.retainPolls)
 	s.lab = &faults.Lab{Project: os.Getenv("KAFERRY_FIXTURE_PROJECT"), API: os.Getenv("KAFERRY_TOXIPROXY_API"), Metadata: metadata}
 	prefix := fmt.Sprintf("kaferry-broker-%d", time.Now().UnixNano())
@@ -96,7 +111,7 @@ func replicatedBrokerFault(t *testing.T, name string) {
 	replicatedTopic(ctx, t, metadata["source"].Client, s.src)
 	replicatedTopic(ctx, t, metadata["destination"].Client, s.dst)
 	s.verifySettings()
-	s.oracle = startFaultOracle(t, "broker/"+name, strings.Join(faults.Endpoints("source", 0), ","),
+	s.oracle = startFaultOracle(t, id, strings.Join(faults.Endpoints("source", 0), ","),
 		strings.Join(faults.Endpoints("destination", 0), ","), s.src, s.dst, s.group, replicatedPartitions, false)
 	s.config = configuration(t, zombieWorkerSettings(timeouts))
 	s.statement = zombieWorkerSQL(timeouts, 1, prefix+"-worker", s.src, s.dst, s.group)
@@ -108,16 +123,11 @@ func replicatedBrokerFault(t *testing.T, name string) {
 		return brokerHealthyCopy(state)
 	})
 
-	// When the registered fault is injected at an independently observed state,
-	// retain its exact targets and require recovery before the next transition.
-	switch name {
-	case "destination-isr-loss":
-		s.isrLoss(baseline)
-	case "source-leader", "destination-leader":
-		s.leaderLoss(strings.TrimSuffix(name, "-leader"), baseline)
-	default:
-		s.rolling(strings.TrimPrefix(name, "rolling-"))
-	}
+	return s, baseline
+}
+
+func (s *brokerCopy) finishReplicatedFault(id string, baseline brokerObservation, filename string) {
+	t, directory, timeouts := s.t, s.directory, s.timeouts
 	publication := s.publisher.stop()
 	require.NoError(t, publication.err, "every offered source write must resolve successfully before reconciliation")
 	require.Equal(t, publication.Offered, publication.Acknowledged, "source offers remain uncertain")
@@ -145,13 +155,17 @@ func replicatedBrokerFault(t *testing.T, name string) {
 	for _, worker := range s.measurements {
 		exactCaps = exactCaps && worker["lifetime_highwater_available"] == true
 	}
-	data, err := json.MarshalIndent(map[string]any{"id": "broker/" + name, "source_partitions": replicatedPartitions,
-		"source_topic": s.src, "destination_topic": s.dst, "group": s.group, "fixture_project": s.lab.Project, "cluster_ids": s.clusters, "readiness_criterion": brokerReadinessCriterion, "baseline": baseline, "events": s.events,
+	receipt := map[string]any{"id": id, "source_partitions": replicatedPartitions,
+		"source_topic": s.src, "destination_topic": s.dst, "group": s.group, "fixture_project": s.lab.Project, "cluster_ids": s.clusters, "baseline": baseline, "events": s.events,
 		"publishing": publication, "worker_measurements": s.measurements, "restarts": len(s.workers) - 1, "restart_scope": "same selected binary, SQL, group and worker1 route",
 		"exact_lifetime_work_caps_qualified": exactCaps,
-		"timeout_milliseconds":               durationMilliseconds(timeouts), "safety_case": map[string]string{"observations": relative, "sha256": fmt.Sprintf("%x", sha256.Sum256(safety))}}, "", "  ")
+		"timeout_milliseconds":               durationMilliseconds(timeouts), "safety_case": map[string]string{"observations": relative, "sha256": fmt.Sprintf("%x", sha256.Sum256(safety))}}
+	if strings.HasPrefix(id, "broker/") {
+		receipt["readiness_criterion"] = brokerReadinessCriterion
+	}
+	data, err := json.MarshalIndent(receipt, "", "  ")
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "replicated-broker.json"), append(data, '\n'), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, filename), append(data, '\n'), 0600))
 }
 
 func durationMilliseconds(timeouts map[string]time.Duration) map[string]int64 {
@@ -169,7 +183,9 @@ func (s *brokerCopy) verifySettings() {
 		require.Len(s.t, configs, 3)
 		for _, broker := range configs {
 			require.NoError(s.t, broker.Err)
-			require.Equal(s.t, fmt.Sprint(s.timeouts["replica.lag.time.max.ms"].Milliseconds()), configValue(broker.Configs, "replica.lag.time.max.ms"), side)
+			if lag := s.timeouts["replica.lag.time.max.ms"]; lag > 0 {
+				require.Equal(s.t, fmt.Sprint(lag.Milliseconds()), configValue(broker.Configs, "replica.lag.time.max.ms"), side)
+			}
 		}
 		topic := s.src
 		if side == "destination" {
@@ -197,8 +213,6 @@ func (s *brokerCopy) start() {
 	process := startCLI(s.t, s.ctx, testBinary(s.t), "", "run", "-e", s.statement, "-c", s.config)
 	s.workers = append(s.workers, process)
 	s.identities = append(s.identities, brokerLifetime{Number: len(s.workers), PID: process.pid(), Started: time.Now().UTC(), Binary: os.Getenv("KAFERRY_EXPECT_BINARY_SHA256")})
-	s.memories = append(s.memories, watchReplicatedRSS(s.t, process))
-	s.oracle.writer(process)
 	logPath := filepath.Join(s.directory, fmt.Sprintf("worker-%d.cli.log", len(s.workers)))
 	s.t.Cleanup(func() {
 		if !process.finished() {
@@ -218,6 +232,8 @@ func (s *brokerCopy) start() {
 			s.t.Error("retain selected worker log: ", err)
 		}
 	})
+	s.memories = append(s.memories, watchReplicatedRSS(s.t, process))
+	s.oracle.writer(process)
 	waitMembers(s.t, s.metadata["source"].Client, s.group, 1, replicatedPartitions, nil)
 }
 

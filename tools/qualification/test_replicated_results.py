@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 from tools.ci.suites import REPLICATED_CASES, fault_timeout_catalog
 from tools.qualification.replicated_results import (EXACT_SCOPE, NEGOTIATION_EOF,
-                                                  SAMPLED_SCOPE, SOURCE_OPERATION_EOFS, broker_case, collect)
-from tools.qualification.broker_lifecycle import FORCED_COPY_PHASES
+                                                  SAMPLED_SCOPE, SOURCE_OPERATION_EOFS, broker_case, network_case, collect)
+from tools.qualification.broker_lifecycle import FORCED_COPY_PHASES, binds_before, load_lifecycle
 from tools.qualification.broker_readiness import CRITERION, admin
 
 FORCED_SAVE_EXIT = next(key for key, phase in FORCED_COPY_PHASES.items() if phase == "saving progress")
@@ -164,9 +164,13 @@ def write_lifecycles(directory, case):
         log_name = f'worker-{number}.exited.cli.log'
         (directory/log_name).write_bytes(raw)
         active = copy.deepcopy(worker.get('failure_context'))
+        if case['id'] == 'network/destination-outage' and number == 1 and active:
+            active['heal'] = '0001-01-01T00:00:00Z'
         witness = dict(lifetime=lifetime(worker),stopped_at=worker['stopped_at'],recorded_at=worker['stopped_at'],exit_code=worker['exit_code'],
                        wait_error='exit status 1' if worker['exit_code'] else '', termination_signal='',driver_intent_before_wait=[],
                        terminal_lines=terminal.splitlines(), raw_log=dict(observations=log_name,sha256=checksum(raw)),raw_log_bytes=len(raw),raw_log_error='',active_fault=active)
+        if case['id'].startswith('network/'):
+            witness['rss'] = dict(samples=worker['rss_samples'],failures=worker['rss_failures'],sampled_peak_rss_bytes=worker['sampled_peak_rss_bytes'])
         if active:
             worker['failure_context']['exit_witness'] = witness
         name = f'worker-{number}.lifecycle.json'
@@ -177,15 +181,108 @@ def write_lifecycles(directory, case):
 
 def rewrite_witness(edit):
     def artifacts(directory,case):
-        worker = case['worker_measurements'][0]
-        path = directory/worker['lifecycle']['observations']
-        witness = json.loads(path.read_text())
-        edit(witness)
-        data = json.dumps(witness).encode()
-        path.write_bytes(data)
-        worker['lifecycle']['sha256'] = checksum(data)
-        worker['failure_context']['exit_witness'] = witness
+        rewrite_lifecycle(directory,case['worker_measurements'][0],edit)
     return artifacts
+
+
+def rewrite_lifecycle(directory, worker, edit):
+    path = directory/worker['lifecycle']['observations']
+    witness = json.loads(path.read_text())
+    edit(witness)
+    data = json.dumps(witness).encode()
+    path.write_bytes(data)
+    worker['lifecycle']['sha256'] = checksum(data)
+    if worker.get('failure_context'):
+        worker['failure_context']['exit_witness'] = witness
+
+
+def network_proof(id):
+    case, safety = proof(id)
+    case.pop('readiness_criterion')
+    publishing_start = 5
+    name = id.split('/')[1]
+    def observed(second, count):
+        count -= publishing_start*10
+        result = state(second, count)
+        result['publishing'].update(started=stamp(publishing_start), observed=stamp(second), offered_by_partition=[count]*24)
+        result['broker_healthy'] = False
+        result['topology']['destination'] = [dict(Leader=n%3+1, ISR=[1,2,3]) for n in range(24)]
+        return result
+    case['baseline'] = observed(10,100)
+    case['publishing'].update(acknowledged_by_partition=[1000]*24, offered_by_partition=[1000]*24,max_acknowledgement_gap_seconds=.1)
+    safety['independent_reconciliation']['partitions'] = [dict(partition=n,expected=1000) for n in range(24)]
+    leader, outage = name == 'destination-leaders-outage', name == 'destination-outage'
+    role = dict(kind='leader' if leader else 'worker-destination', cluster='destination', worker=1,partition=0)
+    if leader: role['topic'] = 'destination'
+    targets = [dict(cluster='destination',broker=n,container=f'container-{n}',service=f'destination-{n}',listener='worker1',
+                    proxy=f'destination-{n}-worker1',proxy_container='proxy-container') for n in ([1] if leader else [1,2,3])]
+    primitive = dict(kind='cut')
+    if name in ('latency','bandwidth','slow-close'):
+        primitive = dict(kind='slow_close' if name == 'slow-close' else name,stream='downstream' if name == 'slow-close' else 'upstream',
+                         value={'latency':500,'bandwidth':32,'slow-close':60000}[name])
+    fault = dict(role=role,fault=primitive,targets=targets,start=stamp(18),heal=stamp(87 if outage else 27))
+    before, after = observed(20,200), observed(86 if outage else 26,860 if outage else 260)
+    affected = [n for n in range(24) if not leader or n%3 == 0]
+    for partition in affected:
+        after['saved'][partition] = after['destination_ends'][partition] = (240 if name in ('latency','bandwidth') else 200)-publishing_start*10
+    event = dict(fault=fault,healthy=dict(before=case['baseline'],after=observed(16,160)),during=dict(before=before,after=after),
+                 recovery=dict(before=observed(90 if outage else 30,900 if outage else 300),after=observed(96 if outage else 36,960 if outage else 360)),
+                 affected_partitions=affected,unaffected_partitions=sorted(set(range(24))-set(affected)),connection_effect=None)
+    window = dict(target=role,unavailable=False,healed_at=97 if outage else 37,
+                  injections=[dict(kind=primitive['kind'],target={k:v for k,v in fault.items() if k != 'heal'},at=19)])
+    if outage:
+        first = case['worker_measurements'][0]
+        second = dict(first,lifetime=2,pid=124,exit_code=0,started_at=stamp(89),stopped_at=stamp(500),reason='completed')
+        first.update(exit_code=1,terminal_error='context deadline exceeded',stopped_at=stamp(80),reason='observed delivery failure')
+        case['worker_measurements'].append(second)
+        case['restarts'] = 1
+        safety['writer_observations'] = [dict(pid=123,exit_code=1),dict(pid=124,exit_code=0)]
+        event['connection_effect'] = dict(exit_observed_at=stamp(80))
+        first['failure_context'] = dict(case=id,recovery_milliseconds=sum(case['timeout_milliseconds'].values()),window=0,
+                                        role=copy.deepcopy(role),kind='cut',start=fault['start'],heal=fault['heal'],
+                                        observed_exit_at=first['stopped_at'],before=copy.deepcopy(event['healthy']['after']),transport='plaintext',
+                                        targets=copy.deepcopy(targets),timeout_milliseconds=copy.deepcopy(case['timeout_milliseconds']))
+        for boundary in event['recovery'].values():
+            boundary['worker']['lifetime'] = lifetime(second)
+    if name == 'slow-close':
+        stimulus = dict(role=role,fault=dict(kind='timeout',stream='upstream',value=1),targets=targets,start=stamp(19.2),heal=stamp(26.7))
+        event['connection_effect'] = dict(stimulus=stimulus,proxy=targets[0]['proxy'],started_at=stamp(19.5),delayed_until=stamp(26.5),
+                                        minimum_delay_seconds=6,read_error='i/o timeout',eof_observed_at=stamp(27.1))
+        window['injections'].append(dict(kind='timeout',target={k:v for k,v in stimulus.items() if k != 'heal'},at=19.3))
+    case['events'], safety['fault_events'] = [event], [window]
+    return case, safety
+
+
+def network_hard_exit(case, terminal):
+    worker = case['worker_measurements'][0]
+    worker.update(terminal_error=terminal,unavailable_highwater_phase=FORCED_COPY_PHASES[terminal],lifetime_highwater_available=False,
+                  copy_summary=None,peak_uncommitted_records=None,peak_uncommitted_bytes=None,cap_measurement_scope=SAMPLED_SCOPE)
+    case['exact_lifetime_work_caps_qualified'] = False
+
+
+def network_negotiation_exit(case):
+    worker = case['worker_measurements'][0]
+    worker['terminal_error'] = '\n'.join([NEGOTIATION_EOF]*72)
+    worker['copy_summary'] = dict(worker['copy_summary'],submitted=4416,confirmed=4344,peak_uncommitted_records=415,peak_uncommitted_bytes=948515)
+    worker.update(peak_uncommitted_records=415,peak_uncommitted_bytes=948515)
+
+
+def validate_proof(id, case, safety, validator, artifacts=None):
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        family, name = id.split('/')
+        directory = root/(family+'-'+name)
+        directory.mkdir()
+        write_lifecycles(directory,case)
+        if artifacts:
+            artifacts(directory,case)
+        path = root/'fault-oracle/fresh/case/observations/case.json'
+        path.parent.mkdir(parents=True)
+        path.write_text('{}')
+        case['safety_case']['sha256'] = checksum(path.read_bytes())
+        (directory/('replicated-'+family+'.json')).write_text(json.dumps(case))
+        with patch('tools.qualification.replicated_results.validate_case', return_value=safety):
+            return validator(root, id, {key:safety[key] for key in ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')})
 
 
 class ReplicatedResultsTest(unittest.TestCase):
@@ -193,21 +290,7 @@ class ReplicatedResultsTest(unittest.TestCase):
         case, safety = proof(id)
         if change:
             change(case, safety)
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            directory = root/('broker-'+id.split('/')[1])
-            directory.mkdir()
-            write_lifecycles(directory,case)
-            if artifacts:
-                artifacts(directory,case)
-            (directory/'replicated-broker.json').write_text(json.dumps(case))
-            path = root/'fault-oracle/fresh/case/observations/case.json'
-            path.parent.mkdir(parents=True)
-            path.write_text('{}')
-            case['safety_case']['sha256'] = checksum(path.read_bytes())
-            (directory/'replicated-broker.json').write_text(json.dumps(case))
-            with patch('tools.qualification.replicated_results.validate_case', return_value=safety):
-                return broker_case(root, id, {key:safety[key] for key in ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')})
+        return validate_proof(id, case, safety, broker_case, artifacts)
 
     def test_each_broker_exposure_requires_its_actual_observations(self):
         # Given passing independent safety proof, when exposure is complete,
@@ -482,6 +565,335 @@ class ReplicatedResultsTest(unittest.TestCase):
                 return row
             with patch('tools.qualification.replicated_results.broker_case', side_effect=stale), self.assertRaisesRegex(ValueError,'another observer run'):
                 collect(root,selected,{},'fresh')
+
+
+class NetworkResultsTest(unittest.TestCase):
+    def validate(self, name, change=None, artifacts=None):
+        id = 'network/'+name
+        case, safety = network_proof(id)
+        if change: change(case,safety)
+        return validate_proof(id, case, safety, network_case, artifacts)
+
+    def test_whole_cut_negotiation_eof_keeps_exact_summary_and_strict_active_scope(self):
+        # Given the retained72-failure counters and complete exact summary,
+        # when the known EOF occurs inside the owned whole cut, qualify only
+        # its normal-summary restart scope, with all exact peaks retained.
+        result = self.validate('destination-outage',lambda c,s:network_negotiation_exit(c))['network_exposure']
+        self.assertTrue(result['exact_lifetime_work_caps_qualified'])
+        self.assertTrue(result['worker_measurements'][0]['lifetime_highwater_available'])
+        self.assertEqual(415,result['worker_measurements'][0]['peak_uncommitted_records'])
+        def stopped(second):
+            def edit(case,worker):
+                worker['stopped_at'] = worker['failure_context']['observed_exit_at'] = stamp(second)
+            return edit
+        # Then before-cut/no-cut/other-case or incomplete write evidence cannot
+        # use a known string to bypass ownership, clock, resource or cap proof.
+        edits = [stopped(17),stopped(88),
+                 lambda c,w:w.update(terminal_error='\n'.join([NEGOTIATION_EOF]*71)),
+                 lambda c,w:w.update(terminal_error=w['terminal_error'].replace(NEGOTIATION_EOF,'authentication failed',1)),
+                 lambda c,w:w['failure_context'].update(kind='kill'),
+                 lambda c,w:w['failure_context']['role'].update(worker=2),
+                 lambda c,w:w.update(copy_summary=None,lifetime_highwater_available=False,peak_uncommitted_records=None,
+                                     peak_uncommitted_bytes=None,cap_measurement_scope=SAMPLED_SCOPE)]
+        for edit in edits:
+            def change(case,safety):
+                network_negotiation_exit(case)
+                edit(case,case['worker_measurements'][0])
+            with self.subTest(edit=edit),self.assertRaises(ValueError):
+                self.validate('destination-outage',change)
+        for name in ('latency','bandwidth','slow-close','destination-leaders-outage'):
+            with self.subTest(name=name),self.assertRaises(ValueError):
+                self.validate(name,lambda c,s:network_negotiation_exit(c))
+        def no_rss(directory,case):
+            rewrite_lifecycle(directory,case['worker_measurements'][0],lambda w:w.pop('rss'))
+        with self.assertRaises(ValueError):
+            self.validate('destination-outage',lambda c,s:network_negotiation_exit(c),no_rss)
+        def padded_terminal(directory,case):
+            worker = case['worker_measurements'][0]
+            def edit(witness):
+                path = directory/witness['raw_log']['observations']
+                changed = path.read_bytes().replace(NEGOTIATION_EOF.encode(),b' '+NEGOTIATION_EOF.encode(),1)
+                path.write_bytes(changed)
+                witness['raw_log']['sha256'],witness['raw_log_bytes'] = checksum(changed),len(changed)
+            rewrite_lifecycle(directory,worker,edit)
+            witness,raw = load_lifecycle(directory,worker)
+            self.assertEqual([NEGOTIATION_EOF]*72,witness['terminal_lines'])
+            self.assertTrue(binds_before(witness,raw,case['events'][0]['healthy']['after']))
+        with self.assertRaisesRegex(ValueError,'negotiation EOF lacks every failed write'):
+            self.validate('destination-outage',lambda c,s:network_negotiation_exit(c),padded_terminal)
+
+    def test_measurement_starts_reject_past_debt_and_output_backlog(self):
+        # Given regenerated physical lifecycle/raw checksums and valid spans,
+        # when a startpoint retains old debt or output, reject that state itself.
+        def lag(state, count, partitions):
+            for partition in range(partitions):
+                for values in (state['saved'], state['destination_ends'],
+                               state['publishing']['acknowledged_by_partition'], state['publishing']['offered_by_partition']):
+                    values[partition] -= count
+        for phase in ('healthy', 'recovery'):
+            for kind in ('source-debt', 'output-backlog'):
+                def change(case, safety):
+                    state = case['events'][0][phase]['before']
+                    if kind == 'source-debt':
+                        lag(state, 4, 8)
+                    else:
+                        state['destination_ends'][0] -= 25
+                        state['saved'][0] -= 25
+                with self.subTest(phase=phase, kind=kind), self.assertRaisesRegex(ValueError, 'network measurement start'):
+                    self.validate('latency', change)
+
+        def inflated(case, safety):
+            event = case['events'][0]
+            for phase in ('healthy', 'recovery'):
+                lag(event[phase]['before'], 14, 8)
+                before, after = event[phase]['before'], event[phase]['after']
+                rate = (sum(after['destination_ends'])-sum(before['destination_ends']))/6
+                self.assertAlmostEqual(258.6666666667, rate)
+            self.assertGreater(.95*rate, 240)
+        # Both lower-bound checks and the relative recovery bar accept
+        # matching catch-up bursts; neither proves a steady measurement start.
+        with self.assertRaisesRegex(ValueError, 'network measurement start'):
+            self.validate('latency', inflated)
+
+    def test_measurement_start_allows_only_current_slot_and_existing_backlog_limit(self):
+        # Given actual publisher timestamps and counters, when only one current
+        # slot or at most24output records remain, retain the existing limits.
+        for phase in ('healthy', 'recovery'):
+            def pending(case, safety):
+                state = case['events'][0][phase]['before']
+                state['publishing']['acknowledged_by_partition'][0] -= 1
+                state['saved'][0] -= 1
+                state['destination_ends'][0] -= 1
+            def backlog(case, safety):
+                state = case['events'][0][phase]['before']
+                state['saved'][0] -= 24
+                state['destination_ends'][0] -= 24
+            for change in (pending, backlog):
+                with self.subTest(phase=phase, change=change):
+                    self.validate('latency', change)
+
+    def test_measurement_start_requires_the_actual_publisher_clock_and_offers(self):
+        # Given otherwise matching receipts and freshly rehashed physical proof,
+        # when publisher identity, time or bounded offers contradict the start,
+        # then collection must fail before those counts define a reference.
+        edits = [lambda p:p.update(started=stamp(1)), lambda p:p.update(observed=stamp(9)),
+                 lambda p:p.update(offered_by_partition=[102]*24),
+                 lambda p:p.pop('observed'), lambda p:p.pop('offered_by_partition')]
+        for edit in edits:
+            def change(case, safety):
+                edit(case['events'][0]['healthy']['before']['publishing'])
+            with self.subTest(edit=edit), self.assertRaises((ValueError, KeyError)):
+                self.validate('latency', change)
+
+    def test_measurement_start_preserves_nanoseconds_at_schedule_boundaries(self):
+        # Given a publisher origin and snapshots with equal nanosecond tails,
+        # when elapsed time is exactly a whole slot, float rounding or datetime
+        # truncation must not reject its actual caught-up acknowledgement count.
+        def precise(case, safety):
+            origin = '1970-01-01T00:00:05.000000009Z'
+            case['publishing']['started'] = origin
+            for phase in ('healthy', 'during', 'recovery'):
+                for state in case['events'][0][phase].values():
+                    state['publishing']['started'] = origin
+                    state['publishing']['observed'] = state['at'].replace('+00:00', '.000000009Z')
+        self.validate('latency', precise)
+
+    def test_outage_sole_wait_and_replacement_lifetimes_bound_observed_windows(self):
+        # Given physically regenerated lifecycle/raw files, when the actual
+        # first exit or replacement lifetime contradicts the measured window,
+        # then a later driver observation cannot qualify those lifetimes.
+        self.validate('destination-outage',lambda c,s:c['events'][0]['connection_effect'].update(exit_observed_at=stamp(81)))
+        for stopped in (17,18,81):
+            def exited(case,safety):
+                worker = case['worker_measurements'][0]
+                worker['stopped_at'] = worker['failure_context']['observed_exit_at'] = stamp(stopped)
+            with self.subTest(stopped=stopped), self.assertRaises(ValueError):
+                self.validate('destination-outage',exited)
+        for key, second in (('started_at',91),('stopped_at',95)):
+            def replacement(case,safety):
+                worker = case['worker_measurements'][1]
+                worker[key] = stamp(second)
+                for boundary in case['events'][0]['recovery'].values():
+                    boundary['worker']['lifetime'] = lifetime(worker)
+            with self.subTest(replacement=(key,second)), self.assertRaises(ValueError):
+                self.validate('destination-outage',replacement)
+
+    def test_outage_rejects_any_driver_intent_signal_or_context_contradiction(self):
+        # Given checksummed immutable raw/lifecycle proof with exact summaries,
+        # when intent, Wait status or its active fault contradicts fail-fast
+        # copying, then rewriting hashes cannot turn it into a fault exit.
+        def captured_before_heal(directory,case):
+            rewrite_lifecycle(directory,case['worker_measurements'][0],lambda w:w['active_fault'].update(heal='0001-01-01T00:00:00Z'))
+        self.validate('destination-outage',artifacts=captured_before_heal)
+        edits = [
+            lambda w:w.update(driver_intent_before_wait=[dict(at=stamp(79),signal='',reason='context cancellation')]),
+            lambda w:w.update(driver_intent_before_wait=[dict(at=stamp(79),signal='interrupt',reason='driver stop')]),
+            lambda w:w.update(termination_signal='killed'),
+            lambda w:w.update(wait_error=''),
+            lambda w:w['active_fault'].update(kind='restart'),
+            lambda w:w['active_fault'].update(window=1),
+        ]
+        for edit in edits:
+            def artifacts(directory,case):
+                rewrite_lifecycle(directory,case['worker_measurements'][0],edit)
+            with self.subTest(edit=edit), self.assertRaises(ValueError):
+                self.validate('destination-outage',artifacts=artifacts)
+        for field, value in (('wait_error','exit status 1'),('termination_signal','killed')):
+            def replacement_artifacts(directory,case):
+                rewrite_lifecycle(directory,case['worker_measurements'][1],lambda w:w.update({field:value}))
+            with self.subTest(replacement=(field,value)), self.assertRaises(ValueError):
+                self.validate('destination-outage',artifacts=replacement_artifacts)
+        with self.assertRaises(ValueError):
+            self.validate('destination-outage',lambda c,s:c['worker_measurements'][0].update(unavailable_highwater_phase='finishing writes'))
+
+    def test_each_network_case_requires_its_specific_actual_exposure(self):
+        # Given independently validated safety/reconciliation, when every actual
+        # exposure and recovered throughput is present, then collect all five IDs.
+        for name in ('destination-outage','destination-leaders-outage','latency','bandwidth','slow-close'):
+            with self.subTest(name=name):
+                self.assertEqual('network/'+name,self.validate(name)['network_exposure']['id'])
+
+    def test_network_evidence_fails_closed_on_missing_or_ineffective_exposures(self):
+        # Given otherwise passing independent proof, when a live effect, scope,
+        # window, cap or recovery is missing, then qualification must fail.
+        mutations = [
+            ('destination-outage',lambda c,s:c['events'][0]['during']['after'].update(at=stamp(79))),
+            ('destination-outage',lambda c,s:c['events'][0]['connection_effect'].update(exit_observed_at=stamp(17))),
+            ('destination-outage',lambda c,s:c['worker_measurements'][1].update(started_at=stamp(85))),
+            ('destination-outage',lambda c,s:c['events'][0]['fault']['targets'][0].update(listener='admin')),
+            ('destination-leaders-outage',lambda c,s:c['events'][0]['during']['after']['saved'].__setitem__(1,150)),
+            ('destination-leaders-outage',lambda c,s:c['events'][0].update(unaffected_partitions=[])),
+            ('latency',lambda c,s:c['events'][0]['during']['after'].update(destination_ends=[210]*24)),
+            ('latency',lambda c,s:c['events'][0]['fault']['fault'].update(stream='downstream')),
+            ('bandwidth',lambda c,s:c['events'][0]['recovery']['after'].update(destination_ends=[251]*24)),
+            ('bandwidth',lambda c,s:c['events'][0]['during']['after'].update(destination_ends=[200]*24)),
+            ('slow-close',lambda c,s:c['events'][0]['connection_effect'].update(delayed_until=stamp(20))),
+            ('slow-close',lambda c,s:c['events'][0]['connection_effect'].pop('stimulus')),
+            ('slow-close',lambda c,s:c['events'][0]['connection_effect'].update(eof_observed_at=stamp(26.8))),
+            ('slow-close',lambda c,s:s['fault_events'][0]['injections'].pop()),
+            ('latency',lambda c,s:s['fault_events'][0].update(unavailable=True)),
+            ('latency',lambda c,s:c['publishing'].update(max_acknowledgement_gap_seconds=2.1)),
+            ('latency',lambda c,s:c['worker_measurements'][0].update(sampled_peak_rss_bytes=512*1024**2+1)),
+        ]
+        for name,change in mutations:
+            with self.subTest(name=name,change=change),self.assertRaises((ValueError,KeyError)):
+                self.validate(name,change)
+
+    def test_network_collection_uses_the_exact_selected_run_and_exposure_validator(self):
+        # Given one selected network case, when collecting its current observer
+        # run, then use that exposure validator and reject another case's receipt.
+        selected = ['network/latency']
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root/'fault-oracle/fresh/latency/observations/case.json'
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(dict(id=selected[0])))
+            row = dict(id=selected[0],safety=dict(observations=str(path.relative_to(root).with_name('samples.jsonl'))))
+            with patch('tools.qualification.replicated_results.network_case',return_value=row) as validate:
+                self.assertEqual([row],collect(root,selected,{},'fresh'))
+                validate.assert_called_once_with(root,selected[0],{})
+            with self.assertRaises(ValueError):
+                collect(root,['network/bandwidth'],{},'fresh')
+
+    def test_whole_outage_hard_exit_excludes_only_first_lifetime_exact_peaks(self):
+        # Given full exposure/restart/recovery and independent reconciliation,
+        # when only the first lifetime has a bound documented hard exit, then
+        # its samples never become exact peaks and the replacement stays exact.
+        for terminal, phase in FORCED_COPY_PHASES.items():
+            with self.subTest(phase=phase):
+                result = self.validate('destination-outage',lambda c,s:network_hard_exit(c,terminal))['network_exposure']
+                self.assertIs(False,result['exact_lifetime_work_caps_qualified'])
+                self.assertIsNone(result['worker_measurements'][0]['peak_uncommitted_records'])
+                self.assertIsNone(result['worker_measurements'][0]['peak_uncommitted_bytes'])
+                self.assertTrue(result['worker_measurements'][1]['lifetime_highwater_available'])
+        with self.assertRaises(ValueError):
+            self.validate('latency',lambda c,s:c.update(exact_lifetime_work_caps_qualified=False))
+
+    def test_whole_outage_hard_exit_requires_byte_exact_terminal_line(self):
+        # Given valid physical proof, when only terminal whitespace changes and
+        # all raw/lifecycle hashes are updated, normalized lines and the healthy
+        # prefix still bind; only the literal terminal-byte gate must reject it.
+        for terminal in FORCED_COPY_PHASES:
+            for leading, trailing in ((b' ',b''),(b'',b' ')):
+                def artifacts(directory,case):
+                    worker = case['worker_measurements'][0]
+                    witness = json.loads((directory/worker['lifecycle']['observations']).read_text())
+                    path = directory/witness['raw_log']['observations']
+                    original = path.read_bytes()
+                    changed = original.replace(terminal.encode()+b'\n',leading+terminal.encode()+trailing+b'\n')
+                    self.assertNotEqual(original,changed)
+                    path.write_bytes(changed)
+                    def edit(witness):
+                        witness['raw_log']['sha256'] = checksum(changed)
+                        witness['raw_log_bytes'] = len(changed)
+                    rewrite_lifecycle(directory,worker,edit)
+                    retained,raw = load_lifecycle(directory,worker)
+                    self.assertEqual([terminal],retained['terminal_lines'])
+                    self.assertTrue(binds_before(retained,raw,case['events'][0]['healthy']['after']))
+                    self.assertNotIn(b'\n'+terminal.encode()+b'\n',b'\n'+raw)
+                with self.subTest(terminal=terminal,leading=leading,trailing=trailing),self.assertRaisesRegex(
+                        ValueError,'unavailable lifetime highwater requires the bound active forced-copy exit'):
+                    self.validate('destination-outage',lambda c,s:network_hard_exit(c,terminal),artifacts)
+
+    def test_whole_outage_hard_exit_requires_frozen_context_and_truthful_cap_scope(self):
+        # Given rehashed real-format lifecycle/raw files, when scope, catalog,
+        # phase or replacement claims are forged, then samples cannot qualify.
+        def stopped(second):
+            def edit(case,worker):
+                worker['stopped_at'] = worker['failure_context']['observed_exit_at'] = stamp(second)
+            return edit
+        edits = [lambda c,w:w.update(terminal_error='unknown forced exit'),
+                 lambda c,w:w.update(terminal_error=w['terminal_error']+'\nauthentication failed'),
+                 lambda c,w:w.update(unavailable_highwater_phase='saving progress'),
+                 lambda c,w:w['failure_context'].update(before=copy.deepcopy(c['baseline'])),
+                 lambda c,w:w['failure_context'].update(window=1),
+                 lambda c,w:w['failure_context']['role'].update(worker=2),
+                 lambda c,w:w['failure_context']['targets'][0].update(container='different-container'),
+                 lambda c,w:w['failure_context']['timeout_milliseconds'].update(shutdown_timeout=5001),
+                 stopped(17),stopped(88),
+                 lambda c,w:c.update(exact_lifetime_work_caps_qualified=True),
+                 lambda c,w:w.update(peak_uncommitted_records=128),
+                 lambda c,w:c['worker_measurements'][1].update(copy_summary=None,lifetime_highwater_available=False,
+                     peak_uncommitted_records=None,peak_uncommitted_bytes=None,cap_measurement_scope=SAMPLED_SCOPE)]
+        for edit in edits:
+            def change(case,safety):
+                network_hard_exit(case,next(iter(FORCED_COPY_PHASES)))
+                edit(case,case['worker_measurements'][0])
+            with self.subTest(edit=edit), self.assertRaises(ValueError):
+                self.validate('destination-outage',change)
+
+    def test_whole_outage_hard_exit_does_not_shorten_hold_or_skip_restart(self):
+        # Given an eligible hard exit, when cleanup heals after44.679seconds,
+        # then complete raw proof still cannot replace the full66second hold.
+        def early(case,safety):
+            network_hard_exit(case,next(iter(FORCED_COPY_PHASES)))
+            event,worker = case['events'][0],case['worker_measurements'][0]
+            worker['stopped_at'] = worker['failure_context']['observed_exit_at'] = stamp(62.568)
+            event['connection_effect']['exit_observed_at'] = stamp(62.57)
+            event['fault']['heal'] = worker['failure_context']['heal'] = stamp(62.679)
+            event['during']['after']['at'] = stamp(62.6)
+        with self.assertRaisesRegex(ValueError,'shortened its configured interval'):
+            self.validate('destination-outage',early)
+        def no_restart(case,safety):
+            network_hard_exit(case,next(iter(FORCED_COPY_PHASES)))
+            case['worker_measurements'].pop()
+            case['restarts'] = 0
+        with self.assertRaises(ValueError):
+            self.validate('destination-outage',no_restart)
+
+    def test_network_hard_exit_keeps_rss_immutable_and_other_cases_exact(self):
+        # Given retained RSS before classification, when its snapshot is missing
+        # or contradictory, or another network case omits a summary, fail closed.
+        for edit in [lambda w:w.pop('rss'),lambda w:w['rss'].update(samples=1),
+                     lambda w:w.update(driver_intent_before_wait=[dict(at=stamp(79),signal='',reason='context cancellation')]),
+                     lambda w:w.update(termination_signal='killed'),lambda w:w.update(wait_error='')]:
+            def artifacts(directory,case):
+                rewrite_lifecycle(directory,case['worker_measurements'][0],edit)
+            with self.subTest(edit=edit),self.assertRaises(ValueError):
+                self.validate('destination-outage',lambda c,s:network_hard_exit(c,next(iter(FORCED_COPY_PHASES))),artifacts)
+        for name in ('latency','bandwidth','slow-close','destination-leaders-outage'):
+            with self.subTest(name=name),self.assertRaises(ValueError):
+                self.validate(name,lambda c,s:network_hard_exit(c,next(iter(FORCED_COPY_PHASES))))
 
 
 if __name__ == '__main__':
