@@ -189,6 +189,7 @@ def copy_case(directory, id, identity):
     if (not workers or len(workers) > len(case['events'])+1 or case['restarts'] != len(workers)-1 or
             case['restart_scope'] != 'same selected binary, SQL, group and worker1 route'):
         raise ValueError('replicated fault has an unsupported worker restart scope')
+    lifecycles = []
     for index, worker in enumerate(workers):
         if (type(worker['pid']) is not int or worker['pid'] <= 0 or
                 worker['binary_sha256'] != identity['binary_sha256'] or worker['worker_route'] != 1 or
@@ -203,17 +204,18 @@ def copy_case(directory, id, identity):
         if (worker['lifetime'] != index+1 or stamp(witness['recorded_at']) < stamp(worker['stopped_at'])):
             raise ValueError('broker lifecycle was not observed after its sole Wait')
         worker_work(case, worker, witness, raw)
+        lifecycles.append((witness, raw))
     if case['exact_lifetime_work_caps_qualified'] is not all(w['lifetime_highwater_available'] for w in workers):
         raise ValueError('replicated case exact lifetime cap claim differs from available measurements')
     if {(w['pid'], w['exit_code']) for w in workers} != {(w['pid'], w['exit_code']) for w in safety['writer_observations']}:
         raise ValueError('replicated fault worker measurements differ from independent exit observations')
     for reference in (safety['safety'], safety['bootstrap']):
         reference['observations'] = (safety_path.parent/reference['observations']).resolve().relative_to(root.resolve()).as_posix()
-    return case, safety
+    return case, safety, lifecycles
 
 
 def broker_case(directory, id, identity):
-    case, safety = copy_case(directory, id, identity)
+    case, safety, _ = copy_case(directory, id, identity)
     baseline, workers = case['baseline'], case['worker_measurements']
     events, windows = case['events'], safety['fault_events']
     rolling = id.startswith('broker/rolling-')
@@ -313,8 +315,31 @@ def backlog(state):
     return max(0, sum(state['publishing']['acknowledged_by_partition'])-sum(state['destination_ends']))
 
 
+def network_outage_lifetimes(case, event, lifecycles):
+    first, replacement = case['worker_measurements']
+    witness, raw = lifecycles[0]
+    recovered_witness, recovered_raw = lifecycles[1]
+    fault, healthy, recovery = event['fault'], event['healthy'], event['recovery']
+    if (not stamp(first['started_at']) < stamp(healthy['before']['at']) < stamp(fault['start']) < stamp(first['stopped_at']) <=
+            stamp(event['connection_effect']['exit_observed_at']) < stamp(fault['heal']) < stamp(replacement['started_at']) <
+            stamp(recovery['before']['at']) < stamp(recovery['after']['at']) < stamp(replacement['stopped_at']) or
+            witness['wait_error'] != 'exit status 1' or witness['termination_signal'] or witness['driver_intent_before_wait'] or
+            recovered_witness['wait_error'] or recovered_witness['termination_signal'] or
+            not all(binds_before(witness, raw, state) for state in healthy.values()) or
+            not all(binds_before(recovered_witness, recovered_raw, state) for state in recovery.values())):
+        raise ValueError('destination outage lacks an unintentional sole-Wait fault exit and live recovered lifetime')
+    expected = dict(case=case['id'], recovery_milliseconds=sum(case['timeout_milliseconds'].values()), window=0,
+                    role=fault['role'], kind=fault['fault']['kind'], start=fault['start'], observed_exit_at=first['stopped_at'],
+                    before=healthy['after'], transport='plaintext')
+    proof, active = first['failure_context'], witness['active_fault']
+    if (any(not isinstance(context, dict) or any(context.get(key) != value for key, value in expected.items()) for context in (proof, active)) or
+            proof['heal'] != fault['heal'] or proof['exit_witness'] != witness or
+            active['heal'] not in ('0001-01-01T00:00:00Z', fault['heal'])):
+        raise ValueError('destination outage lifecycle contradicts its current worker and active fault context')
+
+
 def network_case(directory, id, identity):
-    case, safety = copy_case(directory, id, identity)
+    case, safety, lifecycles = copy_case(directory, id, identity)
     if not id.startswith('network/') or id not in REPLICATED_CASES:
         raise ValueError('unknown network fault exposure')
     if case['exact_lifetime_work_caps_qualified'] is not True:
@@ -386,8 +411,7 @@ def network_case(directory, id, identity):
         raise ValueError('network fault restarted an unsupported worker or lost steady independent input')
     connection = event['connection_effect']
     if outage:
-        if not (stamp(fault['start']) < stamp(connection['exit_observed_at']) < stamp(fault['heal']) < stamp(workers[1]['started_at'])):
-            raise ValueError('destination outage lacks an observed fail-fast exit and post-heal restart')
+        network_outage_lifetimes(case, event, lifecycles)
     elif name == 'slow-close':
         stimulus = connection['stimulus']
         if (stimulus['role'] != role or stimulus['targets'] != targets or

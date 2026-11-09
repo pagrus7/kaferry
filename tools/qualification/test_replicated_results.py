@@ -177,15 +177,19 @@ def write_lifecycles(directory, case):
 
 def rewrite_witness(edit):
     def artifacts(directory,case):
-        worker = case['worker_measurements'][0]
-        path = directory/worker['lifecycle']['observations']
-        witness = json.loads(path.read_text())
-        edit(witness)
-        data = json.dumps(witness).encode()
-        path.write_bytes(data)
-        worker['lifecycle']['sha256'] = checksum(data)
-        worker['failure_context']['exit_witness'] = witness
+        rewrite_lifecycle(directory,case['worker_measurements'][0],edit)
     return artifacts
+
+
+def rewrite_lifecycle(directory, worker, edit):
+    path = directory/worker['lifecycle']['observations']
+    witness = json.loads(path.read_text())
+    edit(witness)
+    data = json.dumps(witness).encode()
+    path.write_bytes(data)
+    worker['lifecycle']['sha256'] = checksum(data)
+    if worker.get('failure_context'):
+        worker['failure_context']['exit_witness'] = witness
 
 
 def network_proof(id):
@@ -227,6 +231,11 @@ def network_proof(id):
         case['restarts'] = 1
         safety['writer_observations'] = [dict(pid=123,exit_code=1),dict(pid=124,exit_code=0)]
         event['connection_effect'] = dict(exit_observed_at=stamp(80))
+        first['failure_context'] = dict(case=id,recovery_milliseconds=sum(case['timeout_milliseconds'].values()),window=0,
+                                        role=copy.deepcopy(role),kind='cut',start=fault['start'],heal=fault['heal'],
+                                        observed_exit_at=first['stopped_at'],before=copy.deepcopy(event['healthy']['after']),transport='plaintext')
+        for boundary in event['recovery'].values():
+            boundary['worker']['lifetime'] = lifetime(second)
     if name == 'slow-close':
         stimulus = dict(role=role,fault=dict(kind='timeout',stream='upstream',value=1),targets=targets,start=stamp(19.2),heal=stamp(26.7))
         event['connection_effect'] = dict(stimulus=stimulus,proxy=targets[0]['proxy'],started_at=stamp(19.5),delayed_until=stamp(26.5),
@@ -537,11 +546,59 @@ class ReplicatedResultsTest(unittest.TestCase):
 
 
 class NetworkResultsTest(unittest.TestCase):
-    def validate(self, name, change=None):
+    def validate(self, name, change=None, artifacts=None):
         id = 'network/'+name
         case, safety = network_proof(id)
         if change: change(case,safety)
-        return validate_proof(id, case, safety, network_case)
+        return validate_proof(id, case, safety, network_case, artifacts)
+
+    def test_outage_sole_wait_and_replacement_lifetimes_bound_observed_windows(self):
+        # Given physically regenerated lifecycle/raw files, when the actual
+        # first exit or replacement lifetime contradicts the measured window,
+        # then a later driver observation cannot qualify those lifetimes.
+        self.validate('destination-outage',lambda c,s:c['events'][0]['connection_effect'].update(exit_observed_at=stamp(81)))
+        for stopped in (17,18,81):
+            def exited(case,safety):
+                worker = case['worker_measurements'][0]
+                worker['stopped_at'] = worker['failure_context']['observed_exit_at'] = stamp(stopped)
+            with self.subTest(stopped=stopped), self.assertRaises(ValueError):
+                self.validate('destination-outage',exited)
+        for key, second in (('started_at',91),('stopped_at',95)):
+            def replacement(case,safety):
+                worker = case['worker_measurements'][1]
+                worker[key] = stamp(second)
+                for boundary in case['events'][0]['recovery'].values():
+                    boundary['worker']['lifetime'] = lifetime(worker)
+            with self.subTest(replacement=(key,second)), self.assertRaises(ValueError):
+                self.validate('destination-outage',replacement)
+
+    def test_outage_rejects_any_driver_intent_signal_or_context_contradiction(self):
+        # Given checksummed immutable raw/lifecycle proof with exact summaries,
+        # when intent, Wait status or its active fault contradicts fail-fast
+        # copying, then rewriting hashes cannot turn it into a fault exit.
+        def captured_before_heal(directory,case):
+            rewrite_lifecycle(directory,case['worker_measurements'][0],lambda w:w['active_fault'].update(heal='0001-01-01T00:00:00Z'))
+        self.validate('destination-outage',artifacts=captured_before_heal)
+        edits = [
+            lambda w:w.update(driver_intent_before_wait=[dict(at=stamp(79),signal='',reason='context cancellation')]),
+            lambda w:w.update(driver_intent_before_wait=[dict(at=stamp(79),signal='interrupt',reason='driver stop')]),
+            lambda w:w.update(termination_signal='killed'),
+            lambda w:w.update(wait_error=''),
+            lambda w:w['active_fault'].update(kind='restart'),
+            lambda w:w['active_fault'].update(window=1),
+        ]
+        for edit in edits:
+            def artifacts(directory,case):
+                rewrite_lifecycle(directory,case['worker_measurements'][0],edit)
+            with self.subTest(edit=edit), self.assertRaises(ValueError):
+                self.validate('destination-outage',artifacts=artifacts)
+        for field, value in (('wait_error','exit status 1'),('termination_signal','killed')):
+            def replacement_artifacts(directory,case):
+                rewrite_lifecycle(directory,case['worker_measurements'][1],lambda w:w.update({field:value}))
+            with self.subTest(replacement=(field,value)), self.assertRaises(ValueError):
+                self.validate('destination-outage',artifacts=replacement_artifacts)
+        with self.assertRaises(ValueError):
+            self.validate('destination-outage',lambda c,s:c['worker_measurements'][0].update(unavailable_highwater_phase='finishing writes'))
 
     def test_each_network_case_requires_its_specific_actual_exposure(self):
         # Given independently validated safety/reconciliation, when every actual
