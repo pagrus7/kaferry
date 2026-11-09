@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from tools.qualification.qualify import broker_fixture, cleanup_container_state, cleanup_replicated, duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, suite_command, valid_receipts, parallel_allowance, parallel_capacity, parallel_run
+from tools.qualification.qualify import broker_fixture, cleanup_container_state, cleanup_replicated, duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, verify_replicated_tests, InconclusivePrecondition, suite_command, valid_receipts, parallel_allowance, parallel_capacity, parallel_run
 from tools.qualification.broker_probe import logical, reconcile, records, replicated_topology, topic_ready
 
 
@@ -532,6 +532,131 @@ class MatrixTest(unittest.TestCase):
                         resolve_run(args, {}, None)
                     execute.assert_not_called()
 
+    def test_network_precondition_reruns_once_and_keeps_each_attempt_under_one_lease(self):
+        selected = 'network/destination-leaders-outage'
+        test = 'TestReplicatedNetworkFaults/destination-leaders-outage'
+        scenarios = [(['inconclusive', 'passed'], 'passed', None), (['passed-dirty'], 'passed', None),
+                     (['inconclusive', 'inconclusive'], 'inconclusive', InconclusivePrecondition),
+                     (['product'], 'failed', RuntimeError), (['cancel'], 'interrupted', InterruptedError),
+                     (['cleanup'], 'failed', RuntimeError), (['safety'], 'failed', ValueError),
+                     (['other-fail'], 'failed', ValueError), (['identity'], 'failed', ValueError),
+                     (['cancel-after-precondition'], 'interrupted', InterruptedError), (['dirty-source'], 'failed', ValueError),
+                     (['untracked-added'], 'failed', ValueError), (['untracked-before'], 'failed', ValueError),
+                     (['passed-untracked'], 'passed', None)]
+        for outcomes, expected_status, error in scenarios:
+            with self.subTest(outcomes=outcomes), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                args = self.suite_args(root, 'fault-replicated', source='4.4.0', destination='4.4.0', case=selected)
+                sequence, runs = [], []
+                cancelled = threading.Event()
+                checkout = root/'checkout'
+                checkout.mkdir()
+                tracked_source, untracked_source = checkout/'fixture.go', checkout/'extra_test.go'
+                tracked_source.write_text('first fixture')
+                for command in (['git', 'init', '-q'], ['git', 'add', 'fixture.go'],
+                                ['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture']):
+                    subprocess.run(command, cwd=checkout, check=True, capture_output=True)
+                if outcomes[0] in ('dirty-source', 'passed-dirty'):
+                    tracked_source.write_text('dirty fixture')
+                if outcomes[0] in ('untracked-before', 'passed-untracked'):
+                    untracked_source.write_text('first fixture')
+                def capture(command):
+                    if command[0] == 'git':
+                        return subprocess.check_output(command, cwd=checkout, text=True).strip()
+                    return 'fixture'
+                @contextmanager
+                def fixture(attempt, spec, receipt, assigned, cancelled, *, lease_held):
+                    self.assertTrue(lease_held)
+                    with self.assertRaisesRegex(ValueError, 'owns this host'):
+                        with lab_lock():
+                            pass
+                    number = len(runs)
+                    sequence.append(('start', attempt.output.name))
+                    try:
+                        yield
+                    finally:
+                        sequence.append(('cleanup', attempt.output.name))
+                        if outcomes[number] == 'cancel-after-precondition':
+                            cancelled.set()
+                        if outcomes[number] == 'cleanup':
+                            raise RuntimeError('writer shutdown failed')
+                def command(command, output, label, env, **kwargs):
+                    number = len(runs)
+                    runs.append((output, env.copy()))
+                    outcome = outcomes[number]
+                    action = 'pass' if outcome in ('passed', 'passed-dirty', 'passed-untracked') else 'skip'
+                    events = [dict(Action=action, Test=test), dict(Action='pass', Test='TestReplicatedNetworkFaults'), dict(Action='pass')]
+                    if outcome == 'other-fail':
+                        events.append(dict(Action='fail', Test='UnrelatedCleanup'))
+                    (output/'suite.log').write_text(''.join(json.dumps(event)+'\n' for event in events))
+                    if outcome in ('untracked-added', 'untracked-before'):
+                        untracked_source.write_text('changed fixture')
+                    if outcome == 'dirty-source':
+                        tracked_source.write_text('changed fixture')
+                    if outcome == 'identity':
+                        Path(args.binary).write_bytes(b'changed candidate')
+                    if outcome == 'product':
+                        raise RuntimeError('product assertion failed')
+                    if outcome == 'cancel':
+                        raise InterruptedError('cancelled')
+                def collect(*unused):
+                    if outcomes[len(runs)-1] == 'safety':
+                        raise ValueError('unsafe saved prefix')
+                    return [dict(id=selected, status='passed' if outcomes[len(runs)-1] in ('passed', 'passed-dirty', 'passed-untracked') else 'inconclusive')]
+                # Given a completed low-rate attempt or an independent failure,
+                # when qualification finishes, then only the former can retry.
+                with patch('tools.qualification.qualify.LAB_LOCK', root/'host.lock'), \
+                     patch('tools.qualification.qualify.capture', side_effect=capture), \
+                     patch('tools.qualification.fault_results.configure', side_effect=lambda env: env.update(KAFERRY_ORACLE_RUN=os.urandom(4).hex())), \
+                     patch('tools.qualification.qualify.broker_fixture', side_effect=fixture), \
+                     patch('tools.qualification.qualify.logged', side_effect=command), \
+                     patch('tools.qualification.replicated_results.collect', side_effect=collect):
+                    if error:
+                        with self.assertRaises(error):
+                            run_suite(args, cancelled=cancelled)
+                    else:
+                        run_suite(args, cancelled=cancelled)
+                receipt = json.loads((args.output/'manifest.json').read_text())
+                self.assertEqual(expected_status, receipt['status'])
+                self.assertEqual(len(outcomes), len(runs))
+                self.assertEqual([item for number in range(1, len(runs)+1) for item in
+                                  [('start', f'attempt-{number}'), ('cleanup', f'attempt-{number}')]], sequence)
+                self.assertEqual(len(runs), len({env['KAFERRY_REPLICATED_RUN_ID'] for _, env in runs}))
+                for number, (output, env) in enumerate(runs, 1):
+                    attempt = json.loads((output/'manifest.json').read_text())
+                    self.assertEqual(f'attempt-{number}', output.name)
+                    self.assertEqual(attempt['status'], receipt['attempts'][number-1]['status'])
+                    self.assertEqual(hashlib.sha256(b'fixture').hexdigest(), attempt['binary_sha256'])
+                    self.assertEqual(outcomes[0] in ('dirty-source', 'passed-dirty', 'untracked-before', 'passed-untracked'), attempt['working_tree_dirty'])
+                    self.assertTrue((output/'suite.log').is_file())
+                if outcomes[0] in ('dirty-source', 'untracked-added', 'untracked-before'):
+                    # Then changed tracked or untracked source with the same HEAD
+                    # cannot start a second fixture or erase the first receipt.
+                    first, second = receipt['attempts']
+                    changed_source = tracked_source if outcomes == ['dirty-source'] else untracked_source
+                    self.assertEqual('changed fixture', changed_source.read_text())
+                    self.assertEqual(first['source_commit'], second['source_commit'])
+                    self.assertEqual(outcomes != ['untracked-added'], first['working_tree_dirty'])
+                    self.assertTrue(second['working_tree_dirty'])
+                    self.assertEqual(('inconclusive', 'failed'), (first['status'], second['status']))
+                    self.assertIn('requires a clean unchanged checkout', receipt['error'])
+                if len(runs) == 2:
+                    self.assertEqual('inconclusive', receipt['attempts'][0]['status'])
+                    self.assertIn('"Action": "skip"', (runs[0][0]/'suite.log').read_text())
+
+    def test_network_skips_need_exact_typed_proof_and_no_other_go_failures(self):
+        test = 'TestReplicatedNetworkFaults/latency'
+        proof = [dict(id='network/latency', status='inconclusive')]
+        skipped = '\n'.join(json.dumps(event) for event in [dict(Action='skip', Test=test),
+                                                         dict(Action='pass', Test='TestReplicatedNetworkFaults')])
+        # Given a typed no-fault outcome, when a different test failed or the
+        # selected leaf did not skip, then no marker can turn it into a retry.
+        verify_replicated_tests(skipped, [test], proof)
+        for log, cases in [(skipped, []), ('', proof), (skipped+'\n'+json.dumps(dict(Action='fail', Test='Cleanup')), proof),
+                           (json.dumps(dict(Action='pass', Test=test)), proof)]:
+            with self.subTest(log=log), self.assertRaises(ValueError):
+                verify_replicated_tests(log, [test], cases)
+
     def test_replicated_broker_selection_and_all_case_budget(self):
         # Given each implemented broker case, when selected, then run its exact
         # subtest and retain its complete119s recovery window in both deadlines.
@@ -547,7 +672,7 @@ class MatrixTest(unittest.TestCase):
                     expected = [REPLICATED_CASES[selected]] if selected else list(REPLICATED_CASES.values())
                     self.assertEqual(expected, spec.expected)
                     self.assertEqual([selected] if selected else list(REPLICATED_CASES), receipt['case_selection'])
-                    seconds = (240 if selected == 'ownership/zombie-worker' else 329 if selected and selected.startswith('network/') else 359 if selected else 3680)
+                    seconds = (240 if selected == 'ownership/zombie-worker' else 353 if selected and selected.startswith('network/') else 359 if selected else 3800)
                     self.assertEqual(seconds+60, spec.timeout)
                     self.assertIn('-timeout='+('4m' if selected == 'ownership/zombie-worker' else str(seconds)+'s'), spec.command)
                     if selected:

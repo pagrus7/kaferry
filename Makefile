@@ -20,6 +20,7 @@ REPLICATED_HELPER_TESTS := \
 	TestReplicatedBrokerPublisherCancellationDrainsDelayedOffers \
 	TestReplicatedBrokerPublisherErrorDrainsDelayedOffers \
 	TestNetworkMeasurementRequiresCaughtUpSourceAndOutput \
+	TestNetworkHealthyPreconditionNeedsThirtySecondsAndBothRates \
 	TestNetworkOutageForcedExitBindsOwnedCutAndRetainedRSS \
 	TestNetworkOutageNegotiationEOFRequiresCompleteBoundWriteFailures \
 	TestBrokerFaultRestartRequiresClassifiedTerminalFailure \

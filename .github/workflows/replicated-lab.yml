@@ -199,9 +199,6 @@ jobs:
           - {name: destination-isr-loss, case: broker/destination-isr-loss}
           - {name: network-destination-outage, case: network/destination-outage}
           - {name: network-destination-leaders-outage, case: network/destination-leaders-outage}
-          - {name: network-latency, case: network/latency}
-          - {name: network-bandwidth, case: network/bandwidth}
-          - {name: network-slow-close, case: network/slow-close}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -189,7 +189,7 @@ def copy_case(directory, id, identity):
             case['timeout_milliseconds'] != fault_timeout_catalog()[id]):
         raise ValueError('replicated fault case differs from its registered configuration')
     safety_path = observation_path(root, case['safety_case'], 'case.json')
-    safety = validate_case(safety_path)
+    safety = validate_case(safety_path, require_fault=case.get('precondition') is None)
     if (safety['id'] != id or safety['execution'] != 'candidate CLI' or
             safety['parameters'] != dict(source_partitions=24, routing='PRESERVE') or
             any(safety[key] != identity[key] for key in IDENTITY)):
@@ -353,7 +353,7 @@ def broker_case(directory, id, identity):
     return safety
 
 
-def interval(value, minimum):
+def interval(value, minimum, *, steady=True):
     before, after = value['before'], value['after']
     seconds = stamp(after['at'])-stamp(before['at'])
     if seconds < minimum:
@@ -363,10 +363,14 @@ def interval(value, minimum):
                 not vector(state['publishing']['acknowledged_by_partition']) or
                 not all(topology(state, side, 3) for side in ('source', 'destination'))):
             raise ValueError('network observation lacks independent healthy topology or progress')
-    if (not advances(after['publishing']['acknowledged_by_partition'], before['publishing']['acknowledged_by_partition']) or
-            (sum(after['publishing']['acknowledged_by_partition'])-sum(before['publishing']['acknowledged_by_partition']))/seconds < .95*240):
+    if steady and (not advances(after['publishing']['acknowledged_by_partition'], before['publishing']['acknowledged_by_partition']) or input_rate(value) < .95*240):
         raise ValueError('independent publisher did not sustain input during network exposure')
     return before, after, (sum(after['destination_ends'])-sum(before['destination_ends']))/seconds
+
+
+def input_rate(value):
+    before, after = value['before'], value['after']
+    return (sum(after['publishing']['acknowledged_by_partition'])-sum(before['publishing']['acknowledged_by_partition']))/(stamp(after['at'])-stamp(before['at']))
 
 
 def backlog(state):
@@ -425,6 +429,8 @@ def network_case(directory, id, identity):
         raise ValueError('unknown network fault exposure')
     if id != 'network/destination-outage' and case['exact_lifetime_work_caps_qualified'] is not True:
         raise ValueError('same-process network cases require exact lifetime work-cap evidence for every worker')
+    if case.get('precondition') is not None:
+        return network_precondition(case, safety, lifecycles)
     events, windows, workers = case['events'], safety['fault_events'], case['worker_measurements']
     if len(events) != 1 or len(windows) != 1:
         raise ValueError('network case requires exactly one fault window')
@@ -457,7 +463,7 @@ def network_case(directory, id, identity):
         raise ValueError('network exposure differs from the independent fault window')
     for phase in ('healthy', 'recovery'):
         network_measurement_start(case, event[phase]['before'])
-    healthy_before, healthy_after, healthy_rate = interval(event['healthy'], budgets['session.timeout.ms'])
+    healthy_before, healthy_after, healthy_rate = interval(event['healthy'], 30)
     during_before, during_after, during_rate = interval(event['during'], budgets['session.timeout.ms']+(budgets['delivery_timeout'] if outage else 0))
     recovery_before, recovery_after, recovery_rate = interval(event['recovery'], budgets['session.timeout.ms'])
     if (healthy_before != case['baseline'] or healthy_rate < .95*240 or recovery_rate < .95*healthy_rate or
@@ -509,6 +515,27 @@ def network_case(directory, id, identity):
             raise ValueError('slow-close lacks actual delayed EOF and removal on the original worker routes')
     elif connection is not None:
         raise ValueError('network case contains an unexpected connection stimulus')
+    safety['network_exposure'] = case
+    return safety
+
+
+def network_precondition(case, safety, lifecycles):
+    precondition = case['precondition']
+    if (set(precondition) != {'status', 'healthy'} or precondition['status'] != 'inconclusive' or
+            case['events'] or safety['fault_events'] or len(lifecycles) != 1 or
+            case['exact_lifetime_work_caps_qualified'] is not True):
+        raise ValueError('inconclusive precondition requires a completed no-fault copy')
+    healthy = precondition['healthy']
+    before, after, rate = interval(healthy, 30, steady=False)
+    network_measurement_start(case, before)
+    witness, raw = lifecycles[0]
+    if (before != case['baseline'] or rate >= .95*240 and input_rate(healthy) >= .95*240 or
+            not stamp(witness['lifetime']['started_at']) < stamp(before['at']) < stamp(after['at']) < stamp(witness['stopped_at']) or
+            not all(binds_before(witness, raw, state) for state in healthy.values()) or
+            not 0 < case['publishing']['max_acknowledgement_gap_seconds'] <= 2):
+        raise ValueError('inconclusive precondition lacks an actual failed healthy rate measurement')
+    safety['status'] = 'inconclusive'
+    safety['precondition'] = precondition
     safety['network_exposure'] = case
     return safety
 

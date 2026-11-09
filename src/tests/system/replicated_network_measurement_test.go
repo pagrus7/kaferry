@@ -64,3 +64,28 @@ func TestNetworkMeasurementRequiresCaughtUpSourceAndOutput(t *testing.T) {
 	backlog.Topology["source"][0].ISR = []int32{1, 2}
 	require.False(t, networkMeasurementReady(backlog))
 }
+
+func TestNetworkHealthyPreconditionNeedsThirtySecondsAndBothRates(t *testing.T) {
+	// Given the unchanged six-second session/recovery budget and steady input.
+	start := time.Unix(1, 0).UTC()
+	before := networkMeasurementState(start, time.Second, 10)
+	after := networkMeasurementState(start, 31*time.Second, 310)
+	window := networkInterval{Before: before, After: after}
+	require.Equal(t, 6*time.Second, faultTimeouts(t, "network/latency")["session.timeout.ms"])
+	// When the healthy reference spans thirty seconds, both independent rates
+	// must meet the existing gate; a six-second sample cannot establish it.
+	require.True(t, window.healthyPrecondition())
+	short := networkInterval{Before: before, After: networkMeasurementState(start, 7*time.Second, 70)}
+	require.False(t, short.healthyPrecondition())
+	for _, values := range [][]int64{window.After.Ends, window.After.Publishing.Acknowledged} {
+		for partition := range values {
+			values[partition] -= 16
+		}
+		// Then even otherwise healthy output cannot hide underloaded input, or
+		// the converse, and the thirty-second reference never changes recovery.
+		require.False(t, window.healthyPrecondition())
+		for partition := range values {
+			values[partition] += 16
+		}
+	}
+}
