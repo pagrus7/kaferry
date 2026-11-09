@@ -18,6 +18,7 @@ MAX_BYTES = 8 * 1024**2
 MAX_ROWS = 8192
 MAX_LINE = 64 * 1024
 COMMAND_SECONDS = 2
+STATS_SECONDS = 5
 INSPECT = ('{"id":{{json .Id}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},'
            '"service":{{json (index .Config.Labels "com.docker.compose.service")}},'
            '"running":{{json .State.Running}},"started_at":{{json .State.StartedAt}},'
@@ -150,27 +151,23 @@ class RuntimeObservations:
 
     def stats(self):
         try:
-            for line in self.lines(['docker', 'stats', '--no-trunc', '--format', '{{json .}}', *self.ids], MAX_SECONDS):
-                # Docker redraws the stream even when stdout is a pipe. Remove
-                # only its cursor home/erase controls at line boundaries.
-                controls = ('\x1b[H', '\x1b[J', '\x1b[K')
-                while line.startswith(controls):
-                    line = line[3:]
-                while line.endswith(controls):
-                    line = line[:-3]
-                if not line:
-                    continue
-                row = json.loads(line)
-                if row['ID'] not in self.ids:
-                    raise ValueError('stats returned an unowned container')
-                selected = {key: row[key] for key in ('ID', 'CPUPerc', 'MemUsage', 'MemPerc', 'NetIO', 'BlockIO', 'PIDs')}
-                if any(not isinstance(value, str) or len(value) > 2048 for value in selected.values()):
+            while not self.expired():
+                started, next_sample = now(), time.monotonic() + 1
+                rows = [json.loads(line) for line in self.lines(
+                    ['docker', 'stats', '--no-stream', '--no-trunc', '--format', '{{json .}}', *self.ids], STATS_SECONDS)]
+                if self.stop.is_set():
+                    return
+                if len(rows) != len(self.ids) or {row['ID'] for row in rows} != set(self.ids):
+                    raise ValueError('stats snapshot must contain every owned container once')
+                selected = [{key: row[key] for key in ('ID', 'CPUPerc', 'MemUsage', 'MemPerc', 'NetIO', 'BlockIO', 'PIDs')} for row in rows]
+                if any(not isinstance(value, str) or len(value) > 2048 for row in selected for value in row.values()):
                     raise ValueError('stats fields must be bounded strings')
-                self.write('stats', selected)
-            if not self.stop.is_set():
-                self.error('stats: stream ended before fixture sampling stopped')
+                for row in selected:
+                    self.write('stats', row, started)
+                self.stop.wait(max(0, next_sample - time.monotonic()))
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, TimeoutError, RuntimeError) as error:
-            self.error('stats: ' + str(error))
+            if not self.stop.is_set():
+                self.error('stats: ' + str(error))
 
     def start(self):
         try:

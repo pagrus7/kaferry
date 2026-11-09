@@ -36,22 +36,25 @@ elif sys.argv[1] == 'inspect':
                    log=[dict(start='2026-11-09T00:00:00Z', end='2026-11-09T00:00:00.1Z', exit_code=0, output='PRIVATE')]))
         print(json.dumps(row), flush=True)
 elif sys.argv[1] == 'stats':
+    if '--no-stream' not in sys.argv:
+        print('Error: diagnostic fixture requires a finite snapshot', flush=True)
+        sys.exit(9)
     def stats_row(identifier):
         return json.dumps(dict(ID=identifier, CPUPerc='1.5%', MemUsage='128MiB / 1GiB', MemPerc='12.5%',
                                NetIO='1MB / 2MB', BlockIO='0B / 3MB', PIDs='12', Name='PRIVATE'))
     if options.get('ignore_term'):
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    (root / ('stats-ready-' + str(os.getpid()))).write_text('ready')
+    if options.get('stats_sleep'):
+        time.sleep(options['stats_sleep'])
     if 'stats_lines' in options:
         for line in options['stats_lines']:
             print(line.replace('RECORD', stats_row(ids[0])), flush=True)
     elif options.get('oversized'):
         print('x' * (128 * 1024), flush=True)
     else:
-        while True:
-            for identifier in ids:
-                print(stats_row(identifier), flush=True)
-            time.sleep(.02)
-    time.sleep(30)
+        for identifier in options.get('stats_ids', ids):
+            print(stats_row(identifier), flush=True)
 else:
     sys.exit(9)
 '''
@@ -86,12 +89,13 @@ class RuntimeObservationsTest(unittest.TestCase):
         return processes
 
     def test_owned_measurements_exclude_private_fields_and_join_before_return(self):
-        # Given seven owned fixture containers and a live stream.
-        with self.prepared_fixture(ignore_term=True) as (root, env):
+        # Given seven owned fixture containers and repeated finite snapshots.
+        with self.prepared_fixture() as (root, env):
             # When sampling ends normally, then every child is reaped and only
             # selected resource/health fields reach bounded retained output.
             with runtime_observations(root, ['docker', 'compose', '-p', 'owned'], env) as summary:
-                self.wait_for(lambda: summary['rows'] >= 9)
+                self.wait_for(lambda: summary['errors'] or summary['rows'] >= 16)
+                self.assertFalse(summary['errors'])
             self.assertEqual('completed', summary['status'])
             rows = [json.loads(line) for line in (root / 'replicated-runtime.jsonl').read_text().splitlines()]
             self.assertEqual({'health', 'stats'}, {row['kind'] for row in rows})
@@ -99,8 +103,10 @@ class RuntimeObservationsTest(unittest.TestCase):
             self.assertEqual(summary['bytes'], (root / 'replicated-runtime.jsonl').stat().st_size)
             processes = self.assert_joined(root)
             stats = [row for row in processes if row['args'][0] == 'stats']
-            self.assertEqual(1, len(stats), 'one stats process must cover all seven targets')
-            self.assertEqual(7, len(stats[0]['args'][4:]))
+            self.assertGreaterEqual(len(stats), 2, 'the next finite snapshot must follow the first')
+            for process in stats:
+                self.assertIn('--no-stream', process['args'])
+                self.assertEqual(7, len(process['args'][5:]))
             self.assertGreater(summary['command_wall_seconds'], 0)
 
     def test_foreign_fixture_is_rejected_before_starting_stats(self):
@@ -113,26 +119,11 @@ class RuntimeObservationsTest(unittest.TestCase):
             self.assertIn('owned replicated fixture', summary['errors'][0])
             self.assertFalse(any(row['args'][0] == 'stats' for row in self.assert_joined(root)))
 
-    def test_docker_stats_cursor_prefixes_and_control_only_lines(self):
-        # Given the cursor controls emitted by the real Docker stats stream,
-        # including refresh prefixes and separate erase-only lines.
-        lines = ['\x1b[HRECORD\x1b[K', '\x1b[K', '\x1b[J\x1b[HRECORD\x1b[K\x1b[J', '\x1b[K', '\x1b[J',
-                 '\x1b[K\x1b[J\x1b[HRECORD', '\x1b[J']
-        with self.prepared_fixture(stats_lines=lines) as (root, env):
-            # When decoding, then retain all three actual measurements and
-            # discard only recognized cursor controls at line boundaries.
-            with runtime_observations(root, ['docker', 'compose', '-p', 'owned'], env) as summary:
-                self.wait_for(lambda: summary['errors'] or summary['rows'] >= 5)
-                self.assertFalse(summary['errors'])
-            rows = [json.loads(line) for line in (root / 'replicated-runtime.jsonl').read_text().splitlines()]
-            self.assertEqual(3, sum(row['kind'] == 'stats' for row in rows))
-            self.assertEqual('completed', summary['status'])
-            self.assert_joined(root)
-
     def test_unknown_controls_and_malformed_stats_remain_diagnostic_errors(self):
-        # Given an unsupported escape, malformed JSON or a daemon error.
-        for line in ('\x1b[2JRECORD', '\x1b[31mRECORD', '\x1b[2J', '\x1b[H{"ID":',
-                     '\x1b[JError response from daemon: unavailable', '{"ID":"x\x1b[K"}'):
+        # Given unexpected controls, malformed JSON or a daemon error in a
+        # finite snapshot, whose Docker path does not use cursor redraws.
+        for line in ('\x1b[HRECORD', '\x1b[2JRECORD', '\x1b[31mRECORD', '\x1b[K', '{"ID":',
+                     'Error response from daemon: unavailable', '{"ID":"x\x1b[K"}'):
             with self.subTest(line=line), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 env = self.fixture(root, stats_lines=[line])
@@ -143,6 +134,43 @@ class RuntimeObservationsTest(unittest.TestCase):
                 self.assertEqual('incomplete', summary['status'])
                 self.assertTrue(summary['errors'][0].startswith('stats: '))
                 self.assert_joined(root)
+
+    def test_each_snapshot_requires_every_owned_container_once(self):
+        # Given missing, duplicated or foreign identities in snapshot output.
+        identifiers = [format(n + 1, '064x') for n in range(7)]
+        for snapshot in (identifiers[:-1], identifiers[:-1] + identifiers[:1], identifiers[:-1] + ['f' * 64]):
+            with self.subTest(snapshot=snapshot), self.prepared_fixture(stats_ids=snapshot) as (root, env):
+                # When validating, then an incomplete or unowned cohort cannot
+                # create even a partial set of retained resource measurements.
+                with runtime_observations(root, ['docker', 'compose', '-p', 'owned'], env) as summary:
+                    self.wait_for(lambda: summary['errors'])
+                rows = [json.loads(line) for line in (root / 'replicated-runtime.jsonl').read_text().splitlines()]
+                self.assertFalse(any(row['kind'] == 'stats' for row in rows))
+                self.assertEqual('incomplete', summary['status'])
+                self.assert_joined(root)
+
+    def test_snapshot_cancellation_kills_and_reaps_the_active_command(self):
+        # Given a snapshot command that ignores termination while blocked.
+        with self.prepared_fixture(stats_sleep=30, ignore_term=True) as (root, env):
+            # When the suite stops, then the sampler escalates and reaps that
+            # command before returning, without waiting for its natural exit.
+            with runtime_observations(root, ['docker', 'compose', '-p', 'owned'], env) as summary:
+                self.wait_for(lambda: list(root.glob('stats-ready-*')))
+            self.assertEqual('completed', summary['status'])
+            self.assert_joined(root)
+
+    def test_snapshot_timeout_is_reported_without_restarting_the_command(self):
+        # Given a snapshot that cannot finish inside its diagnostic deadline.
+        with self.prepared_fixture(stats_sleep=2) as (root, env), \
+             patch('tools.qualification.runtime_observations.STATS_SECONDS', .5):
+            # When it expires, then retain an explicit error and reap the sole
+            # failed request instead of retrying until data looks healthy.
+            with runtime_observations(root, ['docker', 'compose', '-p', 'owned'], env) as summary:
+                self.wait_for(lambda: summary['errors'])
+            self.assertEqual('incomplete', summary['status'])
+            self.assertIn('stats: diagnostic command time limit', summary['errors'])
+            processes = self.assert_joined(root)
+            self.assertEqual(1, sum(row['args'][0] == 'stats' for row in processes))
 
     def test_row_and_wall_time_limits_stop_both_sampling_paths(self):
         for limit, value, expected in [('MAX_ROWS', 6, 'rows'), ('MAX_SECONDS', 1, 'seconds')]:
