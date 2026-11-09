@@ -11,6 +11,7 @@ import tomllib
 
 from tools.ci.suites import fault_timeout_catalog
 from tools.qualification.fault_results import observation_path, validate_case
+from tools.qualification.broker_lifecycle import load_lifecycle
 from tools.qualification.ownership_audit import commits, integer, logging_configuration, records, segments, stamp
 from tools.qualification.replicated_results import EXACT_SCOPE, advances, vector
 
@@ -194,12 +195,49 @@ def work(log):
     return pending, pending_bytes, samples, summary, '\n'.join(terminal)
 
 
+def ownership_lifecycle(directory, case, worker, index, identity):
+    witness, raw = load_lifecycle(directory, worker)
+    require(worker['lifetime'] == index+1 and stamp(worker['stopped_at']) <= stamp(witness['recorded_at']) < stamp(case['audit_marks']['final']['started']) and
+            witness['active_fault'] is None and raw == (directory/worker['log']).read_bytes(),
+            'ownership lifecycle does not bind the sole Wait and exact retained CLI log')
+    code = worker['exit_code']
+    require(witness['wait_error'] == ('signal: killed' if code == -1 else 'exit status 1' if code == 1 else '') and
+            witness['termination_signal'] == ('killed' if code == -1 else ''),
+            'ownership exit differs from the sole-Wait termination status')
+    darwin = identity['execution_platform'].startswith('darwin-')
+    stop, continued = (17, 19) if darwin else (19, 18)
+    signal_names = {2:'interrupt', 9:'killed', stop:'stopped (signal)', continued:'continued'}
+    original = worker['pid'] == case['worker_measurements'][0]['pid']
+    held_coordinator = original and case['id'] == 'ownership/coordinator-kill-rebalance'
+    allowed = {2} if code == 0 else set()
+    if held_coordinator:
+        allowed.update((stop,continued))
+    if code == -1:
+        allowed = {stop,9}
+    events = [event for event in case['events'] if 'signal_number' in event and event.get('pid') == worker['pid']]
+    intents = witness['driver_intent_before_wait']
+    require(len(events) == len(intents), 'ownership driver intent lacks its controlled signal event')
+    remaining = list(events)
+    for intent in intents:
+        require(isinstance(intent['signal'], str) and intent['signal'] != '' and isinstance(intent['reason'], str) and intent['reason'] and
+                stamp(intent['at']) <= stamp(worker['stopped_at']),
+                'generic cancellation or unknown driver intent cannot qualify an ownership exit')
+        matched = [event for event in remaining if event['signal_number'] in allowed and event['route'] == worker['route'] and
+                   signal_names.get(event['signal_number']) == event['signal'] == intent['signal'] and event['reason'] == intent['reason'] and
+                   stamp(event['started']) <= stamp(intent['at']) <= stamp(event['finished']) <= stamp(witness['recorded_at'])]
+        require(len(matched) == 1, 'ownership intent is not the exact controlled signal before sole Wait')
+        remaining.remove(matched[0])
+    if code == 0:
+        require(sum(event['signal_number'] == 2 for event in events) == 1, 'successful ownership worker lacks its controlled completion signal')
+    return raw
+
+
 def workers(directory, case, safety, identity):
     values = case['worker_measurements']
     require(values and len({w['pid'] for w in values}) == len(values) and len({w['log'] for w in values}) == len(values) and
             {(w['pid'], w['exit_code']) for w in values} == {(w['pid'], w['exit_code']) for w in safety['writer_observations']},
             'selected worker waits differ from independent writer observations')
-    for worker in values:
+    for index, worker in enumerate(values):
         require(type(worker['pid']) is int and worker['pid'] > 0 and type(worker['route']) is int and worker['route'] in (1, 2, 3) and
                 worker['binary_sha256'] == identity['binary_sha256'] and
                 safety['started_at'] <= stamp(worker['started_at']) < stamp(worker['stopped_at']) <= safety['writers_stopped_at'] and
@@ -208,7 +246,8 @@ def workers(directory, case, safety, identity):
         require(type(worker['rss_samples']) is int and worker['rss_samples'] > 0 and worker['rss_failures'] == 0 and
                 type(worker['sampled_peak_rss_bytes']) is int and 0 < worker['sampled_peak_rss_bytes'] <= 512*1024**2 and
                 worker['record_cap'] == 1024 and worker['byte_cap'] == 128*1024**2, 'worker resource observations are invalid')
-        counts = work((directory/worker['log']).read_text())
+        raw = ownership_lifecycle(directory, case, worker, index, identity)
+        counts = work(raw.decode('utf-8'))
         require(counts[:4] == (worker['sampled_max_pending_entries'], worker['sampled_max_pending_estimated_bytes'], worker['progress_observations'], worker['copy_summary']) and
                 type(worker['lifetime_highwater_available']) is bool and worker['lifetime_highwater_available'] is (counts[3] is not None),
                 'recorded current work or lifetime availability differs from raw CLI measurements')
@@ -281,6 +320,7 @@ def _validate(root, id, identity):
     required = {f'source-{n}.{suffix}' for n in range(1, 4) for suffix in
                 ('log4j2.yaml', 'log4j2.json', 'jvm-logging.txt', 'console.log', 'baseline.requests.log', 'final.requests.log')}
     required |= {worker['log'] for worker in case['worker_measurements']} | {'ownership-observations.jsonl'}
+    required |= {f'worker-{index}.{suffix}' for index in range(1,len(case['worker_measurements'])+1) for suffix in ('lifecycle.json','exited.cli.log')}
     required |= {'worker-settings.toml'} | {f'worker-route-{worker["route"]}.sql' for worker in case['worker_measurements']}
     coordinator = id == 'ownership/coordinator-kill-rebalance'
     if coordinator:
@@ -381,7 +421,9 @@ def _validate(root, id, identity):
             require(Counter(w['route'] for w in values) == Counter({1:1, 2:1}) and original['exit_code'] == -1 and peer['exit_code'] == 0,
                     'worker kill restarted or terminated another worker')
             killed = signal(case, 9, original['pid'])
-            require(stamp(at_kill['finished']) <= stamp(killed['started']) <= stamp(killed['finished']) <= stamp(original['stopped_at']) <= injection['at'] and
+            require(killed['reason'] == 'SIGKILL during independently observed PreparingRebalance' and
+                    stamp(at_kill['finished']) <= stamp(killed['started']) <= stamp(killed['finished']) <= injection['at'] and
+                    stamp(killed['started']) <= stamp(original['stopped_at']) <= injection['at'] and
                     injection['kind'] == 'worker-sigkill' and injection['target'] == dict(pid=original['pid'], route=1, state=at_kill), 'worker kill lacks the actual rebalance and OS wait before injection proof')
             snapshot(case, recovered, rows, [2], baseline)
         require(injection['at'] <= stamp(recovered['finished']) <= window['healed_at'], 'kill recovery was not observed before heal')

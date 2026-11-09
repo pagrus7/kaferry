@@ -93,7 +93,9 @@ class OwnershipCasesTest(unittest.TestCase):
                 values['cap_measurement_scope']=ownership.KILLED_SCOPE
             return values
         def signal(number,worker,at):
-            case['events'].append(dict(signal_number=number,pid=worker['pid'],route=worker['route'],started=when(at),finished=when(at+.05)))
+            signal_name={2:'interrupt',9:'killed',19:'stopped (signal)',18:'continued'}[number]
+            reason='SIGKILL during independently observed PreparingRebalance' if number == 9 else 'controlled fixture signal'
+            case['events'].append(dict(signal_number=number,signal=signal_name,reason=reason,pid=worker['pid'],route=worker['route'],started=when(at),finished=when(at+.05)))
         def window(kind,target,start,injected,healed,injection_kind,injection_target,unavailable=False):
             safety['fault_events'].append(dict(kind=kind,target=target,started_at=start,healed_at=healed,timeout_basis={k:v/1000 for k,v in budget.items()},
                 recovery_seconds=sum(budget.values())/1000,unavailable=unavailable,injections=[dict(at=injected,kind=injection_kind,target=injection_target)]))
@@ -143,6 +145,24 @@ class OwnershipCasesTest(unittest.TestCase):
                 window('held-worker-rebalance',stimulus,8,13.4,22,'worker-sigkill',dict(pid=original['pid'],route=1,state=at_kill))
         safety['writer_observations']=[dict(pid=w['pid'],exit_code=w['exit_code']) for w in case['worker_measurements']]
         case['exact_lifetime_work_caps_qualified']=all(w['lifetime_highwater_available'] for w in case['worker_measurements'])
+        for index,worker in enumerate(case['worker_measurements'],1):
+            if worker['exit_code'] == 0 and not any(event.get('signal_number') == 2 and event.get('pid') == worker['pid'] for event in case['events']):
+                signal(2,worker,ownership.stamp(worker['stopped_at'])-.2)
+            worker['lifetime']=index
+            raw=(directory/worker['log']).read_bytes()
+            raw_name=f'worker-{index}.exited.cli.log'
+            (directory/raw_name).write_bytes(raw)
+            intents=[dict(at=when(ownership.stamp(event['started'])+.01),signal=event['signal'],reason=event['reason']) for event in case['events']
+                     if 'signal_number' in event and event.get('pid') == worker['pid']]
+            code=worker['exit_code']
+            witness=dict(lifetime=dict(number=index,pid=worker['pid'],started_at=worker['started_at'],binary_sha256=worker['binary_sha256']),
+                         stopped_at=worker['stopped_at'],recorded_at=when(ownership.stamp(worker['stopped_at'])+.01),exit_code=code,
+                         wait_error='signal: killed' if code == -1 else 'exit status 1' if code == 1 else '',termination_signal='killed' if code == -1 else '',
+                         driver_intent_before_wait=intents,terminal_lines=worker['terminal_error'].splitlines(),
+                         raw_log=dict(observations=raw_name,sha256=hashlib.sha256(raw).hexdigest()),raw_log_bytes=len(raw),raw_log_error='',active_fault=None)
+            name=f'worker-{index}.lifecycle.json'
+            (directory/name).write_text(json.dumps(witness))
+            worker['lifecycle']=dict(observations=name,sha256=hashlib.sha256((directory/name).read_bytes()).hexdigest())
         original_fixture=audit_fixture.OwnershipAuditTest()
         original_fixture.setUp()
         self.addCleanup(original_fixture.doCleanups)
@@ -285,6 +305,39 @@ class OwnershipCasesTest(unittest.TestCase):
         fixture[4]['execution_platform']='linux-amd64'
         with self.assertRaises(ValueError):
             self.validate(fixture)
+
+    def test_sole_wait_sidecars_reject_unknown_driver_intent_and_uncontrolled_kills(self):
+        # Given valid sole-Wait sidecars, when cancellation, a different signal
+        # or a forged identity is rechecksummed, then ownership cannot qualify.
+        for mutation in (
+            lambda w:w['driver_intent_before_wait'][0].update(signal='',reason='context cancellation'),
+            lambda w:w.update(wait_error='context canceled'),
+            lambda w:w.update(termination_signal='terminated'),
+            lambda w:w['lifetime'].update(pid=999),
+            lambda w:w['driver_intent_before_wait'][0].update(reason='unmatched driver stop'),
+        ):
+            fixture=self.fixture('worker-kill-rebalance')
+            worker=fixture[2]['worker_measurements'][0]
+            path=fixture[1]/worker['lifecycle']['observations']
+            witness=json.loads(path.read_text())
+            mutation(witness)
+            path.write_text(json.dumps(witness))
+            worker['lifecycle']['sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
+            with self.subTest(mutation=mutation),self.assertRaises(ValueError):
+                self.validate(fixture)
+        # When OS Wait wins the race with Signal's return, retained intent
+        # still proves the controlled SIGKILL before the sole-Wait observation.
+        fixture=self.fixture('worker-kill-rebalance')
+        worker=fixture[2]['worker_measurements'][0]
+        killed=next(event for event in fixture[2]['events'] if event.get('signal_number') == 9)
+        killed['finished']=when(13.35)
+        path=fixture[1]/worker['lifecycle']['observations']
+        witness=json.loads(path.read_text())
+        witness['recorded_at']=when(13.36)
+        path.write_text(json.dumps(witness))
+        worker['lifecycle']['sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
+        fixture[3]['fault_events'][0]['injections'][0]['target']['state']=fixture[2]['states']['at_kill']
+        self.validate(fixture)
 
     def test_scale_requires_all_three_assignments_and_original_process(self):
         # Given 1-to-3-to-1 scaling, when ownership overlaps, generation fails

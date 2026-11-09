@@ -44,6 +44,7 @@ type ownershipCaseObservation struct {
 }
 
 type ownershipCaseWorker struct {
+	lifetime    brokerLifetime
 	route       int
 	process     *cliProcess
 	started     time.Time
@@ -65,6 +66,7 @@ type ownershipCase struct {
 	audit                               *replicatedAudit
 	publisher                           *replicatedPublisher
 	workers                             []*ownershipCaseWorker
+	lifecycle                           *brokerCopy
 	states                              map[string]ownershipCaseObservation
 	events                              []map[string]any
 	failedAfter                         time.Time
@@ -105,6 +107,9 @@ func replicatedOwnershipCase(t *testing.T, name string) {
 	t.Cleanup(metadata.Close)
 	s := &ownershipCase{t: t, ctx: ctx, id: id, directory: directory, timeouts: timeouts, metadata: metadata,
 		states: make(map[string]ownershipCaseObservation), prefix: fmt.Sprintf("kaferry-ownership-%d", time.Now().UnixNano())}
+	// Reuse immutable sole-Wait capture. Ownership keeps its own raw fault
+	// proof and signal rules; generic forced-copy exceptions do not apply.
+	s.lifecycle = &brokerCopy{directory: directory}
 	s.lab = &faults.Lab{Project: os.Getenv("KAFERRY_FIXTURE_PROJECT"), API: os.Getenv("KAFERRY_TOXIPROXY_API"), Metadata: metadata}
 	s.src, s.dst, s.group = s.prefix+"-source", s.prefix+"-destination", s.prefix+"-group"
 	replicatedTopic(ctx, t, metadata["source"], s.src)
@@ -179,8 +184,11 @@ func (s *ownershipCase) start(route int) {
 	}
 	worker := &ownershipCaseWorker{route: route, started: time.Now().UTC()}
 	worker.process = startCLI(s.t, s.ctx, testBinary(s.t), "", "run", "-e", statement, "-c", s.config)
+	worker.lifetime = brokerLifetime{Number: len(s.workers) + 1, PID: worker.process.pid(), Started: worker.started, Binary: os.Getenv("KAFERRY_EXPECT_BINARY_SHA256")}
 	worker.memory = watchReplicatedRSS(s.t, worker.process)
 	s.workers = append(s.workers, worker)
+	s.lifecycle.workers = append(s.lifecycle.workers, worker.process)
+	s.lifecycle.identities = append(s.lifecycle.identities, worker.lifetime)
 	s.oracle.writer(worker.process)
 }
 
@@ -591,7 +599,7 @@ func (s *ownershipCase) scale() {
 func (s *ownershipCase) signal(worker *ownershipCaseWorker, signal os.Signal, reason string) {
 	require.False(s.t, worker.process.finished(), "worker exited before expected signal")
 	started := time.Now().UTC()
-	require.NoError(s.t, worker.process.signal(signal))
+	require.NoError(s.t, worker.process.signal(signal, reason))
 	s.events = append(s.events, map[string]any{"signal": signal.String(), "signal_number": int(signal.(syscall.Signal)), "pid": worker.process.pid(), "route": worker.route,
 		"started": started, "finished": time.Now().UTC(), "reason": reason})
 }
@@ -607,6 +615,8 @@ func (s *ownershipCase) await(worker *ownershipCaseWorker, reason string, killed
 	case <-time.After(s.timeouts["shutdown_timeout"] + time.Second):
 		s.t.Fatal("selected CLI did not stop within its configured shutdown bound")
 	}
+	_, retainErr := s.lifecycle.retainExit(worker.process)
+	require.NoError(s.t, retainErr, "retain ownership sole-Wait evidence before exit assertions")
 	if killed {
 		require.Error(s.t, worker.process.wait())
 		status, ok := worker.process.command.ProcessState.Sys().(syscall.WaitStatus)
@@ -624,6 +634,8 @@ func (s *ownershipCase) live(allowFaultExit bool) {
 		if worker.reason != "" || !worker.process.finished() {
 			continue
 		}
+		_, retainErr := s.lifecycle.retainExit(worker.process)
+		require.NoError(s.t, retainErr, "retain ownership sole-Wait evidence before classification")
 		require.True(s.t, allowFaultExit && !s.failedAfter.IsZero(), "unexplained or premature CLI exit: %s", worker.process.logs())
 		require.Equal(s.t, 1, worker.process.command.ProcessState.ExitCode(), worker.process.logs())
 		terminal, known := ownershipCoordinatorFailure(worker.process.logs())
@@ -691,6 +703,8 @@ func ownershipWorkMeasurement(work brokerWorkEvidence, killed bool) (map[string]
 }
 
 func (s *ownershipCase) measure(worker *ownershipCaseWorker, killed bool) {
+	exit, retainErr := s.lifecycle.retainExit(worker.process)
+	require.NoError(s.t, retainErr)
 	logs, err := worker.process.currentLogs()
 	require.NoError(s.t, err)
 	memory := worker.memory()
@@ -702,7 +716,8 @@ func (s *ownershipCase) measure(worker *ownershipCaseWorker, killed bool) {
 	require.True(s.t, ready, "every selected worker needs live cap measurements")
 	evidence, err := ownershipWorkMeasurement(work, killed)
 	require.NoError(s.t, err)
-	worker.measurement = map[string]any{"pid": worker.process.pid(), "route": worker.route, "started_at": worker.started, "stopped_at": worker.process.stopped,
+	worker.measurement = map[string]any{"lifetime": worker.lifetime.Number, "lifecycle": exit.Reference,
+		"pid": worker.process.pid(), "route": worker.route, "started_at": worker.started, "stopped_at": worker.process.stopped,
 		"wait_status":   int(worker.process.command.ProcessState.Sys().(syscall.WaitStatus)),
 		"binary_sha256": os.Getenv("KAFERRY_EXPECT_BINARY_SHA256"), "exit_code": worker.process.command.ProcessState.ExitCode(), "reason": worker.reason, "terminal_error": worker.terminal,
 		"sampled_peak_rss_bytes": memory.peak * 1024, "rss_samples": memory.samples, "rss_failures": memory.failures,
@@ -749,9 +764,12 @@ func (s *ownershipCase) retainWorkers() ([]map[string]any, bool) {
 	exactCaps := true
 	for index, worker := range s.workers {
 		if !worker.process.finished() {
-			_ = worker.process.command.Process.Kill()
+			_ = worker.process.signal(os.Kill, "ownership test cleanup")
 		}
 		_ = worker.process.wait()
+		if _, retainErr := s.lifecycle.retainExit(worker.process); retainErr != nil {
+			s.t.Error("retain ownership lifecycle: ", retainErr)
+		}
 		if err := os.WriteFile(filepath.Join(s.directory, fmt.Sprintf("worker-%d-route-%d.cli.log", index+1, worker.route)), []byte(worker.process.logs()), 0600); err != nil {
 			s.t.Error("retain worker log: ", err)
 		}
@@ -826,7 +844,7 @@ func TestOwnershipCoordinatorRestartRequiresTerminalCause(t *testing.T) {
 	// Given structured coordinator warnings, when the terminal failure is
 	// unrelated or absent, then a warning cannot authorize a worker restart.
 	warning := `{"msg":"source warning","error":"NOT_COORDINATOR"}` + "\n"
-	for _, terminal := range []string{"", "unexpected invariant failure", "context deadline exceeded\nunexpected invariant failure", "EOF", brokerForcedSaveExit, brokerNegotiationEOF} {
+	for _, terminal := range []string{"", "unexpected invariant failure", "context deadline exceeded\nunexpected invariant failure", "EOF", brokerForcedSaveExit, brokerForcedWritesExit, brokerNegotiationEOF} {
 		_, known := ownershipCoordinatorFailure(warning + terminal)
 		require.False(t, known, terminal)
 	}
