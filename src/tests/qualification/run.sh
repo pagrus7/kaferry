@@ -8,13 +8,15 @@ compose() {
 }
 cleanup() {
   suite_status=$?
-  if [ -n "${KAFERRY_REPORT_DIR:-}" ]; then
-    mkdir -p "$KAFERRY_REPORT_DIR"
-    compose logs --no-color > "$KAFERRY_REPORT_DIR/security-brokers.log" || true
+  if [ "$suite_status" -ne 0 ] && [ -n "${KAFERRY_REPORT_DIR:-}" ]; then
+    mkdir -p "$KAFERRY_REPORT_DIR" && compose logs --no-color > "$KAFERRY_REPORT_DIR/security-brokers.log" || true
   fi
   cleanup_status=0
   compose down -v || cleanup_status=$?
   rm -rf "$cert_dir" || cleanup_status=$?
+  if [ "$suite_status" -eq 0 ] && [ "$cleanup_status" -ne 0 ] && [ -n "${KAFERRY_REPORT_DIR:-}" ]; then
+    mkdir -p "$KAFERRY_REPORT_DIR" && compose logs --no-color > "$KAFERRY_REPORT_DIR/security-brokers.log" || true
+  fi
   if [ "$suite_status" -ne 0 ]; then
     return "$suite_status"
   fi

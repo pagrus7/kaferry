@@ -41,10 +41,11 @@ class ReplicatedBrokerStorageTest(unittest.TestCase):
                  patch('tools.qualification.qualify.identity_platforms', return_value={}), \
                  patch('tools.qualification.qualify.fixture_images', return_value='fixture'), \
                  patch('tools.qualification.qualify.logged', side_effect=command), \
-                 patch('tools.qualification.qualify.subprocess.run'), patch('tools.qualification.qualify.verify_run'):
+                 patch('tools.qualification.qualify.subprocess.run') as capture, patch('tools.qualification.qualify.verify_run'):
                 # When finishing, then the duration reaches RF=3 admission and only enabled proxies are configured.
                 with self.assertRaisesRegex(RuntimeError, 'teardown failed'):
                     run_suite(args)
+            capture.assert_called_once()
             self.assertEqual(60, admit.call_args.args[1])
             self.assertEqual(['storage-capacity', 'storage-prepare', 'proxy-up', 'proxy-configure',
                               'brokers-up', 'suite', 'brokers-stop', 'storage-clean', 'brokers-down'],

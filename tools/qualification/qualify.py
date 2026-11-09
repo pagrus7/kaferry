@@ -446,22 +446,34 @@ def broker_fixture(args, spec, receipt, cancelled, *, lease_held=False):
         finally:
             if spec.compose and owns_fixture:
                 errors = []
+                logs_captured = False
+                def capture_logs():
+                    nonlocal logs_captured
+                    if logs_captured:
+                        return
+                    logs_captured = True
+                    try:
+                        with (args.output / 'brokers.log').open('w') as log:
+                            subprocess.run(spec.compose + ['logs', '--no-color'], cwd=ROOT, env=spec.env,
+                                           stdout=log, stderr=subprocess.STDOUT, timeout=30, check=False)
+                    except (OSError, subprocess.SubprocessError) as error:
+                        errors.append({'phase': 'logs', 'error': str(error)})
                 try:
-                    with (args.output / 'brokers.log').open('w') as log:
-                        subprocess.run(spec.compose + ['logs', '--no-color'], cwd=ROOT, env=spec.env,
-                                       stdout=log, stderr=subprocess.STDOUT, timeout=30, check=False)
-                except (OSError, subprocess.SubprocessError) as error:
-                    errors.append({'phase': 'logs', 'error': str(error)})
+                    if 'suite_error' in receipt or receipt.get('fault_results', {}).get('status') == 'inconclusive':
+                        capture_logs()
                 finally:
                     owned_storage = replicated_fixture(args)
                     if owned_storage:
                         errors.extend(cleanup_replicated(args.output, spec.compose, spec.env))
+                    if errors:
+                        capture_logs()
                     try:
                         # Keep storage if ownership validation or writer shutdown failed.
                         volumes = [] if owned_storage and errors else ['-v']
                         logged(spec.compose + ['down', *volumes, '--remove-orphans'], args.output, 'brokers-down', spec.env, timeout=60)
                     except (OSError, RuntimeError) as error:
                         errors.append({'phase': 'teardown', 'error': str(error)})
+                        capture_logs()
                 if errors:
                     receipt['cleanup_errors'] = errors
                     if 'suite_error' not in receipt:

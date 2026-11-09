@@ -88,6 +88,8 @@ class AuthRunnerTest(unittest.TestCase):
                     self.assertIn('image_error', receipt)
                 self.assertFalse((root / 'alive').exists())
                 calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
+                self.assertEqual(1 if failed else 0, sum('logs' in call['args'] for call in calls))
+                self.assertEqual(bool(failed), (args.output / 'security-brokers.log').exists())
                 startup = next(call['args'] for call in calls if 'up' in call['args'])
                 self.assertEqual(['up', '-d', '--build', '--wait', '--wait-timeout', '90'], startup[startup.index('up'):])
                 for call in calls:
