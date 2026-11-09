@@ -69,3 +69,24 @@ func TestLoadEnduranceTracksBurstsWindowsAndFinalAcknowledgements(t *testing.T) 
 	require.Equal(t, 2, e.Windows)
 	require.InDelta(t, 12398.0/12400, e.MinWindowRatio, 1e-9)
 }
+
+func TestEnduranceRecoveryDeadlineAndBacklogBoundary(t *testing.T) {
+	// Given an active recovery with backlog above the rate/10 limit.
+	e := newEnduranceEvidence(time.Minute)
+	e.recoveryAt = time.Now()
+	require.NoError(t, e.checkRecovery(time.Second, 21, 200))
+	require.Zero(t, e.Recoveries)
+	require.False(t, e.recoveryAt.IsZero())
+	// When backlog reaches the limit at exactly fifteen seconds, then recover once.
+	require.NoError(t, e.checkRecovery(15*time.Second, 20, 200))
+	require.Equal(t, 1, e.Recoveries)
+	require.Equal(t, 15.0, e.MaxRecoverySeconds)
+	require.True(t, e.recoveryAt.IsZero())
+	require.NoError(t, e.checkRecovery(16*time.Second, 0, 200))
+	require.Equal(t, 1, e.Recoveries)
+	// A later stall still fails beyond its deadline, even if backlog has cleared.
+	e.recoveryAt = time.Now()
+	require.ErrorContains(t, e.checkRecovery(15*time.Second+time.Nanosecond, 0, 200), "backlog failed to recover")
+	require.Equal(t, 1, e.Recoveries)
+	require.False(t, e.recoveryAt.IsZero())
+}

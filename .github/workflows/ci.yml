@@ -24,11 +24,11 @@ jobs:
       - run: make build
       - name: Compile fault fixtures
         run: go test -run '^$' -tags=integration,fault ./src/tests/system
-      - name: Compile standalone fault and parallel fixtures
+      - name: Compile standalone fault fixtures
         env:
           CGO_ENABLED: "1"
         run: go test -run '^$' -tags=integration,fault ./src/tests/system
-      - name: Compile capture and parallel streaming fixtures
+      - name: Compile capture and streaming fixtures
         env:
           CGO_ENABLED: "1"
         run: go test -run '^$' -tags=integration,load ./src/tests/compatibility

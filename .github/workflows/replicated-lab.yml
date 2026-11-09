@@ -15,8 +15,6 @@ on:
       - 'tools/qualification/qualify.py'
       - 'tools/qualification/broker_probe.py'
       - 'tools/qualification/test_qualify.py'
-      - 'tools/qualification/storage_census_images_test.py'
-      - 'tools/qualification/proxy_port_reservation_images_test.py'
       - 'tools/qualification/network.py'
       - 'tools/qualification/test_network.py'
       - 'tools/qualification/test_endurance_topology.py'
@@ -40,9 +38,6 @@ jobs:
   smoke:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    permissions:
-      contents: read
-      id-token: write
     outputs:
       binary_sha256: ${{ steps.candidate.outputs.sha256 }}
     steps:
@@ -70,6 +65,9 @@ jobs:
           assert len({services[name]['environment']['KAFKA_LOG_DIRS'] for name in brokers}) == 6
           assert services['toxiproxy']['image'] == network.IMAGE
           assert services['toxiproxy']['sysctls'] == {network.RESERVATION: network.reserved_ports()}
+          assert not services['toxiproxy'].get('privileged')
+          assert not services['toxiproxy'].get('network_mode')
+          assert not services['toxiproxy'].get('cap_add')
           assert {port['published'] for port in services['toxiproxy']['ports']} == {str(port) for port in (*network.client_ports(), 48074)}
           for name in brokers:
               service = services[name]
@@ -87,49 +85,17 @@ jobs:
               assert env['KAFKA_CONTROLLER_QUORUM_VOTERS'] == ','.join(f'{node}@toxiproxy:{network.route_port(side, node, "controller")}' for node in range(1, 4))
           assert services['source-1']['environment']['CLUSTER_ID'] != services['destination-1']['environment']['CLUSTER_ID']
           PY
-      - name: Check cleanup diagnostics in pinned images without brokers
-        run: |
-          python3 - <<'PY'
-          import subprocess
-          from tools.qualification.storage_census_images_test import CENSUS_IMAGES
-          for image in CENSUS_IMAGES:
-              subprocess.run(['docker', 'pull', image], check=True)
-          PY
-          python3 -m unittest -v tools.qualification.storage_census_images_test
-      - name: Check proxy listener reservations in the pinned image without brokers
-        run: |
-          python3 - <<'PY'
-          import subprocess
-          from tools.qualification.network import IMAGE
-          subprocess.run(['docker', 'pull', IMAGE], check=True)
-          PY
-          python3 -m unittest -v tools.qualification.proxy_port_reservation_images_test
-      - name: Publish proxy probe Go coverage
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        with:
-          files: build-results/proxy-port-reservation/coverage.out
-          disable_search: true
-          flags: go
-          use_oidc: true
-          version: v11.3.1
-          fail_ci_if_error: true
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: replicated-proxy-probe-coverage
-          path: build-results/proxy-port-reservation
-          retention-days: 14
       - name: Install the independent checker and build candidate
         id: candidate
         shell: bash
         run: |
           make qualification-setup
           echo "sha256=$(sha256sum bin/kaferry | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-      - name: Check endurance gates and diagnostic retention without brokers
+      - name: Check endurance gates without brokers
         env:
           KAFERRY_TEST_BINARY: ${{ github.workspace }}/bin/kaferry
           KAFERRY_EXPECT_BINARY_SHA256: ${{ steps.candidate.outputs.sha256 }}
-        run: go test -race -tags=integration,load -run '^(TestLoadReport|TestReplicatedEndurance|TestOwnedBroker|TestStallTrace|TestEndurance|TestSoak)' ./src/tests/system
+        run: go test -race -tags=integration,load -run '^(TestLoadReport|TestReplicatedEndurance|TestOwnedBroker|TestEndurance|TestSoak)' ./src/tests/system
       - name: Copy and independently reconcile the replicated fixture
         run: python3 -m tools.qualification.qualify run replicated --binary bin/kaferry --output build-results/replicated
       - name: Verify fixture teardown

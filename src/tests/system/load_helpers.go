@@ -225,13 +225,11 @@ func (s *streamRecords) drainReports(t *testing.T, reports <-chan kgo.ProduceRes
 		}
 	}
 }
-func (s *streamRecords) catchUp(t *testing.T, consumer *kgo.Client, reports <-chan kgo.ProduceResult) time.Duration {
+func (s *streamRecords) catchUp(t *testing.T, consumer *kgo.Client, reports <-chan kgo.ProduceResult) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Millisecond)
 	defer cancel()
-	pollStarted := time.Now()
 	fetches := consumer.PollRecords(ctx, 512)
-	pollDuration := time.Since(pollStarted)
 	for _, failure := range fetches.Errors() {
 		if !errors.Is(failure.Err, context.DeadlineExceeded) {
 			t.Fatal(failure)
@@ -242,7 +240,6 @@ func (s *streamRecords) catchUp(t *testing.T, consumer *kgo.Client, reports <-ch
 	}
 
 	s.drainReports(t, reports)
-	return pollDuration
 }
 
 type rssPeak struct {

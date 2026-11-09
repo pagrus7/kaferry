@@ -28,6 +28,24 @@ import (
 const brokerReadinessCriterion = "target-admin-metadata-all-topics-v1"
 const brokerMetadataCaptureLimit = 64 << 10
 
+type brokerHealthCheck struct {
+	Criterion  string                 `json:"criterion"`
+	Deadline   time.Time              `json:"deadline"`
+	Probes     []brokerAPIProbe       `json:"api_probes,omitempty"`
+	At         time.Time              `json:"at"`
+	Containers []string               `json:"containers"`
+	Error      string                 `json:"error,omitempty"`
+	Passed     bool                   `json:"passed"`
+	Details    []brokerHealthSnapshot `json:"details,omitempty"`
+}
+
+func brokerDiagnosticText(value string) string {
+	if len(value) > 2048 {
+		return value[:2048] + " [truncated]"
+	}
+	return value
+}
+
 type brokerAPIProbe struct {
 	faults.MetadataProbe
 	Topic             string `json:"topic"`
@@ -77,15 +95,10 @@ func (s *brokerCopy) inspectBrokerHealth(ctx context.Context, check *brokerHealt
 		run = brokerHealthDocker
 	}
 	data, err := run(ctx, args...)
-	check.Output = brokerDiagnosticText(string(data))
 	if err != nil {
-		check.Diagnostic = "unavailable"
-		if errors.Is(err, errBrokerHealthTruncated) {
-			check.Diagnostic = "truncated"
-		}
 		return err
 	}
-	check.Details, check.Diagnostic, err = brokerHealthSnapshots(data, len(targets))
+	check.Details, err = brokerHealthSnapshots(data, len(targets))
 	if err != nil {
 		return err
 	}
@@ -242,8 +255,8 @@ func brokerProbeISR(probe brokerAPIProbe, partition int32, size int, leader int3
 
 func TestBrokerReadinessRequiresFreshPinnedMetadataWithinSharedBudget(t *testing.T) {
 	// Given a running owned broker, when its fresh API response is absent or
-	// invalid, then Docker health and a healthy peer cannot satisfy readiness.
-	for _, mode := range []string{"starting", "healthy", "ISR1", "worker route blocked", "stopped", "wrong owner", "wrong container", "malformed Docker", "API error", "wrong cluster", "wrong routes", "missing topic", "bad partition", "blocked target", "cancelled", "shared deadline"} {
+	// invalid, then a running container and a healthy peer cannot satisfy readiness.
+	for _, mode := range []string{"running", "ISR1", "worker route blocked", "stopped", "missing running", "missing start", "new start", "wrong service", "wrong owner", "wrong container", "malformed Docker", "API error", "wrong cluster", "wrong routes", "missing topic", "bad partition", "blocked target", "cancelled", "shared deadline"} {
 		t.Run(mode, func(t *testing.T) {
 			testBrokerReadiness(t, mode)
 		})
@@ -285,7 +298,7 @@ func testBrokerReadiness(t *testing.T, mode string) {
 	require.Equal(t, brokerReadinessCriterion, check.Criterion)
 	deadline, _ := ctx.Deadline()
 	require.Equal(t, deadline, check.Deadline)
-	if mode == "starting" || mode == "healthy" || mode == "ISR1" || mode == "worker route blocked" {
+	if mode == "running" || mode == "ISR1" || mode == "worker route blocked" {
 		require.True(t, ready, check.Error)
 		require.Len(t, check.Probes, 1)
 		probe := check.Probes[0]
@@ -387,7 +400,7 @@ func brokerReadinessDocker(ctx context.Context, t *testing.T, targets []faults.T
 		}
 		var rows []string
 		for _, target := range targets {
-			row := brokerHealthFixture("starting")
+			row := map[string]any{"Running": true, "StartedAt": "2026-11-08T22:55:50Z"}
 			row["ID"], row["Project"], row["Service"] = target.Container, "owned-project", target.Service
 			editBrokerDockerFixture(row, mode)
 			data, encodeErr := json.Marshal(row)
@@ -400,10 +413,16 @@ func brokerReadinessDocker(ctx context.Context, t *testing.T, targets []faults.T
 
 func editBrokerDockerFixture(row map[string]any, mode string) {
 	switch mode {
-	case "healthy":
-		row["Health"].(map[string]any)["Status"] = "healthy"
 	case "stopped":
 		row["Running"] = false
+	case "missing running":
+		delete(row, "Running")
+	case "missing start":
+		delete(row, "StartedAt")
+	case "new start":
+		row["StartedAt"] = time.Now().Add(time.Hour).UTC()
+	case "wrong service":
+		row["Service"] = "foreign-service"
 	case "wrong owner":
 		row["Project"] = "other-project"
 	case "wrong container":
