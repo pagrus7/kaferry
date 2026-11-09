@@ -136,9 +136,9 @@ func (s *brokerCopy) retainNetworkInjection(injection *faults.Injection, name st
 func replicatedNetworkFault(t *testing.T, name string) {
 	// Given one exact candidate CLI, 24 RF=3/minISR=2 partitions and independent
 	// admin, publisher and continuous librdkafka routes, measure healthy output.
-	s, baseline := startReplicatedFaultCopy(t, "network/"+name)
+	s, _ := startReplicatedFaultCopy(t, "network/"+name)
 	span := s.timeouts["session.timeout.ms"]
-	baseline = s.wait("source schedule caught up and output backlog drained before healthy measurement", false,
+	baseline := s.wait("source schedule caught up and output backlog drained before healthy measurement", false,
 		func(_ context.Context, state brokerObservation) bool { return networkMeasurementReady(state) })
 	healthy := s.networkSpan(baseline, span, false)
 	require.GreaterOrEqual(t, healthy.rate(), .95*float64(replicatedPartitions)*10, "healthy fixture did not sustain scheduled input")
