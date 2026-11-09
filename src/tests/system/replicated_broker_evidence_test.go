@@ -192,11 +192,11 @@ func brokerContextualFailure(logs string, proof *brokerFailureProof) (string, bo
 	if proof.sourceOperationExit(logs, strings.Join(terminal, "\n"), work.Summary) {
 		return strings.Join(terminal, "\n"), true
 	}
-	if work.Summary == nil || !proof.negotiationEOFContext(logs, len(terminal)) || len(terminal) != work.Summary.Submitted-work.Summary.Confirmed {
+	if work.Summary == nil || !proof.negotiationEOFContext(logs, len(terminal), terminal[0]) || len(terminal) != work.Summary.Submitted-work.Summary.Confirmed {
 		return "", false
 	}
 	for _, line := range terminal {
-		if line != brokerNegotiationEOF {
+		if line != terminal[0] {
 			return "", false
 		}
 	}
@@ -232,6 +232,7 @@ func TestBrokerNegotiationEOFRequiresAffectedPlainCopyAndEveryUnconfirmedError(t
 		edit func(*brokerFailureProof)
 	}{
 		{name: "unknown terminal", logs: logs + "unknown failure\n"},
+		{name: "first-response EOF remains network-only", logs: strings.ReplaceAll(logs, brokerNegotiationEOF, networkFirstResponseEOF)},
 		{name: "different TLS diagnostic", logs: strings.ReplaceAll(logs, brokerNegotiationEOF, "TLS handshake failed")},
 		{name: "missing one failure", logs: brokerWorkProgress + brokerWorkSummary + brokerNegotiationEOF + "\n"},
 		{name: "missing summary", logs: brokerWorkProgress + brokerNegotiationEOF + "\n"},

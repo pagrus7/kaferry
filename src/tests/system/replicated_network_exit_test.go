@@ -3,8 +3,10 @@
 package compat
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"strings"
@@ -13,7 +15,12 @@ import (
 
 	"github.com/pagrus7/kaferry/src/tests/system/faults"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
+
+const networkFirstResponseEOF = "broker closed the connection immediately after a request was issued, which often happens when SASL is required but not provided: is SASL missing?"
 
 // Only the first lifetime of the complete owned destination cut has this scope.
 // Callers separately require an exact known diagnostic and its work evidence.
@@ -46,17 +53,20 @@ func (p *brokerFailureProof) networkOutageExit(logs string) bool {
 		(active.Heal.IsZero() || active.Heal.Equal(p.Heal))
 }
 
-func (p *brokerFailureProof) negotiationEOFContext(logs string, failures int) bool {
+func (p *brokerFailureProof) negotiationEOFContext(logs string, failures int, diagnostic string) bool {
 	if p != nil && strings.HasPrefix(p.Case, "network/") {
+		if diagnostic != brokerNegotiationEOF && diagnostic != networkFirstResponseEOF {
+			return false
+		}
 		exact := 0
 		for _, line := range strings.Split(logs, "\n") {
-			if line == brokerNegotiationEOF {
+			if line == diagnostic {
 				exact++
 			}
 		}
 		return p.networkOutageExit(logs) && exact == failures
 	}
-	return p.affected("destination")
+	return diagnostic == brokerNegotiationEOF && p.affected("destination")
 }
 
 func networkOutageTargets(targets []faults.Target) bool {
@@ -140,6 +150,8 @@ func networkOutageProofMutations(t *testing.T, proof *brokerFailureProof, logs s
 	t.Helper()
 	mutations := []func(*brokerFailureProof){
 		func(p *brokerFailureProof) { p.Case = "network/latency" },
+		func(p *brokerFailureProof) { p.Case = "broker/destination-leader" },
+		func(p *brokerFailureProof) { p.Role.Cluster = "source" },
 		func(p *brokerFailureProof) { p.Role.Worker = 2 },
 		func(p *brokerFailureProof) { p.Kind = "kill" },
 		func(p *brokerFailureProof) { p.Window = 1 },
@@ -177,41 +189,73 @@ func networkOutageProofMutations(t *testing.T, proof *brokerFailureProof, logs s
 }
 
 func TestNetworkOutageNegotiationEOFRequiresCompleteBoundWriteFailures(t *testing.T) {
-	// Given the retained failure's72unconfirmed writes and exact final peaks,
-	// reproduce a real child exit one second after the owned cut begins.
-	summary := `{"msg":"copy summary","submitted":4416,"confirmed":4344,"peak_uncommitted_records":415,"peak_uncommitted_bytes":948515}` + "\n"
-	s, process := networkOutageChild(t, summary+strings.Repeat(brokerNegotiationEOF+"\n", 72))
-	time.Sleep(time.Second)
-	require.NoError(t, process.stdin.Close())
-	require.Error(t, process.wait())
-	proof := s.failureProof(process)
-	logs, err := process.currentLogs()
-	require.NoError(t, err)
-	// When the same strict whole-cut policy handles either post-injection wait,
-	// accept exactly the known per-write failure, retaining complete exact peaks.
-	_, err = completedBrokerFailure(process, true, proof)
-	require.NoError(t, err)
-	_, err = completedBrokerFailure(process, false, proof)
-	require.Error(t, err, "pre-fault, other-case and replacement waits still reject exits")
-	work, err := brokerWork(logs)
-	require.NoError(t, err)
-	require.NotNil(t, work.Summary)
-	require.Equal(t, 415, work.Summary.PeakRecords)
-	require.EqualValues(t, 948515, work.Summary.PeakBytes)
-	// Then before-cut, no-cut, other-case, RSS and identity mutations still fail;
-	// rehashing a missing/unknown/whitespace terminal cannot replace a failed write.
-	networkOutageProofMutations(t, proof, logs)
-	for _, changedLogs := range []string{
-		strings.Replace(logs, brokerNegotiationEOF+"\n", "", 1),
-		strings.Replace(logs, brokerNegotiationEOF, "authentication failed", 1),
-		strings.Replace(logs, brokerNegotiationEOF, " "+brokerNegotiationEOF, 1),
-	} {
-		data, err := json.Marshal(proof)
+	t.Run("pinned first response diagnostic", func(t *testing.T) {
+		// Given successful API negotiation, when the first metadata response
+		// closes, then the pinned SDK reports its typed first-read EOF guess.
+		cluster := kfake.MustCluster(kfake.NumBrokers(1))
+		defer cluster.Close()
+		cluster.ControlKey(int16(kmsg.Metadata), func(kmsg.Request) (kmsg.Response, error, bool) { return nil, io.EOF, true })
+		client, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.RequestRetries(0))
 		require.NoError(t, err)
-		var changed brokerFailureProof
-		require.NoError(t, json.Unmarshal(data, &changed))
-		changed.Exit.Log.SHA256, changed.Exit.LogBytes, changed.Exit.Terminal = brokerDigest(changedLogs), len(changedLogs), brokerTerminals(changedLogs)
-		_, accepted := brokerContextualFailure(changedLogs, &changed)
-		require.False(t, accepted)
+		defer client.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+		defer cancel()
+		_, err = client.Request(ctx, kmsg.NewPtrMetadataRequest())
+		var firstRead *kgo.ErrFirstReadEOF
+		require.ErrorAs(t, err, &firstRead)
+		require.ErrorIs(t, err, io.EOF)
+		require.EqualError(t, err, networkFirstResponseEOF)
+	})
+	for _, tc := range []struct {
+		diagnostic, other                 string
+		submitted, confirmed, peak, bytes int
+	}{
+		{brokerNegotiationEOF, networkFirstResponseEOF, 4416, 4344, 415, 948515},
+		{networkFirstResponseEOF, brokerNegotiationEOF, 5864, 5832, 401, 916518},
+	} {
+		t.Run(tc.diagnostic, func(t *testing.T) {
+			// Given retained unconfirmed writes and exact final peaks,
+			// reproduce a real child exit one second after the owned cut begins.
+			summary := fmt.Sprintf(`{"msg":"copy summary","submitted":%d,"confirmed":%d,"peak_uncommitted_records":%d,"peak_uncommitted_bytes":%d}`+"\n", tc.submitted, tc.confirmed, tc.peak, tc.bytes)
+			s, process := networkOutageChild(t, summary+strings.Repeat(tc.diagnostic+"\n", tc.submitted-tc.confirmed))
+			time.Sleep(time.Second)
+			require.NoError(t, process.stdin.Close())
+			require.Error(t, process.wait())
+			proof := s.failureProof(process)
+			logs, err := process.currentLogs()
+			require.NoError(t, err)
+			// When the same strict whole-cut policy handles either post-injection wait,
+			// accept exactly the known per-write failure, retaining complete exact peaks.
+			terminal, err := completedBrokerFailure(process, true, proof)
+			require.NoError(t, err)
+			require.Equal(t, strings.TrimSuffix(strings.Repeat(tc.diagnostic+"\n", tc.submitted-tc.confirmed), "\n"), terminal)
+			_, err = completedBrokerFailure(process, false, proof)
+			require.Error(t, err, "pre-fault, other-case and replacement waits still reject exits")
+			work, err := brokerWork(logs)
+			require.NoError(t, err)
+			require.NotNil(t, work.Summary)
+			require.Equal(t, tc.peak, work.Summary.PeakRecords)
+			require.EqualValues(t, tc.bytes, work.Summary.PeakBytes)
+			// Then before-cut, no-cut, other-case, RSS and identity mutations still fail;
+			// rehashing a missing/unknown/whitespace terminal cannot replace a failed write.
+			networkOutageProofMutations(t, proof, logs)
+			for _, changedLogs := range []string{
+				strings.Replace(logs, tc.diagnostic+"\n", "", 1),
+				strings.Replace(logs, tc.diagnostic, "authentication failed", 1),
+				strings.Replace(logs, tc.diagnostic, tc.other, 1),
+				strings.Replace(logs, tc.diagnostic, " "+tc.diagnostic, 1),
+				strings.Replace(logs, tc.diagnostic, tc.diagnostic+" EOF", 1),
+				strings.Replace(logs, tc.diagnostic, brokerNegotiationEOF+networkFirstResponseEOF, 1),
+				strings.Replace(logs, summary, "", 1),
+			} {
+				data, err := json.Marshal(proof)
+				require.NoError(t, err)
+				var changed brokerFailureProof
+				require.NoError(t, json.Unmarshal(data, &changed))
+				changed.Exit.Log.SHA256, changed.Exit.LogBytes, changed.Exit.Terminal = brokerDigest(changedLogs), len(changedLogs), brokerTerminals(changedLogs)
+				_, accepted := brokerContextualFailure(changedLogs, &changed)
+				require.False(t, accepted)
+			}
+		})
 	}
 }

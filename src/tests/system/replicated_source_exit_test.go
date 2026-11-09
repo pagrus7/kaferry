@@ -132,7 +132,7 @@ func TestBrokerLabelledSourceEOFRequiresBoundAllConfirmedExit(t *testing.T) {
 func sourceExitMutations(t *testing.T, proof *brokerFailureProof, logs, terminal string) {
 	t.Helper()
 	changedLogs := []string{strings.ReplaceAll(logs, `"confirmed":1267`, `"confirmed":1266`)}
-	for _, replacement := range []string{brokerNegotiationEOF, terminal + " context deadline exceeded", terminal + "\ncontext deadline exceeded", " " + terminal, terminal + " ", "poll source: TLS handshake failed"} {
+	for _, replacement := range []string{brokerNegotiationEOF, strings.ReplaceAll(terminal, brokerNegotiationEOF, networkFirstResponseEOF), terminal + " context deadline exceeded", terminal + "\ncontext deadline exceeded", " " + terminal, terminal + " ", "poll source: TLS handshake failed"} {
 		changedLogs = append(changedLogs, strings.ReplaceAll(logs, terminal, replacement))
 	}
 	save := "save progress: " + brokerNegotiationEOF

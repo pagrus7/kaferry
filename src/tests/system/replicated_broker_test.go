@@ -329,7 +329,7 @@ func brokerTerminalFailure(logs string) (string, bool) {
 		if line == "" || json.Valid([]byte(line)) {
 			continue
 		}
-		if strings.HasPrefix(line, "shutdown timed out while ") || strings.Contains(line, brokerNegotiationEOF) {
+		if strings.HasPrefix(line, "shutdown timed out while ") || strings.Contains(line, brokerNegotiationEOF) || strings.Contains(line, networkFirstResponseEOF) {
 			return line, false
 		}
 		known := false
