@@ -12,7 +12,7 @@ from unittest.mock import patch
 from tools.ci.suites import REPLICATED_CASES, fault_timeout_catalog
 from tools.qualification.replicated_results import (EXACT_SCOPE, NEGOTIATION_EOF,
                                                   SAMPLED_SCOPE, SOURCE_OPERATION_EOFS, broker_case, network_case, collect)
-from tools.qualification.broker_lifecycle import FORCED_COPY_PHASES
+from tools.qualification.broker_lifecycle import FORCED_COPY_PHASES, binds_before, load_lifecycle
 from tools.qualification.broker_readiness import CRITERION, admin
 
 FORCED_SAVE_EXIT = next(key for key, phase in FORCED_COPY_PHASES.items() if phase == "saving progress")
@@ -753,6 +753,32 @@ class NetworkResultsTest(unittest.TestCase):
                 self.assertTrue(result['worker_measurements'][1]['lifetime_highwater_available'])
         with self.assertRaises(ValueError):
             self.validate('latency',lambda c,s:c.update(exact_lifetime_work_caps_qualified=False))
+
+    def test_whole_outage_hard_exit_requires_byte_exact_terminal_line(self):
+        # Given valid physical proof, when only terminal whitespace changes and
+        # all raw/lifecycle hashes are updated, normalized lines and the healthy
+        # prefix still bind; only the literal terminal-byte gate must reject it.
+        for terminal in FORCED_COPY_PHASES:
+            for leading, trailing in ((b' ',b''),(b'',b' ')):
+                def artifacts(directory,case):
+                    worker = case['worker_measurements'][0]
+                    witness = json.loads((directory/worker['lifecycle']['observations']).read_text())
+                    path = directory/witness['raw_log']['observations']
+                    original = path.read_bytes()
+                    changed = original.replace(terminal.encode()+b'\n',leading+terminal.encode()+trailing+b'\n')
+                    self.assertNotEqual(original,changed)
+                    path.write_bytes(changed)
+                    def edit(witness):
+                        witness['raw_log']['sha256'] = checksum(changed)
+                        witness['raw_log_bytes'] = len(changed)
+                    rewrite_lifecycle(directory,worker,edit)
+                    retained,raw = load_lifecycle(directory,worker)
+                    self.assertEqual([terminal],retained['terminal_lines'])
+                    self.assertTrue(binds_before(retained,raw,case['events'][0]['healthy']['after']))
+                    self.assertNotIn(b'\n'+terminal.encode()+b'\n',b'\n'+raw)
+                with self.subTest(terminal=terminal,leading=leading,trailing=trailing),self.assertRaisesRegex(
+                        ValueError,'unavailable lifetime highwater requires the bound active forced-copy exit'):
+                    self.validate('destination-outage',lambda c,s:network_hard_exit(c,terminal),artifacts)
 
     def test_whole_outage_hard_exit_requires_frozen_context_and_truthful_cap_scope(self):
         # Given rehashed real-format lifecycle/raw files, when scope, catalog,

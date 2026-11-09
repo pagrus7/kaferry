@@ -228,7 +228,8 @@ def network_rss_matches(worker, witness):
 
 def network_forced_copy_failure(case, worker, witness, raw):
     if (case['id'] != 'network/destination-outage' or len(case['worker_measurements']) != 2 or worker['lifetime'] != 1 or
-            worker['terminal_error'] not in FORCED_COPY_PHASES or witness['terminal_lines'] != [worker['terminal_error']]):
+            worker['terminal_error'] not in FORCED_COPY_PHASES or witness['terminal_lines'] != [worker['terminal_error']] or
+            ('\n'+worker['terminal_error']+'\n').encode() not in b'\n'+raw):
         return False
     event = case['events'][0]
     fault, before = event['fault'], event['healthy']['after']
