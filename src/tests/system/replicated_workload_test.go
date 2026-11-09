@@ -158,7 +158,7 @@ func startReplicatedDelayedPublisher(t *testing.T, reject bool) replicatedDelaye
 	publisher := startReplicatedBrokerPublisher(ctx, client, "source", 5*time.Second)
 	t.Cleanup(func() { unblock(); unblockOther(); publisher.stop() })
 	require.Eventually(t, func() bool {
-		return delayed.Load() && slices.Max(publisher.snapshot().Acknowledged) >= 6
+		return delayed.Load() && (!reject || otherDelayed.Load()) && slices.Max(publisher.snapshot().Acknowledged) >= 6
 	}, 3*time.Second, 5*time.Millisecond)
 	before := publisher.snapshot()
 	require.Zero(t, before.Acknowledged[0])
@@ -183,6 +183,30 @@ func (s replicatedDelayedPublisher) reconcile(t *testing.T, state replicatedPubl
 		total += count
 	}
 	return total
+}
+
+func (s replicatedDelayedPublisher) stopWhileHeld(t *testing.T) <-chan replicatedPublishing {
+	t.Helper()
+	cancelled := make(chan struct{})
+	var once sync.Once
+	cancel := s.publisher.cancel
+	s.publisher.cancel = func() {
+		cancel()
+		once.Do(func() { close(cancelled) })
+	}
+	stopped := make(chan replicatedPublishing, 1)
+	go func() { stopped <- s.publisher.stop() }()
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not cancel publication while its response was held")
+	}
+	select {
+	case <-stopped:
+		t.Fatal("stop abandoned an uncertain offer before its response was released")
+	case <-time.After(100 * time.Millisecond):
+	}
+	return stopped
 }
 
 func TestReplicatedBrokerPublisherCatchesUpDelayedSchedule(t *testing.T) {
@@ -221,17 +245,19 @@ func TestReplicatedBrokerPublisherCancellationDrainsDelayedOffers(t *testing.T) 
 	// Given unoffered schedule debt and one uncertain publication per partition.
 	s := startReplicatedDelayedPublisher(t, false)
 	// When cancellation stops intake, it must still join the existing writes.
-	s.publisher.cancel()
-	select {
-	case <-s.publisher.done:
-		t.Fatal("cancellation abandoned an uncertain offer")
-	default:
-	}
+	stopped := s.stopWhileHeld(t)
+	offered := s.publisher.snapshot().Offered
 	s.release()
-	state := s.publisher.stop()
+	var state replicatedPublishing
+	select {
+	case state = <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not join the released source acknowledgements")
+	}
 	// Then unoffered debt is discarded explicitly, with exact offered/ACK/source
 	// counts and no buffered or uncertain writes left after the bounded drain.
 	require.NoError(t, state.err)
+	require.Equal(t, offered, state.Offered)
 	require.EqualValues(t, 1, state.Offered[0], "stop must not start unoffered schedule debt")
 	require.Equal(t, state.Offered, state.Acknowledged)
 	s.reconcile(t, state)
@@ -243,16 +269,19 @@ func TestReplicatedBrokerPublisherErrorDrainsDelayedOffers(t *testing.T) {
 	// When the permanent error stops intake, retain it and join the other write.
 	s.release()
 	require.Eventually(t, func() bool { return s.publisher.snapshot().err != nil }, time.Second, 5*time.Millisecond)
-	select {
-	case <-s.publisher.done:
-		t.Fatal("permanent error abandoned another uncertain offer")
-	default:
-	}
+	stopped := s.stopWhileHeld(t)
+	offered := s.publisher.snapshot().Offered
 	s.releaseOther()
-	state := s.publisher.stop()
+	var state replicatedPublishing
+	select {
+	case state = <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not join the released healthy source acknowledgement")
+	}
 	// Then no debt starts after the error, rejected records have no fabricated
 	// acknowledgements and all healthy source counts match their completed ACKs.
 	require.Error(t, state.err)
+	require.Equal(t, offered, state.Offered)
 	require.Zero(t, state.Acknowledged[0])
 	require.EqualValues(t, 1, state.Offered[0])
 	s.reconcile(t, state)
