@@ -105,6 +105,9 @@ class ReplicatedHelpersTest(unittest.TestCase):
         expressions = ['.*'.join(re.escape(part).replace(r'\*', '[^/]*')
                                  for part in pattern.split('**')) for pattern in patterns]
         for changed, expected in [*((path, True) for path in sorted(helpers)),
+                                  ('tools/qualification/storage_census_images_test.py', True),
+                                  ('src/tests/qualification/matrix.json', True),
+                                  ('src/tests/replicated/storage.sh', True),
                                   ('src/tests/system/replicated_broker_readiness_test.go', True),
                                   ('src/tests/system/nested/replicated_helper.go', False),
                                   ('src/tests/replicated/nested/check.py', True),

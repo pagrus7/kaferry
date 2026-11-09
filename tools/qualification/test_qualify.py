@@ -856,7 +856,9 @@ raise SystemExit(code)
             # When its first deletion fails, then the census never reads contents or follows the link.
             _, error = self.diagnostic_cleanup(root, run, '''import os, pathlib, stat, sys
 assert sys.argv[1] == '-P' and sys.argv[3:5] == ['-maxdepth', '4']
-assert 'device=%D' in sys.argv[6]
+assert sys.argv[5:8] == ['-exec', 'stat', '-c']
+assert sys.argv[8] == 'type=%F device=%d inode=%i bytes=%s links=%h path=%n'
+assert sys.argv[9:] == ['--', '{}', '+']
 p = pathlib.Path(sys.argv[2])
 for entry in [p, *p.iterdir()]:
     info = entry.lstat()

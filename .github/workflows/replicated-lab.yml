@@ -17,6 +17,7 @@ on:
       - 'tools/qualification/broker_lifecycle.py'
       - 'tools/qualification/broker_readiness.py'
       - 'tools/qualification/test_qualify.py'
+      - 'tools/qualification/storage_census_images_test.py'
       - 'tools/qualification/network.py'
       - 'tools/qualification/test_network.py'
       - 'tools/qualification/test_endurance_topology.py'
@@ -81,6 +82,15 @@ jobs:
               assert env['KAFKA_CONTROLLER_QUORUM_VOTERS'] == ','.join(f'{node}@toxiproxy:{network.route_port(side, node, "controller")}' for node in range(1, 4))
           assert services['source-1']['environment']['CLUSTER_ID'] != services['destination-1']['environment']['CLUSTER_ID']
           PY
+      - name: Check cleanup diagnostics in pinned images without brokers
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          from tools.qualification.storage_census_images_test import CENSUS_IMAGES
+          for image in CENSUS_IMAGES:
+              subprocess.run(['docker', 'pull', image], check=True)
+          PY
+          python3 -m unittest -v tools.qualification.storage_census_images_test
       - name: Install the independent checker and build candidate
         id: candidate
         shell: bash
