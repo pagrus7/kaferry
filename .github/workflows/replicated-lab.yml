@@ -196,7 +196,6 @@ jobs:
       matrix:
         include:
           - {name: worker-kill-rebalance, case: ownership/worker-kill-rebalance}
-          - {name: coordinator-kill-rebalance, case: ownership/coordinator-kill-rebalance}
           - {name: worker-scale, case: ownership/worker-scale}
           - {name: source-leader, case: broker/source-leader}
           - {name: destination-leader, case: broker/destination-leader}

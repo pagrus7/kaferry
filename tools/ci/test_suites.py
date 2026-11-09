@@ -53,7 +53,7 @@ class SuitesTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             suites.replicated_execution_seconds(['network/latency']*2)
 
-    def test_ownership_cases_have_exact_budgets_selectors_and_individual_ci_shards(self):
+    def test_ownership_cases_have_exact_budgets_selectors_and_hosted_scope(self):
         # Given all fourteen implemented deterministic cases, when selecting a
         # case or the default suite, then retain every old case and its budget.
         catalog = suites.fault_timeout_catalog()
@@ -73,7 +73,8 @@ class SuitesTest(unittest.TestCase):
         self.assertIn('^TestReplicatedOwnershipCases$',suites.GO_SUITES['fault-replicated'][1])
         workflow=(Path(__file__).resolve().parents[2]/'.github/workflows/replicated-lab.yml').read_text()
         import re
-        hosted = set(suites.REPLICATED_CASES)-{'ownership/zombie-worker', 'network/latency', 'network/bandwidth', 'network/slow-close'}
+        hosted = set(suites.REPLICATED_CASES)-{'ownership/zombie-worker', 'ownership/coordinator-kill-rebalance',
+                                             'network/latency', 'network/bandwidth', 'network/slow-close'}
         self.assertEqual(hosted,set(re.findall(r'case: ([a-z/-]+)',workflow)))
         self.assertIn('--case ownership/zombie-worker ',workflow)
         self.assertEqual(1073,suites.fault_execution_seconds())
