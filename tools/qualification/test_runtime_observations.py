@@ -2,6 +2,7 @@
 
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import sys
 import tempfile
@@ -35,16 +36,20 @@ elif sys.argv[1] == 'inspect':
                    log=[dict(start='2026-11-09T00:00:00Z', end='2026-11-09T00:00:00.1Z', exit_code=0, output='PRIVATE')]))
         print(json.dumps(row), flush=True)
 elif sys.argv[1] == 'stats':
+    def stats_row(identifier):
+        return json.dumps(dict(ID=identifier, CPUPerc='1.5%', MemUsage='128MiB / 1GiB', MemPerc='12.5%',
+                               NetIO='1MB / 2MB', BlockIO='0B / 3MB', PIDs='12', Name='PRIVATE'))
     if options.get('ignore_term'):
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    if options.get('oversized'):
+    if 'stats_lines' in options:
+        for line in options['stats_lines']:
+            print(line.replace('RECORD', stats_row(ids[0])), flush=True)
+    elif options.get('oversized'):
         print('x' * (128 * 1024), flush=True)
     else:
         while True:
             for identifier in ids:
-                row = dict(ID=identifier, CPUPerc='1.5%', MemUsage='128MiB / 1GiB', MemPerc='12.5%',
-                           NetIO='1MB / 2MB', BlockIO='0B / 3MB', PIDs='12', Name='PRIVATE')
-                print(json.dumps(row), flush=True)
+                print(stats_row(identifier), flush=True)
             time.sleep(.02)
     time.sleep(30)
 else:
@@ -66,6 +71,12 @@ class RuntimeObservationsTest(unittest.TestCase):
             self.assertLess(time.monotonic(), deadline, 'diagnostic observation did not arrive')
             time.sleep(.01)
 
+    @contextmanager
+    def prepared_fixture(self, **options):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            yield root, self.fixture(root, **options)
+
     def assert_joined(self, root):
         processes = [json.loads(line) for line in (root / 'processes.jsonl').read_text().splitlines()]
         for process in processes:
@@ -76,9 +87,7 @@ class RuntimeObservationsTest(unittest.TestCase):
 
     def test_owned_measurements_exclude_private_fields_and_join_before_return(self):
         # Given seven owned fixture containers and a live stream.
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            env = self.fixture(root, ignore_term=True)
+        with self.prepared_fixture(ignore_term=True) as (root, env):
             # When sampling ends normally, then every child is reaped and only
             # selected resource/health fields reach bounded retained output.
             with runtime_observations(root, ['docker', 'compose', '-p', 'owned'], env) as summary:
@@ -103,6 +112,37 @@ class RuntimeObservationsTest(unittest.TestCase):
                 self.assertEqual('unavailable', summary['status'])
             self.assertIn('owned replicated fixture', summary['errors'][0])
             self.assertFalse(any(row['args'][0] == 'stats' for row in self.assert_joined(root)))
+
+    def test_docker_stats_cursor_prefixes_and_control_only_lines(self):
+        # Given the cursor controls emitted by the real Docker stats stream,
+        # including refresh prefixes and separate erase-only lines.
+        lines = ['\x1b[HRECORD\x1b[K', '\x1b[K', '\x1b[J\x1b[HRECORD\x1b[K\x1b[J', '\x1b[K', '\x1b[J',
+                 '\x1b[K\x1b[J\x1b[HRECORD', '\x1b[J']
+        with self.prepared_fixture(stats_lines=lines) as (root, env):
+            # When decoding, then retain all three actual measurements and
+            # discard only recognized cursor controls at line boundaries.
+            with runtime_observations(root, ['docker', 'compose', '-p', 'owned'], env) as summary:
+                self.wait_for(lambda: summary['errors'] or summary['rows'] >= 5)
+                self.assertFalse(summary['errors'])
+            rows = [json.loads(line) for line in (root / 'replicated-runtime.jsonl').read_text().splitlines()]
+            self.assertEqual(3, sum(row['kind'] == 'stats' for row in rows))
+            self.assertEqual('completed', summary['status'])
+            self.assert_joined(root)
+
+    def test_unknown_controls_and_malformed_stats_remain_diagnostic_errors(self):
+        # Given an unsupported escape, malformed JSON or a daemon error.
+        for line in ('\x1b[2JRECORD', '\x1b[31mRECORD', '\x1b[2J', '\x1b[H{"ID":',
+                     '\x1b[JError response from daemon: unavailable', '{"ID":"x\x1b[K"}'):
+            with self.subTest(line=line), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                env = self.fixture(root, stats_lines=[line])
+                # When parsing, then no broad ANSI or invalid-row suppression
+                # can turn the malformed stream into completed measurements.
+                with runtime_observations(root, ['docker', 'compose', '-p', 'owned'], env) as summary:
+                    self.wait_for(lambda: summary['errors'])
+                self.assertEqual('incomplete', summary['status'])
+                self.assertTrue(summary['errors'][0].startswith('stats: '))
+                self.assert_joined(root)
 
     def test_row_and_wall_time_limits_stop_both_sampling_paths(self):
         for limit, value, expected in [('MAX_ROWS', 6, 'rows'), ('MAX_SECONDS', 1, 'seconds')]:

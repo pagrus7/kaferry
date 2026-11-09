@@ -151,6 +151,15 @@ class RuntimeObservations:
     def stats(self):
         try:
             for line in self.lines(['docker', 'stats', '--no-trunc', '--format', '{{json .}}', *self.ids], MAX_SECONDS):
+                # Docker redraws the stream even when stdout is a pipe. Remove
+                # only its cursor home/erase controls at line boundaries.
+                controls = ('\x1b[H', '\x1b[J', '\x1b[K')
+                while line.startswith(controls):
+                    line = line[3:]
+                while line.endswith(controls):
+                    line = line[:-3]
+                if not line:
+                    continue
                 row = json.loads(line)
                 if row['ID'] not in self.ids:
                     raise ValueError('stats returned an unowned container')
