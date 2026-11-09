@@ -40,6 +40,9 @@ jobs:
   smoke:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
     outputs:
       binary_sha256: ${{ steps.candidate.outputs.sha256 }}
     steps:
@@ -101,6 +104,21 @@ jobs:
           subprocess.run(['docker', 'pull', IMAGE], check=True)
           PY
           python3 -m unittest -v tools.qualification.proxy_port_reservation_images_test
+      - name: Publish proxy probe Go coverage
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: build-results/proxy-port-reservation/coverage.out
+          disable_search: true
+          flags: go
+          use_oidc: true
+          version: v11.3.1
+          fail_ci_if_error: true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: replicated-proxy-probe-coverage
+          path: build-results/proxy-port-reservation
+          retention-days: 14
       - name: Install the independent checker and build candidate
         id: candidate
         shell: bash

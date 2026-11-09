@@ -77,7 +77,7 @@ The same workflow checks source-port reservation in the pinned Toxiproxy image. 
 python3 -m unittest -v tools.qualification.proxy_port_reservation_images_test
 ```
 
-This broker-free check uses disposable private network namespaces. A finite test-only source-port pool reproduces the unreserved collision, then verifies the default and isolated project reservations against the running kernel while upstream sockets remain open.
+This broker-free check uses disposable private network namespaces. A finite test-only source-port pool reproduces the unreserved collision, then verifies the default and isolated project reservations against the running kernel while upstream sockets remain open. The instrumented probe retains raw Go counters and a coverage profile under `build-results/proxy-port-reservation/`; the workflow uploads that profile alongside the ordinary Go coverage.
 
 ### Test targets
 

@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -25,9 +26,24 @@ class ProxyPortReservationImagesTest(unittest.TestCase):
         cls.temporary = tempfile.TemporaryDirectory(prefix='kaferry-port-reservation-')
         cls.addClassCleanup(cls.temporary.cleanup)
         cls.binary = Path(cls.temporary.name) / 'portprobe'
+        cls.coverage = Path(cls.temporary.name) / 'coverage'
+        cls.coverage.mkdir(mode=0o777)
+        cls.coverage.chmod(0o777)
         env = dict(os.environ, CGO_ENABLED='0', GOOS='linux', GOARCH=architecture)
-        subprocess.run([env.get('GO', 'go'), 'build', '-trimpath', '-o', str(cls.binary),
+        subprocess.run([env.get('GO', 'go'), 'build', '-cover', '-trimpath', '-o', str(cls.binary),
                         './src/tests/replicated/portprobe'], cwd=ROOT, env=env, check=True, timeout=180)
+        cls.addClassCleanup(cls.write_coverage)
+
+    @classmethod
+    def write_coverage(cls):
+        output = Path(os.environ.get('KAFERRY_REPORT_DIR', ROOT / 'build-results')) / 'proxy-port-reservation' / uuid.uuid4().hex
+        output.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(cls.coverage, output / 'raw')
+        if not list((output / 'raw').glob('covmeta.*')) or not list((output / 'raw').glob('covcounters.*')):
+            raise AssertionError('instrumented proxy probe did not retain Go coverage counters')
+        subprocess.run([os.environ.get('GO', 'go'), 'tool', 'covdata', 'textfmt',
+                        '-i', str(output / 'raw'), '-o', str(output / 'coverage.out')], check=True, timeout=30)
+        shutil.copyfile(output / 'coverage.out', output.parent / 'coverage.out')
 
     def exercise(self, settings, expected):
         port = network.route_port('source', 3, 'worker3')
@@ -40,8 +56,11 @@ class ProxyPortReservationImagesTest(unittest.TestCase):
         for name, value in settings.items():
             command.extend(['--sysctl', f'{name}={value}'])
         container = subprocess.check_output(command+[network.IMAGE], text=True, timeout=10).strip()
+        coverage_ready = False
         try:
             subprocess.run(['docker', 'cp', str(self.binary), container+':/portprobe'], check=True, timeout=10)
+            subprocess.run(['docker', 'cp', str(self.coverage), container+':/coverage'], check=True, timeout=10)
+            coverage_ready = True
             subprocess.run(['docker', 'start', container], check=True, capture_output=True, timeout=10)
             with patch.dict(os.environ, KAFERRY_FIXTURE_PROJECT=project):
                 if expected:
@@ -51,7 +70,8 @@ class ProxyPortReservationImagesTest(unittest.TestCase):
                 else:
                     with self.assertRaisesRegex(ValueError, 'exact private listener reservation'):
                         network.reservation()
-            result = subprocess.run(['docker', 'exec', container, '/portprobe', str(port), expected],
+            result = subprocess.run(['docker', 'exec', '--env', 'GOCOVERDIR=/coverage',
+                                     container, '/portprobe', str(port), expected],
                                     text=True, capture_output=True, timeout=30)
             self.assertEqual(0, result.returncode, result.stdout+result.stderr)
             observed = json.loads(result.stdout)
@@ -60,7 +80,11 @@ class ProxyPortReservationImagesTest(unittest.TestCase):
             self.assertEqual(f'{port} {port+3}', observed['ephemeral_range'])
             return observed
         finally:
-            subprocess.run(['docker', 'rm', '--force', container], check=True, capture_output=True, timeout=15)
+            try:
+                if coverage_ready:
+                    subprocess.run(['docker', 'cp', container+':/coverage/.', str(self.coverage)], check=True, timeout=10)
+            finally:
+                subprocess.run(['docker', 'rm', '--force', container], check=True, capture_output=True, timeout=15)
 
     def test_unreserved_port_is_taken_and_proxy_cannot_rebind(self):
         # Given a disabled listener in a namespace with no reserved source ports.
