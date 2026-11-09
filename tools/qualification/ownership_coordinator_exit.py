@@ -1,19 +1,18 @@
-"""Recheck the two observed coordinator-loss exit phases against raw evidence."""
+"""Recheck coordinator-loss operation and pending-join phases against raw evidence."""
 
 import json
 
-from tools.qualification.replicated_results import NEGOTIATION_EOF
+from tools.qualification.replicated_results import NEGOTIATION_EOF, source_operation_eof
 from tools.qualification.fault_results import observation_path
 from tools.qualification.ownership_audit import commits, records, segments, stamp
 from tools.qualification.ownership_cases import (group_description, member_protocol,
                                                  require, route, snapshot)
 
-ESTABLISHED = 'established-source-save'
+ESTABLISHED = 'established-source-operation'
 JOINING = 'pending-group-join'
 SAVE = 'save progress: '+NEGOTIATION_EOF
 CLOSE = 'close Kafka input: '+NEGOTIATION_EOF
-VECTORS = {ESTABLISHED: [SAVE, SAVE, CLOSE],
-           JOINING: ['poll source: unable to join group session: '+NEGOTIATION_EOF, CLOSE]}
+JOIN = 'poll source: unable to join group session: '+NEGOTIATION_EOF
 
 
 def phase(log):
@@ -23,7 +22,9 @@ def phase(log):
             json.loads(line)
         except json.JSONDecodeError:
             terminal.append(line)
-    return next((name for name, vector in VECTORS.items() if terminal == vector), None)
+    if source_operation_eof('\n'.join(terminal)):
+        return ESTABLISHED
+    return JOINING if terminal in ([JOIN], [JOIN, CLOSE]) else None
 
 
 def protocol_cut(directory, case, fault):

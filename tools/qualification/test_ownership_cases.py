@@ -120,10 +120,10 @@ class OwnershipCasesTest(unittest.TestCase):
         else:
             coordinator=name == 'coordinator-kill-rebalance'
             original=worker(1,2,14 if restart else 71 if coordinator else 13.3,1 if restart else 0 if coordinator else -1,
-                            terminal='\n'.join(coordinator_exit.VECTORS[coordinator_exit.ESTABLISHED]) if eof else None,
+                            terminal='\n'.join((coordinator_exit.SAVE,coordinator_exit.SAVE,coordinator_exit.CLOSE)) if eof else None,
                             phase=coordinator_exit.ESTABLISHED if eof else None)
             worker(2,10,14.2 if eof else 70,1 if eof else 0,zero=eof,
-                   terminal='\n'.join(coordinator_exit.VECTORS[coordinator_exit.JOINING]) if eof else None,
+                   terminal='\n'.join((coordinator_exit.JOIN,coordinator_exit.CLOSE)) if eof else None,
                    phase=coordinator_exit.JOINING if eof else None)
             if restart:
                 worker(1,19.5,71)
@@ -325,6 +325,24 @@ class OwnershipCasesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'selected configuration'):
             self.validate(fixture)
 
+    def test_coordinator_operation_and_optional_join_cleanup_bind_full_recovery(self):
+        # Given the established operation stages and a peer whose close may
+        # succeed, each exact vector still needs the complete physical receipt.
+        save,close=coordinator_exit.SAVE,coordinator_exit.CLOSE
+        poll='poll source: '+coordinator_exit.NEGOTIATION_EOF
+        join='poll source: unable to join group session: '+coordinator_exit.NEGOTIATION_EOF
+        for established in ('\n'.join((save,save,close)), '\n'.join((poll,save,close))):
+            for pending in (join, join+'\n'+close):
+                with self.subTest(established=established,pending=pending):
+                    fixture=self.fixture('coordinator-kill-rebalance',restart=True,eof=True)
+                    for index,terminal in enumerate((established,pending)):
+                        old=fixture[2]['worker_measurements'][index]['terminal_error']
+                        self.rebound_exit_log(fixture,index,lambda raw:raw.replace(old,terminal))
+                    self.rebound_exit_log(fixture,0,lambda raw:raw.replace('"submitted": 10','"submitted": 1521').replace(
+                        '"confirmed": 10','"confirmed": 1521').replace('"peak_uncommitted_records": 5','"peak_uncommitted_records": 344').replace(
+                        '"peak_uncommitted_bytes": 100','"peak_uncommitted_bytes": 787059'),mirror_summary=True)
+                    self.assertEqual(4,len(self.validate(fixture)['ownership_exposure']['worker_measurements']))
+
     def coordinator_driver_stop(self, fixture):
         directory,case=fixture[1],fixture[2]
         worker=case['worker_measurements'][1]
@@ -336,12 +354,36 @@ class OwnershipCasesTest(unittest.TestCase):
         path.write_text(json.dumps(witness))
         worker['lifecycle']['sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
 
+    def test_coordinator_operation_stages_preserve_physical_progress_and_cap_gates(self):
+        # Given rehashed poll/save/close and join-without-close lifetimes, none
+        # of their protocol, physical-window or resource gates becomes optional.
+        def erase_progress(rows):
+            for row in rows:
+                if row['requestHeader']['clientId'].endswith('worker1') and row['requestHeader']['requestApiKeyName']=='OFFSET_COMMIT':
+                    row['request']['topics'][0]['partitions'][0]['committedOffset']='0'
+        for change in (
+                lambda f:self.rebound_exit_time(f,0,13.1),
+                lambda f:self.rebound_exit_time(f,0,17.5),
+                lambda f:self.move_birth(f,0,5.5),
+                lambda f:self.rebound_protocol(f,erase_progress),
+                lambda f:self.rebound_exit_log(f,0,lambda raw:raw.replace('"confirmed": 10','"confirmed": 9'),mirror_summary=True),
+                lambda f:self.rebound_exit_log(f,0,lambda raw:raw.replace('"peak_uncommitted_records": 5','"peak_uncommitted_records": 1025'),mirror_summary=True),
+                lambda f:f[2]['worker_measurements'][0].update(sampled_peak_rss_bytes=513*1024**2),
+                lambda f:self.rebound_exit_log(f,1,lambda raw:raw+coordinator_exit.SAVE+'\n'),
+                lambda f:self.rebound_exit_log(f,1,lambda raw:raw+coordinator_exit.CLOSE+'\n'+coordinator_exit.CLOSE+'\n')):
+            fixture=self.fixture('coordinator-kill-rebalance',restart=True,eof=True)
+            self.rebound_exit_log(fixture,0,lambda raw:raw.replace(coordinator_exit.SAVE,'poll source: '+coordinator_exit.NEGOTIATION_EOF,1))
+            self.rebound_exit_log(fixture,1,lambda raw:raw.replace(coordinator_exit.CLOSE+'\n',''))
+            change(fixture)
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                self.validate(fixture)
+
     def test_coordinator_eof_vectors_and_physical_lifetimes_fail_closed(self):
         # Given faithful rehashed CLI and immutable sidecars, when any exact
         # vector or physical-window boundary differs, qualification rejects it.
         mutations=[
             lambda f:self.rebound_exit_log(f,0,lambda raw:raw.replace('save progress:',' save progress:',1)),
-            lambda f:self.rebound_exit_log(f,0,lambda raw:raw.replace(coordinator_exit.SAVE+'\n','',1)),
+            lambda f:self.rebound_exit_log(f,0,lambda raw:raw.replace(coordinator_exit.SAVE,coordinator_exit.CLOSE,1)),
             lambda f:self.rebound_exit_log(f,1,lambda raw:raw+'unknown failure\n'),
             lambda f:self.rebound_exit_log(f,1,lambda raw:raw.replace('poll source: unable to join group session: ','',1)),
             lambda f:self.rebound_exit_log(f,1,lambda raw:raw.replace(coordinator_exit.CLOSE,coordinator_exit.SAVE)),

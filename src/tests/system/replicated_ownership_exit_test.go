@@ -8,7 +8,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -21,7 +23,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-const ownershipEstablishedEOF = "established-source-save"
+const ownershipEstablishedEOF = "established-source-operation"
 const ownershipJoiningEOF = "pending-group-join"
 
 type ownershipCoordinatorBrokerAudit struct {
@@ -73,12 +75,13 @@ func ownershipEOFTerminal(logs string) (string, string) {
 		}
 	}
 	text := strings.Join(terminal, "\n")
-	save := "save progress: " + brokerNegotiationEOF
+	if brokerSourceOperationEOF(text) {
+		return text, ownershipEstablishedEOF
+	}
+	join := "poll source: unable to join group session: " + brokerNegotiationEOF
 	closeInput := "close Kafka input: " + brokerNegotiationEOF
 	switch text {
-	case save + "\n" + save + "\n" + closeInput:
-		return text, ownershipEstablishedEOF
-	case "poll source: unable to join group session: " + brokerNegotiationEOF + "\n" + closeInput:
+	case join, join + "\n" + closeInput:
 		return text, ownershipJoiningEOF
 	default:
 		return "", ""
@@ -472,14 +475,24 @@ func rewriteOwnershipCoordinatorPrefix(t *testing.T, s *ownershipCase, old, new 
 }
 
 func TestOwnershipCoordinatorEOFRequiresRawBoundPhase(t *testing.T) {
-	for _, phase := range []string{ownershipEstablishedEOF, ownershipJoiningEOF} {
-		t.Run(phase, func(t *testing.T) {
+	ownershipCoordinatorChildOutput(t)
+	save, closeInput := "save progress: "+brokerNegotiationEOF, "close Kafka input: "+brokerNegotiationEOF
+	join := "poll source: unable to join group session: " + brokerNegotiationEOF
+	for _, tc := range []struct{ name, phase, terminal string }{
+		{"established save", ownershipEstablishedEOF, save + "\n" + save + "\n" + closeInput},
+		{"established poll", ownershipEstablishedEOF, "poll source: " + brokerNegotiationEOF + "\n" + save + "\n" + closeInput},
+		{"pending close failure", ownershipJoiningEOF, join + "\n" + closeInput},
+		{"pending close success", ownershipJoiningEOF, join},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			// Given the exact observed vector and lifetime-bound pre-kill phase,
 			// when physical healing is known, then only its strict window qualifies.
-			s, w, exit, logs := ownershipCoordinatorFixture(t, phase)
+			s, w, exit, logs := ownershipCoordinatorFixture(t, tc.phase)
+			logs = strings.Replace(logs, strings.Join(brokerTerminals(logs), "\n"), tc.terminal, 1)
 			_, observed, valid := s.coordinatorEOF(w, exit, logs)
 			require.True(t, valid)
-			require.Equal(t, phase, observed)
+			require.Equal(t, tc.phase, observed)
+			ownershipCoordinatorOwnedChild(t, logs, tc.phase)
 			s.coordinatorFault.Event.Heal = time.Time{}
 			_, _, valid = s.coordinatorEOF(w, exit, logs)
 			require.True(t, valid, "early admission remains provisional")
@@ -509,6 +522,73 @@ func TestOwnershipCoordinatorEOFRequiresRawBoundPhase(t *testing.T) {
 			_, _, valid := s.coordinatorEOF(w, exit, logs)
 			require.False(t, valid)
 		})
+	}
+}
+
+func ownershipCoordinatorChildOutput(t *testing.T) {
+	t.Helper()
+	if os.Getenv("KAFERRY_OWNERSHIP_COORDINATOR_CHILD") != "1" {
+		return
+	}
+	_, err := io.WriteString(os.Stdout, os.Getenv("KAFERRY_OWNERSHIP_COORDINATOR_PROGRESS"))
+	require.NoError(t, err)
+	_, err = io.Copy(io.Discard, os.Stdin)
+	require.NoError(t, err)
+	_, err = io.WriteString(os.Stdout, os.Getenv("KAFERRY_OWNERSHIP_COORDINATOR_EXIT"))
+	require.NoError(t, err)
+	os.Exit(1)
+}
+
+func ownershipCoordinatorOwnedChild(t *testing.T, logs, phase string) {
+	t.Helper()
+	// Given a controlled child, when it emits the complete phase log and exits,
+	// the actual sole-Wait witness must retain the same grammar and work summary.
+	// The surrounding fixture separately checks the complete raw fault binding.
+	if phase == ownershipEstablishedEOF {
+		logs = strings.NewReplacer(`"submitted":10`, `"submitted":1521`, `"confirmed":10`, `"confirmed":1521`,
+			`"peak_uncommitted_records":2`, `"peak_uncommitted_records":344`, `"peak_uncommitted_bytes":20`, `"peak_uncommitted_bytes":787059`).Replace(logs)
+	}
+	progress, tail, found := strings.Cut(logs, "\n")
+	require.True(t, found)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	child := &cliProcess{command: exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOwnershipCoordinatorEOFRequiresRawBoundPhase$"), done: make(chan struct{})}
+	child.command.Env = append(os.Environ(), "KAFERRY_OWNERSHIP_COORDINATOR_CHILD=1",
+		"KAFERRY_OWNERSHIP_COORDINATOR_PROGRESS="+progress+"\n", "KAFERRY_OWNERSHIP_COORDINATOR_EXIT="+tail)
+	var err error
+	child.stdin, err = child.command.StdinPipe()
+	require.NoError(t, err)
+	birth := time.Now().UTC()
+	child.start(t)
+	require.Eventually(t, func() bool {
+		data, readErr := child.currentLogs()
+		return readErr == nil && data == progress+"\n"
+	}, 3*time.Second, time.Millisecond)
+	executable, err := os.ReadFile(child.command.Path)
+	require.NoError(t, err)
+	registry := &brokerCopy{t: t, caseID: "ownership/coordinator-kill-rebalance", directory: t.TempDir(), workers: []*cliProcess{child},
+		identities: []brokerLifetime{{Number: 1, PID: child.pid(), Started: birth, Binary: brokerDigest(string(executable))}}}
+	require.NoError(t, child.stdin.Close())
+	require.Error(t, child.wait())
+	exit, err := registry.retainExit(child)
+	require.NoError(t, err)
+	require.Equal(t, 1, exit.Witness.ExitCode)
+	require.Empty(t, exit.Witness.Signal)
+	require.Empty(t, exit.Witness.DriverIntent)
+	require.Equal(t, brokerDigest(logs), exit.Witness.Log.SHA256)
+	_, observed := ownershipEOFTerminal(child.logs())
+	require.Equal(t, phase, observed)
+	work, err := brokerWork(child.logs())
+	require.NoError(t, err)
+	require.NotNil(t, work.Summary)
+	require.Equal(t, work.Summary.Submitted, work.Summary.Confirmed)
+	if phase == ownershipEstablishedEOF {
+		require.Equal(t, 1521, work.Summary.Submitted)
+		require.Equal(t, 344, work.Summary.PeakRecords)
+		require.Equal(t, int64(787059), work.Summary.PeakBytes)
+	} else {
+		require.Zero(t, work.Summary.Submitted)
+		require.True(t, ownershipZeroWork(child.logs()))
 	}
 }
 
