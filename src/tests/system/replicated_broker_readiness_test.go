@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -242,7 +243,7 @@ func brokerProbeISR(probe brokerAPIProbe, partition int32, size int, leader int3
 func TestBrokerReadinessRequiresFreshPinnedMetadataWithinSharedBudget(t *testing.T) {
 	// Given a running owned broker, when its fresh API response is absent or
 	// invalid, then Docker health and a healthy peer cannot satisfy readiness.
-	for _, mode := range []string{"starting", "healthy", "ISR1", "stopped", "wrong owner", "wrong container", "malformed Docker", "API error", "wrong cluster", "wrong routes", "missing topic", "bad partition", "blocked target", "cancelled", "shared deadline"} {
+	for _, mode := range []string{"starting", "healthy", "ISR1", "worker route blocked", "stopped", "wrong owner", "wrong container", "malformed Docker", "API error", "wrong cluster", "wrong routes", "missing topic", "bad partition", "blocked target", "cancelled", "shared deadline"} {
 		t.Run(mode, func(t *testing.T) {
 			testBrokerReadiness(t, mode)
 		})
@@ -284,7 +285,7 @@ func testBrokerReadiness(t *testing.T, mode string) {
 	require.Equal(t, brokerReadinessCriterion, check.Criterion)
 	deadline, _ := ctx.Deadline()
 	require.Equal(t, deadline, check.Deadline)
-	if mode == "starting" || mode == "healthy" || mode == "ISR1" {
+	if mode == "starting" || mode == "healthy" || mode == "ISR1" || mode == "worker route blocked" {
 		require.True(t, ready, check.Error)
 		require.Len(t, check.Probes, 1)
 		probe := check.Probes[0]
@@ -304,6 +305,10 @@ func testBrokerReadiness(t *testing.T, mode string) {
 		require.False(t, ready)
 		require.NotEmpty(t, check.Error)
 	}
+	if mode == "worker route blocked" {
+		requireBlockedWorkerAPI(ctx, t)
+		require.True(t, check.Passed, "ADMIN readiness does not establish worker-route recovery")
+	}
 	if mode == "blocked target" {
 		require.Positive(t, nodes[2].Load())
 		require.Len(t, check.Probes, 1)
@@ -311,11 +316,26 @@ func testBrokerReadiness(t *testing.T, mode string) {
 	}
 	if mode == "shared deadline" {
 		require.Len(t, check.Probes, 3)
+		for id := 1; id <= 3; id++ {
+			require.Positive(t, nodes[id].Load(), "each selected broker must receive its own request before the shared deadline")
+		}
 		require.Less(t, elapsed, time.Second)
 		for _, probe := range check.Probes {
 			require.NotEmpty(t, probe.Error)
 		}
 	}
+}
+
+func requireBlockedWorkerAPI(ctx context.Context, t *testing.T) {
+	t.Helper()
+	worker := kfake.MustCluster(kfake.NumBrokers(1))
+	t.Cleanup(worker.Close)
+	worker.ControlKey(int16(kmsg.Metadata), func(kmsg.Request) (kmsg.Response, error, bool) { worker.KeepControl(); return nil, nil, true })
+	client, err := kgo.NewClient(kgo.SeedBrokers(worker.ListenAddrs()...))
+	require.NoError(t, err)
+	t.Cleanup(client.Close)
+	_, err = client.Request(ctx, kmsg.NewPtrMetadataRequest())
+	require.ErrorIs(t, err, context.DeadlineExceeded, "independent worker-route API remains blocked despite successful ADMIN response")
 }
 
 func controlBrokerReadiness(cluster *kfake.Cluster, routes []string, mode string, nodes *[4]atomic.Int32) {
