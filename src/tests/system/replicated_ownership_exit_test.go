@@ -67,7 +67,10 @@ func (s *ownershipCase) captureCoordinatorAudit() {
 	s.coordinatorAudit = cut
 }
 
-func ownershipEOFTerminal(logs string) (string, string) {
+func ownershipEOFTerminal(logs string, summary *copySummary) (string, string) {
+	if summary == nil || summary.Submitted != summary.Confirmed {
+		return "", ""
+	}
 	var terminal []string
 	for _, line := range strings.Split(strings.TrimSuffix(logs, "\n"), "\n") {
 		if !json.Valid([]byte(line)) {
@@ -75,17 +78,18 @@ func ownershipEOFTerminal(logs string) (string, string) {
 		}
 	}
 	text := strings.Join(terminal, "\n")
-	if brokerSourceOperationEOF(text) {
+	if summary.Submitted > 0 && brokerSourceOperationEOF(text) {
 		return text, ownershipEstablishedEOF
 	}
 	join := "poll source: unable to join group session: " + brokerNegotiationEOF
 	closeInput := "close Kafka input: " + brokerNegotiationEOF
 	switch text {
 	case join, join + "\n" + closeInput:
-		return text, ownershipJoiningEOF
-	default:
-		return "", ""
+		if summary.Submitted == 0 {
+			return text, ownershipJoiningEOF
+		}
 	}
+	return "", ""
 }
 
 func ownershipPhaseMember(state ownershipCaseObservation, route int) (ownershipMember, bool) {
@@ -98,12 +102,12 @@ func ownershipPhaseMember(state ownershipCaseObservation, route int) (ownershipM
 }
 
 func (s *ownershipCase) coordinatorEOF(worker *ownershipCaseWorker, exit *brokerExitWitness, logs string) (string, string, bool) {
-	terminal, phase := ownershipEOFTerminal(logs)
-	if phase == "" || !s.coordinatorExitBound(worker, exit, phase) {
+	work, ready, err := ownershipCaseWork(logs)
+	if err != nil || !ready {
 		return "", "", false
 	}
-	work, ready, err := ownershipCaseWork(logs)
-	if err != nil || !ready || work.Summary == nil || work.Summary.Submitted != work.Summary.Confirmed {
+	terminal, phase := ownershipEOFTerminal(logs, work.Summary)
+	if phase == "" || !s.coordinatorExitBound(worker, exit, phase) {
 		return "", "", false
 	}
 	member, ok := ownershipPhaseMember(s.states["at_kill"], worker.route)
@@ -478,12 +482,14 @@ func TestOwnershipCoordinatorEOFRequiresRawBoundPhase(t *testing.T) {
 	ownershipCoordinatorChildOutput(t)
 	save, closeInput := "save progress: "+brokerNegotiationEOF, "close Kafka input: "+brokerNegotiationEOF
 	join := "poll source: unable to join group session: " + brokerNegotiationEOF
-	for _, tc := range []struct{ name, phase, terminal string }{
-		{"established save", ownershipEstablishedEOF, save + "\n" + save + "\n" + closeInput},
-		{"established poll", ownershipEstablishedEOF, "poll source: " + brokerNegotiationEOF + "\n" + save + "\n" + closeInput},
+	cases := []struct{ name, phase, terminal string }{
 		{"pending close failure", ownershipJoiningEOF, join + "\n" + closeInput},
 		{"pending close success", ownershipJoiningEOF, join},
-	} {
+	}
+	for index, terminal := range sourceExitTerminals() {
+		cases = append(cases, struct{ name, phase, terminal string }{fmt.Sprintf("established form %d", index), ownershipEstablishedEOF, terminal})
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given the exact observed vector and lifetime-bound pre-kill phase,
 			// when physical healing is known, then only its strict window qualifies.
@@ -499,6 +505,45 @@ func TestOwnershipCoordinatorEOFRequiresRawBoundPhase(t *testing.T) {
 			s.coordinatorFault.Event.Heal = exit.Stopped
 			_, _, valid = s.coordinatorEOF(w, exit, logs)
 			require.False(t, valid, "physical-heal equality must reject during conclusive revalidation")
+		})
+	}
+	for _, phase := range []string{ownershipEstablishedEOF, ownershipJoiningEOF} {
+		for _, terminal := range []string{join, join + "\n" + closeInput} {
+			t.Run(phase+" cannot borrow opposite work phase "+strings.ReplaceAll(terminal, brokerNegotiationEOF, "EOF"), func(t *testing.T) {
+				// Given an ambiguous session error and its original raw protocol,
+				// when complete work counts switch phases, then neither proof can be borrowed.
+				s, worker, exit, logs := ownershipCoordinatorFixture(t, phase)
+				logs = strings.Replace(logs, strings.Join(brokerTerminals(logs), "\n"), terminal, 1)
+				if phase == ownershipEstablishedEOF {
+					logs = strings.NewReplacer(`"submitted":10`, `"submitted":0`, `"confirmed":8`, `"confirmed":0`,
+						`"confirmed":10`, `"confirmed":0`, `"pending_entries":2`, `"pending_entries":0`,
+						`"pending_estimated_bytes":20`, `"pending_estimated_bytes":0`, `"peak_uncommitted_records":2`, `"peak_uncommitted_records":0`,
+						`"peak_uncommitted_bytes":20`, `"peak_uncommitted_bytes":0`).Replace(logs)
+				} else {
+					logs = strings.NewReplacer(`"submitted":0`, `"submitted":10`, `"confirmed":0`, `"confirmed":10`).Replace(logs)
+				}
+				_, _, valid := s.coordinatorEOF(worker, exit, logs)
+				require.False(t, valid)
+			})
+		}
+	}
+	for name, change := range map[string]func(string) string{
+		"missing summary": func(logs string) string {
+			return strings.Join(slices.DeleteFunc(strings.Split(logs, "\n"), func(line string) bool { return strings.Contains(line, `"copy summary"`) }), "\n")
+		},
+		"missing count": func(logs string) string { return strings.ReplaceAll(logs, `,"confirmed":0`, "") },
+		"negative counts": func(logs string) string {
+			return strings.NewReplacer(`"submitted":0`, `"submitted":-1`, `"confirmed":0`, `"confirmed":-1`).Replace(logs)
+		},
+		"unconfirmed":        func(logs string) string { return strings.ReplaceAll(logs, `"submitted":0`, `"submitted":1`) },
+		"pending final save": func(logs string) string { return strings.Replace(logs, closeInput, save+"\n"+closeInput, 1) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Given the full pending protocol proof, when its raw work or terminal
+			// stages differ, then the contextual phase remains fail closed.
+			s, worker, exit, logs := ownershipCoordinatorFixture(t, ownershipJoiningEOF)
+			_, _, valid := s.coordinatorEOF(worker, exit, change(logs))
+			require.False(t, valid)
 		})
 	}
 	t.Run("established progress remains required", func(t *testing.T) {
@@ -576,11 +621,11 @@ func ownershipCoordinatorOwnedChild(t *testing.T, logs, phase string) {
 	require.Empty(t, exit.Witness.Signal)
 	require.Empty(t, exit.Witness.DriverIntent)
 	require.Equal(t, brokerDigest(logs), exit.Witness.Log.SHA256)
-	_, observed := ownershipEOFTerminal(child.logs())
-	require.Equal(t, phase, observed)
 	work, err := brokerWork(child.logs())
 	require.NoError(t, err)
 	require.NotNil(t, work.Summary)
+	_, observed := ownershipEOFTerminal(child.logs(), work.Summary)
+	require.Equal(t, phase, observed)
 	require.Equal(t, work.Summary.Submitted, work.Summary.Confirmed)
 	if phase == ownershipEstablishedEOF {
 		require.Equal(t, 1521, work.Summary.Submitted)

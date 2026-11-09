@@ -15,7 +15,7 @@ from tools.ci import suites
 from tools.qualification import ownership_cases as ownership
 from tools.qualification import ownership_coordinator_exit as coordinator_exit
 from tools.qualification import test_ownership_audit as audit_fixture
-from tools.qualification.replicated_results import collect
+from tools.qualification.replicated_results import SOURCE_OPERATION_EOFS, collect
 from tools.qualification.broker_readiness import CRITERION
 from tools.qualification.test_replicated_results import readiness
 
@@ -329,9 +329,9 @@ class OwnershipCasesTest(unittest.TestCase):
         # Given the established operation stages and a peer whose close may
         # succeed, each exact vector still needs the complete physical receipt.
         save,close=coordinator_exit.SAVE,coordinator_exit.CLOSE
-        poll='poll source: '+coordinator_exit.NEGOTIATION_EOF
         join='poll source: unable to join group session: '+coordinator_exit.NEGOTIATION_EOF
-        for established in ('\n'.join((save,save,close)), '\n'.join((poll,save,close))):
+        for primary,final_save,final_close in itertools.product(SOURCE_OPERATION_EOFS, ('','\n'+save), ('','\n'+close)):
+            established=primary+final_save+final_close
             for pending in (join, join+'\n'+close):
                 with self.subTest(established=established,pending=pending):
                     fixture=self.fixture('coordinator-kill-rebalance',restart=True,eof=True)
@@ -342,6 +342,54 @@ class OwnershipCasesTest(unittest.TestCase):
                         '"confirmed": 10','"confirmed": 1521').replace('"peak_uncommitted_records": 5','"peak_uncommitted_records": 344').replace(
                         '"peak_uncommitted_bytes": 100','"peak_uncommitted_bytes": 787059'),mirror_summary=True)
                     self.assertEqual(4,len(self.validate(fixture)['ownership_exposure']['worker_measurements']))
+
+    def test_ambiguous_session_eof_cannot_borrow_the_other_work_phase(self):
+        # Given either raw group phase and the same join diagnostic, when a
+        # rehashed summary changes phase, its original protocol cannot authorize it.
+        for index in (0,1):
+            for terminal in (coordinator_exit.JOIN, coordinator_exit.JOIN+'\n'+coordinator_exit.CLOSE):
+                fixture=self.fixture('coordinator-kill-rebalance',restart=True,eof=True)
+                old=fixture[2]['worker_measurements'][index]['terminal_error']
+                self.rebound_exit_log(fixture,index,lambda raw:raw.replace(old,terminal))
+                if index == 0:
+                    def swap(raw):
+                        return raw.replace('"submitted": 10','"submitted": 0').replace('"confirmed": 10','"confirmed": 0').replace(
+                            '"confirmed": 5','"confirmed": 0').replace('"pending_entries": 5','"pending_entries": 0').replace(
+                            '"pending_estimated_bytes": 100','"pending_estimated_bytes": 0').replace(
+                            '"peak_uncommitted_records": 5','"peak_uncommitted_records": 0').replace('"peak_uncommitted_bytes": 100','"peak_uncommitted_bytes": 0')
+                    phase=coordinator_exit.JOINING
+                else:
+                    def swap(raw):
+                        return raw.replace('"submitted": 0','"submitted": 10').replace('"confirmed": 0','"confirmed": 10')
+                    phase=coordinator_exit.ESTABLISHED
+                self.rebound_exit_log(fixture,index,swap,mirror_summary=True)
+                worker=fixture[2]['worker_measurements'][index]
+                counts=ownership.work((fixture[1]/worker['log']).read_text())
+                worker.update(coordinator_exit_phase=phase,sampled_max_pending_entries=counts[0],sampled_max_pending_estimated_bytes=counts[1])
+                with self.subTest(index=index,terminal=terminal),self.assertRaises(ValueError):
+                    self.validate(fixture)
+
+    def test_session_eof_requires_complete_all_confirmed_raw_summary(self):
+        # Given an ambiguous EOF and a fully rebound immutable lifecycle,
+        # incomplete or invalid summary counts cannot choose either phase.
+        for replacement in (None, {}, dict(submitted=-1,confirmed=-1), dict(submitted=1,confirmed=0),
+                            dict(submitted=True,confirmed=True), dict(submitted=0,confirmed=0.0)):
+            fixture=self.fixture('coordinator-kill-rebalance',restart=True,eof=True)
+            def change(raw):
+                lines=[]
+                for line in raw.splitlines():
+                    if line.startswith('{') and (row:=json.loads(line)).get('msg')=='copy summary':
+                        if replacement is None:
+                            continue
+                        row.pop('submitted')
+                        row.pop('confirmed')
+                        row.update(replacement)
+                        line=json.dumps(row)
+                    lines.append(line)
+                return '\n'.join(lines)+'\n'
+            self.rebound_exit_log(fixture,1,change)
+            with self.subTest(replacement=replacement),self.assertRaises(ValueError):
+                self.validate(fixture)
 
     def coordinator_driver_stop(self, fixture):
         directory,case=fixture[1],fixture[2]

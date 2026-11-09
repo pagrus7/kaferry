@@ -6,7 +6,7 @@ from tools.qualification.replicated_results import NEGOTIATION_EOF, source_opera
 from tools.qualification.fault_results import observation_path
 from tools.qualification.ownership_audit import commits, records, segments, stamp
 from tools.qualification.ownership_cases import (group_description, member_protocol,
-                                                 require, route, snapshot)
+                                                 require, route, snapshot, work)
 
 ESTABLISHED = 'established-source-operation'
 JOINING = 'pending-group-join'
@@ -15,16 +15,19 @@ CLOSE = 'close Kafka input: '+NEGOTIATION_EOF
 JOIN = 'poll source: unable to join group session: '+NEGOTIATION_EOF
 
 
-def phase(log):
+def phase(log, summary):
+    if (not isinstance(summary, dict) or type(summary.get('submitted')) is not int or
+            type(summary.get('confirmed')) is not int or summary['submitted'] != summary['confirmed']):
+        return None
     terminal = []
     for line in log.splitlines():
         try:
             json.loads(line)
         except json.JSONDecodeError:
             terminal.append(line)
-    if source_operation_eof('\n'.join(terminal)):
+    if summary['submitted'] > 0 and source_operation_eof('\n'.join(terminal)):
         return ESTABLISHED
-    return JOINING if terminal in ([JOIN], [JOIN, CLOSE]) else None
+    return JOINING if summary['submitted'] == 0 and terminal in ([JOIN], [JOIN, CLOSE]) else None
 
 
 def protocol_cut(directory, case, fault):
@@ -120,7 +123,7 @@ def validate(directory, case, rows, workers, fault, command):
     held = next(event for event in case['events'] if event.get('reason') == 'OS confirms held worker')
     for worker in candidates:
         log = (directory/worker['log']).read_text()
-        kind = phase(log)
+        kind = phase(log, work(log)[3])
         require(kind == worker['coordinator_exit_phase'] and worker['exit_code'] == 1 and
                 stamp(command['coordinator_kill_started']) < stamp(worker['stopped_at']) < stamp(fault['heal']),
                 'coordinator EOF phase or strict physical exit window differs')

@@ -298,7 +298,7 @@ def workers(directory, case, safety, identity):
             causes = ('NOT_COORDINATOR', 'COORDINATOR_NOT_AVAILABLE', 'COORDINATOR_LOAD_IN_PROGRESS', 'UNKNOWN_MEMBER_ID',
                       'ILLEGAL_GENERATION', 'REBALANCE_IN_PROGRESS', 'consumer group ownership unavailable for commit', 'context deadline exceeded')
             from tools.qualification.ownership_coordinator_exit import phase
-            observed_phase = phase(raw.decode('utf-8'))
+            observed_phase = phase(raw.decode('utf-8'), counts[3])
             known = all(any(cause in line for cause in causes) for line in counts[4].splitlines())
             require(counts[4] and counts[4] == worker['terminal_error'] and
                     ((observed_phase and case['id'] == 'ownership/coordinator-kill-rebalance' and
