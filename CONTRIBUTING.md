@@ -63,6 +63,14 @@ Run Python tools as modules; their tests live beside them:
 python3 -m unittest discover -s tools -t .
 ```
 
+The replicated fixture workflow checks cleanup diagnostics in the pinned default and newest broker images without starting Kafka. With Docker running and those images from [the catalog](src/tests/qualification/matrix.json) cached, repeat the check with:
+
+```sh
+python3 -m unittest -v tools.qualification.storage_census_images_test
+```
+
+This check runs isolated containers with no network and stays outside Docker-free Python test discovery. Missing images fail the check.
+
 ### Test targets
 
 [Makefile](Makefile) defines the commands. Start disposable brokers with `make broker` before integration, fault, load or soak tests, and remove them afterward with `make broker-down`. Before `make fault`, run `make qualification-setup` with the same Python major/minor version to install its independent librdkafka observer.

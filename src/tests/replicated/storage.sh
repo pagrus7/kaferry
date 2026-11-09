@@ -45,7 +45,7 @@ marker=$(printf 'kaferry-%s-v1\n%s\n%s' "$layout" "$project" "$run_id")
 deletion_diagnostics() {
     printf 'cleanup census: metadata only; 2s deadline, 65536-byte limit\n' >&2
     if ! command -v timeout >/dev/null || ! command -v head >/dev/null ||
-       ! command -v find >/dev/null || [ ! -x /bin/bash ]; then
+       ! command -v find >/dev/null || ! command -v stat >/dev/null || [ ! -x /bin/bash ]; then
         echo 'cleanup census unavailable: required fixture tools are missing' >&2
         return
     fi
@@ -54,7 +54,7 @@ deletion_diagnostics() {
         return
     fi
     if timeout -k 1 2 /bin/bash -o pipefail -c '
-        LC_ALL=C find -P "$1" -maxdepth 4 -printf "type=%y device=%D inode=%i bytes=%s links=%n path=%p\\n" 2>&1 |
+        LC_ALL=C find -P "$1" -maxdepth 4 -exec stat -c "type=%F device=%d inode=%i bytes=%s links=%h path=%n" -- {} + 2>&1 |
             head -c 65537
     ' census "$1" > "$census" 2>&1; then
         census_status=0
