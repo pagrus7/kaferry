@@ -2,12 +2,15 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
+import subprocess
 from urllib.request import Request, urlopen
 
 IMAGE = 'ghcr.io/shopify/toxiproxy:2.13.0@sha256:5d3dae09bc185dcc5ff6cf43abf6062a4a720aff0c4306a471e773acdcd107aa'
 API = 'http://127.0.0.1:48074'
 LISTENERS = ('internal', 'controller', 'admin', 'worker1', 'worker2', 'worker3')
+RESERVATION = 'net.ipv4.ip_local_reserved_ports'
 
 
 def route_port(side, node, listener):
@@ -30,6 +33,28 @@ def client_ports():
                  for listener in LISTENERS[2:] for node in range(1, 4))
 
 
+def reserved_ports():
+    ports = {8474}
+    ports.update(int(row['listen'].rsplit(':', 1)[1]) for row in routes())
+    return ','.join(str(port) for port in sorted(ports))
+
+
+def reservation():
+    project = os.environ.get('KAFERRY_FIXTURE_PROJECT', 'kaferry-replicated')
+    ids = subprocess.check_output(['docker', 'ps', '--quiet', '--no-trunc',
+        '--filter', f'label=com.docker.compose.project={project}',
+        '--filter', 'label=com.docker.compose.service=toxiproxy'], text=True, timeout=10).split()
+    if len(ids) != 1:
+        raise ValueError('replicated reservation requires one running proxy container')
+    template = '{"sysctls":{{json .HostConfig.Sysctls}},"network_mode":{{json .HostConfig.NetworkMode}}}'
+    observed = json.loads(subprocess.check_output(
+        ['docker', 'inspect', '--format', template, ids[0]], text=True, timeout=10))
+    mode = observed['network_mode']
+    if mode == 'host' or mode.startswith('container:') or (observed['sysctls'] or {}).get(RESERVATION) != reserved_ports():
+        raise ValueError('replicated proxy container lacks its exact private listener reservation')
+    return dict(container=ids[0], project=project, configured_ports=reserved_ports())
+
+
 def endpoints(side, worker=0):
     listener = f'worker{worker}' if worker else 'admin'
     return ','.join(f'127.0.0.1:{route_port(side, node, listener)}' for node in range(1, 4))
@@ -43,6 +68,7 @@ def request(method, path, value=None):
 
 
 def populate(output):
+    configured = reservation()
     # A fresh container is required: do not reset a previously owned fault state.
     if request('GET', '/proxies'):
         raise ValueError('replicated proxy container is not fresh')
@@ -54,6 +80,7 @@ def populate(output):
             observed[row['name']].get('toxics') for row in expected):
         raise ValueError('replicated proxy routes do not match the fixture')
     (output / 'proxy-routes.json').write_text(json.dumps(expected, indent=2) + '\n')
+    (output / 'proxy-reservation.json').write_text(json.dumps(configured, indent=2) + '\n')
 
 
 def matching_route(observed, expected):

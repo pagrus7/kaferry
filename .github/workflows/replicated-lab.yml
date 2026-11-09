@@ -18,6 +18,7 @@ on:
       - 'tools/qualification/broker_readiness.py'
       - 'tools/qualification/test_qualify.py'
       - 'tools/qualification/storage_census_images_test.py'
+      - 'tools/qualification/proxy_port_reservation_images_test.py'
       - 'tools/qualification/network.py'
       - 'tools/qualification/test_network.py'
       - 'tools/qualification/test_endurance_topology.py'
@@ -65,6 +66,7 @@ jobs:
           assert set(services) == brokers | {'toxiproxy'}
           assert len({services[name]['environment']['KAFKA_LOG_DIRS'] for name in brokers}) == 6
           assert services['toxiproxy']['image'] == network.IMAGE
+          assert services['toxiproxy']['sysctls'] == {network.RESERVATION: network.reserved_ports()}
           assert {port['published'] for port in services['toxiproxy']['ports']} == {str(port) for port in (*network.client_ports(), 48074)}
           for name in brokers:
               service = services[name]
@@ -91,6 +93,14 @@ jobs:
               subprocess.run(['docker', 'pull', image], check=True)
           PY
           python3 -m unittest -v tools.qualification.storage_census_images_test
+      - name: Check proxy listener reservations in the pinned image without brokers
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          from tools.qualification.network import IMAGE
+          subprocess.run(['docker', 'pull', IMAGE], check=True)
+          PY
+          python3 -m unittest -v tools.qualification.proxy_port_reservation_images_test
       - name: Install the independent checker and build candidate
         id: candidate
         shell: bash

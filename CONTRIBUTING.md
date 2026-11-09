@@ -71,6 +71,14 @@ python3 -m unittest -v tools.qualification.storage_census_images_test
 
 This check runs isolated containers with no network and stays outside Docker-free Python test discovery. Missing images fail the check.
 
+The same workflow checks source-port reservation in the pinned Toxiproxy image. With that image cached, run:
+
+```sh
+python3 -m unittest -v tools.qualification.proxy_port_reservation_images_test
+```
+
+This broker-free check uses disposable private network namespaces. A finite test-only source-port pool reproduces the unreserved collision, then verifies the default and isolated project reservations against the running kernel while upstream sockets remain open.
+
 ### Test targets
 
 [Makefile](Makefile) defines the commands. Start disposable brokers with `make broker` before integration, fault, load or soak tests, and remove them afterward with `make broker-down`. Before `make fault`, run `make qualification-setup` with the same Python major/minor version to install its independent librdkafka observer.
