@@ -207,10 +207,15 @@ func (a *replicatedAudit) captureFailedArtifact(ctx context.Context, target faul
 type boundedAuditOutput struct {
 	data     []byte
 	exceeded bool
+	limit    int
 }
 
 func (b *boundedAuditOutput) Write(data []byte) (int, error) {
-	n := min(len(data), auditCaptureLimit-len(b.data))
+	limit := b.limit
+	if limit == 0 {
+		limit = auditCaptureLimit
+	}
+	n := min(len(data), limit-len(b.data))
 	b.data = append(b.data, data[:n]...)
 	b.exceeded = b.exceeded || n < len(data)
 	return len(data), nil

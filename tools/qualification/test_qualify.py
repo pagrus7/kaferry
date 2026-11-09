@@ -531,6 +531,27 @@ class MatrixTest(unittest.TestCase):
                         resolve_run(args, {}, None)
                     execute.assert_not_called()
 
+    def test_replicated_broker_selection_and_all_case_budget(self):
+        # Given each implemented broker case, when selected, then run its exact
+        # subtest and retain its complete119s recovery window in both deadlines.
+        from tools.ci.suites import REPLICATED_CASES
+        with tempfile.TemporaryDirectory() as temporary:
+            for selected in [*REPLICATED_CASES, None]:
+                with self.subTest(selected=selected):
+                    args = self.suite_args(Path(temporary), 'fault-replicated', source='4.4.0', destination='4.4.0', case=selected)
+                    receipt = {}
+                    with patch('tools.qualification.qualify.capture', return_value='fixture'), \
+                         patch('tools.qualification.fault_results.configure', side_effect=lambda env: env.update(KAFERRY_ORACLE_RUN='fresh')):
+                        spec = resolve_run(args, receipt, None)
+                    expected = [REPLICATED_CASES[selected]] if selected else list(REPLICATED_CASES.values())
+                    self.assertEqual(expected, spec.expected)
+                    self.assertEqual([selected] if selected else list(REPLICATED_CASES), receipt['case_selection'])
+                    seconds = 240 if selected == 'ownership/zombie-worker' else 359 if selected else 2035
+                    self.assertEqual(seconds+60, spec.timeout)
+                    self.assertIn('-timeout='+('4m' if selected == 'ownership/zombie-worker' else str(seconds)+'s'), spec.command)
+                    if selected:
+                        self.assertEqual('/'.join('^'+part+'$' for part in expected[0].split('/')), spec.command[spec.command.index('-run')+1])
+
     def test_broker_volume_rejects_unsupported_suites_names_and_old_replicated_images(self):
         with tempfile.TemporaryDirectory() as temporary:
             # Given explicit storage requests, when invalid, then no Docker command is issued.

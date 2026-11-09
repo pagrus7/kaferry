@@ -1,5 +1,6 @@
 """Fast checks must execute the tagged helper selection and reject missing passes."""
 
+import ast
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,23 @@ ROOT = Path(__file__).resolve().parents[2]
 HELPERS = (
     'TestReplicatedPublisherAcknowledgesAllPartitionsAndStops',
     'TestReplicatedPublisherStopsAfterRejectedBatch',
+    'TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites',
+    'TestBrokerFaultRestartRequiresClassifiedTerminalFailure',
+    'TestBrokerCurrentProgressDoesNotWaitForChildExit',
+    'TestBrokerCurrentProgressRequiresReadableCompleteEvidence',
+    'TestBrokerCurrentProgressRejectsMalformedCompleteRows',
+    'TestBrokerRestartRechecksFailureAfterHealthObservation',
+    'TestBrokerNegotiationEOFRequiresAffectedPlainCopyAndEveryUnconfirmedError',
+    'TestBrokerForcedCopyExitLeavesLifetimeHighwaterUnavailable',
+    'TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions',
+    'TestBrokerISRSelectionRequiresActiveSameLeaderBacklog',
+    'TestBrokerPollJournalRetainsFailedQueryAndHealthTail',
+    'TestBrokerHealthInspectionRetainsBoundedProbeEvidence',
+    'TestBrokerReadinessRequiresFreshPinnedMetadataWithinSharedBudget',
+    'TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss',
+    'TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound',
+) + (
+    # Audit and zombie helpers retain their independent measurements.
     'TestReplicatedAuditFailureCleanupRetainsDiagnostics',
     'TestReplicatedAuditFailureCleanupSkipsPassingCases',
     'TestReplicatedAuditFailureCaptureSharesDeadline',
@@ -62,8 +80,36 @@ class ReplicatedHelpersTest(unittest.TestCase):
                         self.assertIn(flag, args)
                     pattern = args[args.index('-run')+1]
                     self.assertTrue(all(re.fullmatch(pattern, name) for name in HELPERS))
-                    for excluded in ('TestReplicatedZombieWorker', 'TestReplicatedProxyRoutes', HELPERS[0]+'Extra'):
+                    for excluded in ('TestReplicatedZombieWorker', 'TestReplicatedProxyRoutes', 'TestBrokerCurrentLogChild', HELPERS[0]+'Extra'):
                         self.assertIsNone(re.fullmatch(pattern, excluded))
+
+    def test_broker_collector_imports_select_real_cases_on_single_file_changes(self):
+        # Given the real collector's broker helpers, when either alone changes,
+        # then the workflow's PR path filter selects the real replicated jobs.
+        collector = ast.parse((ROOT/'tools/qualification/replicated_results.py').read_text())
+        helpers = {node.module.replace('.', '/')+'.py' for node in ast.walk(collector)
+                   if isinstance(node, ast.ImportFrom) and node.module and
+                   node.module.startswith('tools.qualification.broker_')}
+        self.assertGreaterEqual(len(helpers), 2)
+        workflow = (ROOT/'.github/workflows/replicated-lab.yml').read_text()
+        section = re.search(r"(?m)^  pull_request:\n    paths:\n((?:      - '[^']+'\n)+)(?=permissions:\n)", workflow)
+        self.assertIsNotNone(section, 'read the actual PR paths, not another event or job')
+        patterns = re.findall(r"      - '([^']+)'", section[1])
+        # This workflow uses only positive literals, * and terminal **. GitHub
+        # matches the whole rooted path; * excludes slash and ** includes it.
+        # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#filter-pattern-cheat-sheet
+        for pattern in patterns:
+            self.assertNotRegex(pattern, r'[!?+\[\]]')
+            self.assertTrue('**' not in pattern or pattern.endswith('**'))
+        expressions = ['.*'.join(re.escape(part).replace(r'\*', '[^/]*')
+                                 for part in pattern.split('**')) for pattern in patterns]
+        for changed, expected in [*((path, True) for path in sorted(helpers)),
+                                  ('src/tests/system/replicated_broker_readiness_test.go', True),
+                                  ('src/tests/system/nested/replicated_helper.go', False),
+                                  ('src/tests/replicated/nested/check.py', True),
+                                  ('docs/design/qualification.md', False)]:
+            with self.subTest(single_file_change=changed):
+                self.assertEqual(expected, any(re.fullmatch(expression, changed) for expression in expressions))
 
     def test_local_and_hosted_fast_checks_share_the_target(self):
         # Given the two fast entrypoints, when inspected, then both delegate the

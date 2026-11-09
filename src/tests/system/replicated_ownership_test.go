@@ -142,7 +142,7 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(metadata.Close)
 	lab := &faults.Lab{Project: os.Getenv("KAFERRY_FIXTURE_PROJECT"), API: os.Getenv("KAFERRY_TOXIPROXY_API"), Metadata: metadata}
-	source, destination := metadata["source"], metadata["destination"]
+	source, destination := metadata["source"].Client, metadata["destination"].Client
 	prefix := fmt.Sprintf("kaferry-zombie-%d", time.Now().UnixNano())
 	src, dst, group := prefix+"-source", prefix+"-destination", prefix+"-group"
 	replicatedTopic(ctx, t, source, src)

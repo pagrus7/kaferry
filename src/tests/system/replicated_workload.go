@@ -6,13 +6,35 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"sync"
+	"testing"
 	"time"
 
+	"github.com/pagrus7/kaferry/src/tests/system/faults"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 const replicatedPartitions = 24
+
+func replicatedBrokerProducer(t *testing.T, brokers string, delivery time.Duration) *kgo.Client {
+	t.Helper()
+	// The dedicated fixture proves its plain connection settings before faults.
+	// A severed first API request must retry within the existing delivery bound,
+	// rather than treating the EOF as a guessed TLS/SASL configuration error.
+	// Restore the SDK-equivalent unlimited safe retries instead of the shared
+	// fixture's five-try cap; the existing delivery bound still limits each write.
+	diagnostic := &faults.SDKDiagnostics{}
+	client := fixtureClient(t, brokers, kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.MaxBufferedRecords(2*replicatedPartitions), kgo.RecordDeliveryTimeout(delivery),
+		kgo.AllowIdempotentProduceCancellation(), kgo.AlwaysRetryEOF(), kgo.RecordRetries(math.MaxInt), kgo.WithLogger(diagnostic))
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("source publisher SDK record_retries=%v metadata_min_age=%v delivery_timeout=%v:\n%s", client.OptValue(kgo.RecordRetries), client.OptValue(kgo.MetadataMinAge), client.OptValue(kgo.RecordDeliveryTimeout), diagnostic.Snapshot())
+		}
+	})
+	return client
+}
 
 // replicatedPublisher publishes one record per partition every 100ms. The
 // acknowledgement counts, rather than the scheduler, gate scenario transitions.
@@ -25,13 +47,92 @@ type replicatedPublisher struct {
 }
 
 type replicatedPublishing struct {
-	Observed      time.Time `json:"observed"`
-	Started       time.Time `json:"started"`
-	Stopped       time.Time `json:"stopped"`
-	Acknowledged  []int64   `json:"acknowledged_by_partition"`
-	Batches       int       `json:"completed_batches"`
-	MaxGapSeconds float64   `json:"max_acknowledgement_gap_seconds"`
-	err           error
+	Observed           time.Time `json:"observed"`
+	Started            time.Time `json:"started"`
+	Stopped            time.Time `json:"stopped"`
+	Acknowledged       []int64   `json:"acknowledged_by_partition"`
+	Offered            []int64   `json:"offered_by_partition,omitempty"`
+	Batches            int       `json:"completed_batches,omitempty"`
+	MaxGapSeconds      float64   `json:"max_acknowledgement_gap_seconds,omitempty"`
+	MaxOfferGapSeconds float64   `json:"max_offer_gap_seconds,omitempty"`
+	err                error
+}
+
+// Broker faults can delay one source leader's acknowledgements. Keep one
+// bounded offer per partition outstanding so healthy partitions still publish;
+// stop joins every callback, including uncertain writes, before reconciliation.
+func startReplicatedBrokerPublisher(ctx context.Context, client *kgo.Client, topic string, delivery time.Duration) *replicatedPublisher {
+	ctx, cancel := context.WithCancel(ctx)
+	p := &replicatedPublisher{cancel: cancel, done: make(chan struct{}), state: replicatedPublishing{
+		Started: time.Now().UTC(), Acknowledged: make([]int64, replicatedPartitions), Offered: make([]int64, replicatedPartitions)}}
+	go p.runOffers(ctx, client, topic, delivery)
+	return p
+}
+
+func (p *replicatedPublisher) runOffers(ctx context.Context, client *kgo.Client, topic string, delivery time.Duration) {
+	defer close(p.done)
+	var pending sync.WaitGroup
+	busy := make([]bool, replicatedPartitions)
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	var sequence uint64
+	last := p.state.Started
+	for running := true; running; {
+		select {
+		case <-ctx.Done():
+			running = false
+		case <-tick.C:
+			now := time.Now().UTC()
+			p.mu.Lock()
+			p.state.MaxOfferGapSeconds = max(p.state.MaxOfferGapSeconds, now.Sub(last).Seconds())
+			p.mu.Unlock()
+			last = now
+			for partition, record := range replicatedBatch(topic, sequence) {
+				p.offer(context.WithoutCancel(ctx), client, record, partition, busy, &pending)
+			}
+			p.mu.Lock()
+			running = p.state.err == nil
+			p.mu.Unlock()
+			sequence++
+		}
+	}
+	drain, done := context.WithTimeout(context.WithoutCancel(ctx), delivery+time.Second)
+	err := client.Flush(drain)
+	done()
+	// A failed flush must resolve callbacks before the final source snapshot.
+	if err != nil {
+		client.AbortBufferedRecords(context.Background())
+	}
+	pending.Wait()
+	p.mu.Lock()
+	if p.state.err == nil {
+		p.state.err = err
+	}
+	p.state.Stopped = time.Now().UTC()
+	p.mu.Unlock()
+}
+
+func (p *replicatedPublisher) offer(ctx context.Context, client *kgo.Client, record *kgo.Record, partition int, busy []bool, pending *sync.WaitGroup) {
+	p.mu.Lock()
+	if busy[partition] || p.state.err != nil {
+		p.mu.Unlock()
+		return
+	}
+	busy[partition] = true
+	p.state.Offered[partition]++
+	p.mu.Unlock()
+	pending.Add(1)
+	client.TryProduce(ctx, record, func(_ *kgo.Record, err error) {
+		defer pending.Done()
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		busy[partition] = false
+		if err == nil {
+			p.state.Acknowledged[partition]++
+		} else if p.state.err == nil {
+			p.state.err = err
+		}
+	})
 }
 
 func startReplicatedPublisher(ctx context.Context, client *kgo.Client, topic string) *replicatedPublisher {
@@ -105,6 +206,7 @@ func (p *replicatedPublisher) snapshot() replicatedPublishing {
 	state := p.state
 	state.Observed = time.Now().UTC()
 	state.Acknowledged = append([]int64(nil), state.Acknowledged...)
+	state.Offered = append([]int64(nil), state.Offered...)
 	return state
 }
 
