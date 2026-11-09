@@ -310,6 +310,53 @@ func TestEngineReportsCleanupFailureAfterSuccessfulCopy(t *testing.T) {
 	}
 }
 
+func TestEngineAppendsSourceCloseAfterPrimaryAndFinalSaveFailures(t *testing.T) {
+	for _, label := range []string{"poll source", "save progress", "poll source: save progress", "poll source: unable to join group session"} {
+		for _, finalSaveFails := range []bool{false, true} {
+			for _, closeFails := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/save-%t/close-%t", label, finalSaveFails, closeFails), func(t *testing.T) {
+					assertEngineSourceFailureStages(t, label, finalSaveFails, closeFails)
+				})
+			}
+		}
+	}
+}
+
+func assertEngineSourceFailureStages(t *testing.T, label string, finalSaveFails, closeFails bool) {
+	t.Helper()
+	// Given a runner result with distinct primary/final-save causes and a Kafka input close outcome.
+	primary, finalSave, closeFailure := errors.New("same EOF"), errors.New("same EOF"), errors.New("same EOF")
+	result := fmt.Errorf("%s: %w", label, primary)
+	want := result.Error()
+	if finalSaveFails {
+		result = errors.Join(result, fmt.Errorf("save progress: %w", finalSave))
+		want += "\nsave progress: same EOF"
+	}
+	f := newEngineFixture()
+	f.fail, f.failure, f.store = "run", &core.Exit{Code: 1, Err: result}, f.input
+	f.onStage = func(stage string) {
+		if closeFails && stage == "close-topic-input" {
+			f.fail, f.failure = stage, closeFailure
+		}
+	}
+	if closeFails {
+		want += "\nclose Kafka input: same EOF"
+	}
+
+	// When the actual engine unwinds its acquired Kafka input after execution fails.
+	err := newEngine(f, f, f, engineLogger(), nil).Run(t.Context(), enginePlan("TOPIC", "TOPIC"), config.Config{}, noopShutdown{})
+
+	// Then close is final, each cause survives, and cleanup does not replace exit 1.
+	require.EqualError(t, err, want)
+	require.ErrorIs(t, err, primary)
+	require.Equal(t, finalSaveFails, errors.Is(err, finalSave))
+	require.Equal(t, closeFails, errors.Is(err, closeFailure))
+	var exit *core.Exit
+	require.ErrorAs(t, err, &exit)
+	require.Equal(t, 1, exit.Code)
+	require.Equal(t, []string{"close-output", "close-topic-input", "close-destination", "close-source"}, f.trace[len(f.trace)-4:])
+}
+
 func TestEngineSkipsAcquisitionWhenStartupIsCancelled(t *testing.T) {
 	// Given a query cancelled before execution starts.
 	f := newEngineFixture()

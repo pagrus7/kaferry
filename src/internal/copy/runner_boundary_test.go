@@ -117,35 +117,51 @@ func TestRunnerReportsWriteAndFinalSaveFailures(t *testing.T) {
 }
 
 func TestRunnerPollFailureDrainsAcceptedWritesAndPreservesCause(t *testing.T) {
-	// Given an accepted write and a typed source failure on the next poll.
-	r, source, sink, store, clock := fixture(t)
-	input := incoming(0, 0, 1)
-	r.plan.Source.Kind = "TOPIC"
-	r.flow.lastCommit = clock.Now()
-	source.events = []Event{{Input: &input}}
-	failure := operatorConflict{}
-	source.pollErr = failure
-	sink.flush = func() error {
-		require.Equal(t, uint64(1), r.submitted)
-		require.Zero(t, r.confirmed, "accepted write was already drained before the failure")
-		sink.reports <- Delivery{Token: sink.writes[0]}
-		sink.flush = nil
-		return nil
-	}
+	finalFailure := errors.New("final save failed")
+	for _, tc := range []struct {
+		name, text string
+		final      error
+		saved      int64
+	}{
+		{"final save succeeds", "poll source: fingerprint mismatch", nil, 1},
+		{"final save fails", "poll source: fingerprint mismatch\nsave progress: final save failed", finalFailure, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given accepted output, a typed poll failure and the selected final-save outcome.
+			r, source, sink, store, clock := fixture(t)
+			input := incoming(0, 0, 1)
+			r.plan.Source.Kind = "TOPIC"
+			r.flow.lastCommit = clock.Now()
+			source.events = []Event{{Input: &input}}
+			failure := operatorConflict{}
+			source.pollErr = failure
+			store.fail = map[int32]error{0: tc.final}
+			sink.flush = func() error {
+				require.Equal(t, uint64(1), r.submitted)
+				require.Zero(t, r.confirmed, "accepted write was drained before the poll failure")
+				sink.reports <- Delivery{Token: sink.writes[0]}
+				sink.flush = nil
+				return nil
+			}
 
-	// When polling fails after intake, then accepted output drains before exit 1.
-	err := r.Run(context.Background())
-	require.EqualError(t, err, "poll source: fingerprint mismatch")
-	require.ErrorIs(t, err, failure)
-	var original operatorConflict
-	require.ErrorAs(t, err, &original)
-	var exit *Exit
-	require.ErrorAs(t, err, &exit)
-	require.Equal(t, 1, exit.Code)
-	require.Equal(t, uint64(1), r.submitted)
-	require.Equal(t, r.submitted, r.confirmed)
-	require.Equal(t, int64(1), r.tracker.Saved(0))
-	require.Equal(t, [][]Cursor{{{Partition: 0, Position: 1}}}, store.saves)
+			// When polling fails, shutdown drains accepted output and attempts its confirmed prefix.
+			err := r.Run(context.Background())
+
+			// Then exit 1 retains every failure and claims only a successful save.
+			require.EqualError(t, err, tc.text)
+			require.ErrorIs(t, err, failure)
+			require.Equal(t, tc.final != nil, errors.Is(err, finalFailure))
+			var original operatorConflict
+			require.ErrorAs(t, err, &original)
+			var exit *Exit
+			require.ErrorAs(t, err, &exit)
+			require.Equal(t, 1, exit.Code)
+			require.Equal(t, uint64(1), r.submitted)
+			require.Equal(t, r.submitted, r.confirmed)
+			require.Equal(t, tc.saved, r.tracker.Saved(0))
+			require.Equal(t, [][]Cursor{{{Partition: 0, Position: 1}}}, store.saves)
+		})
+	}
 }
 
 func TestDrainTimeoutReportsWriteAndFinalSaveFailures(t *testing.T) {
