@@ -9,6 +9,7 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -119,6 +120,142 @@ func TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites
 	for partition, count := range state.Acknowledged {
 		require.Equal(t, count, ends["source"][int32(partition)].Offset)
 	}
+}
+
+type replicatedDelayedPublisher struct {
+	publisher    *replicatedPublisher
+	client       *kgo.Client
+	ctx          context.Context
+	release      func()
+	releaseOther func()
+}
+
+func startReplicatedDelayedPublisher(t *testing.T, reject bool) replicatedDelayedPublisher {
+	t.Helper()
+	cluster := kfake.MustCluster(kfake.NumBrokers(3), kfake.SeedTopics(replicatedPartitions, "source"))
+	t.Cleanup(cluster.Close)
+	release, otherRelease := make(chan struct{}), make(chan struct{})
+	var released, otherReleased sync.Once
+	unblock := func() { released.Do(func() { close(release) }) }
+	unblockOther := func() { otherReleased.Do(func() { close(otherRelease) }) }
+	var delayed, otherDelayed atomic.Bool
+	cluster.ControlKey(int16(kmsg.Produce), func(request kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
+		produce := request.(*kmsg.ProduceRequest)
+		if replicatedProduceContainsZero(produce) && delayed.CompareAndSwap(false, true) {
+			cluster.SleepControl(func() { <-release })
+			if reject {
+				return rejectedReplicatedProduce(produce, 29), nil, true
+			}
+		} else if reject && !replicatedProduceContainsZero(produce) && otherDelayed.CompareAndSwap(false, true) {
+			cluster.SleepControl(func() { <-otherRelease })
+		}
+		return nil, nil, false
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	t.Cleanup(cancel)
+	client := replicatedBrokerProducer(t, cluster.ListenAddrs()[0], 5*time.Second)
+	publisher := startReplicatedBrokerPublisher(ctx, client, "source", 5*time.Second)
+	t.Cleanup(func() { unblock(); unblockOther(); publisher.stop() })
+	require.Eventually(t, func() bool {
+		return delayed.Load() && slices.Max(publisher.snapshot().Acknowledged) >= 6
+	}, 3*time.Second, 5*time.Millisecond)
+	before := publisher.snapshot()
+	require.Zero(t, before.Acknowledged[0])
+	require.EqualValues(t, 1, before.Offered[0])
+	require.EqualValues(t, 48, client.OptValue(kgo.MaxBufferedRecords))
+	for partition, offered := range before.Offered {
+		require.LessOrEqual(t, offered-before.Acknowledged[partition], int64(1))
+	}
+	return replicatedDelayedPublisher{publisher, client, ctx, unblock, unblockOther}
+}
+
+func (s replicatedDelayedPublisher) reconcile(t *testing.T, state replicatedPublishing) int64 {
+	t.Helper()
+	require.False(t, state.Stopped.IsZero())
+	require.Zero(t, s.client.BufferedProduceRecords())
+	ends, err := kadm.NewClient(s.client).ListEndOffsets(s.ctx, "source")
+	require.NoError(t, err)
+	require.NoError(t, ends.Error())
+	var total int64
+	for partition, count := range state.Acknowledged {
+		require.Equal(t, count, ends["source"][int32(partition)].Offset)
+		total += count
+	}
+	return total
+}
+
+func TestReplicatedBrokerPublisherCatchesUpDelayedSchedule(t *testing.T) {
+	// Given delayed acknowledgements on one leader, healthy partitions continue
+	// while each partition retains at most one actual outstanding publication.
+	s := startReplicatedDelayedPublisher(t, false)
+	// When source capacity returns, complete the due 100ms slots without losing
+	// records or waiting an additional scheduler tick after each acknowledgement.
+	s.release()
+	require.Eventually(t, func() bool {
+		state := s.publisher.snapshot()
+		return slices.Min(state.Acknowledged) >= int64(time.Since(state.Started)/(100*time.Millisecond))-1
+	}, 3*time.Second, 5*time.Millisecond, "delayed source must catch up the unchanged schedule")
+	state := s.publisher.stop()
+	require.NoError(t, state.err)
+	require.Equal(t, state.Offered, state.Acknowledged)
+	total := s.reconcile(t, state)
+	assign(t, s.client, "source", replicatedPartitions)
+	seen := make([]int64, replicatedPartitions)
+	// Then actual source counts match acknowledgements and every partition's
+	// full-record sequence includes every scheduled slot, including delayed ones.
+	for received := int64(0); received < total; {
+		fetches := s.client.PollFetches(s.ctx)
+		require.Empty(t, fetches.Errors())
+		for _, record := range fetches.Records() {
+			require.EqualValues(t, seen[record.Partition], binary.BigEndian.Uint64(record.Value), "scheduled record disappeared")
+			seen[record.Partition]++
+			received++
+		}
+		require.NoError(t, s.ctx.Err())
+	}
+	require.Equal(t, state.Acknowledged, seen)
+}
+
+func TestReplicatedBrokerPublisherCancellationDrainsDelayedOffers(t *testing.T) {
+	// Given unoffered schedule debt and one uncertain publication per partition.
+	s := startReplicatedDelayedPublisher(t, false)
+	// When cancellation stops intake, it must still join the existing writes.
+	s.publisher.cancel()
+	select {
+	case <-s.publisher.done:
+		t.Fatal("cancellation abandoned an uncertain offer")
+	default:
+	}
+	s.release()
+	state := s.publisher.stop()
+	// Then unoffered debt is discarded explicitly, with exact offered/ACK/source
+	// counts and no buffered or uncertain writes left after the bounded drain.
+	require.NoError(t, state.err)
+	require.EqualValues(t, 1, state.Offered[0], "stop must not start unoffered schedule debt")
+	require.Equal(t, state.Offered, state.Acknowledged)
+	s.reconcile(t, state)
+}
+
+func TestReplicatedBrokerPublisherErrorDrainsDelayedOffers(t *testing.T) {
+	// Given one delayed permanent rejection and another uncertain healthy write.
+	s := startReplicatedDelayedPublisher(t, true)
+	// When the permanent error stops intake, retain it and join the other write.
+	s.release()
+	require.Eventually(t, func() bool { return s.publisher.snapshot().err != nil }, time.Second, 5*time.Millisecond)
+	select {
+	case <-s.publisher.done:
+		t.Fatal("permanent error abandoned another uncertain offer")
+	default:
+	}
+	s.releaseOther()
+	state := s.publisher.stop()
+	// Then no debt starts after the error, rejected records have no fabricated
+	// acknowledgements and all healthy source counts match their completed ACKs.
+	require.Error(t, state.err)
+	require.Zero(t, state.Acknowledged[0])
+	require.EqualValues(t, 1, state.Offered[0])
+	s.reconcile(t, state)
 }
 
 func TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss(t *testing.T) {

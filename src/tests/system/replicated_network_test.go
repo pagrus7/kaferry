@@ -53,11 +53,17 @@ func (s *brokerCopy) networkSpan(before brokerObservation, duration time.Duratio
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for {
+		query, cancel := context.WithTimeout(s.ctx, 2*time.Second)
+		started := time.Now()
+		after, ok := s.observe(query)
+		poll := brokerPoll{Label: "network interval", DurationMS: time.Since(started).Milliseconds(), Complete: ok, State: after}
+		if err := query.Err(); err != nil {
+			poll.QueryError = err.Error()
+		}
+		s.recordPoll(poll)
+		cancel()
 		s.live(allowFailure)
 		require.NoError(s.t, s.publisher.snapshot().err)
-		query, cancel := context.WithTimeout(s.ctx, 2*time.Second)
-		after, ok := s.observe(query)
-		cancel()
 		require.True(s.t, ok, "independent routes must remain available throughout worker network faults")
 		require.True(s.t, fullyReplicated(after, "source") && fullyReplicated(after, "destination"))
 		if after.At.Sub(before.At) >= duration {

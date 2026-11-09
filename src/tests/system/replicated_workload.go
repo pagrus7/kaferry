@@ -36,9 +36,10 @@ func replicatedBrokerProducer(t *testing.T, brokers string, delivery time.Durati
 	return client
 }
 
-// replicatedPublisher publishes one record per partition every 100ms. The
+// replicatedPublisher schedules one record per partition every 100ms. The
 // acknowledgement counts, rather than the scheduler, gate scenario transitions.
-// Only one bounded batch is in flight; errors terminate publishing immediately.
+// Broker publication retains due slots while keeping one write per partition
+// outstanding; stopping discards only slots that have never been offered.
 type replicatedPublisher struct {
 	cancel           context.CancelFunc
 	done             chan struct{}
@@ -78,29 +79,42 @@ func (p *replicatedPublisher) runOffers(ctx context.Context, client *kgo.Client,
 	defer close(p.done)
 	var pending sync.WaitGroup
 	busy := make([]bool, replicatedPartitions)
+	next := make([]uint64, replicatedPartitions)
+	wake := make(chan struct{}, 1)
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
-	var sequence uint64
 	last := p.state.Started
-	for running := true; running; {
+offers:
+	for {
 		select {
 		case <-ctx.Done():
-			running = false
+			break offers
 		case <-tick.C:
 			now := time.Now().UTC()
 			p.mu.Lock()
 			p.state.MaxOfferGapSeconds = max(p.state.MaxOfferGapSeconds, now.Sub(last).Seconds())
 			p.mu.Unlock()
 			last = now
-			for partition, record := range replicatedBatch(topic, sequence) {
-				p.offer(context.WithoutCancel(ctx), client, record, partition, busy, &pending)
+		case <-wake:
+		}
+		if ctx.Err() != nil || p.snapshot().err != nil {
+			break
+		}
+		now := time.Now().UTC()
+		// Counters represent elapsed schedule slots without retaining payloads.
+		// A completion wakes this loop immediately instead of losing another
+		// 100ms tick; slow sustained acknowledgements still limit actual input.
+		due := uint64(now.Sub(p.state.Started) / (100 * time.Millisecond))
+		for partition := range replicatedPartitions {
+			if next[partition] < due && p.offer(ctx, client, topic, next[partition], partition, now, busy, wake, &pending) {
+				next[partition]++
 			}
-			p.mu.Lock()
-			running = p.state.err == nil
-			p.mu.Unlock()
-			sequence++
 		}
 	}
+
+	// Cancellation or a permanent error ends schedule intake, including debt.
+	// Already offered records keep their original delivery deadlines and must
+	// all resolve within the existing drain bound before the final snapshot.
 	drain, done := context.WithTimeout(context.WithoutCancel(ctx), delivery+time.Second)
 	err := client.Flush(drain)
 	done()
@@ -117,17 +131,17 @@ func (p *replicatedPublisher) runOffers(ctx context.Context, client *kgo.Client,
 	p.mu.Unlock()
 }
 
-func (p *replicatedPublisher) offer(ctx context.Context, client *kgo.Client, record *kgo.Record, partition int, busy []bool, pending *sync.WaitGroup) {
+func (p *replicatedPublisher) offer(ctx context.Context, client *kgo.Client, topic string, sequence uint64, partition int, stamp time.Time, busy []bool, wake chan<- struct{}, pending *sync.WaitGroup) bool {
 	p.mu.Lock()
-	if busy[partition] || p.state.err != nil {
+	if busy[partition] || p.state.err != nil || ctx.Err() != nil {
 		p.mu.Unlock()
-		return
+		return false
 	}
 	busy[partition] = true
 	p.state.Offered[partition]++
 	p.mu.Unlock()
 	pending.Add(1)
-	client.TryProduce(ctx, record, func(_ *kgo.Record, err error) {
+	client.TryProduce(context.WithoutCancel(ctx), replicatedRecord(topic, sequence, partition, stamp.Truncate(time.Millisecond)), func(_ *kgo.Record, err error) {
 		defer pending.Done()
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -140,7 +154,12 @@ func (p *replicatedPublisher) offer(ctx context.Context, client *kgo.Client, rec
 		} else if p.state.err == nil {
 			p.state.err = err
 		}
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
 	})
+	return true
 }
 
 func startReplicatedPublisher(ctx context.Context, client *kgo.Client, topic string) *replicatedPublisher {
@@ -193,19 +212,23 @@ func replicatedBatch(topic string, sequence uint64) []*kgo.Record {
 	batch := make([]*kgo.Record, replicatedPartitions)
 	stamp := time.Now().Truncate(time.Millisecond)
 	for partition := range replicatedPartitions {
-		value := make([]byte, 2048)
-		binary.BigEndian.PutUint64(value, sequence)
-		binary.BigEndian.PutUint32(value[8:], uint32(partition))
-		// Deterministic varied bytes make each full record unique and retain
-		// enough payload to exercise worker byte accounting.
-		for n := 12; n < len(value); n++ {
-			value[n] = byte(uint64(n)*131 + sequence*17 + uint64(partition))
-		}
-		batch[partition] = &kgo.Record{Topic: topic, Partition: int32(partition),
-			Key: []byte(fmt.Sprintf("%d/%d", partition, sequence)), Value: value, Timestamp: stamp,
-			Headers: []kgo.RecordHeader{{Key: "duplicate", Value: nil}, {Key: "duplicate", Value: []byte{}}}}
+		batch[partition] = replicatedRecord(topic, sequence, partition, stamp)
 	}
 	return batch
+}
+
+func replicatedRecord(topic string, sequence uint64, partition int, stamp time.Time) *kgo.Record {
+	value := make([]byte, 2048)
+	binary.BigEndian.PutUint64(value, sequence)
+	binary.BigEndian.PutUint32(value[8:], uint32(partition))
+	// Deterministic varied bytes make each full record unique and retain
+	// enough payload to exercise worker byte accounting.
+	for n := 12; n < len(value); n++ {
+		value[n] = byte(uint64(n)*131 + sequence*17 + uint64(partition))
+	}
+	return &kgo.Record{Topic: topic, Partition: int32(partition),
+		Key: []byte(fmt.Sprintf("%d/%d", partition, sequence)), Value: value, Timestamp: stamp,
+		Headers: []kgo.RecordHeader{{Key: "duplicate", Value: nil}, {Key: "duplicate", Value: []byte{}}}}
 }
 
 func (p *replicatedPublisher) snapshot() replicatedPublishing {

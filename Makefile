@@ -16,6 +16,9 @@ REPLICATED_HELPER_TESTS := \
 	TestReplicatedPublisherAcknowledgesAllPartitionsAndStops \
 	TestReplicatedPublisherStopsAfterRejectedBatch \
 	TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites \
+	TestReplicatedBrokerPublisherCatchesUpDelayedSchedule \
+	TestReplicatedBrokerPublisherCancellationDrainsDelayedOffers \
+	TestReplicatedBrokerPublisherErrorDrainsDelayedOffers \
 	TestBrokerFaultRestartRequiresClassifiedTerminalFailure \
 	TestBrokerCurrentProgressDoesNotWaitForChildExit \
 	TestBrokerCurrentProgressRequiresReadableCompleteEvidence \
