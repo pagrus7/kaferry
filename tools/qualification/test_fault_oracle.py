@@ -556,6 +556,52 @@ class FaultOracleTest(unittest.TestCase):
                 lambda c, r: c.update(writers_stopped_at=c['finished_at']+1),
             ])
 
+    def test_independent_observations_require_each_phase_and_reject_overlap_or_unavailable_baselines(self):
+        # Given a real independent observer receipt with healthy, fault, recovery
+        # and fresh post-recovery samples, retain coverage beside its record oracle.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self.complete_case(root)
+            original = json.loads(path.read_text())
+            samples = root/'samples.jsonl'
+            rows = [json.loads(line) for line in samples.read_text().splitlines()]
+            phases = validate_case(path)['safety']['phase_observations'][0]
+            self.assertTrue(all(phases.values()))
+            event = original['fault_events'][0]
+            injected = min(item['at'] for item in event['injections'])
+            predicates = {
+                'healthy': lambda row: row['finished_at'] < injected,
+                'fault': lambda row: row['started_at'] >= injected and row['finished_at'] <= event['healed_at'],
+                'recovery': lambda row: row['started_at'] >= event['healed_at'] and row['finished_at'] <= event['recovery_until'],
+                'post-recovery': lambda row: row.get('reason') == 'post-recovery',
+            }
+            for phase, predicate in predicates.items():
+                case = json.loads(json.dumps(original))
+                retained = [row for row in rows if not predicate(row)]
+                # When a phase disappears even with correct counts/checksums,
+                # then the independent observation coverage gate rejects it.
+                samples.write_text(''.join(json.dumps(row)+'\n' for row in retained))
+                case['safety'].update(samples=len(retained), sha256=checksum(samples))
+                path.write_text(json.dumps(case))
+                with self.subTest(missing_phase=phase), self.assertRaises(ValueError):
+                    validate_case(path)
+            for unavailable in (False, True):
+                case = json.loads(json.dumps(original))
+                altered = json.loads(json.dumps(rows))
+                if unavailable:
+                    # An unavailable healthy baseline is outside every fault.
+                    altered[0] = dict(kind='unavailable', started_at=rows[0]['started_at'], finished_at=rows[0]['finished_at'])
+                    case['safety'].update(samples=len(rows)-1, unavailable=1)
+                else:
+                    altered[1]['started_at'] = altered[0]['finished_at']-0.1
+                samples.write_text(''.join(json.dumps(row)+'\n' for row in altered))
+                case['safety']['sha256'] = checksum(samples)
+                path.write_text(json.dumps(case))
+                # Then neither overlapping samples nor unavailable observations
+                # outside declared windows can count as continuous coverage.
+                with self.subTest(unavailable_baseline=unavailable), self.assertRaisesRegex(ValueError, 'overlap|unavailable'):
+                    validate_case(path)
+
     def test_checker_prerequisites_fail_without_running_brokers(self):
         # Given a missing or broken explicit independent-checker interpreter.
         with tempfile.TemporaryDirectory() as directory:

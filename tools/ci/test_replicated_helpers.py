@@ -28,16 +28,14 @@ HELPERS = (
     'TestReplicatedBrokerPublisherErrorDrainsDelayedOffers',
     'TestNetworkMeasurementRequiresCaughtUpSourceAndOutput',
     'TestNetworkHealthyPreconditionNeedsThirtySecondsAndBothRates',
-    'TestNetworkOutageForcedExitBindsOwnedCutAndRetainedRSS',
-    'TestNetworkOutageNegotiationEOFRequiresCompleteBoundWriteFailures',
-    'TestBrokerFaultRestartRequiresClassifiedTerminalFailure',
+    'TestNetworkDestinationLeadersRemainStableAcrossPhases',
+    'TestBrokerWorkCapsRequireActualSamplesAndKeepMissingPeaksUnavailable',
+    'TestBrokerRestartRequiresCurrentLifetimeInsideRecoveryWindow',
+    'TestNetworkOutageRestartRequiresFirstWorkerRSSAndActiveCut',
     'TestBrokerCurrentProgressDoesNotWaitForChildExit',
     'TestBrokerCurrentProgressRequiresReadableCompleteEvidence',
     'TestBrokerCurrentProgressRejectsMalformedCompleteRows',
     'TestBrokerRestartRechecksFailureAfterHealthObservation',
-    'TestBrokerNegotiationEOFRequiresAffectedPlainCopyAndEveryUnconfirmedError',
-    'TestBrokerLabelledSourceEOFRequiresBoundAllConfirmedExit',
-    'TestBrokerForcedCopyExitLeavesLifetimeHighwaterUnavailable',
     'TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions',
     'TestBrokerISRSelectionRequiresActiveSameLeaderBacklog',
     'TestBrokerPollJournalRetainsFailedQueryAndHealthTail',
@@ -99,14 +97,14 @@ class ReplicatedHelpersTest(unittest.TestCase):
                     for excluded in ('TestReplicatedZombieWorker', 'TestReplicatedProxyRoutes', 'TestBrokerCurrentLogChild', HELPERS[0]+'Extra'):
                         self.assertIsNone(re.fullmatch(pattern, excluded))
 
-    def test_broker_collector_imports_select_real_cases_on_single_file_changes(self):
-        # Given the real collector's broker helpers, when either alone changes,
+    def test_independent_collector_changes_select_real_cases(self):
+        # Given the collector's independent checker, when it alone changes,
         # then the workflow's PR path filter selects the real replicated jobs.
         collector = ast.parse((ROOT/'tools/qualification/replicated_results.py').read_text())
         helpers = {node.module.replace('.', '/')+'.py' for node in ast.walk(collector)
                    if isinstance(node, ast.ImportFrom) and node.module and
-                   node.module.startswith('tools.qualification.broker_')}
-        self.assertGreaterEqual(len(helpers), 2)
+                   node.module.startswith('tools.qualification.fault_')}
+        self.assertEqual({'tools/qualification/fault_results.py'}, helpers)
         workflow = (ROOT/'.github/workflows/replicated-lab.yml').read_text()
         section = re.search(r"(?m)^  pull_request:\n    paths:\n((?:      - '[^']+'\n)+)(?=permissions:\n)", workflow)
         self.assertIsNotNone(section, 'read the actual PR paths, not another event or job')
@@ -120,7 +118,7 @@ class ReplicatedHelpersTest(unittest.TestCase):
         expressions = ['.*'.join(re.escape(part).replace(r'\*', '[^/]*')
                                  for part in pattern.split('**')) for pattern in patterns]
         for changed, expected in [*((path, True) for path in sorted(helpers)),
-                                  ('tools/qualification/storage_census_images_test.py', True),
+                                  ('tools/qualification/fault_oracle.py', True),
                                   ('src/tests/qualification/matrix.json', True),
                                   ('src/tests/replicated/storage.sh', True),
                                   ('src/tests/system/replicated_broker_readiness_test.go', True),

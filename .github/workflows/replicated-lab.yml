@@ -14,8 +14,6 @@ on:
       - 'src/tests/qualification/fault-timeouts-ms.json'
       - 'tools/qualification/qualify.py'
       - 'tools/qualification/broker_probe.py'
-      - 'tools/qualification/broker_lifecycle.py'
-      - 'tools/qualification/broker_readiness.py'
       - 'tools/qualification/test_qualify.py'
       - 'tools/qualification/storage_census_images_test.py'
       - 'tools/qualification/proxy_port_reservation_images_test.py'

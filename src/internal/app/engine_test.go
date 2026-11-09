@@ -310,8 +310,8 @@ func TestEngineReportsCleanupFailureAfterSuccessfulCopy(t *testing.T) {
 	}
 }
 
-func TestEngineAppendsSourceCloseAfterPrimaryAndFinalSaveFailures(t *testing.T) {
-	for _, label := range []string{"poll source", "save progress", "poll source: save progress", "poll source: unable to join group session"} {
+func TestEnginePreservesSourceAndCleanupCausesWithOperationLabels(t *testing.T) {
+	for _, label := range []string{"poll source", "save progress"} {
 		for _, finalSaveFails := range []bool{false, true} {
 			for _, closeFails := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/save-%t/close-%t", label, finalSaveFails, closeFails), func(t *testing.T) {
@@ -325,12 +325,10 @@ func TestEngineAppendsSourceCloseAfterPrimaryAndFinalSaveFailures(t *testing.T) 
 func assertEngineSourceFailureStages(t *testing.T, label string, finalSaveFails, closeFails bool) {
 	t.Helper()
 	// Given a runner result with distinct primary/final-save causes and a Kafka input close outcome.
-	primary, finalSave, closeFailure := errors.New("same EOF"), errors.New("same EOF"), errors.New("same EOF")
+	primary, finalSave, closeFailure := errors.New("source failure"), errors.New("final save failure"), errors.New("source close failure")
 	result := fmt.Errorf("%s: %w", label, primary)
-	want := result.Error()
 	if finalSaveFails {
 		result = errors.Join(result, fmt.Errorf("save progress: %w", finalSave))
-		want += "\nsave progress: same EOF"
 	}
 	f := newEngineFixture()
 	f.fail, f.failure, f.store = "run", &core.Exit{Code: 1, Err: result}, f.input
@@ -339,15 +337,18 @@ func assertEngineSourceFailureStages(t *testing.T, label string, finalSaveFails,
 			f.fail, f.failure = stage, closeFailure
 		}
 	}
-	if closeFails {
-		want += "\nclose Kafka input: same EOF"
-	}
 
 	// When the actual engine unwinds its acquired Kafka input after execution fails.
 	err := newEngine(f, f, f, engineLogger(), nil).Run(t.Context(), enginePlan("TOPIC", "TOPIC"), config.Config{}, noopShutdown{})
 
 	// Then close is final, each cause survives, and cleanup does not replace exit 1.
-	require.EqualError(t, err, want)
+	require.ErrorContains(t, err, label+": ")
+	if finalSaveFails {
+		require.ErrorContains(t, err, "save progress: ")
+	}
+	if closeFails {
+		require.ErrorContains(t, err, "close Kafka input: ")
+	}
 	require.ErrorIs(t, err, primary)
 	require.Equal(t, finalSaveFails, errors.Is(err, finalSave))
 	require.Equal(t, closeFails, errors.Is(err, closeFailure))

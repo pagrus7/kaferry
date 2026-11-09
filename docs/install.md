@@ -23,7 +23,7 @@ kaferry --version
 
 Requires Go 1.26+; no C compiler.
 
-`CGO_ENABLED=0 go install github.com/pagrus7/kaferry/cmd/kaferry@latest` builds the latest tagged release with the installer's Go toolchain. Use `@vX.Y.Z` for a specific published release. For development source, use `CGO_ENABLED=0 go install github.com/pagrus7/kaferry/src/cmd/kaferry@main`. `GOBIN` selects the executable directory; otherwise Go uses `$(go env GOPATH)/bin`. The supported source-build profile disables CGO. `GOFLAGS` and the selected toolchain can change the result; a locally compiled executable is not an attested release binary.
+`CGO_ENABLED=0 go install github.com/pagrus7/kaferry/src/cmd/kaferry@latest` builds the latest tagged release with the installer's Go toolchain. Use `@vX.Y.Z` for a specific published release. Tags v0.12.0 and older use `github.com/pagrus7/kaferry/cmd/kaferry@vX.Y.Z`. For development source, use `CGO_ENABLED=0 go install github.com/pagrus7/kaferry/src/cmd/kaferry@main`. `GOBIN` selects the executable directory; otherwise Go uses `$(go env GOPATH)/bin`. The supported source-build profile disables CGO. `GOFLAGS` and the selected toolchain can change the result; a locally compiled executable is not an attested release binary.
 
 The Go module cache and `GOROOT` retain dependency and toolchain source licenses. `go install` installs only the executable, without the release archive's license sidecars. Our supported binary redistribution package is the release archive: keep `LICENSE` and `THIRD_PARTY_NOTICES.txt` with its binary. For a custom build, use the matching checkout and Go toolchain with `tools/release/notices.py`; do not reuse notices from a different toolchain. This packaging policy does not change any upstream license.
 

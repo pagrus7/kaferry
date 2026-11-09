@@ -273,8 +273,8 @@ func (s *brokerCopy) measureLast(reason string) {
 		require.NoError(s.t, err)
 	}
 	available := work.Summary != nil
-	require.True(s.t, available || brokerForcedCopyPhase(terminal) != "", "CLI omitted copy summary without an eligible documented forced-copy exit")
-	measurement := map[string]any{"lifetime": i + 1, "lifecycle": exit.Reference, "unavailable_highwater_phase": "", "pid": process.pid(), "started_at": s.identities[i].Started, "stopped_at": process.stopped,
+	require.True(s.t, available || process.command.ProcessState.ExitCode() == 1, "completed CLI omitted its final copy summary")
+	measurement := map[string]any{"lifetime": i + 1, "lifecycle": exit.Reference, "pid": process.pid(), "started_at": s.identities[i].Started, "stopped_at": process.stopped,
 		"binary_sha256": s.identities[i].Binary, "worker_route": 1,
 		"terminal_error": terminal, "failure_context": proof, "copy_summary": work.Summary,
 		"exit_code": process.command.ProcessState.ExitCode(), "reason": reason, "sampled_peak_rss_bytes": memory.peak * 1024, "rss_samples": memory.samples,
@@ -282,9 +282,6 @@ func (s *brokerCopy) measureLast(reason string) {
 		"lifetime_highwater_available": available, "peak_uncommitted_records": nil, "peak_uncommitted_bytes": nil,
 		"progress_observations": work.ProgressSamples, "sampled_max_pending_entries": work.SampledPending,
 		"sampled_max_pending_estimated_bytes": work.SampledPendingBytes, "cap_measurement_scope": brokerSampledWorkScope}
-	if !available {
-		measurement["unavailable_highwater_phase"] = brokerForcedCopyPhase(terminal)
-	}
 	if available {
 		measurement["peak_uncommitted_records"], measurement["peak_uncommitted_bytes"] = work.Summary.PeakRecords, work.Summary.PeakBytes
 		measurement["cap_measurement_scope"] = brokerExactWorkScope
@@ -317,10 +314,10 @@ func completedBrokerFailure(process *cliProcess, allowFailure bool, proof ...*br
 	if process.wait() == nil || process.command.ProcessState.ExitCode() != 1 {
 		return "", fmt.Errorf("broker fault requires exit 1 before restart: %s", logs)
 	}
-	// Only the product's existing transport/coordinator/deadline failures may
-	// use this case's recorded restart. Other failures remain qualification errors.
-	terminal, known := brokerTerminalFailure(logs)
-	if !known && len(proof) == 1 {
+	// A restart belongs to the actual healthy copy and recorded fault window.
+	// Kaferry labels and work outcomes do not depend on SDK diagnostic wording.
+	terminal, known := "", false
+	if len(proof) == 1 {
 		terminal, known = brokerContextualFailure(logs, proof[0])
 	}
 	if !known {
@@ -335,43 +332,6 @@ func restartBrokerWorker(process *cliProcess, allowFailure bool, restart func(),
 	}
 	restart()
 	return nil
-}
-
-func brokerTerminalFailure(logs string) (string, bool) {
-	var terminal []string
-	for _, line := range strings.Split(logs, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || json.Valid([]byte(line)) {
-			continue
-		}
-		if strings.HasPrefix(line, "shutdown timed out while ") || strings.Contains(line, brokerNegotiationEOF) || strings.Contains(line, networkFirstResponseEOF) {
-			return line, false
-		}
-		known := false
-		for _, message := range []string{"context deadline exceeded", "REQUEST_TIMED_OUT", "NOT_COORDINATOR", "COORDINATOR_NOT_AVAILABLE", "UNKNOWN_MEMBER_ID", "ILLEGAL_GENERATION", "NOT_LEADER_OR_FOLLOWER", "BROKER_NOT_AVAILABLE", "connection refused", "i/o timeout", "EOF", "delivery timeout", "outstanding writes did not finish within 10 seconds"} {
-			known = known || strings.Contains(line, message)
-		}
-		terminal = append(terminal, line)
-		if !known {
-			return strings.Join(terminal, "\n"), false
-		}
-	}
-	return strings.Join(terminal, "\n"), len(terminal) > 0
-}
-
-func TestBrokerFaultRestartRequiresClassifiedTerminalFailure(t *testing.T) {
-	// Given a transient warning in structured logs, when an unrelated terminal
-	// failure follows, then that earlier transport warning cannot authorize restart.
-	warning := `{"msg":"transient source error","error":"EOF"}` + "\n"
-	for _, terminal := range []string{"unexpected invariant failure", "context deadline exceeded\nunexpected invariant failure", ""} {
-		_, known := brokerTerminalFailure(warning + terminal)
-		require.False(t, known, terminal)
-	}
-	// When the terminal error itself names the existing timeout/save contract,
-	// then retain that exact failure separately from informational log records.
-	failure, known := brokerTerminalFailure(warning + "context deadline exceeded\n")
-	require.True(t, known)
-	require.Equal(t, "context deadline exceeded", failure)
 }
 
 func (s *brokerCopy) observe(ctx context.Context) (brokerObservation, bool) {

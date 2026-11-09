@@ -79,6 +79,19 @@ func networkMeasurementReady(state brokerObservation) bool {
 	return true
 }
 
+func networkDestinationLeadersStable(states ...brokerObservation) bool {
+	if len(states) == 0 || len(states[0].Topology["destination"]) != replicatedPartitions {
+		return false
+	}
+	first := states[0].Topology["destination"]
+	for _, state := range states[1:] {
+		if !slices.EqualFunc(first, state.Topology["destination"], func(a, b faults.Partition) bool { return a.Leader == b.Leader }) {
+			return false
+		}
+	}
+	return true
+}
+
 // Hold the actual configured interval while continuing independent observations.
 // Returning early on the desired effect would shorten the claimed exposure.
 func (s *brokerCopy) networkSpan(before brokerObservation, duration time.Duration, allowFailure bool) networkInterval {
@@ -264,6 +277,7 @@ func replicatedNetworkFault(t *testing.T, name string) {
 		return allAbove(state.Saved, during.After.Saved, 2) && networkMeasurementReady(state)
 	})
 	recovery := s.networkSpan(recovered, span, false)
+	require.True(t, networkDestinationLeadersStable(healthy.After, during.Before, during.After, recovery.Before, recovery.After), "destination leaders changed across worker-only network phases")
 	require.GreaterOrEqual(t, recovery.inputRate(), .95*float64(replicatedPartitions)*10, "independent source publisher fell below its steady workload")
 	require.GreaterOrEqual(t, recovery.rate(), .95*healthy.rate(), "measured output throughput did not recover after toxic removal")
 	require.True(t, allAbove(recovery.After.Saved, recovery.Before.Saved, 2))
