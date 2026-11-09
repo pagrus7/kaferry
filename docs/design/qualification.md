@@ -19,6 +19,8 @@ Reserve ports 39092/40092 for ordinary plain brokers, 39192/40192 for dedicated 
 
 Start with one workload, 8 available CPUs, 16–20 GiB available RAM and 100 GiB free test storage; measure actual usage before increasing load. These are starting allocations, not capacity guarantees. Fixtures cap broker JVM heaps at 512 MiB and use four internal offset/transaction partitions.
 
+Replicated fixtures and runs with [`--broker-volume`](#broker-storage) acquire the storage initializer's pinned image if missing, with a separate five-minute deadline and `storage-image.log`. Matching cached images are reused. Acquisition failure stops before creating broker data or containers. The existing three-minute filesystem-capacity check and broker-startup deadlines run afterward; image acquisition does not establish available capacity or broker readiness.
+
 ## Suite taxonomy
 
 An **operating condition** produces zero duplicates, needs no process restart and leaves partition ownership unchanged. Destination stalls shorter than the delivery timeout, steady backpressure and bursts can be operating conditions. Endurance retains its existing one-second destination stalls.

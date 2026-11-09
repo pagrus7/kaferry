@@ -21,7 +21,7 @@ class StartupHealthTest(unittest.TestCase):
     def fixture(self, directory):
         return (SimpleNamespace(suite='broker', output=directory),
                 SimpleNamespace(compose=['docker', 'compose', '-p', 'fixture'],
-                                env={'KAFERRY_FIXTURE_PROJECT': 'fixture'}))
+                                env={'KAFERRY_FIXTURE_PROJECT': 'fixture', 'KAFERRY_SOURCE_IMAGE': 'catalog-image'}))
 
     def failed_startup(self, args, spec, receipt):
         with self.assertRaises(RuntimeError) as raised:
@@ -166,7 +166,7 @@ class StartupHealthTest(unittest.TestCase):
                     raised = self.failed_startup(args, spec, receipt)
                 self.assertIs(original, raised)
                 stages = ['proxy-up', 'proxy-configure', 'brokers-up']
-                self.assertEqual(stages[:stages.index(phase)+1] +
+                self.assertEqual(['storage-image'] + stages[:stages.index(phase)+1] +
                                  ['owned-health', 'broker-logs', 'storage-cleanup', 'brokers-down'], order)
                 capture.assert_called_once_with(args.output, spec.compose, spec.env)
                 self.assertEqual(str(original), receipt['suite_error'])

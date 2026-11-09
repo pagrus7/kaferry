@@ -156,7 +156,7 @@ class PairedBrokerStorageTest(unittest.TestCase):
                     else:
                         run_suite(args)
                 labels = [label for label, _, _ in calls]
-                expected = ['storage-capacity']
+                expected = ['storage-image', 'storage-capacity']
                 if failure != 'storage-capacity':
                     expected += ['storage-prepare'] + ([] if suite == 'auth' else ['brokers-up']) + ['suite']
                 expected += ['brokers-stop']
@@ -164,7 +164,9 @@ class PairedBrokerStorageTest(unittest.TestCase):
                     expected.append('storage-clean')
                 self.assertEqual(expected + ['brokers-down'], labels)
                 for label, command, env in calls:
-                    if label != 'suite':
+                    if label == 'storage-image':
+                        self.assertEqual(env['KAFERRY_SOURCE_IMAGE'], command[-1])
+                    elif label != 'suite':
                         self.assertEqual('kaferry-qualification' if suite == 'auth' else 'kaferry-compat',
                                          command[command.index('-p') + 1])
                         overlay = 'src/tests/' + ('qualification/' if suite == 'auth' else '') + 'broker-storage.compose.yaml'
@@ -220,7 +222,7 @@ class PairedBrokerStorageTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'teardown failed'):
                     run_suite(args)
             self.assertEqual(60, admit.call_args.args[2])
-            self.assertEqual(['storage-capacity', 'storage-prepare', 'proxy-up', 'proxy-configure',
+            self.assertEqual(['storage-image', 'storage-capacity', 'storage-prepare', 'proxy-up', 'proxy-configure',
                               'brokers-up', 'suite', 'brokers-stop', 'storage-clean', 'brokers-down'],
                              [label for label, _ in calls])
             self.assertNotIn('-v', calls[-1][1])

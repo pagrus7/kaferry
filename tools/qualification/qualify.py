@@ -657,21 +657,29 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
         owns_fixture = False
         startup_attempted, startup_complete = False, False
         try:
+            storage_capacity = None
             if replicated_fixture(args):
                 receipt['capacity'] = replicated_admission(args.output, spec.env,
                     args.duration if args.suite == 'endurance' else None)
+                storage_capacity = receipt['capacity']
+            elif receipt.get('fixture_storage', {}).get('layout') in ('paired', 'auth'):
+                receipt['storage_capacity'] = external_storage_admission(args.output, spec.env, fixture is not None,
+                                                                        auth=args.suite == 'auth')
+                storage_capacity = receipt['storage_capacity']
+            if storage_capacity is not None:
+                # All storage initializers use the pinned source image. Inspect
+                # locally first so a cached image needs no registry connection.
+                logged(['/bin/sh', '-ec', 'docker image inspect --format \'{{.Id}}\' "$1" 2>/dev/null || docker pull "$1"',
+                        'storage-image', spec.env['KAFERRY_SOURCE_IMAGE']], args.output,
+                       'storage-image', spec.env, timeout=300, cancelled=cancelled)
                 owns_fixture = True
-                replicated_storage(args.output, spec.compose, spec.env, receipt['capacity'], cancelled)
+                replicated_storage(args.output, spec.compose, spec.env, storage_capacity, cancelled)
+            if replicated_fixture(args):
                 startup_attempted = True
                 logged(spec.compose + ['up', '-d', '--wait', 'toxiproxy'], args.output,
                        'proxy-up', spec.env, timeout=90, cancelled=cancelled)
                 logged([sys.executable, '-m', 'tools.qualification.network', '--output', str(args.output)],
                        args.output, 'proxy-configure', spec.env, timeout=60, cancelled=cancelled)
-            elif receipt.get('fixture_storage', {}).get('layout') in ('paired', 'auth'):
-                receipt['storage_capacity'] = external_storage_admission(args.output, spec.env, fixture is not None,
-                                                                        auth=args.suite == 'auth')
-                owns_fixture = True
-                replicated_storage(args.output, spec.compose, spec.env, receipt['storage_capacity'], cancelled)
             if spec.compose and args.suite != 'auth':
                 owns_fixture = True
                 startup_attempted = True

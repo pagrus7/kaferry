@@ -16,7 +16,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools.qualification.qualify import cleanup_container_state, cleanup_replicated, duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, suite_command, valid_receipts, parallel_allowance, parallel_capacity, parallel_run
+from tools.qualification.qualify import IMAGES, cleanup_container_state, cleanup_replicated, duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, suite_command, valid_receipts, parallel_allowance, parallel_capacity, parallel_run
 from tools.qualification.broker_probe import logical, reconcile, records, replicated_topology, topic_ready
 
 
@@ -624,7 +624,7 @@ class MatrixTest(unittest.TestCase):
                     with self.assertRaises(KeyboardInterrupt if interruption else RuntimeError):
                         run_suite(args)
                 self.assertEqual(60 if suite == 'endurance' else None, admission.call_args.args[2])
-                phases = ['storage-capacity', 'storage-prepare', 'proxy-up', 'proxy-configure', 'brokers-up']
+                phases = ['storage-image', 'storage-capacity', 'storage-prepare', 'proxy-up', 'proxy-configure', 'brokers-up']
                 if suite == 'replicated':
                     phases.append('proxy-proof')
                 phases += ['suite', 'brokers-stop', 'storage-clean', 'brokers-down']
@@ -632,7 +632,9 @@ class MatrixTest(unittest.TestCase):
                 self.assertEqual(1, len({env['KAFERRY_REPLICATED_RUN_ID'] for _, _, env in calls}))
                 for command, label, env in calls:
                     self.assertEqual('true' if volume else 'false', env['KAFERRY_REPLICATED_VOLUME_EXTERNAL'])
-                    if label not in ('suite', 'proxy-configure', 'proxy-proof'):
+                    if label == 'storage-image':
+                        self.assertEqual(env['KAFERRY_SOURCE_IMAGE'], command[-1])
+                    elif label not in ('suite', 'proxy-configure', 'proxy-proof'):
                         self.assertEqual('kaferry-replicated', command[command.index('-p') + 1])
                     self.assertNotEqual(['docker', 'volume', 'rm'], command[:3])
                 if not interruption:
@@ -657,6 +659,119 @@ class MatrixTest(unittest.TestCase):
                     replicated_storage(output, ['compose'], {}, {'required_broker_bytes': 4096}, None)
             self.assertEqual(1, execute.call_count)
             self.assertEqual(1024, json.loads((output / 'capacity.json').read_text())['broker_free_bytes'])
+
+    @contextmanager
+    def storage_commands(self, root, command):
+        with patch('tools.qualification.qualify.LAB_LOCK', root / 'host.lock'), \
+             patch('tools.qualification.qualify.capture', return_value='fixture'), \
+             patch('tools.qualification.qualify.platform.platform', return_value='fixture'), \
+             patch('tools.qualification.qualify.replicated_admission', return_value={'required_broker_bytes': 4096}), \
+             patch('tools.qualification.qualify.external_storage_admission', return_value={'required_broker_bytes': 4096}), \
+             patch('tools.qualification.qualify.logged', side_effect=command), \
+             patch('tools.qualification.qualify.subprocess.run') as docker:
+            yield docker
+
+    def test_storage_image_failure_or_cancellation_has_no_fixture_side_effects(self):
+        # Given a missing storage image and an unavailable or cancelled registry request.
+        for suite in ('replicated', 'broker', 'auth'):
+            for failure in (RuntimeError('registry unavailable'), InterruptedError('acquisition cancelled'), KeyboardInterrupt()):
+                with self.subTest(suite=suite, failure=type(failure).__name__), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    args = self.suite_args(root, suite, source='4.4.0', destination='4.4.0',
+                                           broker_volume=None if suite == 'replicated' else 'private-volume')
+                    cancelled = threading.Event()
+                    calls = []
+                    def command(cmd, output, label, env, **kwargs):
+                        calls.append((cmd, label, kwargs))
+                        if label == 'storage-image':
+                            raise failure
+                        self.fail('image acquisition must precede storage and broker operations')
+                    with self.storage_commands(root, command) as docker:
+                        # When acquisition fails, then preserve the original error and
+                        # never create storage, start brokers or retry through cleanup.
+                        with self.assertRaises(type(failure)) as raised:
+                            run_suite(args, cancelled=cancelled)
+                    self.assertIs(failure, raised.exception)
+                    self.assertEqual(['storage-image'], [label for _, label, _ in calls])
+                    self.assertEqual(['storage-image', IMAGES['4.4.0']], calls[0][0][-2:])
+                    self.assertEqual(300, calls[0][2]['timeout'])
+                    self.assertIs(cancelled, calls[0][2]['cancelled'])
+                    docker.assert_not_called()
+                    receipt = json.loads((args.output / 'manifest.json').read_text())
+                    self.assertEqual('failed' if isinstance(failure, RuntimeError) else 'interrupted', receipt['status'])
+                    self.assertNotIn('cleanup_errors', receipt)
+
+    def test_storage_image_cache_avoids_registry_and_missing_image_pulls_once(self):
+        # Given the portable acquisition command and a controlled Docker executable.
+        for state in ('cached', 'missing', 'pull-failed'):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temporary:
+                root, phases = Path(temporary), []
+                args = self.suite_args(root, 'replicated', source='4.4.0', destination='4.4.0')
+                tools = root / 'tools'
+                tools.mkdir()
+                docker = tools / 'docker'
+                docker.write_text('#!/bin/sh\n'
+                    'printf "%s\\n" "$*" >> "$KAFERRY_TEST_IMAGE_CALLS"\n'
+                    'if [ "$1 $2" = "image inspect" ]; then\n'
+                    '  [ "$KAFERRY_TEST_IMAGE_STATE" = cached ] || exit 1\n'
+                    '  echo sha256:cached\n'
+                    'elif [ "$1" = pull ]; then\n'
+                    '  [ "$KAFERRY_TEST_IMAGE_STATE" != pull-failed ] || exit 23\n'
+                    '  echo acquired\n'
+                    'else exit 99; fi\n')
+                docker.chmod(0o700)
+                def command(cmd, output, label, env, **kwargs):
+                    phases.append(label)
+                    if label == 'storage-image':
+                        logged(cmd, output, label, env, **kwargs)
+                    elif label == 'storage-capacity':
+                        (output / 'storage-capacity.log').write_text('10000000\n')
+                    elif label == 'proxy-proof':
+                        (output / 'proxy-proof.log').write_text('{"Action":"pass","Test":"TestReplicatedProxyRoutes"}\n')
+                calls = root / 'docker.calls'
+                with self.storage_commands(root, command), patch('tools.qualification.qualify.verify_run'), \
+                     patch.dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'],
+                                KAFERRY_TEST_IMAGE_STATE=state, KAFERRY_TEST_IMAGE_CALLS=str(calls)):
+                    # When cached, then only local inspection runs. A miss pulls
+                    # exactly once; failed acquisition cannot reach initialization.
+                    if state == 'pull-failed':
+                        with self.assertRaisesRegex(RuntimeError, 'storage-image'):
+                            run_suite(args)
+                        self.assertEqual(['storage-image'], phases)
+                    else:
+                        run_suite(args)
+                        self.assertEqual(['storage-image', 'storage-capacity', 'storage-prepare'], phases[:3])
+                commands = calls.read_text().splitlines()
+                self.assertEqual('image inspect --format {{.Id}} ' + IMAGES['4.4.0'], commands[0])
+                self.assertEqual([] if state == 'cached' else ['pull ' + IMAGES['4.4.0']], commands[1:])
+
+    def test_storage_deadlines_and_cleanup_begin_after_image_acquisition(self):
+        # Given an acquired image, keep filesystem checks in their own deadline.
+        for phase in ('storage-capacity', 'storage-prepare'):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temporary:
+                root, calls = Path(temporary), []
+                args = self.suite_args(root, 'replicated', source='4.4.0', destination='4.4.0')
+                original = RuntimeError(phase + ' failed')
+                def command(cmd, output, label, env, **kwargs):
+                    calls.append((label, kwargs))
+                    if label == phase:
+                        raise original
+                    if label == 'storage-capacity':
+                        (output / 'storage-capacity.log').write_text('10000000\n')
+                with self.storage_commands(root, command):
+                    # When capacity or preparation fails, then owned cleanup still
+                    # runs once, without another image acquisition.
+                    with self.assertRaises(RuntimeError) as raised:
+                        run_suite(args)
+                self.assertIs(original, raised.exception)
+                expected = ['storage-image', 'storage-capacity']
+                if phase == 'storage-prepare':
+                    expected.append('storage-prepare')
+                self.assertEqual(expected + ['brokers-stop', 'storage-clean', 'brokers-down'], [label for label, _ in calls])
+                self.assertEqual(300, calls[0][1]['timeout'])
+                self.assertEqual(180, calls[1][1]['timeout'])
+                if phase == 'storage-prepare':
+                    self.assertEqual(60, calls[2][1]['timeout'])
 
     def test_replicated_uses_the_same_host_lease_before_any_fixture_mutation(self):
         with tempfile.TemporaryDirectory() as temporary:
