@@ -72,7 +72,7 @@ A coordinator-path cut blocks every connection from that worker to the coordinat
 
 ## Replicated ownership fault
 
-After [preparation](#prepare), use an existing candidate executable and a fresh evidence directory. This command needs the same exclusive ports, two Docker CPUs, 8 GiB runtime memory and storage allowances as the replicated smoke, plus `ps` with RSS reporting. It owns and cleans up the same fixture and runs all proxy-path proofs first. Optional `--broker-volume LAB_VOLUME` uses the labelled-volume procedure above.
+After [preparation](#prepare), use an existing candidate executable and a fresh evidence directory. This command needs the same exclusive ports, two Docker CPUs, 8 GiB runtime memory and storage allowances as the replicated smoke. Live RSS sampling uses native process task information on macOS; other platforms require `ps` with RSS reporting. Unavailable live RSS fails the case. It owns and cleans up the same fixture and runs all proxy-path proofs first. Optional `--broker-volume LAB_VOLUME` uses the labelled-volume procedure above.
 
 ```sh
 python3 -m tools.qualification.qualify run fault-replicated --case ownership/zombie-worker --binary bin/kaferry --output build-results/ownership-zombie
