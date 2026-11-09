@@ -16,7 +16,8 @@ NEGOTIATION_EOF = ('broker closed the connection immediately during api versions
                    'when the broker requires TLS but the client is using plaintext: is TLS missing?')
 FIRST_RESPONSE_EOF = ('broker closed the connection immediately after a request was issued, which often happens '
                       'when SASL is required but not provided: is SASL missing?')
-SOURCE_OPERATION_EOFS = tuple(label+NEGOTIATION_EOF for label in ('poll source: ', 'save progress: ', 'poll source: save progress: '))
+SOURCE_OPERATION_EOFS = tuple(label+NEGOTIATION_EOF for label in ('poll source: ', 'save progress: ',
+                            'poll source: save progress: ', 'poll source: unable to join group session: '))
 EXACT_SCOPE = 'exact lifetime highwater from final copy summary'
 BROKER_ERRORS = ('context deadline exceeded', 'REQUEST_TIMED_OUT', 'NOT_COORDINATOR', 'COORDINATOR_NOT_AVAILABLE',
                 'UNKNOWN_MEMBER_ID', 'ILLEGAL_GENERATION', 'NOT_LEADER_OR_FOLLOWER', 'BROKER_NOT_AVAILABLE',

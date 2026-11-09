@@ -485,8 +485,10 @@ class ReplicatedResultsTest(unittest.TestCase):
     def test_labelled_source_eof_requires_all_confirmed_and_bound_physical_source_fault(self):
         # Given exact all-confirmed output, when the failed operation is labelled,
         # then only its same healthy lifetime inside a source fault is admissible.
+        primaries = tuple(label+NEGOTIATION_EOF for label in ('poll source: ', 'save progress: ',
+                          'poll source: save progress: ', 'poll source: unable to join group session: '))
         for id in ('broker/source-leader', 'broker/rolling-source'):
-            for terminal in (primary+save+close_input for primary in SOURCE_OPERATION_EOFS
+            for terminal in (primary+save+close_input for primary in primaries
                              for save in ('', '\n'+SOURCE_OPERATION_EOFS[1])
                              for close_input in ('', '\nclose Kafka input: '+NEGOTIATION_EOF)):
                 with self.subTest(id=id, terminal=terminal):
@@ -495,11 +497,15 @@ class ReplicatedResultsTest(unittest.TestCase):
         # Given freshly hashed physical evidence, then cleanup-only, reordered,
         # repeated and excess components remain outside the product's three phases.
         poll, save, close_input = SOURCE_OPERATION_EOFS[0], SOURCE_OPERATION_EOFS[1], 'close Kafka input: '+NEGOTIATION_EOF
+        join = 'poll source: unable to join group session: '+NEGOTIATION_EOF
         invalid = [close_input, close_input+'\n'+save, poll+'\n'+poll, save+'\n'+poll,
                    poll+'\n'+close_input+'\n'+save, '\n'.join([save]*3),
                    save+'\n'+close_input+'\n'+close_input, '\n'.join([save, save, close_input, save]),
                    poll+'\n'+SOURCE_OPERATION_EOFS[2], save+'\nsave progress: '+FIRST_RESPONSE_EOF,
-                   save+'\nclose Kafka input: '+FIRST_RESPONSE_EOF]
+                   save+'\nclose Kafka input: '+FIRST_RESPONSE_EOF,
+                   join+'\n'+join, poll+'\n'+join, join+'\n'+poll,
+                   'save progress: unable to join group session: '+NEGOTIATION_EOF,
+                   'poll source: unable to join group session: '+FIRST_RESPONSE_EOF]
         for terminal in invalid:
             with self.subTest(terminal=terminal), self.assertRaisesRegex(ValueError, 'unsupported terminal failure'):
                 self.validate('broker/source-leader', lambda c,s:labelled_source_worker(c,s,terminal))

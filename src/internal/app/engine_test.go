@@ -311,7 +311,7 @@ func TestEngineReportsCleanupFailureAfterSuccessfulCopy(t *testing.T) {
 }
 
 func TestEngineAppendsSourceCloseAfterPrimaryAndFinalSaveFailures(t *testing.T) {
-	for _, label := range []string{"poll source", "save progress", "poll source: save progress"} {
+	for _, label := range []string{"poll source", "save progress", "poll source: save progress", "poll source: unable to join group session"} {
 		for _, finalSaveFails := range []bool{false, true} {
 			for _, closeFails := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/save-%t/close-%t", label, finalSaveFails, closeFails), func(t *testing.T) {

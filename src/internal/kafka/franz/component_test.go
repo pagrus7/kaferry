@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -20,6 +21,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 	"go.uber.org/goleak"
 )
 
@@ -52,6 +54,43 @@ func componentContext(t *testing.T) context.Context {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	t.Cleanup(cancel)
 	return ctx
+}
+
+func TestSourceReportsNativeGroupSessionNegotiationEOF(t *testing.T) {
+	// Given the production source and an established group connection that closes during join.
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"), kfake.MaxVersions(kversion.V4_4_0()))
+	defer cluster.Close()
+	p := componentPlan(t, cluster)
+	_, connection := componentConnection(t, p)
+	input, _, err := connection.Source(t.Context(), p, "fp", config.Defaults("").Worker, nil)
+	require.NoError(t, err)
+	defer input.Close()
+	var joining atomic.Bool
+	cluster.ControlKey(int16(kmsg.JoinGroup), func(kmsg.Request) (kmsg.Response, error, bool) {
+		joining.Store(true)
+		return nil, io.EOF, true
+	})
+	cluster.ControlKey(int16(kmsg.ApiVersions), func(kmsg.Request) (kmsg.Response, error, bool) {
+		if !joining.Load() {
+			cluster.KeepControl()
+			return nil, nil, false
+		}
+		return nil, io.EOF, true
+	})
+	// When replacement negotiation closes, poll through the real SDK's group error injection.
+	ctx := componentContext(t)
+	require.NoError(t, input.Start(ctx, &lifecycleMock{}, &saveObserver{}))
+	for err == nil && ctx.Err() == nil {
+		_, err = input.Poll(ctx, 20*time.Millisecond)
+	}
+	// Then the source preserves the native session wrapper, EOF type and fatal classification.
+	var session *kgo.ErrGroupSession
+	var negotiation *kgo.ErrFirstReadEOF
+	require.ErrorAs(t, err, &session)
+	require.ErrorAs(t, err, &negotiation)
+	require.ErrorIs(t, err, io.EOF)
+	require.NotErrorIs(t, err, core.ErrRecoverable)
+	require.Equal(t, "unable to join group session: "+negotiation.Error(), err.Error())
 }
 
 func TestConsumerConstructionDoesNotJoinBeforeStartAndCanClose(t *testing.T) {

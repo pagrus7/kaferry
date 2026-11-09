@@ -23,7 +23,8 @@ import (
 func brokerSourceOperationEOF(terminal string) bool {
 	lines := strings.Split(terminal, "\n")
 	switch lines[0] {
-	case "poll source: " + brokerNegotiationEOF, "save progress: " + brokerNegotiationEOF, "poll source: save progress: " + brokerNegotiationEOF:
+	case "poll source: " + brokerNegotiationEOF, "save progress: " + brokerNegotiationEOF,
+		"poll source: save progress: " + brokerNegotiationEOF, "poll source: unable to join group session: " + brokerNegotiationEOF:
 	default:
 		return false
 	}
@@ -206,7 +207,7 @@ func sourceExitMutations(t *testing.T, proof *brokerFailureProof, logs, terminal
 
 func sourceExitTerminals() []string {
 	var terminals []string
-	for _, primary := range []string{"poll source: ", "save progress: ", "poll source: save progress: "} {
+	for _, primary := range []string{"poll source: ", "save progress: ", "poll source: save progress: ", "poll source: unable to join group session: "} {
 		for _, save := range []string{"", "\nsave progress: " + brokerNegotiationEOF} {
 			for _, closeInput := range []string{"", "\nclose Kafka input: " + brokerNegotiationEOF} {
 				terminals = append(terminals, primary+brokerNegotiationEOF+save+closeInput)
@@ -218,9 +219,13 @@ func sourceExitTerminals() []string {
 
 func sourceExitInvalidTerminals() []string {
 	poll, save, closeInput := "poll source: "+brokerNegotiationEOF, "save progress: "+brokerNegotiationEOF, "close Kafka input: "+brokerNegotiationEOF
+	join := "poll source: unable to join group session: " + brokerNegotiationEOF
 	return []string{closeInput, closeInput + "\n" + save, poll + "\n" + poll, save + "\n" + poll,
 		poll + "\n" + closeInput + "\n" + save, save + "\n" + save + "\n" + save,
 		save + "\n" + closeInput + "\n" + closeInput, save + "\n" + save + "\n" + closeInput + "\n" + save,
 		poll + "\npoll source: save progress: " + brokerNegotiationEOF,
-		save + "\nsave progress: " + networkFirstResponseEOF, save + "\nclose Kafka input: " + networkFirstResponseEOF}
+		save + "\nsave progress: " + networkFirstResponseEOF, save + "\nclose Kafka input: " + networkFirstResponseEOF,
+		join + "\n" + join, poll + "\n" + join, join + "\n" + poll,
+		"save progress: unable to join group session: " + brokerNegotiationEOF,
+		"poll source: unable to join group session: " + networkFirstResponseEOF}
 }
