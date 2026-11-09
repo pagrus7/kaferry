@@ -190,7 +190,7 @@ func brokerContextualFailure(logs string, proof *brokerFailureProof) (string, bo
 			(proof.forcedCopy(logs) || proof.networkOutageExit(logs))
 	}
 	if proof.sourceOperationExit(logs, strings.Join(terminal, "\n"), work.Summary) {
-		return terminal[0], true
+		return strings.Join(terminal, "\n"), true
 	}
 	if work.Summary == nil || !proof.negotiationEOFContext(logs, len(terminal)) || len(terminal) != work.Summary.Submitted-work.Summary.Confirmed {
 		return "", false

@@ -279,45 +279,61 @@ func TestRunnerStopsBeforeNextInputWhenPeriodicCheckpointFails(t *testing.T) {
 	}
 }
 
-func TestRunnerSaveRequestFailureRemainsFatalAfterCleanupSucceeds(t *testing.T) {
-	// Given confirmed output and a request-level failure on the first periodic save.
-	r, source, sink, store, clock := fixture(t)
-	r.plan.Source.Kind = "TOPIC"
-	first, unread := incoming(0, 0, 1), incoming(0, 1, 1)
-	source.events = []Event{{Input: &first}, {Input: &unread}}
-	failure := errors.New("coordinator request failed")
-	r.flow.lastCommit = clock.Now()
-	sink.submit = func(_ Record, token Token) error {
-		sink.reports <- Delivery{Token: token}
-		clock.now = clock.now.Add(time.Second)
-		return nil
-	}
-	failed := false
-	r.store = saveFunc(func(ctx context.Context, cursors []Cursor) (map[int32]error, error) {
-		results, err := store.Save(ctx, cursors)
-		if !failed {
-			failed = true
-			return nil, failure
-		}
-		return results, err
-	})
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	deadline := clock.Now().Add(5 * time.Second)
-	clock.tick = func() {
-		if !clock.Now().Before(deadline) {
-			cancel()
-		}
-	}
+func TestRunnerSaveRequestFailureRemainsFatalAfterFinalSave(t *testing.T) {
+	for _, finalSaveFails := range []bool{false, true} {
+		t.Run(map[bool]string{false: "final save succeeds", true: "final save fails"}[finalSaveFails], func(t *testing.T) {
+			// Given confirmed output and a request-level failure on the first periodic save.
+			r, source, sink, store, clock := fixture(t)
+			r.plan.Source.Kind = "TOPIC"
+			first, unread := incoming(0, 0, 1), incoming(0, 1, 1)
+			source.events = []Event{{Input: &first}, {Input: &unread}}
+			failure := errors.New("coordinator request failed")
+			finalFailure := errors.New(failure.Error())
+			r.flow.lastCommit = clock.Now()
+			sink.submit = func(_ Record, token Token) error {
+				sink.reports <- Delivery{Token: token}
+				clock.now = clock.now.Add(time.Second)
+				return nil
+			}
+			failed := false
+			r.store = saveFunc(func(ctx context.Context, cursors []Cursor) (map[int32]error, error) {
+				results, err := store.Save(ctx, cursors)
+				if !failed {
+					failed = true
+					return nil, failure
+				}
+				if finalSaveFails {
+					return nil, finalFailure
+				}
+				return results, err
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			deadline := clock.Now().Add(5 * time.Second)
+			clock.tick = func() {
+				if !clock.Now().Before(deadline) {
+					cancel()
+				}
+			}
 
-	// When the request fails, then cleanup saves only the confirmed prefix and exit 1 retains the cause.
-	err := r.Run(ctx)
-	require.EqualError(t, err, "save progress: coordinator request failed")
-	require.ErrorIs(t, err, failure)
-	require.Equal(t, 1, exitCode(err))
-	require.Equal(t, []Event{{Input: &unread}}, source.events)
-	require.Equal(t, uint64(1), r.submitted)
-	require.Equal(t, r.submitted, r.confirmed)
-	require.Equal(t, int64(1), r.tracker.Saved(0))
-	require.Equal(t, [][]Cursor{{{Partition: 0, Position: 1}}, {{Partition: 0, Position: 1}}}, store.saves)
+			// When the periodic save fails and shutdown retries the same confirmed prefix.
+			err := r.Run(ctx)
+			// Then exit 1 retains every save failure and never claims failed saves succeeded.
+			wantError := "save progress: coordinator request failed"
+			wantSaved := int64(1)
+			if finalSaveFails {
+				wantError += "\nsave progress: coordinator request failed"
+				wantSaved = 0
+				require.ErrorIs(t, err, finalFailure, "final save cause was lost")
+			}
+			require.EqualError(t, err, wantError)
+			require.ErrorIs(t, err, failure)
+			require.Equal(t, 1, exitCode(err))
+			require.Equal(t, []Event{{Input: &unread}}, source.events)
+			require.Equal(t, uint64(1), r.submitted)
+			require.Equal(t, r.submitted, r.confirmed)
+			require.Equal(t, wantSaved, r.tracker.Saved(0))
+			require.Equal(t, [][]Cursor{{{Partition: 0, Position: 1}}, {{Partition: 0, Position: 1}}}, store.saves)
+		})
+	}
 }

@@ -22,7 +22,8 @@ import (
 
 func brokerSourceOperationEOF(terminal string) bool {
 	return terminal == "poll source: "+brokerNegotiationEOF || terminal == "save progress: "+brokerNegotiationEOF ||
-		terminal == "poll source: save progress: "+brokerNegotiationEOF
+		terminal == "poll source: save progress: "+brokerNegotiationEOF ||
+		terminal == "save progress: "+brokerNegotiationEOF+"\nsave progress: "+brokerNegotiationEOF
 }
 
 func (p *brokerFailureProof) sourceOperationExit(logs, terminal string, summary *copySummary) bool {
@@ -85,12 +86,12 @@ func TestBrokerLabelledSourceEOFRequiresBoundAllConfirmedExit(t *testing.T) {
 		require.ErrorIs(t, err, io.EOF)
 		require.EqualError(t, err, brokerNegotiationEOF)
 	})
-	for _, label := range []string{"poll source: ", "save progress: ", "poll source: save progress: "} {
-		t.Run(label, func(t *testing.T) {
+	for _, terminal := range []string{"poll source: " + brokerNegotiationEOF, "save progress: " + brokerNegotiationEOF,
+		"poll source: save progress: " + brokerNegotiationEOF, "save progress: " + brokerNegotiationEOF + "\nsave progress: " + brokerNegotiationEOF} {
+		t.Run(terminal, func(t *testing.T) {
 			// Given live healthy progress from this controlled child, when a
 			// registered source restart is followed by a labelled all-confirmed
 			// exit, then the same binary/group restart gate can classify it.
-			terminal := label + brokerNegotiationEOF
 			summary := `{"msg":"copy summary","submitted":1267,"confirmed":1267,"peak_uncommitted_records":270,"peak_uncommitted_bytes":617109}` + "\n"
 			process := brokerLogChild(t, summary+terminal)
 			binary, err := os.ReadFile(process.command.Path)
@@ -133,6 +134,16 @@ func sourceExitMutations(t *testing.T, proof *brokerFailureProof, logs, terminal
 	changedLogs := []string{strings.ReplaceAll(logs, `"confirmed":1267`, `"confirmed":1266`)}
 	for _, replacement := range []string{brokerNegotiationEOF, terminal + " context deadline exceeded", terminal + "\ncontext deadline exceeded", " " + terminal, terminal + " ", "poll source: TLS handshake failed"} {
 		changedLogs = append(changedLogs, strings.ReplaceAll(logs, terminal, replacement))
+	}
+	save := "save progress: " + brokerNegotiationEOF
+	changedLogs = append(changedLogs, strings.ReplaceAll(logs, terminal, save+"\n"+save+"\n"+save))
+	for _, first := range []string{"poll source: ", "save progress: ", "poll source: save progress: "} {
+		for _, second := range []string{"poll source: ", "save progress: ", "poll source: save progress: "} {
+			if first != "save progress: " || second != first {
+				pair := first + brokerNegotiationEOF + "\n" + second + brokerNegotiationEOF
+				changedLogs = append(changedLogs, strings.ReplaceAll(logs, terminal, pair))
+			}
+		}
 	}
 	for _, changed := range changedLogs {
 		data, err := json.Marshal(proof)

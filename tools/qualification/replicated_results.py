@@ -126,7 +126,7 @@ def worker_work(case, worker, witness, raw):
     if worker['exit_code'] == 0:
         if terminal:
             raise ValueError('completed broker worker has a terminal failure')
-    elif terminal in SOURCE_OPERATION_EOFS:
+    elif terminal in SOURCE_OPERATION_EOFS or terminal == '\n'.join([SOURCE_OPERATION_EOFS[1]]*2):
         if (summary['submitted'] <= 0 or summary['submitted'] != summary['confirmed'] or
                 not source_operation_failure(case, worker, witness, raw)):
             raise ValueError('labelled source/save EOF lacks a bound all-confirmed active source fault')
