@@ -50,11 +50,14 @@ func TestBrokerCurrentProgressDoesNotWaitForChildExit(t *testing.T) {
 	require.NoError(t, process.wait())
 }
 
-func brokerLogChild(t *testing.T, terminal string) *cliProcess {
+func brokerLogChild(t *testing.T, terminal string, setup ...func(*cliProcess)) *cliProcess {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	t.Cleanup(cancel)
 	process := &cliProcess{command: exec.CommandContext(ctx, os.Args[0], "-test.run=^TestBrokerCurrentLogChild$"), done: make(chan struct{})}
+	for _, configure := range setup {
+		configure(process)
+	}
 	process.command.Env = append(os.Environ(), "KAFERRY_BROKER_LOG_CHILD=1", "KAFERRY_BROKER_LOG_CHILD_ERROR="+terminal)
 	var err error
 	process.stdin, err = process.command.StdinPipe()

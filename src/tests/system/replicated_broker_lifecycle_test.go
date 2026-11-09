@@ -3,10 +3,12 @@
 package compat
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -159,6 +161,7 @@ func (w *brokerExitWitness) binds(logs string, before brokerObservation) bool {
 }
 
 func TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions(t *testing.T) {
+	t.Run("original cancellation contract", brokerCancellationWitness)
 	for _, terminal := range []string{brokerForcedSaveExit, brokerForcedWritesExit} {
 		t.Run(terminal, func(t *testing.T) {
 			// Given complete progress from this actual live lifetime, when its
@@ -240,4 +243,74 @@ func TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions(
 	require.NoError(t, err)
 	require.NotEmpty(t, exit.Witness.LogError)
 	require.Nil(t, exit.Witness.Log)
+}
+
+func brokerCancellationWitness(t *testing.T) {
+	// Given a custom context hook that reenters signal recording, when context
+	// cancellation runs it, then the original action completes without holding
+	// the intent mutex and the generic callback is not labelled as an OS signal.
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	called := make(chan error, 1)
+	process := brokerLogChild(t, "", func(p *cliProcess) {
+		p.command = exec.CommandContext(ctx, p.command.Path, p.command.Args[1:]...)
+		p.command.Cancel = func() error {
+			if !p.intentMu.TryLock() {
+				err := fmt.Errorf("cancellation wrapper held intent mutex across original callback")
+				_ = p.command.Process.Kill()
+				called <- err
+				return err
+			}
+			p.intentMu.Unlock()
+			err := p.signal(os.Kill, "custom cancellation hook")
+			called <- err
+			return err
+		}
+	})
+	cancel()
+	select {
+	case err := <-called:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("original cancellation callback did not complete")
+	}
+	select {
+	case <-process.done:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled child did not exit")
+	}
+	require.Error(t, process.wait())
+	require.Len(t, process.exitIntent, 2)
+	require.Equal(t, "context cancellation", process.exitIntent[0].Reason)
+	require.Empty(t, process.exitIntent[0].Signal, "generic callback intent cannot identify its actual signal")
+	require.Equal(t, "custom cancellation hook", process.exitIntent[1].Reason)
+	require.Equal(t, os.Kill.String(), process.exitIntent[1].Signal)
+	for _, commandContext := range []bool{false, true} {
+		t.Run(fmt.Sprint(commandContext), func(t *testing.T) {
+			// Given either a plain command or a context command with Cancel=nil,
+			// when the context is cancelled, then start preserves that nil hook
+			// and the child remains live until its ordinary input completes.
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			child := brokerLogChild(t, "", func(p *cliProcess) {
+				if commandContext {
+					p.command = exec.CommandContext(ctx, p.command.Path, p.command.Args[1:]...)
+				} else {
+					p.command = exec.Command(p.command.Path, p.command.Args[1:]...)
+				}
+				p.command.Cancel = nil
+			})
+			require.Nil(t, child.command.Cancel)
+			cancel()
+			require.False(t, child.finished())
+			require.NoError(t, child.stdin.Close())
+			select {
+			case <-child.done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("nil-callback child did not finish after input closed")
+			}
+			require.NoError(t, child.wait())
+			require.Empty(t, child.exitIntent, "nil callback emits no cancellation intent")
+		})
+	}
 }

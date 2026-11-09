@@ -91,8 +91,13 @@ func (p *cliProcess) start(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, log.Close()) })
 	p.command.Stderr = log
 	p.command.Stdout = log
-	if p.command.Cancel != nil {
-		p.command.Cancel = func() error { return p.signal(os.Kill, "context cancellation") }
+	if cancel := p.command.Cancel; cancel != nil {
+		p.command.Cancel = func() error {
+			// A custom callback may stop a process group or close input without
+			// sending a signal. Preserve it and record only the known intent.
+			p.recordIntent("", "context cancellation")
+			return cancel()
+		}
 	}
 	require.NoError(t, p.command.Start())
 	go func() {
@@ -144,10 +149,14 @@ func (p *cliProcess) signal(signal os.Signal, reason ...string) error {
 	if len(reason) == 1 {
 		intent = reason[0]
 	}
+	p.recordIntent(signal.String(), intent)
+	return p.command.Process.Signal(signal)
+}
+
+func (p *cliProcess) recordIntent(signal, reason string) {
 	p.intentMu.Lock()
 	defer p.intentMu.Unlock()
-	p.intent = append(p.intent, cliSignalIntent{At: time.Now().UTC(), Signal: signal.String(), Reason: intent})
-	return p.command.Process.Signal(signal)
+	p.intent = append(p.intent, cliSignalIntent{At: time.Now().UTC(), Signal: signal, Reason: reason})
 }
 func (p *cliProcess) pid() int { return p.command.Process.Pid }
 func (p *cliProcess) logs() string {
