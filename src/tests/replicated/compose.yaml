@@ -43,6 +43,8 @@ services:
   toxiproxy:
     image: ghcr.io/shopify/toxiproxy:2.13.0@sha256:5d3dae09bc185dcc5ff6cf43abf6062a4a720aff0c4306a471e773acdcd107aa
     profiles: [replicated]
+    sysctls:
+      net.ipv4.ip_local_reserved_ports: "8474,26092,26093,26094,27092,27093,27094,28092,28093,28094,29092,29093,29094,46092,46093,46094,46192,46193,46194,46292,46293,46294,46392,46393,46394,47092,47093,47094,47192,47193,47194,47292,47293,47294,47392,47393,47394"
     environment:
       KAFERRY_REPLICATED_RUN_ID: ${KAFERRY_REPLICATED_RUN_ID:-}
     ports:
