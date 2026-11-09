@@ -7,6 +7,10 @@
 - Retain qualification storage ownership markers when data deletion fails, so remaining data can still be checked before later cleanup.
 - Identify source polling and progress saving in copy errors, while preserving the underlying failure and existing exit behavior.
 
+## Fixes
+
+- Retry destination connection EOFs during API negotiation within the existing request and delivery limits. Final delivery failures still stop copying.
+
 ## Upgrade
 
 - For a release containing this layout, source installations use `go install github.com/pagrus7/kaferry/src/cmd/kaferry@VERSION`, with `CGO_ENABLED=0`. Earlier release tags retain their original `cmd/kaferry` path. Downloaded binaries and container commands keep the same names and behavior.

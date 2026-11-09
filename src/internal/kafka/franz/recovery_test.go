@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/pagrus7/kaferry/src/internal/plan"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -89,6 +92,134 @@ func await(t *testing.T, done <-chan struct{}, label string) {
 		t.Fatal(label + " did not finish within 2 seconds")
 	}
 }
+
+func componentSink(t *testing.T, cluster *kfake.Cluster, limits config.Worker) core.Sink {
+	t.Helper()
+	p := componentPlan(t, cluster)
+	connection, err := componentFactory().Open(componentContext(t), p.Destination)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = connection.Close(context.Background()) })
+	_, err = connection.Describe(componentContext(t), false)
+	require.NoError(t, err)
+	sink, err := connection.Sink(componentContext(t), limits)
+	require.NoError(t, err)
+	t.Cleanup(sink.Close)
+	return sink
+}
+
+func TestProductionSinkRetriesNegotiationEOFAfterConnectionLoss(t *testing.T) {
+	// Given the production sink with an acknowledged write on its established connection.
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"))
+	t.Cleanup(cluster.Close)
+	limits := config.Defaults("").Worker
+	limits.DeliveryTimeout.Duration = 2 * time.Second
+	sink := componentSink(t, cluster, limits)
+	require.NoError(t, sink.Submit(t.Context(), core.Record{Value: []byte("warmup")}, core.Token{}))
+	require.NoError(t, receiveDelivery(t, sink).Err)
+	cut := make(chan struct{})
+	cluster.ControlKey(int16(kmsg.Produce), func(kmsg.Request) (kmsg.Response, error, bool) {
+		return nil, io.EOF, true
+	})
+	cluster.ControlKey(int16(kmsg.ApiVersions), func(kmsg.Request) (kmsg.Response, error, bool) {
+		close(cut)
+		return nil, io.EOF, true
+	})
+	// When the established connection and the replacement negotiation each close once,
+	// submit each accepted record only once and let the native producer retry it.
+	want := []string{"warmup", "first", "second", "third"}
+	for index, value := range want[1:] {
+		require.NoError(t, sink.Submit(t.Context(), core.Record{Value: []byte(value)}, core.Token{Sequence: uint64(index + 1)}))
+	}
+	await(t, cut, "replacement negotiation")
+	for index := range want[1:] {
+		delivery := receiveDelivery(t, sink)
+		require.NoError(t, delivery.Err)
+		require.Equal(t, core.Token{Sequence: uint64(index + 1)}, delivery.Token)
+	}
+	// Then the original offers are confirmed in order, with no extra destination writes.
+	require.EqualValues(t, len(want), cluster.PartitionInfo("output", 0).HighWatermark)
+	reader := componentClient(t, cluster, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"output": {0: kgo.NewOffset().AtStart()}}))
+	for index, record := range readN(t, reader, len(want)) {
+		require.Equal(t, want[index], string(record.Value))
+		require.EqualValues(t, index, record.Offset)
+	}
+}
+
+func TestProductionSinkNegotiationEOFRetriesRemainBounded(t *testing.T) {
+	for _, closing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("close=%t", closing), func(t *testing.T) {
+			// Given an established production sink whose replacement negotiations all close.
+			cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"))
+			t.Cleanup(cluster.Close)
+			limits := config.Defaults("").Worker
+			limits.DeliveryTimeout.Duration = 500 * time.Millisecond
+			sink := componentSink(t, cluster, limits)
+			require.NoError(t, sink.Submit(t.Context(), core.Record{Value: []byte("warmup")}, core.Token{}))
+			require.NoError(t, receiveDelivery(t, sink).Err)
+			cluster.ControlKey(int16(kmsg.Produce), func(kmsg.Request) (kmsg.Response, error, bool) {
+				return nil, io.EOF, true
+			})
+			cut := make(chan struct{}, 1)
+			cluster.ControlKey(int16(kmsg.ApiVersions), func(kmsg.Request) (kmsg.Response, error, bool) {
+				cluster.KeepControl()
+				select {
+				case cut <- struct{}{}:
+				default:
+				}
+				return nil, io.EOF, true
+			})
+			// When negotiation cannot recover, the existing delivery deadline or close cancels it.
+			started := time.Now()
+			token := core.Token{Sequence: 1}
+			require.NoError(t, sink.Submit(t.Context(), core.Record{Value: []byte("unconfirmed")}, token))
+			await(t, cut, "replacement negotiation")
+			if closing {
+				sink.Close()
+			}
+			// Then a failed delivery remains visible, does not append output and finishes promptly.
+			delivery := receiveDelivery(t, sink)
+			require.Equal(t, token, delivery.Token)
+			if closing {
+				require.True(t, errors.Is(delivery.Err, context.Canceled) || errors.Is(delivery.Err, kgo.ErrClientClosed), "close reported %v", delivery.Err)
+			} else {
+				require.ErrorIs(t, delivery.Err, context.DeadlineExceeded)
+			}
+			require.Less(t, time.Since(started), 2*time.Second)
+			require.EqualValues(t, 1, cluster.PartitionInfo("output", 0).HighWatermark)
+		})
+	}
+}
+
+func TestProductionSinkDoesNotRetryPermanentRejection(t *testing.T) {
+	// Given the production sink and a broker that rejects every produce with an authorization error.
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"))
+	t.Cleanup(cluster.Close)
+	sink := componentSink(t, cluster, config.Defaults("").Worker)
+	var attempts atomic.Int64
+	cluster.ControlKey(int16(kmsg.Produce), func(request kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
+		attempts.Add(1)
+		req := request.(*kmsg.ProduceRequest)
+		response := req.ResponseKind().(*kmsg.ProduceResponse)
+		for _, topic := range req.Topics {
+			result := kmsg.ProduceResponseTopic{Topic: topic.Topic, TopicID: topic.TopicID}
+			for _, partition := range topic.Partitions {
+				result.Partitions = append(result.Partitions, kmsg.ProduceResponseTopicPartition{Partition: partition.Partition, ErrorCode: kerr.TopicAuthorizationFailed.Code})
+			}
+			response.Topics = append(response.Topics, result)
+		}
+		return response, nil, true
+	})
+	// When one original offer is accepted by the adapter, then its permanent failure is reported once.
+	token := core.Token{Sequence: 1}
+	require.NoError(t, sink.Submit(t.Context(), core.Record{Value: []byte("rejected")}, token))
+	delivery := receiveDelivery(t, sink)
+	require.Equal(t, token, delivery.Token)
+	require.ErrorIs(t, delivery.Err, kerr.TopicAuthorizationFailed)
+	require.EqualValues(t, 1, attempts.Load())
+	require.Zero(t, cluster.PartitionInfo("output", 0).HighWatermark)
+}
+
 func TestAmbiguousDeliveryReplaysWithoutLosingProgress(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	// Given three source records and a broker whose second produce reply is lost.
