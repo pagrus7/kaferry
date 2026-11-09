@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,6 +35,7 @@ type brokerObservation struct {
 	Pending       copySummary                   `json:"cli_progress"`
 	Publishing    replicatedPublishing          `json:"publishing"`
 	QueryErrors   []string                      `json:"query_errors,omitempty"`
+	Readiness     []brokerHealthCheck           `json:"broker_readiness,omitempty"`
 }
 
 type brokerCopy struct {
@@ -43,6 +43,7 @@ type brokerCopy struct {
 	ctx                                           context.Context
 	lab                                           *faults.Lab
 	metadata                                      faults.KafkaMetadata
+	clusters                                      map[string]string
 	src, dst, group, directory, config, statement string
 	caseID                                        string
 	exits                                         map[*cliProcess]*brokerRetainedExit
@@ -92,8 +93,8 @@ func replicatedBrokerFault(t *testing.T, name string) {
 	s.lab = &faults.Lab{Project: os.Getenv("KAFERRY_FIXTURE_PROJECT"), API: os.Getenv("KAFERRY_TOXIPROXY_API"), Metadata: metadata}
 	prefix := fmt.Sprintf("kaferry-broker-%d", time.Now().UnixNano())
 	s.src, s.dst, s.group = prefix+"-source", prefix+"-destination", prefix+"-group"
-	replicatedTopic(ctx, t, metadata["source"], s.src)
-	replicatedTopic(ctx, t, metadata["destination"], s.dst)
+	replicatedTopic(ctx, t, metadata["source"].Client, s.src)
+	replicatedTopic(ctx, t, metadata["destination"].Client, s.dst)
 	s.verifySettings()
 	s.oracle = startFaultOracle(t, "broker/"+name, strings.Join(faults.Endpoints("source", 0), ","),
 		strings.Join(faults.Endpoints("destination", 0), ","), s.src, s.dst, s.group, replicatedPartitions, false)
@@ -145,7 +146,7 @@ func replicatedBrokerFault(t *testing.T, name string) {
 		exactCaps = exactCaps && worker["lifetime_highwater_available"] == true
 	}
 	data, err := json.MarshalIndent(map[string]any{"id": "broker/" + name, "source_partitions": replicatedPartitions,
-		"source_topic": s.src, "destination_topic": s.dst, "group": s.group, "baseline": baseline, "events": s.events,
+		"source_topic": s.src, "destination_topic": s.dst, "group": s.group, "fixture_project": s.lab.Project, "cluster_ids": s.clusters, "readiness_criterion": brokerReadinessCriterion, "baseline": baseline, "events": s.events,
 		"publishing": publication, "worker_measurements": s.measurements, "restarts": len(s.workers) - 1, "restart_scope": "same selected binary, SQL, group and worker1 route",
 		"exact_lifetime_work_caps_qualified": exactCaps,
 		"timeout_milliseconds":               durationMilliseconds(timeouts), "safety_case": map[string]string{"observations": relative, "sha256": fmt.Sprintf("%x", sha256.Sum256(safety))}}, "", "  ")
@@ -217,7 +218,7 @@ func (s *brokerCopy) start() {
 			s.t.Error("retain selected worker log: ", err)
 		}
 	})
-	waitMembers(s.t, s.metadata["source"], s.group, 1, replicatedPartitions, nil)
+	waitMembers(s.t, s.metadata["source"].Client, s.group, 1, replicatedPartitions, nil)
 }
 
 func (s *brokerCopy) measureLast(reason string) {
@@ -387,6 +388,16 @@ func (s *brokerCopy) topology(ctx context.Context, side, topic string) ([]faults
 	if err != nil {
 		return nil, fmt.Errorf("%s topology request: %w", side, err)
 	}
+	if metadata.Cluster == "" {
+		return nil, fmt.Errorf("%s topology omitted cluster identity", side)
+	}
+	if s.clusters == nil {
+		s.clusters = make(map[string]string)
+	}
+	if previous := s.clusters[side]; previous != "" && previous != metadata.Cluster {
+		return nil, fmt.Errorf("%s topology cluster identity changed", side)
+	}
+	s.clusters[side] = metadata.Cluster
 	if err := metadata.Topics[topic].Err; err != nil {
 		return nil, fmt.Errorf("%s topology topic: %w", side, err)
 	}
@@ -459,43 +470,6 @@ func fullyReplicated(state brokerObservation, side string) bool {
 	return true
 }
 
-func (s *brokerCopy) healthy(ctx context.Context, targets ...faults.Target) bool {
-	check := brokerHealthCheck{At: time.Now().UTC()}
-	defer func() { s.healthChecks = append(s.healthChecks, check) }()
-	args := []string{"inspect", "--format", brokerHealthFormat}
-	for _, target := range targets {
-		args = append(args, target.Container)
-		check.Containers = append(check.Containers, target.Container)
-	}
-	run := brokerHealthDocker
-	if s.lab != nil && s.lab.Docker != nil {
-		run = s.lab.Docker
-	}
-	data, err := run(ctx, args...)
-	check.Output = brokerDiagnosticText(string(data))
-	if err != nil {
-		check.Diagnostic = "unavailable"
-		if errors.Is(err, errBrokerHealthTruncated) {
-			check.Diagnostic = "truncated"
-		}
-		check.Error = brokerDiagnosticText(err.Error())
-		return false
-	}
-	check.Details, check.Diagnostic, err = brokerHealthSnapshots(data, len(targets))
-	if err != nil {
-		check.Error = brokerDiagnosticText(err.Error())
-		return false
-	}
-	var status strings.Builder
-	ready := true
-	for _, detail := range check.Details {
-		fmt.Fprintf(&status, "%t %s\n", *detail.Running, detail.Health.Status)
-		ready = ready && *detail.Running && detail.Health.Status == "healthy"
-	}
-	check.Output, check.Passed = status.String(), ready
-	return ready
-}
-
 func (s *brokerCopy) inject(role faults.Role, kind string, before brokerObservation) (*faults.Injection, int) {
 	require.True(s.t, brokerHealthyCopy(before), "fault requires healthy verified plaintext copying before injection")
 	process := s.workers[len(s.workers)-1]
@@ -530,9 +504,10 @@ func (s *brokerCopy) heal(injection *faults.Injection, window int, before broker
 	require.NoError(s.t, injection.Heal(s.ctx))
 	allowFailure := injection.Event.Fault.Kind != "cut"
 	health := s.wait("restored broker health and all 24 ISR sets", allowFailure, func(query context.Context, state brokerObservation) bool {
-		return s.healthy(query, injection.Event.Targets[0]) && fullyReplicated(state, injection.Event.Role.Cluster)
+		return s.healthy(query, injection.Event.Targets[0]) && fullyReplicated(state, injection.Event.Role.Cluster) && brokerReadinessISR(s.healthChecks, injection.Event.Role.Cluster, -1, 3, -1)
 	})
 	health.BrokerHealthy = true
+	health.Readiness = slices.Clone(s.healthChecks)
 	if s.workers[len(s.workers)-1].finished() {
 		// The worker may exit during the successful health query, after wait's
 		// liveness check. Classify that completed lifetime at the restart boundary.
@@ -545,6 +520,7 @@ func (s *brokerCopy) heal(injection *faults.Injection, window int, before broker
 		return fullyReplicated(state, injection.Event.Role.Cluster) && allAbove(state.Saved, before.Saved, 2) && allAbove(state.Publishing.Acknowledged, before.Publishing.Acknowledged, 2)
 	})
 	after.BrokerHealthy = health.BrokerHealthy
+	after.Readiness = health.Readiness
 	s.oracle.healed(s.t, window, "original targets restored; broker health, ISR3, publishing and saved progress observed")
 	return after
 }
@@ -582,13 +558,14 @@ func (s *brokerCopy) isrLoss(before brokerObservation) {
 	partition := -1
 	isr := s.wait("actual ISR1 with the leader and controller quorum alive", false, func(query context.Context, state brokerObservation) bool {
 		selected, ok := brokerISRPartition(injection.Event, before, state)
-		if !ok || !s.healthy(query, controllers...) || s.destinationMinISR(query) != "2" {
+		if !ok || !s.healthy(query, controllers...) || !brokerReadinessISR(s.healthChecks, "destination", int32(selected), 1, injection.Event.Targets[0].Broker) || s.destinationMinISR(query) != "2" {
 			return false
 		}
 		partition = selected
 		return true
 	})
 	isr.BrokerHealthy = true
+	isr.Readiness = slices.Clone(s.healthChecks)
 	stalled := s.wait("new source input cannot advance destination or saved target prefix below min ISR", false, func(_ context.Context, state brokerObservation) bool {
 		part := state.Topology["destination"][partition]
 		if part.Leader != broker || len(part.ISR) != 1 {

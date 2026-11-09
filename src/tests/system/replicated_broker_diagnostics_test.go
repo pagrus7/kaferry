@@ -13,6 +13,9 @@ import (
 )
 
 type brokerHealthCheck struct {
+	Criterion  string                 `json:"criterion"`
+	Deadline   time.Time              `json:"deadline"`
+	Probes     []brokerAPIProbe       `json:"api_probes,omitempty"`
 	At         time.Time              `json:"at"`
 	Containers []string               `json:"containers"`
 	Output     string                 `json:"output"`

@@ -13,6 +13,7 @@ from tools.ci.suites import REPLICATED_CASES, fault_timeout_catalog
 from tools.qualification.replicated_results import (EXACT_SCOPE, NEGOTIATION_EOF,
                                                   SAMPLED_SCOPE, broker_case, collect)
 from tools.qualification.broker_lifecycle import FORCED_COPY_PHASES
+from tools.qualification.broker_readiness import CRITERION, admin
 
 FORCED_SAVE_EXIT = next(key for key, phase in FORCED_COPY_PHASES.items() if phase == "saving progress")
 BINARY = "a"*64
@@ -38,10 +39,33 @@ def state(second, count):
                 worker=dict(lifetime=dict(number=1,pid=123,started_at=stamp(2),binary_sha256=BINARY),log_prefix_bytes=len(PROGRESS_BYTES),log_prefix_sha256=checksum(PROGRESS_BYTES)))
 
 
+def readiness(case, observation, targets, at):
+    details, probes = [], []
+    for target in targets:
+        side, broker = target['cluster'], target['broker']
+        topic = case['source_topic' if side == 'source' else 'destination_topic']
+        response = dict(Version=13, ErrorCode=0, ClusterID=case['cluster_ids'][side],
+                        Brokers=[dict(NodeID=n, Host='127.0.0.1', Port=int(admin(side,n).split(':')[1])) for n in (1,2,3)],
+                        Topics=[dict(Topic=topic, ErrorCode=0, Partitions=[dict(Partition=n, ErrorCode=0, Leader=p['Leader'], ISR=p['ISR'])
+                                                                      for n,p in enumerate(observation['topology'][side])])])
+        raw = json.dumps(response)
+        probes.append(dict(target=target, client_cluster=side, route='admin', api_key=3, all_topics=True,
+                           expected_address=admin(side,broker), transport_broker=broker, transport_address=admin(side,broker),
+                           remote_address=admin(side,broker), connected_at=stamp(3), started_at=stamp(at+.1),
+                           response_at=stamp(at+.2), finished_at=stamp(at+.3), error='', topic=topic,
+                           cluster_id=case['cluster_ids'][side], response_json=raw, response_sha256=checksum(raw.encode()), response_truncated=False))
+        details.append(dict(ID=target['container'],Project=case['fixture_project'],Service=target['service'],Running=True,StartedAt=stamp(3),
+                            Healthcheck=dict(Test=['CMD','kafka-topics.sh','--list']),
+                            Health=dict(Status='starting',FailingStreak=2,Log=[dict(Start=stamp(4),End=stamp(9),ExitCode=-1,Output='Health check exceeded timeout (5s)')]),
+                            probe_history_state='retained'))
+    observation['broker_readiness'] = [dict(criterion=CRITERION, at=stamp(at),deadline=stamp(at+1.9),
+        containers=[target['container'] for target in targets], passed=True,diagnostic_state='complete',details=details,api_probes=probes)]
+
+
 def proof(id):
     side = 'source' if id in ('broker/source-leader', 'broker/rolling-source') else 'destination'
     rolling, isr = '/rolling-' in id, id.endswith('isr-loss')
-    case = dict(id=id, source_partitions=24, source_topic='source', destination_topic='destination',
+    case = dict(id=id, readiness_criterion=CRITERION, fixture_project='owned-project', cluster_ids=dict(source='source-id', destination='destination-id'), source_partitions=24, source_topic='source', destination_topic='destination',
                 timeout_milliseconds=fault_timeout_catalog()[id], baseline=state(10, 1), events=[],
                 restarts=0, restart_scope='same selected binary, SQL, group and worker1 route', exact_lifetime_work_caps_qualified=True,
                 safety_case=dict(observations='fault-oracle/fresh/case/observations/case.json', sha256='checksum'),
@@ -81,7 +105,7 @@ def proof(id):
             lost['publishing']['acknowledged_by_partition'][6] = 6
             stalled['publishing']['acknowledged_by_partition'][6] = 10
             recovered = state(at+5, 16)
-            event.update(isr_partition=6,isr_lost=lost, stalled=stalled,recovered=recovered, min_insync_replicas=2,controller_targets=[dict(cluster='destination',broker=n,listener='controller',container=f'controller-{n}') for n in (1,2,3)])
+            event.update(isr_partition=6,isr_lost=lost, stalled=stalled,recovered=recovered, min_insync_replicas=2,controller_targets=[dict(cluster='destination',broker=n,service=f'destination-{n}',listener='controller',container=f'controller-{n}',proxy=f'destination-{n}-controller',proxy_container='proxy') for n in (1,2,3)])
             case['publishing'].update(offered_by_partition=[20]*24,acknowledged_by_partition=[20]*24)
             for part in safety['independent_reconciliation']['partitions']:
                 part['expected'] = 20
@@ -89,6 +113,9 @@ def proof(id):
             failover = state(at+2, 4)
             failover['topology'][side][0] = dict(Leader=2, ISR=[2, 3])
             event['failover'] = failover
+        readiness(case,event['recovered'],targets[:1],at+4.1)
+        if isr:
+            readiness(case,event['isr_lost'],event['controller_targets'],at+1.1)
         case['events'].append(event)
         safety['fault_events'].append(dict(target=role, healed_at=at+6, injections=[dict(kind=kind, target={k:v for k,v in fault.items() if k != 'heal'}, at=at+0.5)]))
         previous = recovered
@@ -194,6 +221,49 @@ class ReplicatedResultsTest(unittest.TestCase):
         for id, change in mutations:
             with self.subTest(id=id, change=change), self.assertRaises(ValueError):
                 self.validate(id,change)
+
+    def test_readiness_rejects_boolean_cached_peer_wrong_route_and_late_api_evidence(self):
+        # Given otherwise passing recovery, when its fresh target API proof is
+        # absent, stale, malformed or routed elsewhere, then collection fails.
+        def change_probe(case, edit):
+            edit(case['events'][0]['recovered']['broker_readiness'][0]['api_probes'][0])
+        mutations = [
+            lambda c:c.pop('readiness_criterion'),
+            lambda c:c['events'][0]['recovered'].pop('broker_readiness'),
+            lambda c:c['events'][0]['recovered']['broker_readiness'][0].update(passed=False),
+            lambda c:c['events'][0]['recovered']['broker_readiness'][0]['details'][0].update(Running=False),
+            lambda c:c['events'][0]['recovered']['broker_readiness'][0]['details'][0].update(Project='other'),
+            lambda c:c['events'][0]['recovered']['broker_readiness'][0]['details'][0].update(ID='peer'),
+            lambda c:change_probe(c,lambda p:p.update(transport_broker=2)),
+            lambda c:change_probe(c,lambda p:p.update(target=dict(p['target'],broker=2))),
+            lambda c:change_probe(c,lambda p:p.update(route='internal')),
+            lambda c:change_probe(c,lambda p:p.update(remote_address='127.0.0.1:9999')),
+            lambda c:change_probe(c,lambda p:p.update(client_cluster='source')),
+            lambda c:change_probe(c,lambda p:p.update(all_topics=False)),
+            lambda c:change_probe(c,lambda p:p.update(error='context deadline exceeded')),
+            lambda c:change_probe(c,lambda p:p.update(response_at=stamp(30))),
+            lambda c:change_probe(c,lambda p:p.update(started_at=stamp(1))),
+            lambda c:change_probe(c,lambda p:p.update(response_truncated=True)),
+            lambda c:change_probe(c,lambda p:p.update(response_json='{}')),
+            lambda c:c['events'][0]['recovered']['broker_readiness'][0].update(deadline=stamp(30)),
+        ]
+        for change in mutations:
+            with self.subTest(change=change), self.assertRaises((ValueError,KeyError)):
+                self.validate('broker/destination-leader',lambda c,s:change(c))
+        def invalid_response(case, edit):
+            probe=case['events'][0]['recovered']['broker_readiness'][0]['api_probes'][0]
+            response=json.loads(probe['response_json']);edit(response)
+            probe['response_json']=json.dumps(response);probe['response_sha256']=checksum(probe['response_json'].encode())
+        for edit in (lambda r:r.update(Version=0), lambda r:r.update(ErrorCode=31), lambda r:r.update(ClusterID='source-id'),
+                     lambda r:r['Brokers'][0].update(Port=47093),lambda r:r.update(Topics=[]),
+                     lambda r:r['Topics'][0]['Partitions'][0].update(ISR=[1])):
+            with self.subTest(edit=edit),self.assertRaises(ValueError):
+                self.validate('broker/destination-leader',lambda c,s:invalid_response(c,edit))
+        for edit in (lambda check:check['api_probes'].pop(),
+                     lambda check:check['api_probes'][0].update(finished_at=stamp(24)),
+                     lambda check:check['api_probes'][1].update(target=check['api_probes'][0]['target'])):
+            with self.subTest(edit=edit),self.assertRaises(ValueError):
+                self.validate('broker/destination-isr-loss',lambda c,s:edit(c['events'][0]['isr_lost']['broker_readiness'][0]))
 
     def test_exact_selection_rejects_missing_or_extra_successful_cases(self):
         # Given selected runtime cases, when evidence omits or adds a case,

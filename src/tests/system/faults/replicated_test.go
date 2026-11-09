@@ -37,7 +37,7 @@ func TestReplicatedProxyRoutes(t *testing.T) {
 	for _, cluster := range []string{"source", "destination"} {
 		for worker := 1; worker <= 3; worker++ {
 			t.Run(fmt.Sprintf("%s/worker%d", cluster, worker), func(t *testing.T) {
-				proveProxyRoute(t, lab, metadata[cluster], cluster, worker, func(event Event) { events = append(events, event) })
+				proveProxyRoute(t, lab, metadata[cluster].Client, cluster, worker, func(event Event) { events = append(events, event) })
 			})
 		}
 	}

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from tools.ci.suites import REPLICATED_CASES, fault_timeout_catalog
 from tools.qualification.fault_results import observation_path, validate_case
+from tools.qualification.broker_readiness import validate as validate_readiness
 from tools.qualification.broker_lifecycle import (FORCED_COPY_PHASES, SAMPLED_SCOPE, binds_before, load_lifecycle)
 
 
@@ -196,6 +197,7 @@ def broker_case(directory, id, identity):
                 not advances(recovered['saved'], previous['saved']) or
                 not advances(recovered['publishing']['acknowledged_by_partition'], previous['publishing']['acknowledged_by_partition'])):
             raise ValueError('broker fault target, health, ISR or recovered progress is incomplete')
+        validate_readiness(case, recovered, targets[:1], stamp(fault["heal"]), stamp(recovered["at"]))
         broker = targets[0]['broker']
         if (not 1 <= broker <= 3 or len({t['container'] for t in targets}) != 1 or
                 any(t['cluster'] != side or t['broker'] != broker or not t['container'] or
@@ -214,6 +216,8 @@ def broker_case(directory, id, identity):
             if type(selected) is not int or not 0 <= selected < 24:
                 raise ValueError('ISR loss omitted its observed affected partition')
             controllers = event['controller_targets']
+            validate_readiness(case, lost, controllers, stamp(fault["start"]), stamp(fault["heal"]),
+                               partition=selected, size=1, leader=broker)
             lost_part, stalled_part = lost['topology']['destination'][selected], stalled['topology']['destination'][selected]
             if (len(workers) != 1 or len(targets) != 1 or targets[0]['listener'] != 'internal' or role['listener'] != 'internal' or
                     targets[0]['proxy'] != f'destination-{broker}-internal' or event['before'] != previous or

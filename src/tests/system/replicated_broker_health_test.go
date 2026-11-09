@@ -13,16 +13,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pagrus7/kaferry/src/tests/system/faults"
 	"github.com/stretchr/testify/require"
 )
 
 const brokerHealthCaptureLimit = 64 << 10
-const brokerHealthFormat = `{"Running":{{json .State.Running}},"StartedAt":{{json .State.StartedAt}},"Healthcheck":{{json .Config.Healthcheck}},"Health":{{json .State.Health}}}`
+const brokerHealthFormat = `{"ID":{{json .Id}},"Project":{{json (index .Config.Labels "com.docker.compose.project")}},"Service":{{json (index .Config.Labels "com.docker.compose.service")}},"Running":{{json .State.Running}},"StartedAt":{{json .State.StartedAt}},"Healthcheck":{{json .Config.Healthcheck}},"Health":{{json .State.Health}}}`
 
 var errBrokerHealthTruncated = errors.New("docker health output exceeded bounded capture")
 
 type brokerHealthSnapshot struct {
+	ID            string              `json:"ID"`
+	Project       string              `json:"Project"`
+	Service       string              `json:"Service"`
 	Running       *bool               `json:"Running"`
 	StartedAt     time.Time           `json:"StartedAt"`
 	Healthcheck   json.RawMessage     `json:"Healthcheck"`
@@ -136,25 +138,21 @@ func brokerHealthFixture(status string) map[string]any {
 	return row
 }
 
-func TestBrokerHealthInspectionRequiresHealthyAndRetainsBoundedProbeEvidence(t *testing.T) {
-	// Given Docker's health state and retained probe outcomes, when inspecting
-	// once with the original context, then only Running && healthy can pass.
+func TestBrokerHealthInspectionRetainsBoundedProbeEvidence(t *testing.T) {
+	// Given Docker's selected state, when decoding bounded diagnostics, then
+	// malformed evidence fails and current health/probe outcomes remain distinct.
 	for _, scenario := range []struct {
 		name, status, diagnostic string
 		edit                     func(map[string]any)
 		raw                      []byte
-		err                      error
-		ready                    bool
 	}{
-		{name: "healthy", status: "healthy", diagnostic: "complete", ready: true},
+		{name: "healthy", status: "healthy", diagnostic: "complete"},
 		{name: "starting failed probes", status: "starting", diagnostic: "complete"},
 		{name: "stopped", status: "healthy", diagnostic: "complete", edit: func(row map[string]any) { row["Running"] = false }},
 		{name: "missing health", status: "healthy", diagnostic: "unavailable", edit: func(row map[string]any) { row["Health"] = nil }},
 		{name: "missing running", status: "healthy", diagnostic: "unavailable", edit: func(row map[string]any) { delete(row, "Running") }},
 		{name: "malformed", raw: []byte("{"), diagnostic: "malformed"},
 		{name: "truncated capture", raw: bytes.Repeat([]byte("x"), brokerHealthCaptureLimit+1), diagnostic: "truncated"},
-		{name: "inspect unavailable", status: "healthy", err: context.DeadlineExceeded, diagnostic: "unavailable"},
-		{name: "capture overflow", status: "healthy", err: errBrokerHealthTruncated, diagnostic: "truncated"},
 		{name: "oversized command", status: "healthy", diagnostic: "truncated", edit: func(row map[string]any) {
 			row["Healthcheck"] = map[string]any{"Test": []string{"CMD", strings.Repeat("x", 4096)}}
 		}},
@@ -169,30 +167,19 @@ func TestBrokerHealthInspectionRequiresHealthyAndRetainsBoundedProbeEvidence(t *
 			if scenario.raw != nil {
 				data = scenario.raw
 			}
-			check := brokerHealthObservation(t, data, scenario.err)
-			require.Equal(t, scenario.ready, check.Passed)
-			require.Equal(t, scenario.diagnostic, check.Diagnostic)
-			if scenario.diagnostic != "complete" {
-				require.NotEmpty(t, check.Error)
+			details, diagnostic, err := brokerHealthSnapshots(data, 1)
+			require.Equal(t, scenario.diagnostic, diagnostic)
+			if diagnostic != "complete" {
+				require.Error(t, err)
 				return
 			}
-			detail := check.Details[0]
-			wantStreak := 2
-			if scenario.status == "healthy" {
-				wantStreak = 0
-				require.Zero(t, *detail.Health.Log[len(detail.Health.Log)-1].ExitCode)
-			}
-			require.Equal(t, wantStreak, *detail.Health.FailingStreak)
-			require.Equal(t, 1, *detail.Health.Log[0].ExitCode)
-			require.Equal(t, -1, *detail.Health.Log[1].ExitCode)
-			require.Equal(t, "Health check exceeded timeout (5s)", detail.Health.Log[1].Output)
-			require.Equal(t, 5*time.Second, detail.Health.Log[1].End.Sub(detail.Health.Log[1].Start))
-			require.Contains(t, string(detail.Healthcheck), `"Timeout":5000000000`)
-			require.Equal(t, "2026-11-08T22:55:50Z", detail.StartedAt.Format(time.RFC3339))
+			require.NoError(t, err)
+			require.Equal(t, scenario.status, details[0].Health.Status)
+			require.Equal(t, -1, *details[0].Health.Log[1].ExitCode)
+			require.Equal(t, "Health check exceeded timeout (5s)", details[0].Health.Log[1].Output)
+			require.Contains(t, string(details[0].Healthcheck), `"Timeout":5000000000`)
 		})
 	}
-	// Then metadata retains only the latest five probes and bounds every output,
-	// making omissions explicit without changing starting into a healthy result.
 	row := brokerHealthFixture("starting")
 	var probes []map[string]any
 	for index := range 7 {
@@ -201,76 +188,18 @@ func TestBrokerHealthInspectionRequiresHealthyAndRetainsBoundedProbeEvidence(t *
 	row["Health"].(map[string]any)["Log"] = probes
 	data, err := json.Marshal(row)
 	require.NoError(t, err)
-	check := brokerHealthObservation(t, data, nil)
-	require.False(t, check.Passed)
-	require.Equal(t, "complete", check.Diagnostic)
-	detail := check.Details[0]
-	require.Equal(t, 2, detail.OmittedProbes)
-	require.Len(t, detail.Health.Log, 5)
-	require.Contains(t, detail.Health.Log[0].Output, "probe 2 ")
-	for _, probe := range detail.Health.Log {
+	details, _, err := brokerHealthSnapshots(data, 1)
+	require.NoError(t, err)
+	require.Equal(t, 2, details[0].OmittedProbes)
+	require.Len(t, details[0].Health.Log, 5)
+	for _, probe := range details[0].Health.Log {
 		require.True(t, probe.Truncated)
 		require.LessOrEqual(t, len(probe.Output), 2060)
 	}
-	healthy, err := json.Marshal(brokerHealthFixture("healthy"))
-	require.NoError(t, err)
-	starting, err := json.Marshal(brokerHealthFixture("starting"))
-	require.NoError(t, err)
-	targets := []faults.Target{{Container: "owned-1"}, {Container: "owned-2"}, {Container: "owned-3"}}
-	mixed := []byte(string(healthy) + "\n" + string(starting) + "\n" + string(healthy))
-	check = brokerHealthObservation(t, mixed, nil, targets...)
-	require.False(t, check.Passed, "every resolved broker must be healthy")
-	require.Equal(t, "complete", check.Diagnostic)
-	require.Len(t, check.Details, 3)
-	check = brokerHealthObservation(t, healthy, nil, targets...)
-	require.False(t, check.Passed)
-	require.Equal(t, "unavailable", check.Diagnostic)
-	row = brokerHealthFixture("healthy")
-	recent := row["Health"].(map[string]any)
-	recent["FailingStreak"] = 2
-	recent["Log"] = recent["Log"].([]map[string]any)[:2]
-	data, err = json.Marshal(row)
-	require.NoError(t, err)
-	check = brokerHealthObservation(t, data, nil)
-	require.True(t, check.Passed, "retained probe metadata must not replace Docker's current healthy status")
-	row = brokerHealthFixture("starting")
-	row["Health"].(map[string]any)["FailingStreak"] = 0
-	row["Health"].(map[string]any)["Log"] = nil
-	data, err = json.Marshal(row)
-	require.NoError(t, err)
-	check = brokerHealthObservation(t, data, nil)
-	require.False(t, check.Passed)
-	require.Equal(t, "unavailable", check.Details[0].ProbeHistory)
-	var output = boundedAuditOutput{limit: brokerHealthCaptureLimit}
+	_, _, err = brokerHealthSnapshots(data, 3)
+	require.Error(t, err)
+	output := boundedAuditOutput{limit: brokerHealthCaptureLimit}
 	_, err = output.Write(bytes.Repeat([]byte("x"), brokerHealthCaptureLimit+1))
 	require.NoError(t, err)
-	require.Len(t, output.data, brokerHealthCaptureLimit)
 	require.True(t, output.exceeded)
-}
-
-func brokerHealthObservation(t *testing.T, data []byte, inspectError error, targets ...faults.Target) brokerHealthCheck {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	if len(targets) == 0 {
-		targets = []faults.Target{{Container: "owned-container"}}
-	}
-	expectedArgs := []string{"inspect", "--format", brokerHealthFormat}
-	for _, target := range targets {
-		expectedArgs = append(expectedArgs, target.Container)
-	}
-	calls := 0
-	s := &brokerCopy{lab: &faults.Lab{Docker: func(actual context.Context, args ...string) ([]byte, error) {
-		calls++
-		require.Equal(t, ctx, actual, "health diagnostics must use the same query context")
-		require.Equal(t, expectedArgs, args)
-		require.NotContains(t, brokerHealthFormat, ".Config.Env")
-		require.NotContains(t, brokerHealthFormat, ".HostConfig")
-		return data, inspectError
-	}}}
-	ready := s.healthy(ctx, targets...)
-	require.Equal(t, 1, calls)
-	require.Len(t, s.healthChecks, 1)
-	require.Equal(t, ready, s.healthChecks[0].Passed)
-	return s.healthChecks[0]
 }

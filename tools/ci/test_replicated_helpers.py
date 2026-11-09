@@ -25,7 +25,8 @@ HELPERS = (
     'TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions',
     'TestBrokerISRSelectionRequiresActiveSameLeaderBacklog',
     'TestBrokerPollJournalRetainsFailedQueryAndHealthTail',
-    'TestBrokerHealthInspectionRequiresHealthyAndRetainsBoundedProbeEvidence',
+    'TestBrokerHealthInspectionRetainsBoundedProbeEvidence',
+    'TestBrokerReadinessRequiresFreshPinnedMetadataWithinSharedBudget',
     'TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss',
     'TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound',
 ) + (
