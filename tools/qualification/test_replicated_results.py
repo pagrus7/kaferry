@@ -447,6 +447,19 @@ class ReplicatedResultsTest(unittest.TestCase):
                 self.validate('broker/source-leader',labelled_source_worker,rewrite_witness(edit))
         with self.assertRaises(ValueError):
             self.validate('broker/destination-leader',labelled_source_worker)
+        # Given an otherwise consistent exit exactly at or just after physical
+        # healing, when worker, proof and sole-Wait times agree, then the strict
+        # source boundary rejects it even within the existing recovery budget.
+        for stopped in (24,25):
+            def at_or_after_heal(case,safety):
+                worker = labelled_source_worker(case,safety)
+                worker['stopped_at'] = stamp(stopped)
+                worker['failure_context']['observed_exit_at'] = worker['stopped_at']
+                # validate writes fresh raw/lifecycle files: active exit, sole
+                # Wait, recorded time, byte lengths and all hashes agree.
+            with self.subTest(stopped=stopped), self.assertRaisesRegex(
+                    ValueError, 'labelled source/save EOF lacks a bound all-confirmed active source fault'):
+                self.validate('broker/source-leader',at_or_after_heal)
 
     def test_collection_binds_each_proof_to_this_observer_run(self):
         # Given two selected broker cases from this observer run, when collecting,

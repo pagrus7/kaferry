@@ -178,4 +178,17 @@ func sourceExitMutations(t *testing.T, proof *brokerFailureProof, logs, terminal
 		_, known := brokerContextualFailure(logs, &changed)
 		require.False(t, known)
 	}
+	// Given an otherwise consistent sole-Wait witness exactly at physical heal,
+	// when every copy of its exit time agrees, then only the strict boundary
+	// rejects the exit; lifetime or active-window mismatch cannot mask this gate.
+	data, err := json.Marshal(proof)
+	require.NoError(t, err)
+	var atHeal brokerFailureProof
+	require.NoError(t, json.Unmarshal(data, &atHeal))
+	atHeal.ObservedExit, atHeal.Exit.Stopped, atHeal.Exit.Recorded = atHeal.Heal, atHeal.Heal, atHeal.Heal
+	atHeal.Exit.Window.ObservedExit = atHeal.Heal
+	require.True(t, atHeal.forcedCopy(logs), "the bound lifetime and active fault remain valid")
+	require.True(t, atHeal.affected("source"), "the existing inclusive fault check admits equality")
+	_, known := brokerContextualFailure(logs, &atHeal)
+	require.False(t, known, "labelled source EOF must precede physical healing")
 }
