@@ -540,18 +540,29 @@ class MatrixTest(unittest.TestCase):
                      (['product'], 'failed', RuntimeError), (['cancel'], 'interrupted', InterruptedError),
                      (['cleanup'], 'failed', RuntimeError), (['safety'], 'failed', ValueError),
                      (['other-fail'], 'failed', ValueError), (['identity'], 'failed', ValueError),
-                     (['cancel-after-precondition'], 'interrupted', InterruptedError), (['dirty-source'], 'failed', ValueError)]
+                     (['cancel-after-precondition'], 'interrupted', InterruptedError), (['dirty-source'], 'failed', ValueError),
+                     (['untracked-added'], 'failed', ValueError), (['untracked-before'], 'failed', ValueError),
+                     (['passed-untracked'], 'passed', None)]
         for outcomes, expected_status, error in scenarios:
             with self.subTest(outcomes=outcomes), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 args = self.suite_args(root, 'fault-replicated', source='4.4.0', destination='4.4.0', case=selected)
                 sequence, runs = [], []
                 cancelled = threading.Event()
-                tracked_source = root/'fixture.go'
+                checkout = root/'checkout'
+                checkout.mkdir()
+                tracked_source, untracked_source = checkout/'fixture.go', checkout/'extra_test.go'
                 tracked_source.write_text('first fixture')
+                for command in (['git', 'init', '-q'], ['git', 'add', 'fixture.go'],
+                                ['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture']):
+                    subprocess.run(command, cwd=checkout, check=True, capture_output=True)
+                if outcomes[0] in ('dirty-source', 'passed-dirty'):
+                    tracked_source.write_text('dirty fixture')
+                if outcomes[0] in ('untracked-before', 'passed-untracked'):
+                    untracked_source.write_text('first fixture')
                 def capture(command):
-                    if command[:3] == ['git', 'status', '--porcelain']:
-                        return ' M fixture.go' if outcomes[0] in ('dirty-source', 'passed-dirty') else ''
+                    if command[0] == 'git':
+                        return subprocess.check_output(command, cwd=checkout, text=True).strip()
                     return 'fixture'
                 @contextmanager
                 def fixture(attempt, spec, receipt, assigned, cancelled, *, lease_held):
@@ -573,11 +584,13 @@ class MatrixTest(unittest.TestCase):
                     number = len(runs)
                     runs.append((output, env.copy()))
                     outcome = outcomes[number]
-                    action = 'pass' if outcome in ('passed', 'passed-dirty') else 'skip'
+                    action = 'pass' if outcome in ('passed', 'passed-dirty', 'passed-untracked') else 'skip'
                     events = [dict(Action=action, Test=test), dict(Action='pass', Test='TestReplicatedNetworkFaults'), dict(Action='pass')]
                     if outcome == 'other-fail':
                         events.append(dict(Action='fail', Test='UnrelatedCleanup'))
                     (output/'suite.log').write_text(''.join(json.dumps(event)+'\n' for event in events))
+                    if outcome in ('untracked-added', 'untracked-before'):
+                        untracked_source.write_text('changed fixture')
                     if outcome == 'dirty-source':
                         tracked_source.write_text('changed fixture')
                     if outcome == 'identity':
@@ -589,7 +602,7 @@ class MatrixTest(unittest.TestCase):
                 def collect(*unused):
                     if outcomes[len(runs)-1] == 'safety':
                         raise ValueError('unsafe saved prefix')
-                    return [dict(id=selected, status='passed' if outcomes[len(runs)-1] in ('passed', 'passed-dirty') else 'inconclusive')]
+                    return [dict(id=selected, status='passed' if outcomes[len(runs)-1] in ('passed', 'passed-dirty', 'passed-untracked') else 'inconclusive')]
                 # Given a completed low-rate attempt or an independent failure,
                 # when qualification finishes, then only the former can retry.
                 with patch('tools.qualification.qualify.LAB_LOCK', root/'host.lock'), \
@@ -614,15 +627,17 @@ class MatrixTest(unittest.TestCase):
                     self.assertEqual(f'attempt-{number}', output.name)
                     self.assertEqual(attempt['status'], receipt['attempts'][number-1]['status'])
                     self.assertEqual(hashlib.sha256(b'fixture').hexdigest(), attempt['binary_sha256'])
-                    self.assertEqual(outcomes[0] in ('dirty-source', 'passed-dirty'), attempt['working_tree_dirty'])
+                    self.assertEqual(outcomes[0] in ('dirty-source', 'passed-dirty', 'untracked-before', 'passed-untracked'), attempt['working_tree_dirty'])
                     self.assertTrue((output/'suite.log').is_file())
-                if outcomes == ['dirty-source']:
-                    # Then changing tracked source while HEAD and the dirty bit
-                    # stay identical cannot start a second fixture or erase proof.
+                if outcomes[0] in ('dirty-source', 'untracked-added', 'untracked-before'):
+                    # Then changed tracked or untracked source with the same HEAD
+                    # cannot start a second fixture or erase the first receipt.
                     first, second = receipt['attempts']
-                    self.assertEqual('changed fixture', tracked_source.read_text())
+                    changed_source = tracked_source if outcomes == ['dirty-source'] else untracked_source
+                    self.assertEqual('changed fixture', changed_source.read_text())
                     self.assertEqual(first['source_commit'], second['source_commit'])
-                    self.assertTrue(first['working_tree_dirty'] and second['working_tree_dirty'])
+                    self.assertEqual(outcomes != ['untracked-added'], first['working_tree_dirty'])
+                    self.assertTrue(second['working_tree_dirty'])
                     self.assertEqual(('inconclusive', 'failed'), (first['status'], second['status']))
                     self.assertIn('requires a clean unchanged checkout', receipt['error'])
                 if len(runs) == 2:

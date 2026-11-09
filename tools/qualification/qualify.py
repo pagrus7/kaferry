@@ -840,7 +840,7 @@ def run_suite_attempt(args, *, fixture=None, cancelled=None, lease_held=False, i
     receipt = {'schema': 1, 'id': f'{args.suite}-{args.source}-{args.destination}', 'suite': args.suite,
                'source_version': args.source, 'destination_version': args.destination,
                'source_commit': capture(['git', 'rev-parse', 'HEAD']),
-               'working_tree_dirty': bool(capture(['git', 'status', '--porcelain', '--untracked-files=no'])),
+               'working_tree_dirty': bool(capture(['git', 'status', '--porcelain', '--untracked-files=all'])),
                'platform': platform.platform(), 'machine': platform.machine(), 'python': platform.python_version(),
                'started_at': datetime.now(timezone.utc).isoformat(), 'status': 'running',
                'go': capture([os.environ.get('GO', 'go'), 'version']),
