@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -56,8 +57,10 @@ HELPERS = (
 class ReplicatedHelpersTest(unittest.TestCase):
     def workflow_paths(self, name, event):
         workflow = (ROOT/f'.github/workflows/{name}.yml').read_text()
-        section = re.search(rf"(?m)^  {event}:\n(?:    branches: \[main\]\n)?    paths:\n((?:      - '[^']+'\n)+)", workflow)
-        self.assertIsNotNone(section, f'read the actual {event} paths')
+        section = re.search(
+            rf"(?m)^  {event}:\n(?:    branches: \[main\]\n)?    paths:\n"
+            r"((?:      - '[^'\n]+'\n)+)(?=^(?:  )?[a-z][a-z0-9_-]*:|\Z)", workflow)
+        self.assertIsNotNone(section, f'read the complete {event} paths with supported syntax')
         patterns = re.findall(r"      - '([^']+)'", section[1])
         # These workflows use positive literals, * and terminal **. GitHub
         # matches the whole rooted path; * excludes slash and ** includes it.
@@ -67,6 +70,21 @@ class ReplicatedHelpersTest(unittest.TestCase):
             self.assertTrue('**' not in pattern or pattern.endswith('**'))
         return ['.*'.join(re.escape(part).replace(r'\*', '[^/]*')
                           for part in pattern.split('**')) for pattern in patterns]
+
+    def test_workflow_paths_rejects_unsupported_trailing_syntax(self):
+        # Given a supported filter followed by another event boundary.
+        prefix = "on:\n  push:\n    branches: [main]\n    paths:\n      - 'src/**'\n"
+        suffix = "  workflow_dispatch:\npermissions: {}\n"
+        with patch.object(Path, 'read_text', return_value=prefix+suffix):
+            self.assertEqual(['src/.*'], self.workflow_paths('in-memory', 'push'))
+        # When a valid broad filter or malformed entry follows the known paths,
+        # then reject unsupported syntax rather than silently reading a prefix.
+        for trailing in ('      - "**"\n', '  - "**"\n', '      - unquoted/path\n',
+                         "      - 'unterminated\n", "      - 'other/path' # comment\n"):
+            with self.subTest(trailing=trailing):
+                with patch.object(Path, 'read_text', return_value=prefix+trailing+suffix), \
+                        self.assertRaisesRegex(AssertionError, 'complete push paths'):
+                    self.workflow_paths('in-memory', 'push')
 
     def test_shared_fast_target_requires_exact_completed_helper_passes(self):
         # Given a Go command that exits zero with actual, absent or wrong events.
