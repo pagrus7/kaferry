@@ -16,6 +16,7 @@ REPLICATED_HELPER_TESTS := \
 	TestOwnershipCaseRejectsUnprovedMembership \
 	TestOwnershipCoordinatorRestartRequiresTerminalCause \
 	TestOwnershipKilledWorkerKeepsEarlierPeak \
+	TestOwnershipGenerationsReuseOneAuditSnapshot \
 	TestReplicatedPublisherAcknowledgesAllPartitionsAndStops \
 	TestReplicatedPublisherStopsAfterRejectedBatch \
 	TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites \

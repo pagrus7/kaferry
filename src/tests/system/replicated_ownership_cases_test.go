@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -370,11 +371,18 @@ func (s *ownershipCase) acceptedGenerations(ctx context.Context, members map[int
 	for partition, offset := range ownershipCaseMinimum(before) {
 		minimum[int32(partition)] = offset + 2
 	}
+	run := s.lab.Docker
+	if run == nil {
+		run = faults.Docker
+	}
+	all, err := readAuditRequests(ctx, s.audit.targets, run)
+	require.NoError(s.t, err, "actual accepted generation audit unavailable")
 	generations := make(map[string]int32)
 	var current int32
 	for _, member := range members {
-		observed, ready, err := s.audit.ready(ctx, member.ClientID, s.group, member.MemberID, member.Partitions, minimum)
+		observed, ready, err := currentGenerationSaved(all, member.ClientID, s.group, member.MemberID, member.Partitions, minimum)
 		require.NoError(s.t, err, "actual accepted generation audit unavailable")
+		require.NoError(s.t, context.Cause(ctx), "actual accepted generation audit unavailable")
 		if !ready || observed <= generation || current != 0 && current != observed {
 			return nil
 		}
@@ -382,6 +390,82 @@ func (s *ownershipCase) acceptedGenerations(ctx context.Context, members map[int
 		generations[member.ClientID] = observed
 	}
 	return generations
+}
+
+func TestOwnershipGenerationsReuseOneAuditSnapshot(t *testing.T) {
+	for missing := range 4 {
+		t.Run(fmt.Sprintf("missing-worker-%d", missing), func(t *testing.T) {
+			// Given three selected members with disjoint assignments over all 24
+			// partitions, each requires its own current-generation saved proof.
+			members := ownershipGenerationMembers()
+			s := &ownershipCase{t: t, group: "group", audit: &replicatedAudit{targets: readinessTargets()}, lab: &faults.Lab{}}
+			for generation := int32(2); generation <= 3; generation++ {
+				query, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+				proof := ownershipGenerationRows(members, missing, generation)
+				run, calls := ownershipGenerationReader(query, proof)
+				s.lab.Docker = run
+				// When the full cohort is checked, then only one read per broker
+				// is needed, and a new poll must read its new generation again.
+				observed := s.acceptedGenerations(query, members, make([]int64, replicatedPartitions), generation-1)
+				cancel()
+				require.Equal(t, map[string]int{"one": 1, "two": 1, "three": 1}, calls)
+				if missing != 0 {
+					require.Nil(t, observed, "one member's missing partition must reject the entire cohort")
+				} else {
+					require.Equal(t, map[string]int32{"worker1": generation, "worker2": generation, "worker3": generation}, observed)
+				}
+			}
+		})
+	}
+}
+
+func ownershipGenerationMembers() map[int]ownershipMember {
+	members := make(map[int]ownershipMember)
+	for route := 1; route <= 3; route++ {
+		member := ownershipMember{ClientID: fmt.Sprintf("worker%d", route), MemberID: fmt.Sprintf("member%d", route)}
+		for partition := (route - 1) * 8; partition < route*8; partition++ {
+			member.Partitions = append(member.Partitions, int32(partition))
+		}
+		members[route] = member
+	}
+	return members
+}
+
+func ownershipGenerationRows(members map[int]ownershipMember, missing int, generation int32) string {
+	var proof strings.Builder
+	rows := readinessRows()
+	for route, member := range members {
+		rewrite := strings.NewReplacer(`"worker"`, fmt.Sprintf(`"%s"`, member.ClientID), `"member"`, fmt.Sprintf(`"%s"`, member.MemberID),
+			`"generationId":2`, fmt.Sprintf(`"generationId":%d`, generation), `"generationIdOrMemberEpoch":2`, fmt.Sprintf(`"generationIdOrMemberEpoch":%d`, generation))
+		proof.WriteString(rewrite.Replace(string(rows[0])))
+		for index, partition := range member.Partitions {
+			if route != missing || index != 0 {
+				proof.WriteString(strings.ReplaceAll(rewrite.Replace(string(rows[1])), `"partitionIndex":0`, fmt.Sprintf(`"partitionIndex":%d`, partition)))
+			}
+		}
+	}
+	return proof.String()
+}
+
+func ownershipGenerationReader(query context.Context, proof string) (func(context.Context, ...string) ([]byte, error), map[string]int) {
+	var lock sync.Mutex
+	calls := make(map[string]int)
+	return func(ctx context.Context, args ...string) ([]byte, error) {
+		if ctx != query || len(args) != 5 || args[0] != "exec" {
+			return nil, fmt.Errorf("audit did not share its existing query context")
+		}
+		lock.Lock()
+		calls[args[1]]++
+		repeated := calls[args[1]] != 1
+		lock.Unlock()
+		if repeated {
+			return nil, fmt.Errorf("broker audit reread for another member")
+		}
+		if args[1] == "three" {
+			return []byte(proof), nil
+		}
+		return []byte("KAFERRY_AUDIT_FILE kafka-request.log\n"), nil
+	}, calls
 }
 
 func ownershipCaseMinimum(before []int64) []int64 {
