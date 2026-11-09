@@ -353,6 +353,32 @@ class FaultOracleTest(unittest.TestCase):
                     oracle.command(dict(command='finish', writers_stopped=True,
                         writer_observations=[dict(pid=1, exit_code=1, observation='process exited')]))
 
+    def test_no_fault_precondition_still_reconciles_and_rejects_unsafe_samples(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            oracle = self.oracle(root, source=[record(0)])
+            # Given no injected fault, finish the real independent observer after
+            # a normal writer exit; only the explicit precondition reader accepts it.
+            with patch('tools.qualification.fault_oracle.time.time', return_value=10):
+                oracle.sample()
+            with patch('tools.qualification.fault_oracle.time.time', return_value=11):
+                oracle.command(dict(command='finish', writers_stopped=True,
+                                    writer_observations=[dict(pid=1, exit_code=0, observation='process exited')]))
+            path = root/'case.json'
+            with self.assertRaisesRegex(ValueError, 'no observed fault'):
+                validate_case(path)
+            self.assertEqual([], validate_case(path, require_fault=False)['fault_events'])
+            # When an independent sample is unsafe even with fresh checksums,
+            # then the no-fault precondition cannot downgrade that safety error.
+            rows = [json.loads(line) for line in (root/'samples.jsonl').read_text().splitlines()]
+            rows[0]['partitions'][0]['saved'] = 2
+            (root/'samples.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in rows))
+            receipt = json.loads(path.read_text())
+            receipt['safety']['sha256'] = checksum(root/'samples.jsonl')
+            path.write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(ValueError, 'unsafe saved progress'):
+                validate_case(path, require_fault=False)
+
     def complete_case(self, path, id='recovery/kill'):
         oracle = self.oracle(path, source=[record(0)])
         oracle.args.case = id

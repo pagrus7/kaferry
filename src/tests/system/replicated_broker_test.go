@@ -68,6 +68,7 @@ type brokerCopy struct {
 	polls                                         []brokerPoll
 	omittedPolls                                  int
 	healthChecks                                  []brokerHealthCheck
+	precondition                                  *networkPrecondition
 	conditionQueries                              []string
 }
 
@@ -98,7 +99,11 @@ func startReplicatedFaultCopy(t *testing.T, id string) (*brokerCopy, brokerObser
 	for _, timeout := range timeouts {
 		recovery += timeout
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute+recovery)
+	allowance := 3*time.Minute + recovery
+	if strings.HasPrefix(id, "network/") {
+		allowance += networkHealthyWindow - timeouts["session.timeout.ms"]
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), allowance)
 	t.Cleanup(cancel)
 	directory := os.Getenv("KAFERRY_REPORT_DIR")
 	if directory == "" {
@@ -167,6 +172,9 @@ func (s *brokerCopy) finishReplicatedFault(id string, baseline brokerObservation
 		"publishing": publication, "worker_measurements": s.measurements, "restarts": len(s.workers) - 1, "restart_scope": "same selected binary, SQL, group and worker1 route",
 		"exact_lifetime_work_caps_qualified": exactCaps,
 		"timeout_milliseconds":               durationMilliseconds(timeouts), "safety_case": map[string]string{"observations": relative, "sha256": fmt.Sprintf("%x", sha256.Sum256(safety))}}
+	if s.precondition != nil {
+		receipt["precondition"] = s.precondition
+	}
 	if strings.HasPrefix(id, "broker/") {
 		receipt["readiness_criterion"] = brokerReadinessCriterion
 	}

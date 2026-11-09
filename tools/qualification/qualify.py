@@ -652,9 +652,9 @@ def validate_fixture_images(images):
 
 
 @contextmanager
-def broker_fixture(args, spec, receipt, fixture, cancelled):
+def broker_fixture(args, spec, receipt, fixture, cancelled, *, lease_held=False):
     # Parallel children use the coordinator's lease and their assigned project.
-    with lab_lock() if fixture is None else nullcontext():
+    with lab_lock() if fixture is None and not lease_held else nullcontext():
         owns_fixture = False
         startup_attempted, startup_complete = False, False
         try:
@@ -732,7 +732,7 @@ def broker_fixture(args, spec, receipt, fixture, cancelled):
 
 
 def verify_run(args, spec, receipt):
-    if spec.expected:
+    if spec.expected and args.suite != 'fault-replicated':
         verify_tests((args.output / 'suite.log').read_text(), spec.expected)
     if args.suite == 'benchmark':
         from tools.ci.quality import benchmarks
@@ -757,11 +757,83 @@ def verify_run(args, spec, receipt):
     if args.suite == 'fault-replicated':
         from tools.qualification.replicated_results import collect
         cases = collect(args.output, receipt['case_selection'], receipt, spec.env['KAFERRY_ORACLE_RUN'])
-        receipt['fault_results'] = dict(schema=1, status='passed', cases=cases, oracle_run=spec.env['KAFERRY_ORACLE_RUN'],
+        verify_replicated_tests((args.output / 'suite.log').read_text(), spec.expected, cases)
+        status = 'inconclusive' if any(case.get('status') == 'inconclusive' for case in cases) else 'passed'
+        receipt['fault_results'] = dict(schema=1, status=status, cases=cases, oracle_run=spec.env['KAFERRY_ORACLE_RUN'],
             **{key: receipt[key] for key in ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')})
 
 
+class InconclusivePrecondition(RuntimeError):
+    """A completed safe attempt did not establish its fixture precondition."""
+
+
+def failed_outcome(error):
+    status = ('interrupted' if isinstance(error, (KeyboardInterrupt, InterruptedError)) else
+              'inconclusive' if isinstance(error, InconclusivePrecondition) else 'failed')
+    return dict(status=status, error=str(error) or 'interrupted')
+
+
+def verify_replicated_tests(log, expected, cases):
+    events = []
+    for line in log.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    if any(event.get('Action') == 'fail' for event in events):
+        raise ValueError('replicated Go test or cleanup failed')
+    inconclusive = {REPLICATED_CASES[case['id']] for case in cases if case.get('status') == 'inconclusive'}
+    skipped = [event['Test'] for event in events if event.get('Action') == 'skip' and event.get('Test')]
+    if set(skipped) != inconclusive or len(skipped) != len(inconclusive):
+        raise ValueError('replicated skip lacks an exact inconclusive precondition proof')
+    if any(event.get('Action') == 'pass' and event.get('Test') in inconclusive for event in events):
+        raise ValueError('inconclusive precondition cannot pass its Go case')
+    verify_tests(log, [name for name in expected if name not in inconclusive] +
+                 sorted({name.split('/')[0] for name in inconclusive}))
+
+
 def run_suite(args, *, fixture=None, cancelled=None):
+    selected = getattr(args, 'case', None)
+    if args.suite != 'fault-replicated' or selected and not selected.startswith('network/'):
+        return run_suite_attempt(args, fixture=fixture, cancelled=cancelled)
+    output = args.output.resolve()
+    output.mkdir(parents=True, exist_ok=False)
+    summary = dict(schema=1, suite=args.suite, status='running', attempts=[])
+    write_json(output/'manifest.json', summary)
+    try:
+        # Keep the host lease across teardown and the one fresh-fixture rerun.
+        with lab_lock():
+            for number in (1, 2):
+                if cancelled is not None and cancelled.is_set():
+                    raise InterruptedError('qualification cancelled before fresh fixture')
+                attempt = argparse.Namespace(**dict(vars(args), output=output/f'attempt-{number}'))
+                try:
+                    identity = summary['attempts'][0] if summary['attempts'] else None
+                    result = run_suite_attempt(attempt, fixture=fixture, cancelled=cancelled, lease_held=True, identity=identity)
+                except InconclusivePrecondition:
+                    if number == 2:
+                        raise
+                finally:
+                    path = attempt.output/'manifest.json'
+                    if path.is_file():
+                        receipt = json.loads(path.read_text())
+                        summary['attempts'].append(dict(observations=f'attempt-{number}/manifest.json',
+                            **{key: receipt[key] for key in ('status', 'source_commit', 'working_tree_dirty', 'binary_sha256', 'binary_platform', 'execution_platform') if key in receipt}))
+                if receipt['status'] == 'passed':
+                    summary.update(status='passed', qualified_attempt=f'attempt-{number}/manifest.json',
+                                   **{key: result[key] for key in ('source_commit', 'working_tree_dirty', 'binary_sha256', 'binary_platform', 'execution_platform')})
+                    return summary
+                write_json(output/'manifest.json', summary)
+    except (Exception, KeyboardInterrupt) as error:
+        summary.update(failed_outcome(error))
+        raise
+    finally:
+        write_json(output/'manifest.json', summary)
+
+
+def run_suite_attempt(args, *, fixture=None, cancelled=None, lease_held=False, identity=None):
     args = argparse.Namespace(**dict(vars(args), output=args.output.resolve(),
         destination=args.source if args.suite == 'auth' else args.destination))
     args.output.mkdir(parents=True, exist_ok=False)
@@ -790,8 +862,11 @@ def run_suite(args, *, fixture=None, cancelled=None):
     write_json(args.output / 'manifest.json', receipt)
     try:
         spec = resolve_run(args, receipt, fixture)
+        if identity is not None and any(identity[key] != receipt[key] for key in
+                ('source_commit', 'working_tree_dirty', 'binary_sha256', 'binary_platform', 'execution_platform')):
+            raise ValueError('qualification identity changed between attempts')
         write_json(args.output / 'manifest.json', receipt)
-        with broker_fixture(args, spec, receipt, fixture, cancelled):
+        with broker_fixture(args, spec, receipt, fixture, cancelled, lease_held=lease_held):
             try:
                 logged(spec.command, args.output, 'suite', spec.env, timeout=spec.timeout, cancelled=cancelled)
             finally:
@@ -805,9 +880,11 @@ def run_suite(args, *, fixture=None, cancelled=None):
                             raise
                         receipt['image_error'] = str(error)
             verify_run(args, spec, receipt)
+        if receipt.get('fault_results', {}).get('status') == 'inconclusive':
+            raise InconclusivePrecondition('healthy fixture rate precondition was not met')
         receipt['status'] = 'passed'
     except (Exception, KeyboardInterrupt) as error:
-        receipt.update(status='interrupted' if isinstance(error, (KeyboardInterrupt, InterruptedError)) else 'failed', error=str(error) or 'interrupted')
+        receipt.update(failed_outcome(error))
         raise
     finally:
         receipt.update(elapsed_seconds=time.monotonic() - started, finished_at=datetime.now(timezone.utc).isoformat())
@@ -820,6 +897,8 @@ def run_suite(args, *, fixture=None, cancelled=None):
                 if receipt['status'] == 'passed':
                     raise
                 print(f'Endurance report unavailable: {error}', file=sys.stderr)
+
+    return receipt
 
 
 def released_binaries(args):

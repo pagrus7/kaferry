@@ -73,8 +73,11 @@ def replicated_execution_seconds(selected):
     if not selected or len(selected) != len(set(selected)) or any(id not in REPLICATED_CASES or id not in catalog for id in selected):
         raise ValueError('unknown or unregistered replicated fault case')
     # Preserve the zombie's existing four-minute outer deadline. Each new
-    # broker/network case adds its own complete configured recovery sum.
-    return sum(240 + (sum(catalog[id].values())+999)//1000 if id != 'ownership/zombie-worker' else 240 for id in selected)
+    # broker/network case adds its own complete configured recovery sum. The
+    # network healthy reference grows from one session to thirty seconds.
+    return sum(240 + (sum(catalog[id].values())+999)//1000 +
+               (30-catalog[id]['session.timeout.ms']//1000 if id.startswith('network/') else 0)
+               if id != 'ownership/zombie-worker' else 240 for id in selected)
 
 
 def fault_execution_seconds():

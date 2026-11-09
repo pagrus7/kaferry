@@ -20,6 +20,7 @@ HELPERS = (
     'TestReplicatedBrokerPublisherCancellationDrainsDelayedOffers',
     'TestReplicatedBrokerPublisherErrorDrainsDelayedOffers',
     'TestNetworkMeasurementRequiresCaughtUpSourceAndOutput',
+    'TestNetworkHealthyPreconditionNeedsThirtySecondsAndBothRates',
     'TestNetworkOutageForcedExitBindsOwnedCutAndRetainedRSS',
     'TestNetworkOutageNegotiationEOFRequiresCompleteBoundWriteFailures',
     'TestBrokerFaultRestartRequiresClassifiedTerminalFailure',
@@ -120,6 +121,18 @@ class ReplicatedHelpersTest(unittest.TestCase):
                                   ('docs/design/qualification.md', False)]:
             with self.subTest(single_file_change=changed):
                 self.assertEqual(expected, any(re.fullmatch(expression, changed) for expression in expressions))
+
+    def test_hosted_cases_keep_broker_and_outage_coverage_with_local_rate_cases(self):
+        # Given every registered local case, when selecting hosted physical runs,
+        # then the three rate-sensitive cases remain local candidate requirements.
+        from tools.ci.suites import REPLICATED_CASES
+        workflow = (ROOT/'.github/workflows/replicated-lab.yml').read_text()
+        matrix = workflow.split('  faults:', 1)[1].split('    steps:', 1)[0]
+        hosted = set(re.findall(r'case: ([a-z/-]+)', matrix))
+        local = {'network/latency', 'network/bandwidth', 'network/slow-close'}
+        self.assertTrue(local <= set(REPLICATED_CASES))
+        self.assertEqual(set(REPLICATED_CASES)-local-{'ownership/zombie-worker'}, hosted)
+        self.assertIn('--case ownership/zombie-worker', workflow)
 
     def test_local_and_hosted_fast_checks_share_the_target(self):
         # Given the two fast entrypoints, when inspected, then both delegate the

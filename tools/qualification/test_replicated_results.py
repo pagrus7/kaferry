@@ -199,16 +199,20 @@ def rewrite_lifecycle(directory, worker, edit):
 def network_proof(id):
     case, safety = proof(id)
     case.pop('readiness_criterion')
-    publishing_start = 5
+    publishing_start = -19
+    case['worker_measurements'][0]['started_at'] = stamp(-20)
+    case['publishing']['started'] = stamp(publishing_start)
+    safety['started_at'] = -22
     name = id.split('/')[1]
     def observed(second, count):
         count -= publishing_start*10
         result = state(second, count)
+        result['worker']['lifetime']['started_at'] = stamp(-20)
         result['publishing'].update(started=stamp(publishing_start), observed=stamp(second), offered_by_partition=[count]*24)
         result['broker_healthy'] = False
         result['topology']['destination'] = [dict(Leader=n%3+1, ISR=[1,2,3]) for n in range(24)]
         return result
-    case['baseline'] = observed(10,100)
+    case['baseline'] = observed(-14,-140)
     case['publishing'].update(acknowledged_by_partition=[1000]*24, offered_by_partition=[1000]*24,max_acknowledgement_gap_seconds=.1)
     safety['independent_reconciliation']['partitions'] = [dict(partition=n,expected=1000) for n in range(24)]
     leader, outage = name == 'destination-leaders-outage', name == 'destination-outage'
@@ -594,6 +598,40 @@ class NetworkResultsTest(unittest.TestCase):
         if change: change(case,safety)
         return validate_proof(id, case, safety, network_case, artifacts)
 
+    def test_healthy_precondition_is_thirty_seconds_but_recovery_remains_six(self):
+        # Given a valid thirty-second reference and the original six-second recovery.
+        self.validate('latency')
+        # When either window is shortened, then only its own fixed bound rejects it.
+        for phase, end in [('healthy', -8), ('recovery', 35)]:
+            def shorten(case, safety):
+                case['events'][0][phase]['after']['at'] = stamp(end)
+            with self.subTest(phase=phase), self.assertRaisesRegex(ValueError, 'shortened'):
+                self.validate('latency', shorten)
+
+    def test_inconclusive_precondition_requires_complete_no_fault_safety_and_lifetime(self):
+        def inconclusive(case, safety):
+            healthy = case['events'][0]['healthy']
+            healthy['after']['destination_ends'] = [n-20 for n in healthy['after']['destination_ends']]
+            case.update(events=[], precondition=dict(status='inconclusive', healthy=healthy))
+            safety['fault_events'] = []
+        # Given safe final reconciliation, when the measured healthy rate is low,
+        # then it is an inconclusive no-fault attempt, never a passed fault.
+        result = self.validate('latency', inconclusive)
+        self.assertEqual('inconclusive', result['status'])
+        for edit in (lambda c,s:c['precondition'].update(status='passed'),
+                     lambda c,s:c['precondition']['healthy']['after'].update(destination_ends=[350]*24),
+                     lambda c,s:c['precondition']['healthy']['after'].update(at=stamp(-8)),
+                     lambda c,s:c.update(exact_lifetime_work_caps_qualified=False),
+                     lambda c,s:c['worker_measurements'][0].update(exit_code=1),
+                     lambda c,s:s['fault_events'].append(dict(unexpected='fault'))):
+            def change(case, safety):
+                inconclusive(case, safety)
+                edit(case, safety)
+            # Then malformed markers, real exposure and failed process/resource
+            # checks cannot acquire the precondition classification.
+            with self.subTest(edit=edit), self.assertRaises(ValueError):
+                self.validate('latency', change)
+
     def test_whole_cut_negotiation_eof_keeps_exact_summary_and_strict_active_scope(self):
         for diagnostic,count,peak in ((NEGOTIATION_EOF,72,415),(FIRST_RESPONSE_EOF,32,401)):
             with self.subTest(diagnostic=diagnostic):
@@ -682,8 +720,9 @@ class NetworkResultsTest(unittest.TestCase):
             for phase in ('healthy', 'recovery'):
                 lag(event[phase]['before'], 14, 8)
                 before, after = event[phase]['before'], event[phase]['after']
-                rate = (sum(after['destination_ends'])-sum(before['destination_ends']))/6
-                self.assertAlmostEqual(258.6666666667, rate)
+                seconds = 30 if phase == 'healthy' else 6
+                rate = (sum(after['destination_ends'])-sum(before['destination_ends']))/seconds
+                self.assertAlmostEqual(240+112/seconds, rate)
             self.assertGreater(.95*rate, 240)
         # Both lower-bound checks and the relative recovery bar accept
         # matching catch-up bursts; neither proves a steady measurement start.
@@ -725,7 +764,7 @@ class NetworkResultsTest(unittest.TestCase):
         # when elapsed time is exactly a whole slot, float rounding or datetime
         # truncation must not reject its actual caught-up acknowledgement count.
         def precise(case, safety):
-            origin = '1970-01-01T00:00:05.000000009Z'
+            origin = '1969-12-31T23:59:41.000000009Z'
             case['publishing']['started'] = origin
             for phase in ('healthy', 'during', 'recovery'):
                 for state in case['events'][0][phase].values():
@@ -798,10 +837,10 @@ class NetworkResultsTest(unittest.TestCase):
             ('destination-outage',lambda c,s:c['events'][0]['fault']['targets'][0].update(listener='admin')),
             ('destination-leaders-outage',lambda c,s:c['events'][0]['during']['after']['saved'].__setitem__(1,150)),
             ('destination-leaders-outage',lambda c,s:c['events'][0].update(unaffected_partitions=[])),
-            ('latency',lambda c,s:c['events'][0]['during']['after'].update(destination_ends=[210]*24)),
+            ('latency',lambda c,s:c['events'][0]['during']['after'].update(destination_ends=[450]*24)),
             ('latency',lambda c,s:c['events'][0]['fault']['fault'].update(stream='downstream')),
             ('bandwidth',lambda c,s:c['events'][0]['recovery']['after'].update(destination_ends=[251]*24)),
-            ('bandwidth',lambda c,s:c['events'][0]['during']['after'].update(destination_ends=[200]*24)),
+            ('bandwidth',lambda c,s:c['events'][0]['during']['after'].update(destination_ends=[440]*24)),
             ('slow-close',lambda c,s:c['events'][0]['connection_effect'].update(delayed_until=stamp(20))),
             ('slow-close',lambda c,s:c['events'][0]['connection_effect'].pop('stimulus')),
             ('slow-close',lambda c,s:c['events'][0]['connection_effect'].update(eof_observed_at=stamp(26.8))),
