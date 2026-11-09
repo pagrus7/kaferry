@@ -297,7 +297,13 @@ def workers(directory, case, safety, identity):
         if worker['exit_code'] == 1:
             causes = ('NOT_COORDINATOR', 'COORDINATOR_NOT_AVAILABLE', 'COORDINATOR_LOAD_IN_PROGRESS', 'UNKNOWN_MEMBER_ID',
                       'ILLEGAL_GENERATION', 'REBALANCE_IN_PROGRESS', 'consumer group ownership unavailable for commit', 'context deadline exceeded')
-            require(counts[4] and counts[4] == worker['terminal_error'] and all(any(cause in line for cause in causes) for line in counts[4].splitlines()),
+            from tools.qualification.ownership_coordinator_exit import phase
+            observed_phase = phase(raw.decode('utf-8'))
+            known = all(any(cause in line for cause in causes) for line in counts[4].splitlines())
+            require(counts[4] and counts[4] == worker['terminal_error'] and
+                    ((observed_phase and case['id'] == 'ownership/coordinator-kill-rebalance' and
+                      worker.get('coordinator_exit_phase') == observed_phase) or
+                     (not observed_phase and not worker.get('coordinator_exit_phase') and known)),
                     'restart lacks the exact bounded terminal coordinator cause')
         else:
             require(not counts[4] and not worker['terminal_error'], 'successful or killed worker has an unexplained terminal error')
@@ -353,6 +359,8 @@ def _validate(root, id, identity):
     coordinator = id == 'ownership/coordinator-kill-rebalance'
     if coordinator:
         required |= {'coordinator-stopped.inspect.json', 'coordinator-restored.inspect.json'}
+        if case.get('coordinator_exit_audit'):
+            required |= {f'source-{n}.coordinator-pre-kill.requests.log' for n in (1,2,3)}
     require(set(paths) == required, 'ownership receipt omitted a required raw artifact')
     safety_path = observation_path(root, case['safety_case'], 'case.json')
     safety = validate_case(safety_path)
@@ -480,6 +488,8 @@ def coordinator_case(directory, case, rows, values, window, identity):
             'physical target differs from the actual coordinator and independent injection')
     require(stamp(fault['start']) <= stamp(states['at_kill']['started']) <= stamp(states['at_kill']['finished']) <=
             stamp(command['coordinator_kill_started']) <= stamp(command['coordinator_kill_finished']) <= injection['at'], 'coordinator command did not follow the actual rebalance recheck')
+    from tools.qualification.ownership_coordinator_exit import validate as validate_exits
+    validate_exits(directory, case, rows, values, fault, command)
     replacement, api_ready, restored = (states[name] for name in ('coordinator_replacement', 'broker_api_ready', 'broker_restored'))
     # Broker metadata may retain a dead member until session expiry. These
     # observations prove coordinator/health only; accepted recovered ownership

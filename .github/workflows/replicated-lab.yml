@@ -28,6 +28,7 @@ on:
       - 'tools/qualification/test_fault_oracle.py'
       - 'tools/qualification/test_ownership_audit.py'
       - 'tools/qualification/ownership_cases.py'
+      - 'tools/qualification/ownership_coordinator_exit.py'
       - 'tools/qualification/test_ownership_cases.py'
       - 'tools/qualification/replicated_results.py'
       - 'tools/qualification/test_replicated_results.py'

@@ -17,6 +17,7 @@ REPLICATED_HELPER_TESTS := \
 	TestOwnershipCoordinatorRestartRequiresTerminalCause \
 	TestOwnershipKilledWorkerKeepsEarlierPeak \
 	TestOwnershipGenerationsReuseOneAuditSnapshot \
+	TestOwnershipCoordinatorEOFRequiresRawBoundPhase \
 	TestReplicatedPublisherAcknowledgesAllPartitionsAndStops \
 	TestReplicatedPublisherStopsAfterRejectedBatch \
 	TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites \

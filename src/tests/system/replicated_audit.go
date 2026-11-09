@@ -270,12 +270,19 @@ func (a *replicatedAudit) mark(ctx context.Context, t *testing.T, phase string) 
 }
 
 type ownershipAuditRecord struct {
+	Connection       string
+	Listener         string
 	TotalTime        json.RawMessage `json:"totalTimeMs"`
 	completionPrefix string
+	Completed        time.Time                                    `json:"-"`
+	Received         time.Time                                    `json:"-"`
 	Header           struct{ ClientID, RequestAPIKeyName string } `json:"requestHeader"`
 	Request          struct {
 		GroupID, MemberID string
 		Generation        int32 `json:"generationIdOrMemberEpoch"`
+		SyncGeneration    int32 `json:"generationId"`
+		SessionTimeout    int32 `json:"sessionTimeoutMs"`
+		RebalanceTimeout  int32 `json:"rebalanceTimeoutMs"`
 		Topics            []struct {
 			Partitions []struct {
 				PartitionIndex  int32
@@ -287,6 +294,7 @@ type ownershipAuditRecord struct {
 		ErrorCode    int16
 		MemberID     string
 		GenerationID int32
+		Assignment   string
 		Topics       []struct {
 			Partitions []struct {
 				PartitionIndex int32
@@ -294,6 +302,19 @@ type ownershipAuditRecord struct {
 			}
 		}
 	} `json:"response"`
+}
+
+func decodeOwnershipAuditRecord(line string) (ownershipAuditRecord, bool, error) {
+	var row ownershipAuditRecord
+	prefix, payload, ok := strings.Cut(line, "Completed request:")
+	if !ok {
+		return row, false, nil
+	}
+	if err := json.NewDecoder(strings.NewReader(payload)).Decode(&row); err != nil {
+		return row, true, err
+	}
+	row.completionPrefix = prefix
+	return row, true, nil
 }
 
 // currentGenerationSaved requires accepted commits in the latest successful
@@ -334,18 +355,16 @@ func currentGenerationRows(data []byte, client, group, member string) ([]ownersh
 	var rows []ownershipAuditRecord
 	generation := int32(-1)
 	for _, line := range strings.Split(string(data), "\n") {
-		prefix, payload, ok := strings.Cut(line, "Completed request:")
+		row, ok, err := decodeOwnershipAuditRecord(line)
+		if err != nil {
+			return nil, 0, err
+		}
 		if !ok {
 			continue
-		}
-		var row ownershipAuditRecord
-		if err := json.NewDecoder(strings.NewReader(payload)).Decode(&row); err != nil {
-			return nil, 0, err
 		}
 		if row.Header.ClientID != client || row.Request.GroupID != group || row.Response == nil {
 			continue
 		}
-		row.completionPrefix = prefix
 		rows = append(rows, row)
 		if row.Header.RequestAPIKeyName == "JOIN_GROUP" && row.Response.ErrorCode == 0 && row.Response.MemberID == member {
 			generation = max(generation, row.Response.GenerationID)
@@ -364,15 +383,23 @@ func auditReceivedAfter(row ownershipAuditRecord, barrier time.Time) (bool, erro
 	if err != nil {
 		return false, fmt.Errorf("commit completion timestamp: %w", err)
 	}
-	milliseconds, err := strconv.ParseFloat(string(row.TotalTime), 64)
+	elapsed, err := auditRequestDuration(row.TotalTime)
+	if err != nil {
+		return false, err
+	}
+	return !completed.Add(-elapsed).Before(barrier), nil
+}
+
+func auditRequestDuration(totalTime json.RawMessage) (time.Duration, error) {
+	milliseconds, err := strconv.ParseFloat(string(totalTime), 64)
 	if err != nil || milliseconds < 0 {
-		return false, fmt.Errorf("commit total request time is unavailable or invalid: %q", row.TotalTime)
+		return 0, fmt.Errorf("commit total request time is unavailable or invalid: %q", totalTime)
 	}
 	elapsed, err := time.ParseDuration(strconv.FormatFloat(milliseconds, 'f', -1, 64) + "ms")
 	if err != nil || elapsed < 0 {
-		return false, fmt.Errorf("commit total request time is unavailable or invalid: %q", row.TotalTime)
+		return 0, fmt.Errorf("commit total request time is unavailable or invalid: %q", totalTime)
 	}
-	return !completed.Add(-elapsed).Before(barrier), nil
+	return elapsed, nil
 }
 
 func auditAcceptedParts(row ownershipAuditRecord, minimum map[int32]int64) (map[int32]bool, error) {

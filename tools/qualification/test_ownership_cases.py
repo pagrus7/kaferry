@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from tools.ci import suites
 from tools.qualification import ownership_cases as ownership
+from tools.qualification import ownership_coordinator_exit as coordinator_exit
 from tools.qualification import test_ownership_audit as audit_fixture
 from tools.qualification.replicated_results import collect
 from tools.qualification.broker_readiness import CRITERION
@@ -31,7 +32,7 @@ def encoded_assignment(parts):
 
 
 class OwnershipCasesTest(unittest.TestCase):
-    def fixture(self, name, restart=False):
+    def fixture(self, name, restart=False, eof=False):
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         directory = root/('ownership-'+name)
         directory.mkdir()
@@ -54,8 +55,9 @@ class OwnershipCasesTest(unittest.TestCase):
             value = audit_fixture.record(at,client,api,request,response,next(serial))
             value['listener'] = 'WORKER'+str(ownership.route(client)) if client.endswith(('worker1','worker2','worker3')) else 'ADMIN'
             rows[broker].append(value)
+            return value
         def state(label,start,finish,routes,count,generation=0,broker=2,preparing=False):
-            owned = [dict(client_id='kaferry-group-selected-worker'+str(route),member_id=('new' if restart and label == 'recovered' and route == 1 else 'member')+str(route),
+            owned = [dict(client_id='kaferry-group-selected-worker'+str(route),member_id=('new' if restart and label == 'recovered' and route in ((1,2) if eof else (1,)) else 'member')+str(route),
                           partitions=list(range(index,24,len(routes))) if not preparing else list(range(24)) if route == 1 else []) for index,route in enumerate(routes)]
             result = dict(started=when(start),finished=when(finish),state='PreparingRebalance' if preparing else 'Stable',coordinator=broker,
                           members=owned,saved=[count]*24,publishing=dict(acknowledged_by_partition=[count+10]*24),processes_alive={})
@@ -75,22 +77,24 @@ class OwnershipCasesTest(unittest.TestCase):
                 groupState=result['state'],members=[dict(clientId=m['client_id'],memberId=m['member_id'],memberAssignment=encoded_assignment(m['partitions'])) for m in owned])]),broker)
             case['states'][label] = result
             return result
-        def worker(route,start,stop,code=0):
+        def worker(route,start,stop,code=0,zero=False,terminal=None,phase=None):
             pid = 100+len(case['worker_measurements'])
             log = f'worker-{len(case["worker_measurements"])+1}-route-{route}.cli.log'
             values = dict(pid=pid,route=route,binary_sha256=identity['binary_sha256'],started_at=when(start),stopped_at=when(stop),exit_code=code,
-                          wait_status=9 if code == -1 else code<<8,forced_kill=code == -1,reason='fault' if code else 'completed',terminal_error='context deadline exceeded' if code == 1 else '',
+                          wait_status=9 if code == -1 else code<<8,forced_kill=code == -1,reason='fault' if code else 'completed',terminal_error=terminal if terminal is not None else 'context deadline exceeded' if code == 1 else '',
                           rss_samples=10,rss_failures=0,sampled_peak_rss_bytes=10000,record_cap=1024,byte_cap=128*1024**2,
-                          peak_uncommitted_records=None if code == -1 else 5,peak_uncommitted_bytes=None if code == -1 else 100,
-                          progress_observations=1,sampled_max_pending_entries=5,sampled_max_pending_estimated_bytes=100,
+                          peak_uncommitted_records=None if code == -1 else 0 if zero else 5,peak_uncommitted_bytes=None if code == -1 else 0 if zero else 100,
+                          progress_observations=1,sampled_max_pending_entries=0 if zero else 5,sampled_max_pending_estimated_bytes=0 if zero else 100,
                           lifetime_highwater_available=code != -1,copy_summary=None,cap_measurement_scope=ownership.EXACT_SCOPE,log=log)
-            progress=dict(msg='progress',submitted=10,confirmed=5,pending_entries=5,pending_estimated_bytes=100)
+            progress=dict(msg='progress',submitted=0 if zero else 10,confirmed=0 if zero else 5,pending_entries=0 if zero else 5,pending_estimated_bytes=0 if zero else 100)
             lines=[progress]
             if code != -1:
-                values['copy_summary']=dict(msg='copy summary',submitted=10,confirmed=10,peak_uncommitted_records=5,peak_uncommitted_bytes=100)
+                values['copy_summary']=dict(msg='copy summary',submitted=0 if zero else 10,confirmed=0 if zero else 10,peak_uncommitted_records=0 if zero else 5,peak_uncommitted_bytes=0 if zero else 100)
                 lines.append(values['copy_summary'])
             (directory/log).write_text(''.join(json.dumps(line)+'\n' for line in lines)+(values['terminal_error']+'\n' if code == 1 else ''))
             case['worker_measurements'].append(values)
+            if phase:
+                values['coordinator_exit_phase']=phase
             if code == -1:
                 values['cap_measurement_scope']=ownership.KILLED_SCOPE
             return values
@@ -115,10 +119,16 @@ class OwnershipCasesTest(unittest.TestCase):
             window('scale-down',{'from':3,'to':1},24,28,37,'worker-stop',dict(routes=[2,3]))
         else:
             coordinator=name == 'coordinator-kill-rebalance'
-            original=worker(1,2,14 if restart else 71 if coordinator else 13.3,1 if restart else 0 if coordinator else -1)
-            worker(2,10,70)
+            original=worker(1,2,14 if restart else 71 if coordinator else 13.3,1 if restart else 0 if coordinator else -1,
+                            terminal='\n'.join(coordinator_exit.VECTORS[coordinator_exit.ESTABLISHED]) if eof else None,
+                            phase=coordinator_exit.ESTABLISHED if eof else None)
+            worker(2,10,14.2 if eof else 70,1 if eof else 0,zero=eof,
+                   terminal='\n'.join(coordinator_exit.VECTORS[coordinator_exit.JOINING]) if eof else None,
+                   phase=coordinator_exit.JOINING if eof else None)
             if restart:
                 worker(1,19.5,71)
+            if eof:
+                worker(2,19.7,70)
             signal(19,original,9)
             case['events'].append(dict(reason='OS confirms held worker',pid=original['pid'],command=['ps','-o','state=','-p',str(original['pid'])],
                                        stdout='T\n',os_process_state='T',observed_at=when(9.2)))
@@ -128,8 +138,15 @@ class OwnershipCasesTest(unittest.TestCase):
             stimulus=dict(held_worker=original['pid'],coordinator_role=role)
             if coordinator:
                 targets=[dict(cluster='source',broker=2,service='source-2',container='container2',listener=listener) for listener in ('internal','controller','admin','worker1','worker2','worker3')]
-                fault=dict(role=role,fault=dict(kind='kill'),targets=targets,start=when(12),heal=when(17.5))
-                case['events'] += [dict(fault=fault),dict(coordinator_kill_started=when(13.1),coordinator_kill_finished=when(13.2),container='container2'),dict(restart_routes=[1] if restart else [])]
+                if eof:
+                    for target in targets:
+                        target.update(proxy='source-2-'+target['listener'],proxy_container='owned-proxy')
+                    client='kaferry-group-selected-worker2'
+                    row(10.15,client,'API_VERSIONS',{},dict(errorCode=0),1)
+                    row(10.2,client,'API_VERSIONS',{},dict(errorCode=0))
+                    row(10.3,client,'JOIN_GROUP',dict(groupId='group',memberId='',sessionTimeoutMs=6000,rebalanceTimeoutMs=30000),dict(errorCode=79,memberId='member2'))
+                fault=dict(role=role,fault=dict(kind='kill'),targets=targets,start=when(12.075 if eof else 12),heal=when(17.5))
+                case['events'] += [dict(fault=fault),dict(coordinator_kill_started=when(13.1),coordinator_kill_finished=when(13.2),container='container2'),dict(restart_routes=[1,2] if eof else [1] if restart else [])]
                 signal(18,original,13.3)
                 replacement=state('coordinator_replacement',16,17,[1,2],20,broker=3,preparing=True)
                 api_ready=state('broker_api_ready',17.55,17.95,[1,2],20,broker=3,preparing=True)
@@ -186,7 +203,14 @@ class OwnershipCasesTest(unittest.TestCase):
             first=audit_fixture.record(.5,'guard','API_VERSIONS',{},{},0)
             final=audit_fixture.record(73.5,'guard','API_VERSIONS',{},{},99999)
             (directory/f'source-{broker}.baseline.requests.log').write_bytes(audit_fixture.encode([first]))
-            (directory/f'source-{broker}.final.requests.log').write_bytes(audit_fixture.encode([first]+rows[broker]+[final]))
+            ordered=sorted(rows[broker],key=lambda row:row['at']) if eof else rows[broker]
+            (directory/f'source-{broker}.final.requests.log').write_bytes(audit_fixture.encode([first]+ordered+[final]))
+            if eof:
+                name=f'source-{broker}.coordinator-pre-kill.requests.log'
+                (directory/name).write_bytes(audit_fixture.encode([first]+[row for row in ordered if row['at'] <= 12.05]))
+                target=dict(cluster='source',broker=broker,listener='admin',service=f'source-{broker}',container=f'container{broker}',proxy=f'source-{broker}-admin',proxy_container='owned-proxy')
+                cut=case.setdefault('coordinator_exit_audit',dict(started=when(12.01),finished=when(12.05),deadline=when(14.01),brokers=[]))
+                cut['brokers'].append(dict(target=target,raw=dict(observations=name,sha256=hashlib.sha256((directory/name).read_bytes()).hexdigest())))
         (directory/'ownership-observations.jsonl').write_text(''.join(json.dumps(s)+'\n' for s in case['states'].values()))
         (directory/'worker-settings.toml').write_text("[worker]\nrecord_cap=1024\npartition_record_cap=128\nbyte_cap=134217728\npartition_byte_cap=8388608\nprogress_interval='100ms'\ndelivery_timeout='1m0s'\nshutdown_timeout='5s'\n")
         def connection(name,properties):
@@ -238,6 +262,153 @@ class OwnershipCasesTest(unittest.TestCase):
                 edited+=1
         self.assertEqual(1,edited)
         path.write_bytes(audit_fixture.encode(rows))
+
+    def rebound_exit_log(self, fixture, index, transform, mirror_summary=False):
+        directory,case=fixture[1],fixture[2]
+        worker=case['worker_measurements'][index]
+        path=directory/worker['log']
+        raw=transform(path.read_text())
+        path.write_text(raw)
+        witness_path=directory/worker['lifecycle']['observations']
+        witness=json.loads(witness_path.read_text())
+        (directory/witness['raw_log']['observations']).write_text(raw)
+        witness['raw_log']['sha256']=hashlib.sha256(raw.encode()).hexdigest()
+        witness['raw_log_bytes']=len(raw.encode())
+        witness['terminal_lines']=[line.strip() for line in raw.splitlines() if line.strip() and not line.lstrip().startswith('{')]
+        worker['terminal_error']='\n'.join(witness['terminal_lines'])
+        if mirror_summary:
+            summary=next(json.loads(line) for line in raw.splitlines() if line.startswith('{') and json.loads(line).get('msg')=='copy summary')
+            worker['copy_summary']=summary
+            worker['peak_uncommitted_records']=summary['peak_uncommitted_records']
+            worker['peak_uncommitted_bytes']=summary['peak_uncommitted_bytes']
+        witness_path.write_text(json.dumps(witness))
+        worker['lifecycle']['sha256']=hashlib.sha256(witness_path.read_bytes()).hexdigest()
+
+    def rebound_exit_time(self, fixture, index, at):
+        directory,case=fixture[1],fixture[2]
+        worker=case['worker_measurements'][index]
+        worker['stopped_at']=when(at)
+        path=directory/worker['lifecycle']['observations']
+        witness=json.loads(path.read_text())
+        witness['stopped_at'],witness['recorded_at']=when(at),when(at+.01)
+        path.write_text(json.dumps(witness))
+        worker['lifecycle']['sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def rebound_protocol(self, fixture, change, prefix=True):
+        from tools.qualification.ownership_audit import records,segments
+        directory,case=fixture[1],fixture[2]
+        names=['source-2.final.requests.log']
+        if prefix:
+            names.append('source-2.coordinator-pre-kill.requests.log')
+        for name in names:
+            path=directory/name
+            rows=records(segments(path))
+            for row in rows:
+                row['at']=row.pop('completed_at')
+                row.pop('received_at')
+            change(rows)
+            path.write_bytes(audit_fixture.encode(sorted(rows,key=lambda row:row['at'])))
+        for entry in case['coordinator_exit_audit']['brokers']:
+            path=directory/entry['raw']['observations']
+            entry['raw']['sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def test_coordinator_eof_phases_require_full_raw_proof_and_recovered_lifetimes(self):
+        # Given both exact observed exit phases, including zero-work samples,
+        # when all immutable/raw recovery proof agrees, both routes may restart.
+        fixture=self.fixture('coordinator-kill-rebalance',restart=True,eof=True)
+        result=self.validate(fixture)
+        self.assertEqual(4,len(result['ownership_exposure']['worker_measurements']))
+        for worker in fixture[2]['worker_measurements'][:2]:
+            self.assertTrue(worker['lifetime_highwater_available'])
+        # Removing a required proof never retroactively repairs a failed receipt.
+        fixture[2]['complete']=False
+        with self.assertRaisesRegex(ValueError,'selected configuration'):
+            self.validate(fixture)
+
+    def coordinator_driver_stop(self, fixture):
+        directory,case=fixture[1],fixture[2]
+        worker=case['worker_measurements'][1]
+        event=dict(signal_number=2,signal='interrupt',reason='manual stop',pid=worker['pid'],route=2,started=when(13.4),finished=when(13.5))
+        case['events'].append(event)
+        path=directory/worker['lifecycle']['observations']
+        witness=json.loads(path.read_text())
+        witness['driver_intent_before_wait']=[dict(at=when(13.45),signal='interrupt',reason='manual stop')]
+        path.write_text(json.dumps(witness))
+        worker['lifecycle']['sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def test_coordinator_eof_vectors_and_physical_lifetimes_fail_closed(self):
+        # Given faithful rehashed CLI and immutable sidecars, when any exact
+        # vector or physical-window boundary differs, qualification rejects it.
+        mutations=[
+            lambda f:self.rebound_exit_log(f,0,lambda raw:raw.replace('save progress:',' save progress:',1)),
+            lambda f:self.rebound_exit_log(f,0,lambda raw:raw.replace(coordinator_exit.SAVE+'\n','',1)),
+            lambda f:self.rebound_exit_log(f,1,lambda raw:raw+'unknown failure\n'),
+            lambda f:self.rebound_exit_log(f,1,lambda raw:raw.replace('poll source: unable to join group session: ','',1)),
+            lambda f:self.rebound_exit_log(f,1,lambda raw:raw.replace(coordinator_exit.CLOSE,coordinator_exit.SAVE)),
+            lambda f:self.rebound_exit_log(f,1,lambda raw:raw.replace('"submitted": 0','"submitted": 1',1)),
+            lambda f:self.rebound_exit_log(f,1,lambda raw:'{"msg":"partition assigned","partition":8}\n'+raw),
+            lambda f:self.rebound_exit_log(f,0,lambda raw:raw.replace('"confirmed": 10','"confirmed": 9',1),mirror_summary=True),
+            lambda f:self.rebound_exit_time(f,1,13.1),
+            lambda f:self.rebound_exit_time(f,1,17.5),
+            lambda f:self.move_birth(f,1,10.25),
+            lambda f:self.coordinator_driver_stop(f),
+            lambda f:f[2]['worker_measurements'][1].update(coordinator_exit_phase=coordinator_exit.ESTABLISHED),
+            lambda f:f[2].pop('coordinator_exit_audit'),
+            lambda f:f[2]['coordinator_exit_audit']['brokers'].pop(),
+            lambda f:f[2]['coordinator_exit_audit'].update(deadline=when(14.02)),
+            lambda f:f[2]['coordinator_exit_audit'].update(finished=when(12.08)),
+            lambda f:f[2]['coordinator_exit_audit']['brokers'][1]['target'].update(container='unrelated'),
+            lambda f:f[2]['events'][2].update(coordinator_kill_started=when(14.2)),
+            lambda f:f[2]['worker_measurements'][1].update(sampled_peak_rss_bytes=513*1024**2),
+        ]
+        for change in mutations:
+            fixture=self.fixture('coordinator-kill-rebalance',restart=True,eof=True)
+            change(fixture)
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                self.validate(fixture)
+
+    def test_coordinator_eof_protocol_rechecks_rehashed_phase_and_absent_progress(self):
+        # Given full prefix/final bytes and matching digests, changing a raw
+        # phase fact cannot be hidden by rewriting the summary or checksum.
+        def alter(api,change):
+            def apply(rows):
+                for row in rows:
+                    if row['requestHeader']['clientId'].endswith('worker2') and row['requestHeader']['requestApiKeyName']==api:
+                        change(row)
+            return apply
+        mutations=[
+            alter('API_VERSIONS',lambda row:row['response'].update(errorCode=58)),
+            alter('API_VERSIONS',lambda row:row['response'].update(errorCode=False)),
+            alter('API_VERSIONS',lambda row:row.update(connection='unrelated')),
+            alter('JOIN_GROUP',lambda row:row['response'].update(errorCode=58)),
+            alter('JOIN_GROUP',lambda row:row['response'].update(errorCode=79.0)),
+            alter('JOIN_GROUP',lambda row:row['response'].update(memberId='unrelated')),
+            alter('JOIN_GROUP',lambda row:row['request'].update(groupId='unrelated')),
+            alter('JOIN_GROUP',lambda row:row.update(listener='WORKER3')),
+        ]
+        for change in mutations:
+            fixture=self.fixture('coordinator-kill-rebalance',restart=True,eof=True)
+            self.rebound_protocol(fixture,change)
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                self.validate(fixture)
+        # A grant/commit after the retained pre-kill cut but before the peer's
+        # exit must still reject its pending-join interpretation after healing.
+        for api in ('JOIN_GROUP','SYNC_GROUP','OFFSET_COMMIT','late-JOIN_GROUP'):
+            fixture=self.fixture('coordinator-kill-rebalance',restart=True,eof=True)
+            def append_success(rows):
+                request=dict(groupId='group',memberId='member2',generationId=2)
+                response=dict(errorCode=0,memberId='member2',generationId=2,assignment=encoded_assignment([8]))
+                if api=='OFFSET_COMMIT':
+                    request=dict(groupId='group',memberId='member2',generationIdOrMemberEpoch=2,topics=[dict(topicId='00000000-0000-0000-0000-000000000001',partitions=[dict(partitionIndex=8,committedOffset=5)])])
+                    response=dict(topics=[dict(topicId='00000000-0000-0000-0000-000000000001',partitions=[dict(partitionIndex=8,errorCode=0)])])
+                row=audit_fixture.record(20 if api.startswith('late-') else 13.5,'kaferry-group-selected-worker2',api.removeprefix('late-'),request,response,50000)
+                if api.startswith('late-'):
+                    row['totalTimeMs']=6500
+                row['listener']='WORKER2'
+                rows.append(row)
+            self.rebound_protocol(fixture,append_success,prefix=False)
+            with self.subTest(api=api),self.assertRaisesRegex(ValueError,'before exit'):
+                self.validate(fixture)
 
     def test_all_three_cases_require_raw_group_generations_and_os_observations(self):
         # Given raw broker/CLI/Docker fixtures, when their observations agree,
