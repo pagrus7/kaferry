@@ -40,8 +40,6 @@ type enduranceEvidence struct {
 	lastExpected, lastAcknowledged int
 	endRecorded, graceChecked      bool
 	recoveryAt                     time.Time
-
-	Recovery *enduranceRecoveryObservation `json:"last_recovery,omitempty"`
 }
 
 func newEnduranceEvidence(duration time.Duration) *enduranceEvidence {
@@ -88,6 +86,21 @@ func (e *enduranceEvidence) check(elapsed, duration time.Duration, submitted, ac
 		if !e.LoadValidated {
 			return fmt.Errorf("endurance load invalid: all scheduled input must be submitted and acknowledged within five seconds of publishing end")
 		}
+	}
+	return nil
+}
+
+func (e *enduranceEvidence) checkRecovery(elapsed time.Duration, backlog, rate int) error {
+	if e.recoveryAt.IsZero() {
+		return nil
+	}
+	if elapsed > 15*time.Second {
+		return fmt.Errorf("backlog failed to recover after destination stall")
+	}
+	if backlog <= rate/10 {
+		e.MaxRecoverySeconds = max(e.MaxRecoverySeconds, elapsed.Seconds())
+		e.Recoveries++
+		e.recoveryAt = time.Time{}
 	}
 	return nil
 }

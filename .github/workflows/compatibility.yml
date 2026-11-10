@@ -92,11 +92,6 @@ jobs:
       - name: Install independent checker
         if: matrix.suite == 'broker'
         run: python3 -m tools.qualification.qualify setup
-      - name: Check authentication broker storage configuration
-        if: matrix.suite == 'auth'
-        env:
-          SOURCE: ${{ matrix.source }}
-        run: python3 -c 'import os; from tools.qualification.qualify import check_auth_storage; check_auth_storage(os.environ["SOURCE"])'
       - name: Build candidate
         if: inputs.artifact == ''
         run: make build

@@ -134,5 +134,4 @@ services:
 
 volumes:
   data:
-    name: ${KAFERRY_REPLICATED_BROKER_VOLUME:-${COMPOSE_PROJECT_NAME}-data}
-    external: ${KAFERRY_REPLICATED_VOLUME_EXTERNAL:-false}
+    name: ${COMPOSE_PROJECT_NAME}-data

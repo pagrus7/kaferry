@@ -3,7 +3,6 @@
 
 import argparse
 from contextlib import contextmanager, nullcontext
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from dataclasses import dataclass
 import fcntl
@@ -13,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import platform
-import re
 import shutil
 import signal
 import socket
@@ -27,7 +25,6 @@ import venv
 from tools.ci.ci import capture, verify_tests
 from tools.ci.suites import command as go_suite, EXPECTED, REPLICATED_CASES, replicated_execution_seconds
 from tools.qualification import network
-from tools.qualification.runtime_observations import runtime_observations
 
 ROOT = Path(__file__).resolve().parents[2]
 IMAGES = json.loads((ROOT / 'src/tests/qualification/matrix.json').read_text())
@@ -38,7 +35,7 @@ SUITES = ('broker', 'replicated', 'fault-replicated', 'auth', 'fault', 'load', '
 STOP_GRACE = 5
 SOAK_DRAIN_SECONDS = 10
 STREAMING_SUITES = ('soak', 'capture', 'endurance')
-PAIRED_SUITES = ('broker', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration')
+TWO_BROKER_SUITES = ('broker', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration')
 LAB_LOCK = Path('/tmp/kaferry-qualification.lock')
 VENV = ROOT / ('.cache/qualification/venv-' + str(sys.version_info.major) + '.' + str(sys.version_info.minor))
 REPLICATED_SOURCE_PORTS = (46092, 46093, 46094)
@@ -250,31 +247,6 @@ def endurance_capacity(seconds, output, compose, env):
     return capacity
 
 
-def parallel_allowance(duration, companion, companion_duration):
-    # Sum full remaining allowances before admitting either workload. Check this
-    # combined amount on every participating filesystem, even if they are distinct.
-    def stream_bytes(seconds, rate):
-        records = seconds * rate + (1 + seconds // 60) * min(2048, rate * 2)
-        return records * 5376 * 3 + 4 * 1024**3
-    primary = stream_bytes(duration, 200)
-    secondary = stream_bytes(companion_duration, 50) if companion == 'capture' else 4 * 1024**3
-    return primary + secondary + max(2 * 1024**3, (duration + companion_duration) * 8192)
-
-
-def parallel_capacity(required, output, compose, env):
-    free = {'evidence': shutil.disk_usage(output).free,
-            'temporary': shutil.disk_usage(env.get('TMPDIR') or '/tmp').free}
-    for service in ('kafka', 'kafka-dr'):
-        result = subprocess.check_output(compose + ['exec', '-T', service, 'df', '-Pk', '/tmp/kaferry-logs'],
-                                         env=env, cwd=ROOT, text=True, timeout=15)
-        free[service] = int(result.splitlines()[-1].split()[3]) * 1024
-    result = dict(required_combined_bytes=required, free_bytes=free)
-    write_json(output / 'parallel-capacity.json', result)
-    if min(free.values()) < required:
-        raise ValueError('insufficient combined space for parallel workloads; inspect parallel-capacity.json')
-    return result
-
-
 def fixture_capacity(output, required):
     runtime = json.loads(capture(['docker', 'info', '--format', '{{json .}}']))
     capacity = dict(required,
@@ -288,17 +260,12 @@ def fixture_capacity(output, required):
     return capacity
 
 
-def replicated_admission(output, env, endurance_seconds=None):
+def replicated_admission(output, endurance_seconds=None):
     required = dict(required_cpus=2, required_runtime_memory_bytes=8 * 1024**3,
         required_broker_bytes=4 * 1024**3, required_evidence_bytes=1024**3)
     if endurance_seconds is not None:
         required.update(endurance_allowance(endurance_seconds, replicas=3))
     capacity = fixture_capacity(output, required)
-    if env['KAFERRY_REPLICATED_VOLUME_EXTERNAL'] == 'true':
-        labels = json.loads(capture(['docker', 'volume', 'inspect', '--format', '{{json .Labels}}',
-                                     env['KAFERRY_REPLICATED_BROKER_VOLUME']]) or 'null')
-        if not labels or labels.get('kaferry.lab.storage') != 'true':
-            raise ValueError('external broker volume must exist with label kaferry.lab.storage=true')
     for port in (*network.client_ports(), 48074):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -338,162 +305,7 @@ def cleanup_replicated(output, compose, env):
                'storage-clean', env, timeout=60)
     except (OSError, RuntimeError) as error:
         errors.append({'phase': 'storage-clean', 'error': str(error)})
-        try:
-            cleanup_container_state(output, compose, env)
-        except OSError:
-            errors.append({'phase': 'cleanup-diagnostics', 'error': 'cannot retain cleanup-container-state.json'})
     return errors
-
-
-def cleanup_container_state(output, compose, env):
-    template = '{"service":{{json .Service}},"state":{{json .State}},"exit_code":{{json .ExitCode}}}'
-    snapshot = dict(captured_at=datetime.now(timezone.utc).isoformat(), timeout_seconds=2,
-                    output_limit_bytes=65536, status='unavailable')
-    command = compose + ['ps', '--all', '--format', template]
-    try:
-        process = subprocess.Popen(command, env=env, cwd=ROOT, stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, start_new_session=True)
-    except OSError:
-        write_json(output / 'cleanup-container-state.json', snapshot)
-        return
-    expired = threading.Event()
-    def kill_group():
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    def timeout():
-        expired.set()
-        kill_group()
-    watchdog = threading.Timer(2, timeout)
-    watchdog.start()
-    try:
-        data = process.stdout.read(65537)
-        if len(data) > 65536:
-            kill_group()
-        code = process.wait()
-    finally:
-        watchdog.cancel()
-        kill_group()
-        process.stdout.close()
-        process.wait()
-        watchdog.join()
-    snapshot['exit_code'] = code
-    if expired.is_set():
-        snapshot['status'] = 'timed out'
-    elif len(data) > 65536:
-        snapshot['status'] = 'truncated'
-    elif code:
-        snapshot['status'] = 'failed'
-    else:
-        try:
-            rows = [json.loads(line) for line in data.decode().splitlines()]
-            if len(rows) > 32 or any(set(row) != {'service', 'state', 'exit_code'} or
-                    not isinstance(row['service'], str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,80}', row['service']) or
-                    row['state'] not in ('created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead') or
-                    type(row['exit_code']) is not int for row in rows):
-                raise ValueError('invalid state rows')
-            snapshot.update(status='complete', containers=rows)
-        except (ValueError, TypeError, UnicodeError):
-            snapshot['status'] = 'invalid output'
-    write_json(output / 'cleanup-container-state.json', snapshot)
-
-
-def external_storage_admission(output, env, parallel, *, auth=False):
-    count = 2 if parallel else 1
-    capacity = fixture_capacity(output, dict(required_cpus=2 * count, required_runtime_memory_bytes=(8 if auth else 4 * count) * 1024**3,
-        required_broker_bytes=4 * 1024**3, required_evidence_bytes=1024**3))
-    labels = json.loads(capture(['docker', 'volume', 'inspect', '--format', '{{json .Labels}}',
-                                 env['KAFERRY_BROKER_VOLUME']]) or 'null')
-    if not labels or labels.get('kaferry.lab.storage') != 'true':
-        raise ValueError('external broker volume must exist with label kaferry.lab.storage=true')
-    return capacity
-
-
-def validate_auth_storage(default, external, env):
-    services = default.get('services', {})
-    selected = external.get('services', {})
-    volume = external.get('volumes', {}).get('broker-data', {})
-    if default.get('volumes') or 'storage' in services:
-        raise ValueError('default authentication fixture must not select broker storage')
-    if volume.get('external') is not True or volume.get('name') != env['KAFERRY_BROKER_VOLUME']:
-        raise ValueError('authentication broker storage must use the selected external volume')
-    for name in ('kdc', 'kafka-secure-1', 'kafka-secure-2', 'kafka-secure-3'):
-        before, after = services.get(name, {}), dict(selected.get(name, {}))
-        certificates = [mount for mount in before.get('volumes', []) if mount.get('target') == '/mnt/certs']
-        if (len(certificates) != 1 or certificates[0].get('type') != 'bind' or
-                certificates[0].get('source') != env['KAFERRY_QUAL_CERT_DIR'] or
-                bool(certificates[0].get('read_only')) != (name != 'kdc')):
-            raise ValueError('authentication certificate and KDC mounts must retain their host paths and access')
-        if name != 'kdc':
-            logs = ('KAFKA_LOG_DIRS', 'KAFKA_METADATA_LOG_DIR')
-            expected = '/tmp/kaferry-logs/kaferry-auth/kaferry-qualification/' + env['KAFERRY_BROKER_RUN_ID'] + '/' + name
-            settings = after.get('environment', {})
-            if any(settings.get(key) != expected for key in logs):
-                raise ValueError('authentication data and metadata logs must use their owned broker directory')
-            mounts = [mount for mount in after.get('volumes', []) if mount.get('target') == '/tmp/kaferry-logs']
-            if (len(mounts) != 1 or mounts[0].get('type') != 'volume' or
-                    mounts[0].get('source') != 'broker-data' or mounts[0].get('read_only')):
-                raise ValueError('authentication broker log paths must be backed by the selected writable volume')
-            if after.pop('user', None) != '1000:1000':
-                raise ValueError('authentication broker storage requires its fixture owner')
-            if (any(key in before.get('environment', {}) for key in logs) or
-                    before.get('environment', {}).get('KAFKA_HEAP_OPTS') != '-Xms128m -Xmx512m'):
-                raise ValueError('default authentication broker logs and heap must remain unchanged')
-            after['environment'] = {key: value for key, value in settings.items() if key not in logs}
-            after['volumes'] = [mount for mount in after['volumes'] if mount not in mounts]
-        if after != before:
-            raise ValueError('external authentication storage must preserve the broker and KDC configuration')
-
-
-def check_auth_storage(version):
-    env = dict(os.environ, KAFERRY_AUTH_IMAGE=IMAGES[version], KAFERRY_QUAL_CERT_DIR='/tmp',
-               KAFERRY_BROKER_VOLUME='LAB_VOLUME', KAFERRY_BROKER_RUN_ID='a' * 32)
-    compose = ['docker', 'compose', '-p', 'kaferry-qualification', '-f', 'src/tests/qualification/compose.yaml']
-    documents = [json.loads(subprocess.check_output(compose + overlay + ['config', '--format', 'json'],
-        env=env, cwd=ROOT, text=True, timeout=10)) for overlay in ([], ['-f', 'src/tests/qualification/broker-storage.compose.yaml'])]
-    validate_auth_storage(*documents, env)
-
-
-def parallel_run(args):
-    if args.companion == 'recovery' and args.companion_duration > 86400:
-        raise ValueError('recovery duration must not exceed 24h')
-    args.output = args.output.resolve()
-    args.output.mkdir(parents=True, exist_ok=False)
-    args.binary = str(Path(args.binary).resolve())
-    binary_sha256 = hashlib.sha256(Path(args.binary).read_bytes()).hexdigest()
-    run_id = uuid.uuid4().hex[:12]
-    reserved = parallel_allowance(args.duration, args.companion, args.companion_duration)
-    cancelled = threading.Event()
-    jobs = []
-    for index, (suite, seconds, rate) in enumerate((('endurance', args.duration, 200),
-            (args.companion, args.companion_duration, 50)), 1):
-        case = argparse.Namespace(**dict(vars(args), suite=suite, duration=seconds, rate=rate,
-            output=args.output / suite, config=None, previous_binary=None))
-        fixture = dict(project=f'kaferry-lab-{run_id}-{index}', ports=[45092+index*100, 45093+index*100],
-                       reserved_bytes=reserved, binary_sha256=binary_sha256, companions=['endurance', args.companion])
-        jobs.append((case, fixture))
-    result = dict(schema=1, status='running', reserved_bytes=reserved, cases=[])
-    write_json(args.output / 'parallel.json', result)
-    try:
-        with lab_lock(), ThreadPoolExecutor(max_workers=2) as pool:
-            try:
-                futures = {pool.submit(run_suite, case, fixture=fixture, cancelled=cancelled): case for case, fixture in jobs}
-                for future in as_completed(futures):
-                    future.result()
-            except BaseException:
-                cancelled.set()
-                raise
-        result['status'] = 'passed'
-    except (Exception, KeyboardInterrupt) as error:
-        result.update(status='interrupted' if isinstance(error, (KeyboardInterrupt, InterruptedError)) else 'failed',
-                      error=str(error) or 'interrupted')
-        raise
-    finally:
-        for case, _ in jobs:
-            receipt = case.output / 'manifest.json'
-            result['cases'].append(json.loads(receipt.read_text()) if receipt.is_file() else {'suite': case.suite, 'status': 'missing'})
-        write_json(args.output / 'parallel.json', result)
 
 
 @dataclass(frozen=True)
@@ -505,22 +317,17 @@ class RunSpec:
     timeout: int
 
 
-def resolve_run(args, receipt, fixture):
+def resolve_run(args, receipt):
     args = argparse.Namespace(**dict(vars(args), binary=str(Path(args.binary).resolve())))
     topology = getattr(args, 'topology', None)
     if topology is not None and (args.suite != 'endurance' or topology not in ('single', 'replicated')):
         raise ValueError('--topology is only accepted by run endurance: single or replicated')
     project = 'kaferry-endurance' if args.suite == 'endurance' else 'kaferry-compat'
     source_port, destination_port = (39192, 40192) if args.suite == 'endurance' else (39092, 40092)
-    if fixture is not None:
-        project = fixture['project']
-        source_port, destination_port = fixture['ports']
-        receipt['parallel'] = fixture
     env = dict(os.environ, KAFERRY_SOURCE_PORT=str(source_port), KAFERRY_DESTINATION_PORT=str(destination_port), KAFERRY_REPORT_DIR=str(args.output), KAFERRY_TEST_OUTPUT='-json',
                KAFKA_TEST_BROKERS=f'127.0.0.1:{source_port}', KAFKA_TEST_DEST_BROKERS=f'127.0.0.1:{destination_port}',
                KAFKA_FAULT_CONTAINER=project+'-kafka-1', KAFKA_FAULT_DEST_CONTAINER=project+'-kafka-dr-1', KAFERRY_FIXTURE_PROJECT=project, CGO_ENABLED='1')
     compose = ['docker', 'compose', '-f', 'src/tests/compose.yaml', '-p', project, '--profile', 'cross-cluster']
-    volume = getattr(args, 'broker_volume', None)
     selected_case = getattr(args, 'case', None)
     if selected_case and args.suite != 'fault-replicated':
         raise ValueError('--case requires run fault-replicated')
@@ -528,39 +335,17 @@ def resolve_run(args, receipt, fixture):
         if selected_case is not None and selected_case not in REPLICATED_CASES:
             raise ValueError('unknown replicated fault case')
         receipt['case_selection'] = [selected_case] if selected_case else list(REPLICATED_CASES)
-    paired = not replicated_fixture(args) and (args.suite in PAIRED_SUITES or
+    two_brokers = not replicated_fixture(args) and (args.suite in TWO_BROKER_SUITES or
         args.suite == 'migration' and args.state_contract == 'resume')
-    auth = args.suite == 'auth' and volume is not None
-    if volume is not None and (not (replicated_fixture(args) or args.suite == 'auth' or paired) or
-                               not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', volume)):
-        raise ValueError('--broker-volume requires a local broker fixture and a Docker volume name')
-    for name in ('KAFERRY_BROKER_VOLUME', 'KAFERRY_BROKER_RUN_ID'):
-        env.pop(name, None)
-    if volume and (paired or auth):
-        env.update(KAFERRY_BROKER_VOLUME=volume, KAFERRY_BROKER_RUN_ID=uuid.uuid4().hex)
-        if paired:
-            compose[4:4] = ['-f', 'src/tests/broker-storage.compose.yaml']
-        receipt['fixture_storage'] = dict(mode='external-volume', run_id=env['KAFERRY_BROKER_RUN_ID'], layout='auth' if auth else 'paired')
-    if auth:
-        project = 'kaferry-qualification'
-        brokers = '127.0.0.1:41092,127.0.0.1:42092,127.0.0.1:43092'
-        # run.sh generates the actual private certificate directory before startup.
-        # Other Compose operations only need an existing interpolation placeholder.
-        env.update(KAFERRY_FIXTURE_PROJECT=project, KAFERRY_QUAL_CERT_DIR='/tmp',
-                   KAFKA_TEST_BROKERS=brokers, KAFKA_TEST_DEST_BROKERS=brokers)
-        compose = ['docker', 'compose', '-f', 'src/tests/qualification/compose.yaml',
-                   '-f', 'src/tests/qualification/broker-storage.compose.yaml', '-p', project]
     if replicated_fixture(args):
-        if fixture is not None or args.source != VERSIONS[-1] or args.destination != VERSIONS[-1]:
+        if args.source != VERSIONS[-1] or args.destination != VERSIONS[-1]:
             raise ValueError('replicated uses the newest catalog image and its dedicated fixture')
         project = 'kaferry-replicated'
         env.update(KAFKA_TEST_BROKERS=','.join(f'127.0.0.1:{port}' for port in REPLICATED_SOURCE_PORTS),
                    KAFKA_TEST_DEST_BROKERS=','.join(f'127.0.0.1:{port}' for port in REPLICATED_DESTINATION_PORTS),
                    KAFKA_FAULT_CONTAINER=project+'-source-1-1', KAFKA_FAULT_DEST_CONTAINER=project+'-destination-1-1',
                    KAFERRY_FIXTURE_PROJECT=project, KAFERRY_REPLICATED_IMAGE=IMAGES[VERSIONS[-1]],
-                   KAFERRY_REPLICATED_RUN_ID=uuid.uuid4().hex,
-                   KAFERRY_REPLICATED_BROKER_VOLUME=volume or project+'-data',
-                   KAFERRY_REPLICATED_VOLUME_EXTERNAL='true' if volume else 'false')
+                   KAFERRY_REPLICATED_RUN_ID=uuid.uuid4().hex)
         for worker in range(1, 4):
             env[f'KAFERRY_WORKER{worker}_SOURCE_BROKERS'] = network.endpoints('source', worker)
             env[f'KAFERRY_WORKER{worker}_DESTINATION_BROKERS'] = network.endpoints('destination', worker)
@@ -568,14 +353,12 @@ def resolve_run(args, receipt, fixture):
         compose = ['docker', 'compose', '-f', 'src/tests/replicated/compose.yaml', '-p', project, '--profile', 'replicated']
         receipt['parameters'] = dict(topology='replicated', brokers_per_cluster=3,
                                      replication_factor=3, min_insync_replicas=2, client_paths=4)
-        receipt['fixture_storage'] = dict(mode='external-volume' if volume else 'disposable-volume',
+        receipt['fixture_storage'] = dict(mode='disposable-volume',
                                          run_id=env['KAFERRY_REPLICATED_RUN_ID'])
-    fixtures = paired or replicated_fixture(args) or auth
+    fixtures = two_brokers or replicated_fixture(args)
     if not Path(args.binary).is_file():
         raise ValueError('binary is missing; run make build or pass --binary')
     receipt['binary_sha256'] = hashlib.sha256(Path(args.binary).read_bytes()).hexdigest()
-    if fixture is not None and receipt['binary_sha256'] != fixture['binary_sha256']:
-        raise ValueError('candidate binary changed after parallel admission')
     receipt['binary_version'] = capture([args.binary, '--version'])
     receipt.update(identity_platforms(args.binary, env.get('GO', 'go')))
     if args.suite == 'migration' and args.previous_binary:
@@ -584,8 +367,6 @@ def resolve_run(args, receipt, fixture):
     env.update(KAFERRY_TEST_BINARY=args.binary, KAFERRY_EXPECT_BINARY_SHA256=receipt['binary_sha256'],
                KAFERRY_SOURCE_IMAGE=IMAGES[args.source], KAFERRY_DESTINATION_IMAGE=IMAGES[args.destination])
     receipt['requested_images'] = [env['KAFERRY_SOURCE_IMAGE'], env['KAFERRY_DESTINATION_IMAGE']] if fixtures else []
-    if auth:
-        receipt['requested_images'] = [IMAGES[args.source]]
     if replicated_fixture(args):
         receipt['requested_images'].append(network.IMAGE)
     if args.config and args.suite != 'cloud':
@@ -610,28 +391,6 @@ def resolve_run(args, receipt, fixture):
     return RunSpec(command, expected, env, compose if fixtures else [], timeout)
 
 
-def startup_health(output, compose, env):
-    """Capture only selected, label-verified containers' health before teardown."""
-    project = env.get('KAFERRY_FIXTURE_PROJECT')
-    if not project:
-        raise ValueError('startup health requires an owned Compose project')
-    def query(command):
-        return subprocess.run(command, cwd=ROOT, env=env, check=True, capture_output=True,
-                              text=True, timeout=15).stdout
-    ids = query(compose+['ps', '--all', '--quiet']).split()
-    if any(not re.fullmatch(r'[0-9a-f]{64}', id) for id in ids):
-        raise ValueError('Compose returned invalid container IDs for startup health')
-    template = ('{"id":{{json .Id}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},'
-                '"service":{{json (index .Config.Labels "com.docker.compose.service")}},'
-                '"status":{{json .State.Status}},"running":{{json .State.Running}},'
-                '"exit_code":{{json .State.ExitCode}},"health":{{json .State.Health}}}')
-    rows = [json.loads(line) for line in query(['docker', 'inspect', '--format', template, *ids]).splitlines()] if ids else []
-    if (len(rows) != len(ids) or {row['id'] for row in rows} != set(ids) or
-            any(row.get('project') != project or not row.get('service') for row in rows)):
-        raise ValueError('startup health container ownership does not match the selected Compose project')
-    write_json(output/'startup-health.json', dict(project=project, containers=rows))
-
-
 def fixture_images(spec):
     images = subprocess.check_output(spec.compose + ['images', '--format', 'json'],
         env=spec.env, cwd=ROOT, text=True, timeout=10)
@@ -652,79 +411,69 @@ def validate_fixture_images(images):
 
 
 @contextmanager
-def broker_fixture(args, spec, receipt, fixture, cancelled, *, lease_held=False):
-    # Parallel children use the coordinator's lease and their assigned project.
-    with lab_lock() if fixture is None and not lease_held else nullcontext():
+def broker_fixture(args, spec, receipt, cancelled, *, lease_held=False):
+    with nullcontext() if lease_held else lab_lock():
         owns_fixture = False
-        startup_attempted, startup_complete = False, False
         try:
             if replicated_fixture(args):
-                receipt['capacity'] = replicated_admission(args.output, spec.env,
+                receipt['capacity'] = replicated_admission(args.output,
                     args.duration if args.suite == 'endurance' else None)
                 owns_fixture = True
                 replicated_storage(args.output, spec.compose, spec.env, receipt['capacity'], cancelled)
-                startup_attempted = True
                 logged(spec.compose + ['up', '-d', '--wait', 'toxiproxy'], args.output,
                        'proxy-up', spec.env, timeout=90, cancelled=cancelled)
                 logged([sys.executable, '-m', 'tools.qualification.network', '--output', str(args.output)],
                        args.output, 'proxy-configure', spec.env, timeout=60, cancelled=cancelled)
-            elif receipt.get('fixture_storage', {}).get('layout') in ('paired', 'auth'):
-                receipt['storage_capacity'] = external_storage_admission(args.output, spec.env, fixture is not None,
-                                                                        auth=args.suite == 'auth')
-                owns_fixture = True
-                replicated_storage(args.output, spec.compose, spec.env, receipt['storage_capacity'], cancelled)
             if spec.compose and args.suite != 'auth':
                 owns_fixture = True
-                startup_attempted = True
                 logged(spec.compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output,
                        'brokers-up', spec.env, timeout=180, cancelled=cancelled)
-                startup_complete = True
                 receipt['broker_images'] = fixture_images(spec)
-            observations = runtime_observations(args.output, spec.compose, spec.env) if args.suite == 'fault-replicated' else nullcontext()
-            with observations as observation:
-                if observation is not None:
-                    receipt['runtime_observations'] = observation
-                if args.suite in REPLICATED_SUITES:
-                    logged([spec.env.get('GO', 'go'), 'test', '-count=1', '-json', '-tags=integration',
-                            '-timeout=3m', '-run', '^TestReplicatedProxyRoutes$', './src/tests/system/faults'],
-                           args.output, 'proxy-proof', spec.env, timeout=210, cancelled=cancelled)
-                    verify_tests((args.output / 'proxy-proof.log').read_text(), ['TestReplicatedProxyRoutes'])
-                    receipt['proxy_path_check'] = 'passed'
-                if fixture is not None:
-                    receipt['parallel_capacity'] = parallel_capacity(fixture['reserved_bytes'], args.output, spec.compose, spec.env)
-                    write_json(args.output / 'manifest.json', receipt)
-                if args.suite == 'endurance':
-                    if not replicated_fixture(args):
-                        receipt['capacity'] = endurance_capacity(args.duration, args.output, spec.compose, spec.env)
-                    write_json(args.output / 'manifest.json', receipt)
-                yield
+            if args.suite in REPLICATED_SUITES:
+                logged([spec.env.get('GO', 'go'), 'test', '-count=1', '-json', '-tags=integration',
+                        '-timeout=3m', '-run', '^TestReplicatedProxyRoutes$', './src/tests/system/faults'],
+                       args.output, 'proxy-proof', spec.env, timeout=210, cancelled=cancelled)
+                verify_tests((args.output / 'proxy-proof.log').read_text(), ['TestReplicatedProxyRoutes'])
+                receipt['proxy_path_check'] = 'passed'
+            if args.suite == 'endurance':
+                if not replicated_fixture(args):
+                    receipt['capacity'] = endurance_capacity(args.duration, args.output, spec.compose, spec.env)
+                write_json(args.output / 'manifest.json', receipt)
+            yield
         except (Exception, KeyboardInterrupt) as error:
             receipt['suite_error'] = str(error) or 'interrupted'
             raise
         finally:
             if spec.compose and owns_fixture:
                 errors = []
-                if startup_attempted and not startup_complete:
+                logs_captured = False
+                def capture_logs():
+                    nonlocal logs_captured
+                    if logs_captured:
+                        return
+                    logs_captured = True
                     try:
-                        startup_health(args.output, spec.compose, spec.env)
-                    except (OSError, subprocess.SubprocessError, ValueError) as error:
-                        errors.append({'phase': 'startup-health', 'error': str(error)})
+                        with (args.output / 'brokers.log').open('w') as log:
+                            subprocess.run(spec.compose + ['logs', '--no-color'], cwd=ROOT, env=spec.env,
+                                           stdout=log, stderr=subprocess.STDOUT, timeout=30, check=False)
+                    except (OSError, subprocess.SubprocessError) as error:
+                        errors.append({'phase': 'logs', 'error': str(error)})
                 try:
-                    with (args.output / 'brokers.log').open('w') as log:
-                        subprocess.run(spec.compose + ['logs', '--no-color'], cwd=ROOT, env=spec.env,
-                                       stdout=log, stderr=subprocess.STDOUT, timeout=30, check=False)
-                except (OSError, subprocess.SubprocessError) as error:
-                    errors.append({'phase': 'logs', 'error': str(error)})
+                    if 'suite_error' in receipt or receipt.get('fault_results', {}).get('status') == 'inconclusive':
+                        capture_logs()
                 finally:
-                    owned_storage = replicated_fixture(args) or receipt.get('fixture_storage', {}).get('layout') in ('paired', 'auth')
+                    owned_storage = replicated_fixture(args)
                     if owned_storage:
                         errors.extend(cleanup_replicated(args.output, spec.compose, spec.env))
+                    if errors:
+                        capture_logs()
                     try:
                         # Keep storage if ownership validation or writer shutdown failed.
                         volumes = [] if owned_storage and errors else ['-v']
                         logged(spec.compose + ['down', *volumes, '--remove-orphans'], args.output, 'brokers-down', spec.env, timeout=60)
                     except (OSError, RuntimeError) as error:
                         errors.append({'phase': 'teardown', 'error': str(error)})
+                        capture_logs()
                 if errors:
                     receipt['cleanup_errors'] = errors
                     if 'suite_error' not in receipt:
@@ -794,10 +543,10 @@ def verify_replicated_tests(log, expected, cases):
                  sorted({name.split('/')[0] for name in inconclusive}))
 
 
-def run_suite(args, *, fixture=None, cancelled=None):
+def run_suite(args, *, cancelled=None):
     selected = getattr(args, 'case', None)
     if args.suite != 'fault-replicated' or selected and not selected.startswith('network/'):
-        return run_suite_attempt(args, fixture=fixture, cancelled=cancelled)
+        return run_suite_attempt(args, cancelled=cancelled)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     summary = dict(schema=1, suite=args.suite, status='running', attempts=[])
@@ -811,7 +560,7 @@ def run_suite(args, *, fixture=None, cancelled=None):
                 attempt = argparse.Namespace(**dict(vars(args), output=output/f'attempt-{number}'))
                 try:
                     identity = summary['attempts'][0] if summary['attempts'] else None
-                    result = run_suite_attempt(attempt, fixture=fixture, cancelled=cancelled, lease_held=True, identity=identity)
+                    result = run_suite_attempt(attempt, cancelled=cancelled, lease_held=True, identity=identity)
                 except InconclusivePrecondition:
                     if number == 2:
                         raise
@@ -833,7 +582,7 @@ def run_suite(args, *, fixture=None, cancelled=None):
         write_json(output/'manifest.json', summary)
 
 
-def run_suite_attempt(args, *, fixture=None, cancelled=None, lease_held=False, identity=None):
+def run_suite_attempt(args, *, cancelled=None, lease_held=False, identity=None):
     args = argparse.Namespace(**dict(vars(args), output=args.output.resolve(),
         destination=args.source if args.suite == 'auth' else args.destination))
     args.output.mkdir(parents=True, exist_ok=False)
@@ -861,14 +610,14 @@ def run_suite_attempt(args, *, fixture=None, cancelled=None, lease_held=False, i
     started = time.monotonic()
     write_json(args.output / 'manifest.json', receipt)
     try:
-        spec = resolve_run(args, receipt, fixture)
+        spec = resolve_run(args, receipt)
         if identity is not None and (identity['working_tree_dirty'] or receipt['working_tree_dirty']):
             raise ValueError('automatic qualification retry requires a clean unchanged checkout')
         if identity is not None and any(identity[key] != receipt[key] for key in
                 ('source_commit', 'working_tree_dirty', 'binary_sha256', 'binary_platform', 'execution_platform')):
             raise ValueError('qualification identity changed between attempts')
         write_json(args.output / 'manifest.json', receipt)
-        with broker_fixture(args, spec, receipt, fixture, cancelled, lease_held=lease_held):
+        with broker_fixture(args, spec, receipt, cancelled, lease_held=lease_held):
             try:
                 logged(spec.command, args.output, 'suite', spec.env, timeout=spec.timeout, cancelled=cancelled)
             finally:
@@ -990,7 +739,6 @@ def main(argv=None):
         running = sub.add_parser(name, help='run one suite' if name == 'run' else 'run every planned case sequentially')
         if name == 'run':
             running.add_argument('suite', choices=SUITES)
-            running.add_argument('--broker-volume', help='existing labeled external volume for local brokers')
             running.add_argument('--topology', choices=('single', 'replicated'), help='endurance topology (default: single)')
             running.add_argument('--case', choices=tuple(REPLICATED_CASES), help='one case within fault-replicated; default: all registered cases')
         elif name == 'matrix':
@@ -1006,15 +754,6 @@ def main(argv=None):
         running.add_argument('--output', type=Path, help='new evidence directory; existing paths are refused',
             default=Path('build-results/qualification') /
             (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]))
-    parallel = sub.add_parser('parallel', help='run isolated endurance and recovery/capture together under one host lease')
-    parallel.add_argument('--companion', choices=('recovery', 'capture'), default='recovery')
-    parallel.add_argument('--duration', type=duration, default=86400)
-    parallel.add_argument('--companion-duration', type=duration)
-    parallel.add_argument('--source', choices=VERSIONS, default=VERSIONS[0])
-    parallel.add_argument('--destination', choices=VERSIONS, default=VERSIONS[0])
-    parallel.add_argument('--binary', default='bin/kaferry', help='existing candidate executable (default: %(default)s)')
-    parallel.add_argument('--broker-volume', help='existing labeled external volume for both jobs’ brokers')
-    parallel.add_argument('--output', type=Path, required=True, help='new evidence directory; existing paths are refused')
     verifying = sub.add_parser('verify-release', help='validate full matrix evidence against an exact release archive')
     verifying.add_argument('report', type=Path)
     verifying.add_argument('archive', type=Path)
@@ -1032,10 +771,6 @@ def main(argv=None):
         args.duration = args.duration if args.duration is not None else (86400 if endurance else 7200 if getattr(args, 'suite', None) == 'recovery' else 120)
         args.rate = args.rate if args.rate is not None else (200 if endurance else 50)
     os.chdir(ROOT)
-    if args.action == 'parallel':
-        args.companion_duration = args.companion_duration or (7200 if args.companion == 'recovery' else args.duration)
-        parallel_run(args)
-        return 0
     if args.action == 'setup':
         if sys.version_info < (3, 11):
             raise ValueError('qualification setup requires Python 3.11+; select that interpreter for setup and runs')

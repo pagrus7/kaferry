@@ -34,15 +34,7 @@ type brokerObservation struct {
 	BrokerHealthy bool                          `json:"broker_healthy"`
 	Pending       copySummary                   `json:"cli_progress"`
 	Publishing    replicatedPublishing          `json:"publishing"`
-	QueryErrors   []string                      `json:"query_errors,omitempty"`
 	Readiness     []brokerHealthCheck           `json:"broker_readiness,omitempty"`
-	Queries       []brokerQueryTiming           `json:"query_timings,omitempty"`
-}
-
-type brokerQueryTiming struct {
-	Operation string    `json:"operation"`
-	Started   time.Time `json:"started_at"`
-	Finished  time.Time `json:"finished_at"`
 }
 
 type brokerCopy struct {
@@ -65,11 +57,8 @@ type brokerCopy struct {
 	active                                        *faults.Injection
 	activeWindow                                  int
 	beforeFault                                   brokerObservation
-	polls                                         []brokerPoll
-	omittedPolls                                  int
 	healthChecks                                  []brokerHealthCheck
 	precondition                                  *networkPrecondition
-	conditionQueries                              []string
 }
 
 func replicatedBrokerFault(t *testing.T, name string) {
@@ -116,7 +105,6 @@ func startReplicatedFaultCopy(t *testing.T, id string) (*brokerCopy, brokerObser
 	require.NoError(t, err)
 	t.Cleanup(metadata.Close)
 	s := &brokerCopy{caseID: id, t: t, ctx: ctx, metadata: metadata, timeouts: timeouts, directory: directory}
-	t.Cleanup(s.retainPolls)
 	s.lab = &faults.Lab{Project: os.Getenv("KAFERRY_FIXTURE_PROJECT"), API: os.Getenv("KAFERRY_TOXIPROXY_API"), Metadata: metadata}
 	prefix := fmt.Sprintf("kaferry-broker-%d", time.Now().UnixNano())
 	s.src, s.dst, s.group = prefix+"-source", prefix+"-destination", prefix+"-group"
@@ -339,11 +327,8 @@ func (s *brokerCopy) observe(ctx context.Context) (brokerObservation, bool) {
 	state.Topology = make(map[string][]faults.Partition)
 	for side, topic := range map[string]string{"source": s.src, "destination": s.dst} {
 		var err error
-		started := time.Now().UTC()
 		state.Topology[side], err = s.topology(ctx, side, topic)
-		state.Queries = append(state.Queries, brokerQueryTiming{side + " topology", started, time.Now().UTC()})
 		if err != nil {
-			state.QueryErrors = append(state.QueryErrors, brokerDiagnosticText(err.Error()))
 			return state, false
 		}
 	}
@@ -352,25 +337,18 @@ func (s *brokerCopy) observe(ctx context.Context) (brokerObservation, bool) {
 	state.Pending, state.Worker, found, err = s.currentProgress(s.workers[len(s.workers)-1])
 	require.NoError(s.t, err, "read current broker worker progress")
 	if !found {
-		state.QueryErrors = append(state.QueryErrors, "CLI has not emitted complete progress")
 		return state, false
 	}
-	started := time.Now().UTC()
 	parts, err := s.metadata["source"].FetchOffsetsForTopics(ctx, s.group, s.src)
-	state.Queries = append(state.Queries, brokerQueryTiming{"source saved offsets", started, time.Now().UTC()})
 	if err != nil || parts.Error() != nil || len(parts[s.src]) != replicatedPartitions {
-		state.QueryErrors = append(state.QueryErrors, brokerDiagnosticText(fmt.Sprintf("source saved offsets: request=%v partitions=%v count=%d", err, parts.Error(), len(parts[s.src]))))
 		return state, false
 	}
 	state.Saved = make([]int64, replicatedPartitions)
 	for partition, part := range parts[s.src] {
 		state.Saved[partition] = part.At
 	}
-	started = time.Now().UTC()
 	ends, err := s.metadata["destination"].ListEndOffsets(ctx, s.dst)
-	state.Queries = append(state.Queries, brokerQueryTiming{"destination end offsets", started, time.Now().UTC()})
 	if err != nil || ends.Error() != nil || len(ends[s.dst]) != replicatedPartitions {
-		state.QueryErrors = append(state.QueryErrors, brokerDiagnosticText(fmt.Sprintf("destination end offsets: request=%v partitions=%v count=%d", err, ends.Error(), len(ends[s.dst]))))
 		return state, false
 	}
 	state.Ends = make([]int64, replicatedPartitions)
@@ -421,16 +399,9 @@ func (s *brokerCopy) wait(label string, allowFailure bool, condition func(contex
 		s.live(allowFailure)
 		require.NoError(s.t, s.publisher.snapshot().err, "steady source publisher failed")
 		query, cancel := context.WithTimeout(deadline, 2*time.Second)
-		started := time.Now()
 		s.healthChecks = nil
-		s.conditionQueries = nil
 		state, ok := s.observe(query)
 		ready := ok && condition(query, state)
-		poll := brokerPoll{Label: label, DurationMS: time.Since(started).Milliseconds(), Complete: ok, State: state, Health: s.healthChecks, Conditions: s.conditionQueries}
-		if err := query.Err(); err != nil {
-			poll.QueryError = err.Error()
-		}
-		s.recordPoll(poll)
 		cancel()
 		if ready {
 			return state
@@ -583,10 +554,8 @@ func (s *brokerCopy) isrLoss(before brokerObservation) {
 func (s *brokerCopy) destinationMinISR(ctx context.Context) string {
 	configs, err := s.metadata["destination"].DescribeTopicConfigs(ctx, s.dst)
 	if err != nil || len(configs) != 1 || configs[0].Err != nil {
-		s.conditionQueries = append(s.conditionQueries, brokerDiagnosticText(fmt.Sprintf("destination minISR: request=%v config=%v", err, configs)))
 		return ""
 	}
 	value := configValue(configs[0].Configs, "min.insync.replicas")
-	s.conditionQueries = append(s.conditionQueries, "destination minISR: "+value)
 	return value
 }

@@ -4,22 +4,19 @@ mkdir -p .cache/qualification
 cert_dir=$(mktemp -d "$PWD/.cache/qualification/run.XXXXXX")
 export KAFERRY_QUAL_CERT_DIR="$cert_dir"
 compose() {
-  if [ -n "${KAFERRY_BROKER_VOLUME:-}" ]; then
-    docker compose -p kaferry-qualification -f src/tests/qualification/compose.yaml \
-      -f src/tests/qualification/broker-storage.compose.yaml "$@"
-  else
-    docker compose -p kaferry-qualification -f src/tests/qualification/compose.yaml "$@"
-  fi
+  docker compose -p kaferry-qualification -f src/tests/qualification/compose.yaml "$@"
 }
 cleanup() {
   suite_status=$?
-  if [ -n "${KAFERRY_REPORT_DIR:-}" ]; then
-    mkdir -p "$KAFERRY_REPORT_DIR"
-    compose logs --no-color > "$KAFERRY_REPORT_DIR/security-brokers.log" || true
+  if [ "$suite_status" -ne 0 ] && [ -n "${KAFERRY_REPORT_DIR:-}" ]; then
+    mkdir -p "$KAFERRY_REPORT_DIR" && compose logs --no-color > "$KAFERRY_REPORT_DIR/security-brokers.log" || true
   fi
   cleanup_status=0
   compose down -v || cleanup_status=$?
   rm -rf "$cert_dir" || cleanup_status=$?
+  if [ "$suite_status" -eq 0 ] && [ "$cleanup_status" -ne 0 ] && [ -n "${KAFERRY_REPORT_DIR:-}" ]; then
+    mkdir -p "$KAFERRY_REPORT_DIR" && compose logs --no-color > "$KAFERRY_REPORT_DIR/security-brokers.log" || true
+  fi
   if [ "$suite_status" -ne 0 ]; then
     return "$suite_status"
   fi
