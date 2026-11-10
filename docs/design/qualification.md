@@ -53,7 +53,7 @@ All commands attempt cleanup and return nonzero on failure or interruption. CLI 
 
 ## Broker and security matrix
 
-The [image catalog](../../src/tests/qualification/matrix.json) pins Kafka 3.9.2, 4.0.2, 4.1.2, 4.2.1 and 4.4.0, including digests. Update its pins when changing supported images.
+The [image catalog](../../src/tests/qualification/matrix.json) pins supported broker images by digest. Update its pins when changing supported images.
 
 | Tier | Directed broker cases | Security fixture |
 | --- | --- | --- |
