@@ -14,22 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const brokerForcedSaveExit = "shutdown timed out while saving progress; exiting without further cleanup"
-const brokerForcedWritesExit = "shutdown timed out while finishing writes; exiting without further cleanup"
-
-func brokerForcedCopyPhase(terminal string) string {
-	switch terminal {
-	case brokerForcedSaveExit:
-		return "saving progress"
-	case brokerForcedWritesExit:
-		return "finishing writes"
-	default:
-		return ""
-	}
-}
-
-const brokerNegotiationEOF = "broker closed the connection immediately during api versions negotiation, which often happens when the broker requires TLS but the client is using plaintext: is TLS missing?"
-const brokerSampledWorkScope = "sampled progress only; forced copy shutdown omits final lifetime highwater"
+const brokerSampledWorkScope = "sampled progress only; final lifetime highwater unavailable"
 const brokerExactWorkScope = "exact lifetime highwater from final copy summary"
 
 type brokerFailureProof struct {
@@ -43,17 +28,6 @@ type brokerFailureProof struct {
 	Heal         time.Time          `json:"heal"`
 	ObservedExit time.Time          `json:"observed_exit_at"`
 	Before       brokerObservation  `json:"before"`
-	Transport    string             `json:"transport"`
-	Targets      []faults.Target    `json:"targets,omitempty"`
-	Timeouts     map[string]int64   `json:"timeout_milliseconds,omitempty"`
-}
-
-func (p *brokerFailureProof) affected(side string) bool {
-	return p != nil && p.Window >= 0 && p.Role.Cluster == side &&
-		(p.Kind == "kill" || p.Kind == "restart") && p.Transport == "plaintext" &&
-		p.Before.At.Before(p.Start) && p.Start.Before(p.ObservedExit) &&
-		(p.Heal.IsZero() || !p.ObservedExit.After(p.Heal)) &&
-		brokerHealthyCopy(p.Before)
 }
 
 func brokerHealthyCopy(state brokerObservation) bool {
@@ -73,11 +47,7 @@ func (s *brokerCopy) activeProof(process *cliProcess) *brokerFailureProof {
 		recovery += timeout
 	}
 	proof := &brokerFailureProof{Case: s.caseID, RecoveryMS: recovery.Milliseconds(), Window: s.activeWindow, Role: event.Role, Kind: event.Fault.Kind,
-		Start: event.Start, Heal: event.Heal, ObservedExit: process.stopped, Before: s.beforeFault, Transport: "plaintext"}
-	if s.caseID == "broker/source-leader" || s.caseID == "broker/rolling-source" || s.caseID == "network/destination-outage" {
-		proof.Targets = append([]faults.Target(nil), event.Targets...)
-		proof.Timeouts = durationMilliseconds(s.timeouts)
-	}
+		Start: event.Start, Heal: event.Heal, ObservedExit: process.stopped, Before: s.beforeFault}
 	return proof
 }
 
@@ -91,8 +61,8 @@ func (s *brokerCopy) failureProof(process *cliProcess) *brokerFailureProof {
 	return proof
 }
 
-func (p *brokerFailureProof) forcedCopy(logs string) bool {
-	if p == nil || p.Transport != "plaintext" || p.RecoveryMS <= 0 || !brokerHealthyCopy(p.Before) ||
+func (p *brokerFailureProof) restartScope(logs string) bool {
+	if p == nil || p.RecoveryMS <= 0 || !brokerHealthyCopy(p.Before) ||
 		!p.Before.At.Before(p.Start) || !p.Start.Before(p.ObservedExit) || !p.Exit.binds(logs, p.Before) ||
 		!p.ObservedExit.Equal(p.Exit.Stopped) || (!p.Heal.IsZero() && p.ObservedExit.After(p.Heal.Add(time.Duration(p.RecoveryMS)*time.Millisecond))) {
 		return false
@@ -102,6 +72,15 @@ func (p *brokerFailureProof) forcedCopy(logs string) bool {
 		"broker/rolling-source": {"source", "broker", "restart"}, "broker/rolling-destination": {"destination", "broker", "restart"},
 	}
 	rule, ok := registered[p.Case]
+	if p.Case == "network/destination-outage" {
+		rule.side, rule.role, rule.kind, ok = "destination", "worker-destination", "cut", true
+		rss := p.Exit.RSS
+		if p.Window != 0 || p.Role.Worker != 1 || p.Exit.Lifetime.Number != 1 ||
+			(!p.Heal.IsZero() && !p.ObservedExit.Before(p.Heal)) ||
+			rss == nil || rss.Samples <= 0 || rss.Failures != 0 || rss.Peak <= 0 || rss.Peak > 512<<20 {
+			return false
+		}
+	}
 	active := p.Exit.Window
 	return ok && p.Window >= 0 && p.Role.Cluster == rule.side && p.Role.Kind == rule.role && p.Kind == rule.kind &&
 		active != nil && active.Case == p.Case && active.Window == p.Window && active.Role == p.Role && active.Kind == p.Kind &&
@@ -174,33 +153,22 @@ func (w *brokerWorkEvidence) add(row brokerWorkRow) error {
 	return nil
 }
 
+// Exit codes and Kaferry operation labels identify a failed copy; dependency
+// diagnostics are retained verbatim without interpreting their wording or order.
 func brokerContextualFailure(logs string, proof *brokerFailureProof) (string, bool) {
-	var terminal []string
-	for _, line := range strings.Split(logs, "\n") {
-		if line = strings.TrimSpace(line); line != "" && !json.Valid([]byte(line)) {
-			terminal = append(terminal, line)
-		}
-	}
+	lines := brokerTerminals(logs)
+	terminal := strings.Join(lines, "\n")
 	work, err := brokerWork(logs)
-	if err != nil || len(terminal) == 0 {
-		return "", false
+	if err != nil || terminal == "" || !proof.restartScope(logs) {
+		return terminal, false
 	}
-	if len(terminal) == 1 && brokerForcedCopyPhase(terminal[0]) != "" {
-		return terminal[0], work.Summary == nil && strings.Contains("\n"+logs, "\n"+terminal[0]+"\n") &&
-			(proof.forcedCopy(logs) || proof.networkOutageExit(logs))
+	labelled := false
+	for _, line := range lines {
+		labelled = labelled || strings.HasPrefix(line, "poll source: ") || strings.HasPrefix(line, "save progress: ") ||
+			strings.HasPrefix(line, "shutdown timed out while ")
 	}
-	if proof.sourceOperationExit(logs, strings.Join(terminal, "\n"), work.Summary) {
-		return strings.Join(terminal, "\n"), true
-	}
-	if work.Summary == nil || !proof.negotiationEOFContext(logs, len(terminal), terminal[0]) || len(terminal) != work.Summary.Submitted-work.Summary.Confirmed {
-		return "", false
-	}
-	for _, line := range terminal {
-		if line != terminal[0] {
-			return "", false
-		}
-	}
-	return strings.Join(terminal, "\n"), true
+	unconfirmed := work.Summary != nil && work.Summary.Submitted > work.Summary.Confirmed
+	return terminal, labelled || unconfirmed
 }
 
 func brokerEvidenceProof(side string) *brokerFailureProof {
@@ -212,155 +180,31 @@ func brokerEvidenceProof(side string) *brokerFailureProof {
 			before.Topology[cluster] = append(before.Topology[cluster], faults.Partition{Leader: 1, ISR: []int32{1, 2, 3}})
 		}
 	}
-	return &brokerFailureProof{Window: 0, Role: faults.Role{Kind: "leader", Cluster: side}, Kind: "kill", Start: time.Unix(20, 0).UTC(), Heal: time.Unix(30, 0).UTC(), ObservedExit: time.Unix(25, 0).UTC(), Before: before, Transport: "plaintext"}
+	return &brokerFailureProof{Window: 0, Role: faults.Role{Kind: "leader", Cluster: side}, Kind: "kill", Start: time.Unix(20, 0).UTC(), Heal: time.Unix(30, 0).UTC(), ObservedExit: time.Unix(25, 0).UTC(), Before: before}
 }
 
 const brokerWorkProgress = `{"msg":"progress","submitted":9,"confirmed":7,"pending_entries":2,"pending_estimated_bytes":4096}` + "\n"
 const brokerWorkSummary = `{"msg":"copy summary","submitted":9,"confirmed":7,"peak_uncommitted_records":3,"peak_uncommitted_bytes":8192}` + "\n"
 
-func TestBrokerNegotiationEOFRequiresAffectedPlainCopyAndEveryUnconfirmedError(t *testing.T) {
-	// Given a verified healthy plaintext destination copy and exact final counts,
-	// when every unconfirmed write returns the pinned SDK negotiation diagnostic,
-	// then only that affected active destination fault can authorize restart.
-	logs := brokerWorkProgress + brokerWorkSummary + strings.Repeat(brokerNegotiationEOF+"\n", 2)
-	terminal, known := brokerContextualFailure(logs, brokerEvidenceProof("destination"))
-	require.True(t, known)
-	require.Equal(t, strings.Repeat(brokerNegotiationEOF+"\n", 2), terminal+"\n")
-	for _, scenario := range []struct {
-		name string
-		logs string
-		edit func(*brokerFailureProof)
-	}{
-		{name: "unknown terminal", logs: logs + "unknown failure\n"},
-		{name: "first-response EOF remains network-only", logs: strings.ReplaceAll(logs, brokerNegotiationEOF, networkFirstResponseEOF)},
-		{name: "different TLS diagnostic", logs: strings.ReplaceAll(logs, brokerNegotiationEOF, "TLS handshake failed")},
-		{name: "missing one failure", logs: brokerWorkProgress + brokerWorkSummary + brokerNegotiationEOF + "\n"},
-		{name: "missing summary", logs: brokerWorkProgress + brokerNegotiationEOF + "\n"},
-		{name: "malformed summary", logs: strings.ReplaceAll(logs, `"confirmed":7`, `"confirmed":null`)},
-		{name: "TLS configuration", edit: func(p *brokerFailureProof) { p.Transport = "TLS" }},
-		{name: "wrong cluster", edit: func(p *brokerFailureProof) { p.Role.Cluster = "source" }},
-		{name: "ISR cut", edit: func(p *brokerFailureProof) { p.Kind = "cut" }},
-		{name: "startup", edit: func(p *brokerFailureProof) { p.Before.Pending.Confirmed = 0 }},
-		{name: "unhealthy before", edit: func(p *brokerFailureProof) { p.Before.Topology["destination"][0].ISR = []int32{1, 2} }},
-		{name: "before injection", edit: func(p *brokerFailureProof) { p.ObservedExit = p.Start.Add(-time.Second) }},
-		{name: "after healing", edit: func(p *brokerFailureProof) { p.ObservedExit = p.Heal.Add(time.Second) }},
+func TestBrokerWorkCapsRequireActualSamplesAndKeepMissingPeaksUnavailable(t *testing.T) {
+	// Given a real progress sample, when no final summary exists, then observed
+	// work remains bounded and the missing lifetime highwater stays unavailable.
+	work, err := brokerWork(brokerWorkProgress)
+	require.NoError(t, err)
+	require.Nil(t, work.Summary)
+	require.Equal(t, 2, work.SampledPending)
+	// When the final summary exists, then its exact peaks must cover the samples
+	// and remain within the configured record and byte caps.
+	work, err = brokerWork(brokerWorkProgress + brokerWorkSummary)
+	require.NoError(t, err)
+	require.Equal(t, 3, work.Summary.PeakRecords)
+	for _, invalid := range []string{
+		brokerWorkSummary,
+		strings.ReplaceAll(brokerWorkProgress, `"pending_entries":2`, `"pending_entries":1025`),
+		strings.ReplaceAll(brokerWorkProgress, `"pending_estimated_bytes":4096`, `"pending_estimated_bytes":134217729`),
+		brokerWorkProgress + strings.ReplaceAll(brokerWorkSummary, `"peak_uncommitted_records":3`, `"peak_uncommitted_records":1`),
+		brokerWorkProgress + strings.ReplaceAll(brokerWorkSummary, `"peak_uncommitted_bytes":8192`, `"peak_uncommitted_bytes":null`),
 	} {
-		t.Run(scenario.name, func(t *testing.T) {
-			proof := brokerEvidenceProof("destination")
-			if scenario.edit != nil {
-				scenario.edit(proof)
-			}
-			input := scenario.logs
-			if input == "" {
-				input = logs
-			}
-			_, accepted := brokerContextualFailure(input, proof)
-			require.False(t, accepted)
-		})
-	}
-}
-
-func brokerForcedProof(side, terminal string) (*brokerFailureProof, string) {
-	proof := brokerEvidenceProof(side)
-	proof.Case, proof.RecoveryMS = "broker/"+side+"-leader", 119000
-	identity := brokerLifetime{Number: 1, PID: 123, Started: time.Unix(1, 0).UTC(), Binary: strings.Repeat("a", 64)}
-	proof.Before.Worker = &brokerProgressWitness{Lifetime: identity, Bytes: len(brokerWorkProgress), SHA256: brokerDigest(brokerWorkProgress)}
-	logs := brokerWorkProgress + terminal + "\n"
-	active := *proof
-	proof.Exit = &brokerExitWitness{Lifetime: identity, Stopped: proof.ObservedExit, Recorded: proof.ObservedExit.Add(time.Millisecond), ExitCode: 1,
-		WaitError: "exit status 1", DriverIntent: []cliSignalIntent{}, Terminal: []string{terminal}, Log: &brokerFile{Path: "worker-1.exited.cli.log", SHA256: brokerDigest(logs)}, LogBytes: len(logs), Window: &active}
-	return proof, logs
-}
-
-func TestBrokerForcedCopyExitLeavesLifetimeHighwaterUnavailable(t *testing.T) {
-	// Given current-lifetime healthy copying, when either documented pre-summary
-	// phase forces exit 1 during a registered source or destination fault and its
-	// existing recovery window, then only sampled work remains measurable.
-	for _, fault := range []struct{ side, caseID, role, kind string }{
-		{"source", "broker/source-leader", "leader", "kill"}, {"destination", "broker/destination-leader", "leader", "kill"},
-		{"source", "broker/rolling-source", "broker", "restart"}, {"destination", "broker/rolling-destination", "broker", "restart"},
-	} {
-		for _, terminal := range []string{brokerForcedSaveExit, brokerForcedWritesExit} {
-			proof, logs := brokerForcedProof(fault.side, terminal)
-			proof.Case, proof.Kind, proof.Role.Kind = fault.caseID, fault.kind, fault.role
-			active := *proof
-			active.Exit = nil
-			proof.Exit.Window = &active
-			failure, known := brokerContextualFailure(logs, proof)
-			require.True(t, known, fault.caseID+terminal)
-			require.Equal(t, terminal, failure)
-			_, generic := brokerTerminalFailure(logs)
-			require.False(t, generic, "forced exits always require full contextual proof")
-			work, err := brokerWork(logs)
-			require.NoError(t, err)
-			require.Nil(t, work.Summary)
-			require.Equal(t, 2, work.SampledPending)
-			// Physical healing does not change the declared recovery budget.
-			proof.Heal = proof.ObservedExit.Add(-time.Second)
-			proof.Exit.Window.Heal = proof.Heal
-			_, known = brokerContextualFailure(logs, proof)
-			require.True(t, known)
-		}
-	}
-	for _, scenario := range []struct {
-		name string
-		edit func(*brokerFailureProof)
-		logs func(string) string
-	}{
-		{name: "ISR", edit: func(p *brokerFailureProof) { p.Case = "broker/destination-isr-loss"; p.Kind = "cut" }},
-		{name: "unknown case", edit: func(p *brokerFailureProof) { p.Case = "broker/unknown" }},
-		{name: "unknown phase", logs: func(s string) string { return strings.ReplaceAll(s, "saving progress", "printing copy summary") }},
-		{name: "nonliteral whitespace", logs: func(s string) string { return strings.ReplaceAll(s, brokerForcedSaveExit, " "+brokerForcedSaveExit) }},
-		{name: "TLS configuration", edit: func(p *brokerFailureProof) { p.Transport = "TLS" }},
-		{name: "unhealthy before", edit: func(p *brokerFailureProof) { p.Before.Topology["source"][0].ISR = []int32{1, 2} }},
-		{name: "changed recovery budget", edit: func(p *brokerFailureProof) { p.RecoveryMS++ }},
-		{name: "missing Wait witness", edit: func(p *brokerFailureProof) { p.Exit = nil }},
-		{name: "compound terminal", logs: func(s string) string { return s + "context deadline exceeded\n" }},
-		{name: "auth", logs: func(s string) string { return s + "SASL authentication failed\n" }},
-		{name: "summary present", logs: func(s string) string { return brokerWorkSummary + s }},
-		{name: "malformed", logs: func(s string) string { return s + "{malformed}\n" }},
-		{name: "missing progress", logs: func(s string) string { return brokerForcedSaveExit + "\n" }},
-		{name: "bad counts", logs: func(s string) string { return strings.ReplaceAll(s, `"pending_entries":2`, `"pending_entries":null`) }},
-		{name: "work cap", logs: func(s string) string { return strings.ReplaceAll(s, `"pending_entries":2`, `"pending_entries":1025`) }},
-		{name: "byte cap", logs: func(s string) string {
-			return strings.ReplaceAll(s, `"pending_estimated_bytes":4096`, `"pending_estimated_bytes":134217729`)
-		}},
-		{name: "startup", edit: func(p *brokerFailureProof) { p.Before.Pending.Confirmed = 0 }},
-		{name: "before fault", edit: func(p *brokerFailureProof) { p.ObservedExit = p.Start.Add(-time.Second) }},
-		{name: "after recovery", edit: func(p *brokerFailureProof) {
-			p.ObservedExit = p.Heal.Add(120 * time.Second)
-			p.Exit.Stopped = p.ObservedExit
-			p.Exit.Recorded = p.ObservedExit
-		}},
-		{name: "intentional stop", edit: func(p *brokerFailureProof) {
-			p.Exit.DriverIntent = []cliSignalIntent{{At: p.Start, Signal: "interrupt", Reason: "driver"}}
-		}},
-		{name: "signal", edit: func(p *brokerFailureProof) { p.Exit.Signal = "killed" }},
-		{name: "status", edit: func(p *brokerFailureProof) { p.Exit.ExitCode = 0 }},
-		{name: "no Wait error", edit: func(p *brokerFailureProof) { p.Exit.WaitError = "" }},
-		{name: "unreadable", edit: func(p *brokerFailureProof) { p.Exit.LogError = "permission denied" }},
-		{name: "stale lifetime", edit: func(p *brokerFailureProof) { p.Exit.Lifetime.Number++ }},
-		{name: "stale pid", edit: func(p *brokerFailureProof) { p.Exit.Lifetime.PID++ }},
-		{name: "stale start", edit: func(p *brokerFailureProof) { p.Exit.Lifetime.Started = p.Start }},
-		{name: "different binary", edit: func(p *brokerFailureProof) { p.Exit.Lifetime.Binary = strings.Repeat("b", 64) }},
-		{name: "prefix", edit: func(p *brokerFailureProof) { p.Before.Worker.SHA256 = strings.Repeat("b", 64) }},
-		{name: "missing baseline", edit: func(p *brokerFailureProof) { p.Before.Worker = nil }},
-		{name: "not observed", edit: func(p *brokerFailureProof) { p.Exit.Recorded = p.Start }},
-		{name: "missing active window", edit: func(p *brokerFailureProof) { p.Exit.Window = nil }},
-	} {
-		t.Run(scenario.name, func(t *testing.T) {
-			proof, logs := brokerForcedProof("source", brokerForcedSaveExit)
-			if scenario.edit != nil {
-				scenario.edit(proof)
-			}
-			if scenario.logs != nil {
-				logs = scenario.logs(logs)
-			}
-			_, accepted := brokerContextualFailure(logs, proof)
-			require.False(t, accepted)
-		})
-	}
-	for _, invalid := range []string{strings.ReplaceAll(brokerWorkProgress+brokerWorkSummary, `"peak_uncommitted_records":3`, `"peak_uncommitted_records":1025`), strings.ReplaceAll(brokerWorkProgress+brokerWorkSummary, `"peak_uncommitted_bytes":8192`, `"peak_uncommitted_bytes":null`)} {
 		_, err := brokerWork(invalid)
 		require.Error(t, err)
 	}

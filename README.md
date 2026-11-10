@@ -75,8 +75,10 @@ brew install pagrus7/tap/kaferry
 Go 1.26+:
 
 ```sh
-CGO_ENABLED=0 go install github.com/pagrus7/kaferry/cmd/kaferry@latest
+CGO_ENABLED=0 go install github.com/pagrus7/kaferry/src/cmd/kaferry@latest
 ```
+
+Tags v0.12.0 and older use `github.com/pagrus7/kaferry/cmd/kaferry@vX.Y.Z`.
 
 [Prebuilt binaries](https://github.com/pagrus7/kaferry/releases/latest) · [Installation details](docs/install.md).
 

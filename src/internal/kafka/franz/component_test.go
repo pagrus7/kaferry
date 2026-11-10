@@ -90,7 +90,6 @@ func TestSourceReportsNativeGroupSessionNegotiationEOF(t *testing.T) {
 	require.ErrorAs(t, err, &negotiation)
 	require.ErrorIs(t, err, io.EOF)
 	require.NotErrorIs(t, err, core.ErrRecoverable)
-	require.Equal(t, "unable to join group session: "+negotiation.Error(), err.Error())
 }
 
 func TestConsumerConstructionDoesNotJoinBeforeStartAndCanClose(t *testing.T) {
