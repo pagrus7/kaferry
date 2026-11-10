@@ -270,12 +270,19 @@ func (a *replicatedAudit) mark(ctx context.Context, t *testing.T, phase string) 
 }
 
 type ownershipAuditRecord struct {
+	Connection       string
+	Listener         string
 	TotalTime        json.RawMessage `json:"totalTimeMs"`
 	completionPrefix string
+	Completed        time.Time                                    `json:"-"`
+	Received         time.Time                                    `json:"-"`
 	Header           struct{ ClientID, RequestAPIKeyName string } `json:"requestHeader"`
 	Request          struct {
 		GroupID, MemberID string
 		Generation        int32 `json:"generationIdOrMemberEpoch"`
+		SyncGeneration    int32 `json:"generationId"`
+		SessionTimeout    int32 `json:"sessionTimeoutMs"`
+		RebalanceTimeout  int32 `json:"rebalanceTimeoutMs"`
 		Topics            []struct {
 			Partitions []struct {
 				PartitionIndex  int32
@@ -287,6 +294,7 @@ type ownershipAuditRecord struct {
 		ErrorCode    int16
 		MemberID     string
 		GenerationID int32
+		Assignment   string
 		Topics       []struct {
 			Partitions []struct {
 				PartitionIndex int32
@@ -296,14 +304,32 @@ type ownershipAuditRecord struct {
 	} `json:"response"`
 }
 
+func decodeOwnershipAuditRecord(line string) (ownershipAuditRecord, bool, error) {
+	var row ownershipAuditRecord
+	prefix, payload, ok := strings.Cut(line, "Completed request:")
+	if !ok {
+		return row, false, nil
+	}
+	if err := json.NewDecoder(strings.NewReader(payload)).Decode(&row); err != nil {
+		return row, true, err
+	}
+	row.completionPrefix = prefix
+	return row, true, nil
+}
+
 // currentGenerationSaved requires accepted commits in the latest successful
 // join generation. A nonzero barrier also requires receipt after that observation;
 // a request received earlier cannot qualify just because its response was later.
 func currentGenerationSaved(data []byte, client, group, member string, owned []int32, minimum map[int32]int64, receivedAfter time.Time) (int32, bool, error) {
-	rows, generation, err := currentGenerationRows(data, client, group, member)
+	rows, err := decodeOwnershipAudit(context.Background(), data)
 	if err != nil {
 		return 0, false, err
 	}
+	return currentGenerationSavedRows(rows, client, group, member, owned, minimum, receivedAfter)
+}
+
+func currentGenerationSavedRows(all []ownershipAuditRecord, client, group, member string, owned []int32, minimum map[int32]int64, receivedAfter time.Time) (int32, bool, error) {
+	rows, generation := currentGenerationRows(all, client, group, member)
 	accepted := make(map[int32]bool)
 	for _, row := range rows {
 		if row.Header.RequestAPIKeyName != "OFFSET_COMMIT" || row.Request.MemberID != member || row.Request.Generation != generation {
@@ -330,28 +356,39 @@ func currentGenerationSaved(data []byte, client, group, member string, owned []i
 	return generation, generation >= 0 && len(owned) > 0, nil
 }
 
-func currentGenerationRows(data []byte, client, group, member string) ([]ownershipAuditRecord, int32, error) {
+func currentGenerationRows(all []ownershipAuditRecord, client, group, member string) ([]ownershipAuditRecord, int32) {
 	var rows []ownershipAuditRecord
 	generation := int32(-1)
-	for _, line := range strings.Split(string(data), "\n") {
-		prefix, payload, ok := strings.Cut(line, "Completed request:")
-		if !ok {
-			continue
-		}
-		var row ownershipAuditRecord
-		if err := json.NewDecoder(strings.NewReader(payload)).Decode(&row); err != nil {
-			return nil, 0, err
-		}
+	for _, row := range all {
 		if row.Header.ClientID != client || row.Request.GroupID != group || row.Response == nil {
 			continue
 		}
-		row.completionPrefix = prefix
 		rows = append(rows, row)
 		if row.Header.RequestAPIKeyName == "JOIN_GROUP" && row.Response.ErrorCode == 0 && row.Response.MemberID == member {
 			generation = max(generation, row.Response.GenerationID)
 		}
 	}
-	return rows, generation, nil
+	return rows, generation
+}
+
+// Decode the complete bounded audit once before checking the selected cohort.
+// Irrelevant request bodies are still validated; no partial snapshot is proof.
+func decodeOwnershipAudit(ctx context.Context, data []byte) ([]ownershipAuditRecord, error) {
+	var rows []ownershipAuditRecord
+	for _, line := range strings.Split(string(data), "\n") {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		row, ok, err := decodeOwnershipAuditRecord(line)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	return rows, ctx.Err()
 }
 
 // Completion can follow the transfer even when the broker received the request
@@ -360,19 +397,24 @@ func auditReceivedAfter(row ownershipAuditRecord, barrier time.Time) (bool, erro
 	if barrier.IsZero() {
 		return true, nil
 	}
-	completed, err := time.Parse("[2006-01-02 15:04:05,000] DEBUG ", row.completionPrefix)
+	_, received, err := auditRequestTimes(row)
+	return err == nil && !received.Before(barrier), err
+}
+
+func auditRequestTimes(row ownershipAuditRecord) (completed, received time.Time, err error) {
+	completed, err = time.Parse("[2006-01-02 15:04:05,000] DEBUG ", row.completionPrefix)
 	if err != nil {
-		return false, fmt.Errorf("commit completion timestamp: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("commit completion timestamp: %w", err)
 	}
 	milliseconds, err := strconv.ParseFloat(string(row.TotalTime), 64)
 	if err != nil || milliseconds < 0 {
-		return false, fmt.Errorf("commit total request time is unavailable or invalid: %q", row.TotalTime)
+		return time.Time{}, time.Time{}, fmt.Errorf("commit total request time is unavailable or invalid: %q", row.TotalTime)
 	}
 	elapsed, err := time.ParseDuration(strconv.FormatFloat(milliseconds, 'f', -1, 64) + "ms")
 	if err != nil || elapsed < 0 {
-		return false, fmt.Errorf("commit total request time is unavailable or invalid: %q", row.TotalTime)
+		return time.Time{}, time.Time{}, fmt.Errorf("commit total request time is unavailable or invalid: %q", row.TotalTime)
 	}
-	return !completed.Add(-elapsed).Before(barrier), nil
+	return completed, completed.Add(-elapsed), nil
 }
 
 func auditAcceptedParts(row ownershipAuditRecord, minimum map[int32]int64) (map[int32]bool, error) {

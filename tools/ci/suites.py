@@ -16,13 +16,15 @@ GO_SUITES = {
     'soak': ('integration,load', '^TestStreamingSoak', False),
     'fault': ('integration,fault', '^TestBlockingCommit|^TestRebalanceChurn|^TestCrashResume|^TestRecoveryBlockedOutput', False),
     'recovery': ('integration,fault', '^TestRecoveryBlockedOutput$', False),
-    'fault-replicated': ('integration,fault,load', '^TestReplicatedZombieWorker$|^TestReplicatedBrokerFaults$|^TestReplicatedNetworkFaults$', False),
+    'fault-replicated': ('integration,fault,load', '^TestReplicatedZombieWorker$|^TestReplicatedBrokerFaults$|^TestReplicatedNetworkFaults$|^TestReplicatedOwnershipCases$', False),
 }
 REPLICATED_CASES = {'ownership/zombie-worker': 'TestReplicatedZombieWorker'} | {
     'broker/'+name: 'TestReplicatedBrokerFaults/'+name for name in
     ('source-leader', 'destination-leader', 'rolling-source', 'rolling-destination', 'destination-isr-loss')} | {
     'network/'+name: 'TestReplicatedNetworkFaults/'+name for name in
-    ('destination-outage', 'destination-leaders-outage', 'latency', 'bandwidth', 'slow-close')}
+    ('destination-outage', 'destination-leaders-outage', 'latency', 'bandwidth', 'slow-close')} | {
+    'ownership/'+name: 'TestReplicatedOwnershipCases/'+name for name in
+    ('worker-kill-rebalance', 'coordinator-kill-rebalance', 'worker-scale')}
 RECOVERY_CASES = {'recovery/'+name for name in
                   ('kill', 'signal', 'delivery-timeout', 'source-outage-shutdown', 'ownership-loss')}
 FAULT_CASES = RECOVERY_CASES | {'fault/crash', 'fault/churn', 'fault/blocking-commit'}
@@ -59,6 +61,8 @@ def fault_timeout_catalog():
     ownership = standard | {'socket.timeout.ms', 'progress_save_timeout'}
     broker = ownership | {'replica.lag.time.max.ms'}
     def allowed(id):
+        if id in REPLICATED_CASES and id.startswith('ownership/') and id != 'ownership/zombie-worker':
+            return ownership | {'max.poll.interval.ms'} | ({'replica.lag.time.max.ms'} if id == 'ownership/coordinator-kill-rebalance' else set())
         return broker if id in REPLICATED_CASES and id.startswith('broker/') else ownership if id in REPLICATED_CASES else standard
     if not catalog or any(not budgets or set(budgets)-allowed(id) or
                           id in REPLICATED_CASES and set(budgets) != allowed(id) or
@@ -73,7 +77,7 @@ def replicated_execution_seconds(selected):
     if not selected or len(selected) != len(set(selected)) or any(id not in REPLICATED_CASES or id not in catalog for id in selected):
         raise ValueError('unknown or unregistered replicated fault case')
     # Preserve the zombie's existing four-minute outer deadline. Each new
-    # broker/network case adds its own complete configured recovery sum. The
+    # deterministic case adds its own complete configured recovery sum. The
     # network healthy reference grows from one session to thirty seconds.
     return sum(240 + (sum(catalog[id].values())+999)//1000 +
                (30-catalog[id]['session.timeout.ms']//1000 if id.startswith('network/') else 0)

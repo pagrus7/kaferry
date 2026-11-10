@@ -13,6 +13,13 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 HELPERS = (
+    'TestOwnershipCaseRejectsUnprovedMembership',
+    'TestOwnershipCoordinatorRestartRequiresTerminalCause',
+    'TestOwnershipKilledWorkerKeepsEarlierPeak',
+    'TestOwnershipGenerationsReuseOneAuditSnapshot',
+    'TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy',
+    'TestOwnershipCoordinatorEOFRequiresRawBoundPhase',
+) + (
     'TestReplicatedPublisherAcknowledgesAllPartitionsAndStops',
     'TestReplicatedPublisherStopsAfterRejectedBatch',
     'TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites',
@@ -49,6 +56,7 @@ HELPERS = (
     'TestReplicatedAuditReadinessReadsEveryBrokerConcurrently',
     'TestReplicatedAuditReadinessRejectsIncompleteBrokerReads',
     'TestReplicatedAuditReadinessSharesCancellation',
+    'TestReplicatedAuditCohortUsesOneCompleteParsedSnapshot',
     'TestReplicatedZombieRSSStopsAtProcessExit',
     'TestReplicatedZombieExposureSpansSessionWithinSaveDeadline',
 )
@@ -67,7 +75,7 @@ class ReplicatedHelpersTest(unittest.TestCase):
                             'for name in json.loads(os.environ["HELPER_EVENTS"]):\n'
                             '    print(json.dumps(dict(Action="pass", Test=name)))\n')
             fake.chmod(0o700)
-            for emitted in (HELPERS, (), HELPERS[:-1], ('TestDifferent',)):
+            for emitted in (HELPERS, (), HELPERS[3:], HELPERS[4:], HELPERS[5:], HELPERS[:-1], ('TestDifferent',)):
                 with self.subTest(emitted=emitted):
                     env = dict(os.environ, KAFERRY_REPORT_DIR=str(directory/'results'),
                                HELPER_ARGUMENTS=str(arguments), HELPER_EVENTS=json.dumps(emitted))
@@ -122,14 +130,14 @@ class ReplicatedHelpersTest(unittest.TestCase):
             with self.subTest(single_file_change=changed):
                 self.assertEqual(expected, any(re.fullmatch(expression, changed) for expression in expressions))
 
-    def test_hosted_cases_keep_broker_and_outage_coverage_with_local_rate_cases(self):
+    def test_hosted_cases_keep_broker_and_outage_coverage_with_local_cases(self):
         # Given every registered local case, when selecting hosted physical runs,
-        # then the three rate-sensitive cases remain local candidate requirements.
+        # then all four local cases remain exact candidate requirements.
         from tools.ci.suites import REPLICATED_CASES
         workflow = (ROOT/'.github/workflows/replicated-lab.yml').read_text()
         matrix = workflow.split('  faults:', 1)[1].split('    steps:', 1)[0]
         hosted = set(re.findall(r'case: ([a-z/-]+)', matrix))
-        local = {'network/latency', 'network/bandwidth', 'network/slow-close'}
+        local = {'network/latency', 'network/bandwidth', 'network/slow-close', 'ownership/coordinator-kill-rebalance'}
         self.assertTrue(local <= set(REPLICATED_CASES))
         self.assertEqual(set(REPLICATED_CASES)-local-{'ownership/zombie-worker'}, hosted)
         self.assertIn('--case ownership/zombie-worker', workflow)

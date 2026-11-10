@@ -13,6 +13,12 @@ KAFKA_TEST_DEST_BROKERS ?= 127.0.0.1:40092
 KAFERRY_TEST_OUTPUT ?= -v
 SOAK_TEST_TIMEOUT ?= 1h
 REPLICATED_HELPER_TESTS := \
+	TestOwnershipCaseRejectsUnprovedMembership \
+	TestOwnershipCoordinatorRestartRequiresTerminalCause \
+	TestOwnershipKilledWorkerKeepsEarlierPeak \
+	TestOwnershipGenerationsReuseOneAuditSnapshot \
+	TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy \
+	TestOwnershipCoordinatorEOFRequiresRawBoundPhase \
 	TestReplicatedPublisherAcknowledgesAllPartitionsAndStops \
 	TestReplicatedPublisherStopsAfterRejectedBatch \
 	TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites \
@@ -47,6 +53,7 @@ REPLICATED_HELPER_TESTS := \
 	TestReplicatedAuditReadinessReadsEveryBrokerConcurrently \
 	TestReplicatedAuditReadinessRejectsIncompleteBrokerReads \
 	TestReplicatedAuditReadinessSharesCancellation \
+	TestReplicatedAuditCohortUsesOneCompleteParsedSnapshot \
 	TestReplicatedZombieRSSStopsAtProcessExit \
 	TestReplicatedZombieExposureSpansSessionWithinSaveDeadline
 ifeq ($(KAFERRY_TEST_BINARY),)

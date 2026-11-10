@@ -553,6 +553,9 @@ def collect(directory, selected, identity, run):
         if id == 'ownership/zombie-worker':
             from tools.qualification.ownership_audit import validate
             case = validate(directory, identity)
+        elif id.startswith('ownership/'):
+            from tools.qualification.ownership_cases import validate
+            case = validate(directory, id, identity)
         else:
             try:
                 case = network_case(directory, id, identity) if id.startswith('network/') else broker_case(directory, id, identity)

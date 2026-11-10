@@ -27,6 +27,9 @@ on:
       - 'tools/qualification/ownership_audit.py'
       - 'tools/qualification/test_fault_oracle.py'
       - 'tools/qualification/test_ownership_audit.py'
+      - 'tools/qualification/ownership_cases.py'
+      - 'tools/qualification/ownership_coordinator_exit.py'
+      - 'tools/qualification/test_ownership_cases.py'
       - 'tools/qualification/replicated_results.py'
       - 'tools/qualification/test_replicated_results.py'
       - 'tools/ci/suites.py'
@@ -192,6 +195,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - {name: worker-kill-rebalance, case: ownership/worker-kill-rebalance}
+          - {name: worker-scale, case: ownership/worker-scale}
           - {name: source-leader, case: broker/source-leader}
           - {name: destination-leader, case: broker/destination-leader}
           - {name: rolling-source, case: broker/rolling-source}

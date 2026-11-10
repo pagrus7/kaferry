@@ -672,7 +672,7 @@ class MatrixTest(unittest.TestCase):
                     expected = [REPLICATED_CASES[selected]] if selected else list(REPLICATED_CASES.values())
                     self.assertEqual(expected, spec.expected)
                     self.assertEqual([selected] if selected else list(REPLICATED_CASES), receipt['case_selection'])
-                    seconds = (240 if selected == 'ownership/zombie-worker' else 353 if selected and selected.startswith('network/') else 359 if selected else 3800)
+                    seconds = (240 if selected == 'ownership/zombie-worker' else 353 if selected and selected.startswith('network/') else 389 if selected == 'ownership/coordinator-kill-rebalance' else 359 if selected else 4907)
                     self.assertEqual(seconds+60, spec.timeout)
                     self.assertIn('-timeout='+('4m' if selected == 'ownership/zombie-worker' else str(seconds)+'s'), spec.command)
                     if selected:
