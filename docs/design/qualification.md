@@ -109,6 +109,8 @@ A coordinator-path cut affects every worker connection to that broker, including
 
 Use an existing candidate and a fresh evidence directory after [preparation](#prepare). These cases need the replicated smoke's capacity and exclusive ports. Live RSS uses native macOS task information or `ps` elsewhere; unavailable live RSS fails.
 
+The worker-kill and coordinator-kill cases also require permission to execute `ps` and inspect their own stopped worker processes.
+
 ```sh
 python3 -m tools.qualification.qualify run fault-replicated --case ownership/zombie-worker --binary bin/kaferry --output build-results/ownership-zombie
 python3 -m tools.qualification.qualify run fault-replicated --case ownership/worker-kill-rebalance --binary bin/kaferry --output build-results/worker-kill
