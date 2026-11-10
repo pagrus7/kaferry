@@ -37,7 +37,7 @@ An **operating condition** produces zero duplicates, requires no process restart
 | `run broker --source 3.9.2 --destination 4.4.0` | Independent Kafka/archive compatibility checks |
 | `run auth --source 4.4.0` | Authentication, ACLs, TLS and replicated leader failure |
 | `run replicated` | Healthy RF=3 copying and worker proxy-path isolation |
-| `run fault-replicated --case broker/source-leader` | One selected replicated fault; omit `--case` for all eleven |
+| `run fault-replicated --case broker/source-leader` | One selected replicated fault; omit `--case` for all fourteen |
 | `run integration` | CLI copying, fidelity, resume and source truncation |
 | `run fault` | Outages, process death, restart and ownership changes |
 | `run recovery --duration 2h` | Repeat the five recovery cases with fresh topics/processes |
@@ -111,6 +111,7 @@ Use an existing candidate and a fresh evidence directory after [preparation](#pr
 
 ```sh
 python3 -m tools.qualification.qualify run fault-replicated --case ownership/zombie-worker --binary bin/kaferry --output build-results/ownership-zombie
+python3 -m tools.qualification.qualify run fault-replicated --case ownership/worker-kill-rebalance --binary bin/kaferry --output build-results/worker-kill
 python3 -m tools.qualification.qualify run fault-replicated --case broker/source-leader --binary bin/kaferry --output build-results/source-leader
 python3 -m tools.qualification.qualify run fault-replicated --case network/destination-outage --binary bin/kaferry --output build-results/destination-outage
 ```
@@ -120,6 +121,9 @@ All cases use 24 RF=3 partitions with minimum ISR=2, independent publication and
 | Case | Required effect and recovery |
 | --- | --- |
 | `ownership/zombie-worker` | Two workers share a group. Discard worker 1's upstream coordinator packets while keeping TCP connections open; observe actual session expiry, transfer to worker 2 and accepted peer progress on every transferred partition while both CLI processes remain alive before healing. |
+| `ownership/worker-kill-rebalance` | Hold worker 1 with SIGSTOP, start worker 2, observe both in `PreparingRebalance` and recheck immediately before SIGKILL. The peer must own and save every partition in a later generation. |
+| `ownership/coordinator-kill-rebalance` | Use the same held-worker rebalance, recheck its actual coordinator and kill that broker, then resume worker 1. Require replacement coordination while the broker stays stopped, restored ADMIN readiness/ISR3 and accepted progress from both routes. Required local case. |
+| `ownership/worker-scale` | Add two workers while publishing, then stop those peers successfully. Independently require disjoint nonempty assignments and accepted commits in each 1→3→1 membership generation; the original worker stays alive. |
 | `broker/source-leader` | Kill the resolved source leader; observe replacement leadership and publication before restoring it. |
 | `broker/destination-leader` | Kill the resolved destination leader; observe replacement leadership, restore it and require saved progress. |
 | `broker/rolling-source`, `broker/rolling-destination` | Restart brokers 1–3 in order; require readiness, all 24 ISR sets at three and saved progress before each next restart. |
@@ -130,13 +134,20 @@ All cases use 24 RF=3 partitions with minimum ISR=2, independent publication and
 | `network/bandwidth` | Limit each worker destination connection to 32 KB/s upstream for six seconds; require increased backlog, unresolved writes and output below 75% of baseline. |
 | `network/slow-close` | Add downstream 60-second close delay. An auxiliary one-ms upstream timeout supplies backend EOF on the same routes. Require stalled output/unresolved writes and an actual TCP EOF held at least six seconds, then released after removal. |
 
-Slow close includes that connection interruption; the toxic alone cannot pass. The other network cases have no auxiliary stimulus. Only whole-destination network outage permits restart; the other four require the same CLI process to survive. Broker leader/rolling cases may restart after bounded fault-related exit 1; the ISR case forbids restart. Worker exits use stable Kaferry operation labels and exit status with actual fault/restart boundaries. Unknown failures do not qualify.
+Slow close includes that connection interruption; the toxic alone cannot pass. The other network cases have no auxiliary stimulus. Only whole-destination network outage permits restart; the other four require the same CLI process to survive. Broker leader/rolling cases may restart after bounded fault-related exit 1; the ISR case forbids restart. Worker exits must fit the case’s actual fault/restart boundaries and recorded lifetime, status and driver intent. Coordinator restarts additionally require Kaferry `poll source` or `save progress` labels. Unknown failures do not qualify.
 
-Ownership requires correlated broker request/response observations for every selected CLI commit, no accepted stale-generation save after transfer, and positive fencing: stale-generation rejections covering worker 1's former partitions or legitimate rejoin with accepted progress on its new assignment. Missing/truncated logs or logging failures fail. Worker 2 remains alive and succeeds. Worker 1 may exit 1 after healing only when its late stale save was rejected before exit; early transport exit or unexplained failure fails. Publication and saved progress must advance on every partition after healing.
+Zombie fencing requires correlated broker request/response observations for every selected CLI commit, no accepted stale-generation save after transfer, and positive fencing: stale-generation rejections covering worker 1's former partitions or legitimate rejoin with accepted progress on its new assignment. Missing/truncated logs or logging failures fail. Worker 2 remains alive and succeeds. Worker 1 may exit 1 after healing only when its late stale save was rejected before exit; early transport exit or unexplained failure fails. Publication and saved progress must advance on every partition after healing.
+
+The zombie peer’s accepted saves must cover every transferred partition and have broker receipt times after the completed transfer observation. A request received before transfer cannot open the heal gate merely because its response completes afterward.
+
+Worker-kill and scale cases permit no restart. The coordinator case permits one restart per affected route after broker API/ISR recovery, using the same executable, SQL, group, configuration and route. Its eligible exit 1 must occur between physical kill and observed recovery. Worker 1 may carry only the recorded hold/resume signals; its peer may carry no driver stop intent. Lifecycle evidence binds PID, executable, raw log and sole OS wait; prior cancellation or unmatched signals fail.
+
+For these three cases, raw broker group descriptions, successful joins, decoded `SYNC_GROUP` assignments and accepted commits independently bind each stable generation to one selected route lifetime. Membership reads resolve the current coordinator; each two-second observation uses one complete audit snapshot inside its 60-second state deadline. Expired observations cannot establish readiness; malformed protocol records fail. This positive transition proof does not add the zombie case’s complete stale-generation fencing claim; coordinator death can lose in-flight request completions. Coordinator restoration checks target-pinned ADMIN/ISR3 before reapplying scoped audit logging and again for recovery.
 
 | Scope | Configured bounds and complete post-heal observation |
 | --- | --- |
-| Ownership | Session 6s, source RPC 8s, periodic save 10s, delivery 2s, shutdown 5s; observe their full 31s sum and a healthy sample. Three-minute case/four-minute Go deadline. |
+| Zombie fencing | Session 6s, source RPC 8s, periodic save 10s, delivery 2s, shutdown 5s; observe their full 31s sum and a healthy sample. Three-minute case/four-minute Go deadline. |
+| Worker kill / coordinator kill / scale | Session 6s, RPC 8s, rebalance 30s, save 10s, delivery 60s, shutdown 5s; coordinator also checks replica lag 30s. Post-heal sums 119/149/119s plus a healthy sample; Go deadlines 359/389/359s, with 60s added by the outer runner. |
 | Broker | Session 6s, RPC 8s, save 10s, delivery 60s, shutdown 5s, replica lag 30s; observe the full 119s sum and a healthy sample. |
 | Network | Session 6s, RPC 8s, save 10s, delivery 60s, shutdown 5s; observe full 89s and a healthy sample. Case/Go/outer deadlines are 293/353/413s. |
 
@@ -146,9 +157,9 @@ Network injection follows nonempty saved prefixes and a 30-second healthy measur
 
 An unmet healthy-rate precondition ends before injection. Only successful normal CLI shutdown, independent reconciliation, prefix, duplicate and resource checks make the attempt **inconclusive**. The runner retains `attempt-1/` and allows one fresh-fixture retry after successful cleanup under the same lease and unchanged source/binary identities. Automatic retry requires a clean checkout, including no nonignored untracked files. Product/safety failures, cancellation and cleanup failures never retry. A second inconclusive attempt returns nonzero; a later pass retains the first attempt.
 
-Every lifetime requires sampled RSS at most 512 MiB and observed current work within 1,024 records/128 MiB. Complete final summaries supply exact lifetime peaks. Where an allowed hard exit prevents a final summary, missing peaks remain null and that lifetime has no exact-cap claim; current samples cannot supply it. Independent full-record reconciliation, saved-prefix safety, duplicate attribution and complete recovery remain mandatory.
+Every lifetime requires sampled RSS at most 512 MiB and observed current work within 1,024 records/128 MiB. Normal completion requires a final summary supplying exact lifetime peaks. A permitted broker/network fault exit may omit it; missing peaks remain null and that lifetime has no exact-cap claim. The three ownership-transition cases require final summaries for successful/fail-fast exits and permit missing peaks only after their explicit SIGKILL. Current samples cannot supply exact peaks. Independent full-record reconciliation, saved-prefix safety, duplicate attribution and complete recovery remain mandatory.
 
-Hosted checks run broker/ownership cases and the two outage cases. Latency, bandwidth and slow-close require local exact-candidate qualification alongside 24-hour endurance. Run each with its `--case` and a fresh output directory. Missing local passes require explicit release-note exclusions. Selecting all eleven cases gives 3,800s Go allowance plus 60s outer allowance; individual selection uses that case's budget. These local cases have no separate hosted scheduled tier. One-host clusters do not establish machine or zone-failure behavior.
+Hosted checks run the five broker faults, zombie fencing, worker kill, worker scaling and two destination outages: ten fault cases on separate runners. Four cases require local exact-candidate qualification alongside 24-hour endurance: `network/latency`, `network/bandwidth`, `network/slow-close` and `ownership/coordinator-kill-rebalance`. Run each with its `--case` and a fresh output directory. Missing local passes require explicit release-note exclusions. Selecting all fourteen cases gives 4,907s Go allowance plus 60s outer allowance; individual selection uses that case's budget. These local cases have no separate hosted scheduled tier. One-host clusters do not establish machine or zone-failure behavior.
 
 ## Recovery and bounded load
 
