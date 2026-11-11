@@ -144,6 +144,55 @@ func TestTLSHostnameOverrideKeepsTrustAndClientCertificateChecks(t *testing.T) {
 	}
 }
 
+func TestTLSHostnameOverrideRejectsInvalidServerCertificates(t *testing.T) {
+	// Given a trusted root and server certificates with invalid dates or usage.
+	ca, key, caPEM := testCA(t)
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	caPath := writeFixture(t, t.TempDir(), "ca.pem", caPEM)
+	client, _, _ := testCertificate(t, ca, key, true)
+	server, _, _ := testCertificate(t, ca, key, false)
+	leaf, err := x509.ParseCertificate(server.Certificate[0])
+	require.NoError(t, err)
+	now := time.Now()
+	for _, tc := range []struct {
+		name                string
+		notBefore, notAfter time.Time
+		usage               x509.ExtKeyUsage
+		reason              x509.InvalidReason
+	}{
+		{"expired", now.Add(-2 * time.Hour), now.Add(-time.Hour), x509.ExtKeyUsageServerAuth, x509.Expired},
+		{"not yet valid", now.Add(time.Hour), now.Add(2 * time.Hour), x509.ExtKeyUsageServerAuth, x509.Expired},
+		{"client authentication only", now.Add(-time.Hour), now.Add(time.Hour), x509.ExtKeyUsageClientAuth, x509.IncompatibleUsage},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			certificate := *leaf
+			certificate.NotBefore, certificate.NotAfter = tc.notBefore, tc.notAfter
+			certificate.ExtKeyUsage = []x509.ExtKeyUsage{tc.usage}
+			der, err := x509.CreateCertificate(rand.Reader, &certificate, ca, leaf.PublicKey, key)
+			require.NoError(t, err)
+			invalidServer := server
+			invalidServer.Certificate = [][]byte{der}
+			address := tlsFixture(t, invalidServer, roots)
+			cfg, err := (settings{ca: caPath, hostname: "none"}).tlsConfig()
+			require.NoError(t, err)
+			cfg.ServerName = "wrong.invalid"
+			cfg.Certificates = []tls.Certificate{client}
+			// When connecting with hostname checks disabled.
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			connection, err := (&tls.Dialer{Config: cfg}).DialContext(ctx, "tcp", address)
+			if connection != nil {
+				defer connection.Close()
+			}
+			// Then certificate validity and server-authentication usage remain enforced.
+			var invalid x509.CertificateInvalidError
+			require.ErrorAs(t, err, &invalid)
+			require.Equal(t, tc.reason, invalid.Reason)
+		})
+	}
+}
+
 func TestConnectionOptionsApplyTLSAndSelectedSASLMechanism(t *testing.T) {
 	ca, _, caPEM := testCA(t)
 	roots := x509.NewCertPool()
