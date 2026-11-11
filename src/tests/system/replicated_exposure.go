@@ -40,7 +40,7 @@ func zombieWorkerSQL(timeouts map[string]time.Duration, worker int, marker, src,
 		strings.Join(faults.Endpoints("destination", worker), ","), marker, dst, src, group)
 }
 
-// Stop RSS sampling when this process exits. A failed ps after an independently
+// Stop RSS sampling when this process exits. A failed sample after an independently
 // observed exit is outside its live interval; errors while it lives still fail.
 // Existing endurance sampling and its failure thresholds remain unchanged.
 func watchReplicatedRSS(t *testing.T, process *cliProcess) func() rssPeak {

@@ -16,6 +16,70 @@ from tools.qualification.fault_results import FAULT_CASES
 
 
 class SuitesTest(unittest.TestCase):
+    def test_replicated_broker_budgets_are_registered_and_selection_scoped(self):
+        # Given five broker recipes and the unchanged ownership recipe, when
+        # selecting deadlines, then each uses only its actual registered bounds.
+        catalog = suites.fault_timeout_catalog()
+        for id in suites.REPLICATED_CASES:
+            if id.startswith('broker/'):
+                self.assertEqual(119000, sum(catalog[id].values()))
+                self.assertEqual(359, suites.replicated_execution_seconds([id]))
+        self.assertEqual(240, suites.replicated_execution_seconds(['ownership/zombie-worker']))
+        self.assertEqual(4907, suites.replicated_execution_seconds(list(suites.REPLICATED_CASES)))
+        for selected in ([], ['broker/not-implemented']):
+            with self.assertRaises(ValueError):
+                suites.replicated_execution_seconds(selected)
+
+    def test_network_case_budgets_are_exact_and_do_not_extend_legacy_cases(self):
+        # Given the five implemented worker network exposures, when selecting
+        # cases, then only the healthy reference adds24s; recovery stays89s.
+        catalog = suites.fault_timeout_catalog()
+        ids = {'network/'+name for name in ('destination-outage', 'destination-leaders-outage', 'latency', 'bandwidth', 'slow-close')}
+        self.assertEqual(ids, {id for id in suites.REPLICATED_CASES if id.startswith('network/')})
+        for id in ids:
+            self.assertEqual(89000, sum(catalog[id].values()))
+            self.assertEqual(24, suites.replicated_execution_seconds([id])-(240+sum(catalog[id].values())//1000))
+            self.assertEqual(353, suites.replicated_execution_seconds([id]))
+        self.assertEqual(706, suites.replicated_execution_seconds(['network/latency','network/bandwidth']))
+        self.assertEqual(1073, suites.fault_execution_seconds())
+        self.assertEqual(240, suites.replicated_execution_seconds(['ownership/zombie-worker']))
+        for id, keys in [('broker/source-leader', ('socket.timeout.ms', 'replica.lag.time.max.ms')),
+                         ('network/latency', ('socket.timeout.ms', 'progress_save_timeout'))]:
+            for key in keys:
+                changed = json.loads(json.dumps(catalog))
+                changed[id].pop(key)
+                with patch('tools.ci.suites.json.loads', return_value=changed), self.assertRaises(ValueError):
+                    suites.fault_timeout_catalog()
+        with self.assertRaises(ValueError):
+            suites.replicated_execution_seconds(['network/latency']*2)
+
+    def test_ownership_cases_have_exact_budgets_selectors_and_hosted_scope(self):
+        # Given all fourteen implemented deterministic cases, when selecting a
+        # case or the default suite, then retain every old case and its budget.
+        catalog = suites.fault_timeout_catalog()
+        expected = {'ownership/'+name:seconds for name,seconds in
+                    (('worker-kill-rebalance',359),('coordinator-kill-rebalance',389),('worker-scale',359))}
+        self.assertEqual(14,len(suites.REPLICATED_CASES))
+        self.assertEqual(4907,suites.replicated_execution_seconds(list(suites.REPLICATED_CASES)))
+        for id,seconds in expected.items():
+            self.assertEqual('TestReplicatedOwnershipCases/'+id.split('/')[1],suites.REPLICATED_CASES[id])
+            self.assertEqual((seconds-240)*1000,sum(catalog[id].values()))
+            self.assertEqual(seconds,suites.replicated_execution_seconds([id]))
+            self.assertLess(seconds+60,15*60)
+            changed=json.loads(json.dumps(catalog))
+            changed[id].pop('max.poll.interval.ms')
+            with patch('tools.ci.suites.json.loads',return_value=changed),self.assertRaises(ValueError):
+                suites.fault_timeout_catalog()
+        self.assertIn('^TestReplicatedOwnershipCases$',suites.GO_SUITES['fault-replicated'][1])
+        workflow=(Path(__file__).resolve().parents[2]/'.github/workflows/replicated-lab.yml').read_text()
+        import re
+        hosted = set(suites.REPLICATED_CASES)-{'ownership/zombie-worker', 'ownership/coordinator-kill-rebalance',
+                                             'network/latency', 'network/bandwidth', 'network/slow-close'}
+        self.assertEqual(hosted,set(re.findall(r'case: ([a-z/-]+)',workflow)))
+        self.assertIn('--case ownership/zombie-worker ',workflow)
+        self.assertEqual(1073,suites.fault_execution_seconds())
+        self.assertEqual(240,suites.replicated_execution_seconds(['ownership/zombie-worker']))
+
     def test_registered_ownership_bounds_extend_only_the_catalog_key_allowlist(self):
         # Given the new exposure's actual bounds, when loading the catalog,
         # then its31s horizon is exact and legacy eight-case budgets stay473s.

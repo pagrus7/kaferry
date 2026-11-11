@@ -37,7 +37,7 @@ func TestReplicatedProxyRoutes(t *testing.T) {
 	for _, cluster := range []string{"source", "destination"} {
 		for worker := 1; worker <= 3; worker++ {
 			t.Run(fmt.Sprintf("%s/worker%d", cluster, worker), func(t *testing.T) {
-				proveProxyRoute(t, lab, metadata[cluster], cluster, worker, func(event Event) { events = append(events, event) })
+				proveProxyRoute(t, lab, metadata[cluster].Client, cluster, worker, func(event Event) { events = append(events, event) })
 			})
 		}
 	}
@@ -61,7 +61,9 @@ func proveProxyRoute(t *testing.T, lab *Lab, admin *kadm.Client, cluster string,
 	})
 	// Bootstrap on broker 1, then let Kafka metadata discover a different leader.
 	workerSeed := Endpoints(cluster, worker)[0]
-	client, err := proxyProducer(workerSeed)
+	diagnostic := &SDKDiagnostics{}
+	t.Cleanup(func() { t.Logf("bounded producer SDK diagnostics:\n%s", diagnostic.Snapshot()) })
+	client, err := newProxyProducer([]string{workerSeed}, diagnostic)
 	require.NoError(t, err)
 	closeProbe := sync.OnceFunc(client.Close)
 	defer closeProbe()
@@ -96,7 +98,7 @@ func proveProxyRoute(t *testing.T, lab *Lab, admin *kadm.Client, cluster string,
 	// restores the worker route. Reconcile the actual output through that route.
 	require.NoError(t, produce(observer, "observer"))
 	require.NoError(t, injection.Heal(ctx))
-	recovered, err := proxyProducer(workerSeed)
+	recovered, err := newProxyProducer([]string{workerSeed}, diagnostic)
 	require.NoError(t, err)
 	defer recovered.Close()
 	require.NoError(t, prepareProxyProducer(ctx, recovered, topic, partition, proxyRoutes(cluster, worker), t.Logf))

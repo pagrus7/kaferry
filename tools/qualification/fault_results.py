@@ -99,7 +99,7 @@ def configure(env):
     env['KAFERRY_ORACLE_RUN'] = uuid.uuid4().hex
 
 
-def _validate_observations(case, root):
+def _validate_observations(case, root, require_fault):
     """Validate and derive bounded proof from one case and its contained JSONL."""
     if type(case.get('schema')) is not int or case['schema'] != 1 or case.get('status') != 'passed':
         raise ValueError('missing successful independent fault case')
@@ -121,7 +121,7 @@ def _validate_observations(case, root):
         raise ValueError('fault observation requires source partitions')
     validate_bootstrap(case, root, partitions)
     events = case['fault_events']
-    if not events:
+    if not events and require_fault:
         raise ValueError('fault case has no observed fault')
     registered = fault_timeout_catalog().get(case['id'])
     if registered is None:
@@ -259,16 +259,16 @@ def _validate_observations(case, root):
     return case
 
 
-def validate_observations(case, root):
+def validate_observations(case, root, *, require_fault=True):
     """Return the case with proof derived from its checksummed observations."""
     try:
-        return _validate_observations(case, root)
+        return _validate_observations(case, root, require_fault)
     except (KeyError, TypeError, IndexError) as error:
         raise ValueError('malformed fault observation evidence') from error
 
 
-def validate_case(path):
-    return validate_observations(json.loads(path.read_text()), path.parent)
+def validate_case(path, *, require_fault=True):
+    return validate_observations(json.loads(path.read_text()), path.parent, require_fault=require_fault)
 
 
 def collect(directory, suite, identity=None, run=None):

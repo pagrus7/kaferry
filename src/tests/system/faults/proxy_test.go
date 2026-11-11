@@ -151,6 +151,63 @@ func TestToxicsUseDocumentedUnitsAndRemoveOnlyTheirOwnNames(t *testing.T) {
 	}
 }
 
+func TestSlowCloseStimulusUsesOnlyTheFrozenWorkerRoutes(t *testing.T) {
+	// Given an active downstream slow close on worker 1's three destinations.
+	lab, proxies, _ := newProxyStub(t)
+	slow, err := lab.Inject(t.Context(), Role{Kind: "worker-destination", Cluster: "destination", Worker: 1},
+		Fault{Kind: "slow_close", Stream: "downstream", Value: 60000})
+	require.NoError(t, err)
+	// When supplying backend EOF, then add an explicit upstream timeout only to
+	// those frozen paths and retain both independent cleanup responsibilities.
+	stimulus, err := lab.CloseWorkerConnections(t.Context(), slow)
+	require.NoError(t, err)
+	require.Equal(t, slow.Event.Targets, stimulus.Event.Targets)
+	require.Equal(t, Fault{Kind: "timeout", Stream: "upstream", Value: 1}, stimulus.Event.Fault)
+	for name, route := range proxies.routes {
+		if strings.HasPrefix(name, "destination-") && strings.HasSuffix(name, "-worker1") {
+			require.Len(t, route.Toxics, 2)
+		} else {
+			require.Empty(t, route.Toxics, name)
+		}
+	}
+	require.NoError(t, stimulus.Heal(t.Context()))
+	for _, target := range slow.Event.Targets {
+		require.Len(t, proxies.routes[target.Proxy].Toxics, 1)
+	}
+	require.NoError(t, slow.Heal(t.Context()))
+	for _, route := range proxies.routes {
+		require.Empty(t, route.Toxics)
+	}
+}
+
+func TestSlowCloseStimulusRefusesOtherPathsAndUnwindsPartialFailure(t *testing.T) {
+	// Given an active worker slow-close fault, when a close stimulus partially
+	// fails, then restore only its own toxics and preserve the original delay.
+	lab, proxies, _ := newProxyStub(t)
+	slow, err := lab.Inject(t.Context(), Role{Kind: "worker-destination", Cluster: "destination", Worker: 2},
+		Fault{Kind: "slow_close", Stream: "downstream", Value: 60000})
+	require.NoError(t, err)
+	proxies.fail = "POST /proxies/destination-2-worker2/toxics"
+	stimulus, err := lab.CloseWorkerConnections(t.Context(), slow)
+	require.Error(t, err)
+	require.NoError(t, stimulus.Heal(t.Context()))
+	for _, target := range slow.Event.Targets {
+		require.Len(t, proxies.routes[target.Proxy].Toxics, 1)
+	}
+	proxies.fail = ""
+	// When its original targets or active toxic differ, refuse composition.
+	slow.Event.Targets[0].Listener = "admin"
+	_, err = lab.CloseWorkerConnections(t.Context(), slow)
+	require.Error(t, err)
+	slow.Event.Targets[0].Listener = "worker2"
+	proxies.routes[slow.Event.Targets[0].Proxy].Toxics = append(proxies.routes[slow.Event.Targets[0].Proxy].Toxics, json.RawMessage(`{"name":"other"}`))
+	_, err = lab.CloseWorkerConnections(t.Context(), slow)
+	require.ErrorContains(t, err, "unrelated or missing toxic")
+	require.NoError(t, slow.Heal(t.Context()))
+	_, err = lab.CloseWorkerConnections(t.Context(), slow)
+	require.Error(t, err)
+}
+
 func TestPartialPathCutUnwindsAndRejectsWrongOrAlreadyFaultedRoutes(t *testing.T) {
 	// Given a three-broker worker destination path whose second mutation fails.
 	lab, proxies, _ := newProxyStub(t)

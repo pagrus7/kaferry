@@ -89,3 +89,18 @@ func (e *enduranceEvidence) check(elapsed, duration time.Duration, submitted, ac
 	}
 	return nil
 }
+
+func (e *enduranceEvidence) checkRecovery(elapsed time.Duration, backlog, rate int) error {
+	if e.recoveryAt.IsZero() {
+		return nil
+	}
+	if elapsed > 15*time.Second {
+		return fmt.Errorf("backlog failed to recover after destination stall")
+	}
+	if backlog <= rate/10 {
+		e.MaxRecoverySeconds = max(e.MaxRecoverySeconds, elapsed.Seconds())
+		e.Recoveries++
+		e.recoveryAt = time.Time{}
+	}
+	return nil
+}

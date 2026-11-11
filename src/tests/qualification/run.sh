@@ -7,13 +7,19 @@ compose() {
   docker compose -p kaferry-qualification -f src/tests/qualification/compose.yaml "$@"
 }
 cleanup() {
-  if [ -n "${KAFERRY_REPORT_DIR:-}" ]; then
-    mkdir -p "$KAFERRY_REPORT_DIR"
-    compose logs --no-color > "$KAFERRY_REPORT_DIR/security-brokers.log" || true
+  suite_status=$?
+  if [ "$suite_status" -ne 0 ] && [ -n "${KAFERRY_REPORT_DIR:-}" ]; then
+    mkdir -p "$KAFERRY_REPORT_DIR" && compose logs --no-color > "$KAFERRY_REPORT_DIR/security-brokers.log" || true
   fi
   cleanup_status=0
   compose down -v || cleanup_status=$?
-  rm -rf "$cert_dir"
+  rm -rf "$cert_dir" || cleanup_status=$?
+  if [ "$suite_status" -eq 0 ] && [ "$cleanup_status" -ne 0 ] && [ -n "${KAFERRY_REPORT_DIR:-}" ]; then
+    mkdir -p "$KAFERRY_REPORT_DIR" && compose logs --no-color > "$KAFERRY_REPORT_DIR/security-brokers.log" || true
+  fi
+  if [ "$suite_status" -ne 0 ]; then
+    return "$suite_status"
+  fi
   return "$cleanup_status"
 }
 trap cleanup EXIT
@@ -27,7 +33,16 @@ esac
 compose up -d --build --wait --wait-timeout 90
 if [ -n "${KAFERRY_REPORT_DIR:-}" ]; then
   mkdir -p "$KAFERRY_REPORT_DIR"
-  compose images --format json > "$KAFERRY_REPORT_DIR/qualification.broker-images.json"
+  image_receipt="$KAFERRY_REPORT_DIR/qualification.broker-images.json"
+  rm -f "$image_receipt"
+  compose images --format json > "$image_receipt.tmp"
+  "${KAFERRY_QUAL_PYTHON:-python3}" - "$image_receipt.tmp" <<'PY'
+from pathlib import Path
+import sys
+from tools.qualification.qualify import validate_fixture_images
+validate_fixture_images(Path(sys.argv[1]).read_text())
+PY
+  mv "$image_receipt.tmp" "$image_receipt"
 fi
 export KAFERRY_QUAL_BROKERS=127.0.0.1:41092,127.0.0.1:42092,127.0.0.1:43092
 export KAFERRY_QUAL_CA="$cert_dir/ca.pem"

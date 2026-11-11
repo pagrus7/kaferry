@@ -34,10 +34,8 @@ type faultOracle struct {
 
 func faultTimeouts(t *testing.T, id string) map[string]time.Duration {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "qualification", "fault-timeouts-ms.json"))
+	catalog, err := readFaultTimeoutCatalog()
 	require.NoError(t, err)
-	var catalog map[string]map[string]int64
-	require.NoError(t, json.Unmarshal(data, &catalog))
 	require.Contains(t, catalog, id, "register a scenario before generating fault proof")
 	result := make(map[string]time.Duration)
 	for name, milliseconds := range catalog[id] {
@@ -45,6 +43,16 @@ func faultTimeouts(t *testing.T, id string) map[string]time.Duration {
 		result[name] = time.Duration(milliseconds) * time.Millisecond
 	}
 	return result
+}
+
+func readFaultTimeoutCatalog() (map[string]map[string]int64, error) {
+	data, err := os.ReadFile(filepath.Join("..", "qualification", "fault-timeouts-ms.json"))
+	if err != nil {
+		return nil, err
+	}
+	var catalog map[string]map[string]int64
+	err = json.Unmarshal(data, &catalog)
+	return catalog, err
 }
 
 func startFaultOracle(t *testing.T, id, source, destination, src, dst, group string, partitions int, allowEmpty bool) *faultOracle {

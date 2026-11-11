@@ -28,11 +28,11 @@ class ReplicatedEnduranceTest(unittest.TestCase):
         args = run.call_args.args[0]
         self.assertEqual(('4.4.0', '4.4.0', 86400, 200), (args.source, args.destination, args.duration, args.rate))
         with tempfile.TemporaryDirectory() as temporary:
-            settings = self.settings(Path(temporary), broker_volume='private-lab-volume')
+            settings = self.settings(Path(temporary))
             receipt = {}
             with patch('tools.qualification.qualify.capture', return_value='candidate'), \
                  patch('tools.qualification.qualify.identity_platforms', return_value={}):
-                spec = resolve_run(settings, receipt, None)
+                spec = resolve_run(settings, receipt)
             self.assertIn('src/tests/replicated/compose.yaml', spec.compose)
             self.assertEqual('kaferry-replicated', receipt['fixture_project'])
             workload = {'KAFERRY_SOAK_TOPOLOGY': 'replicated', 'KAFERRY_SOAK_PROFILE': 'application',
@@ -40,25 +40,22 @@ class ReplicatedEnduranceTest(unittest.TestCase):
             self.assertEqual(workload, {key: spec.env[key] for key in workload})
             self.assertIn('-timeout=370s', spec.command)
             self.assertEqual(['TestStreamingSoakFidelityCommitLagMemoryAndShutdown'], spec.expected)
-            self.assertEqual('true', spec.env['KAFERRY_REPLICATED_VOLUME_EXTERNAL'])
-            self.assertEqual('external-volume', receipt['fixture_storage']['mode'])
+            self.assertEqual('disposable-volume', receipt['fixture_storage']['mode'])
             self.assertIn(network.IMAGE, receipt['requested_images'])
             self.assertEqual(network.API, spec.env['KAFERRY_TOXIPROXY_API'])
             for side, key in [('source', 'KAFKA_TEST_BROKERS'), ('destination', 'KAFKA_TEST_DEST_BROKERS')]:
                 self.assertEqual(network.endpoints(side), spec.env[key])
                 for worker in range(1, 4):
                     self.assertEqual(network.endpoints(side, worker), spec.env[f'KAFERRY_WORKER{worker}_{side.upper()}_BROKERS'])
-            self.assertNotIn('private-lab-volume', json.dumps(receipt))
 
-    def test_rejects_other_suite_topologies_old_images_and_parallel_replicated_selection(self):
+    def test_rejects_other_suite_topologies_and_old_images(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for changes, fixture in [({'suite': 'soak'}, None), ({'topology': 'other'}, None),
-                                     ({'source': '3.9.2'}, None), ({}, {'project': 'parallel', 'ports': [1, 2]})]:
+            for changes in ({'suite': 'soak'}, {'topology': 'other'}, {'source': '3.9.2'}):
                 # Given unsupported combinations, when resolving, then no Docker or binary executes.
-                with self.subTest(changes=changes, fixture=fixture):
+                with self.subTest(changes=changes):
                     with patch('tools.qualification.qualify.capture') as execute, self.assertRaises(ValueError):
-                        resolve_run(self.settings(root, **changes), {}, fixture)
+                        resolve_run(self.settings(root, **changes), {})
                     execute.assert_not_called()
 
     def test_capacity_counts_three_replicas_of_both_clusters_before_starting_brokers(self):
@@ -73,7 +70,7 @@ class ReplicatedEnduranceTest(unittest.TestCase):
             with patch('tools.qualification.qualify.capture', return_value=json.dumps({'NCPU': 4, 'MemTotal': 16 * 1024**3})), \
                  patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=10**12)), \
                  patch('tools.qualification.qualify.socket.socket'):
-                capacity = replicated_admission(root, {'KAFERRY_REPLICATED_VOLUME_EXTERNAL': 'false'}, 86400)
+                capacity = replicated_admission(root, 86400)
             self.assertEqual(replicated['required_broker_bytes'], capacity['required_broker_bytes'])
             def disk(command, output, label, env, **kwargs):
                 (output / 'storage-capacity.log').write_text(str(baseline['required_broker_bytes'] // 1024) + '\n')

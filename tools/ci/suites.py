@@ -16,8 +16,15 @@ GO_SUITES = {
     'soak': ('integration,load', '^TestStreamingSoak', False),
     'fault': ('integration,fault', '^TestBlockingCommit|^TestRebalanceChurn|^TestCrashResume|^TestRecoveryBlockedOutput', False),
     'recovery': ('integration,fault', '^TestRecoveryBlockedOutput$', False),
-    'fault-replicated': ('integration,fault,load', '^TestReplicatedZombieWorker$', False),
+    'fault-replicated': ('integration,fault,load', '^TestReplicatedZombieWorker$|^TestReplicatedBrokerFaults$|^TestReplicatedNetworkFaults$|^TestReplicatedOwnershipCases$', False),
 }
+REPLICATED_CASES = {'ownership/zombie-worker': 'TestReplicatedZombieWorker'} | {
+    'broker/'+name: 'TestReplicatedBrokerFaults/'+name for name in
+    ('source-leader', 'destination-leader', 'rolling-source', 'rolling-destination', 'destination-isr-loss')} | {
+    'network/'+name: 'TestReplicatedNetworkFaults/'+name for name in
+    ('destination-outage', 'destination-leaders-outage', 'latency', 'bandwidth', 'slow-close')} | {
+    'ownership/'+name: 'TestReplicatedOwnershipCases/'+name for name in
+    ('worker-kill-rebalance', 'coordinator-kill-rebalance', 'worker-scale')}
 RECOVERY_CASES = {'recovery/'+name for name in
                   ('kill', 'signal', 'delivery-timeout', 'source-outage-shutdown', 'ownership-loss')}
 FAULT_CASES = RECOVERY_CASES | {'fault/crash', 'fault/churn', 'fault/blocking-commit'}
@@ -25,6 +32,8 @@ LOAD_PROFILES = ('near-limit-v1', 'hot-keys-v1', 'headers-v1', 'tombstones-v1',
                  'source-none-v1', 'source-gzip-v1', 'source-snappy-v1', 'source-lz4-v1', 'source-zstd-v1')
 EXPECTED = {
     'integration': ['TestAllFileDirectionsAndResume', 'TestTopicToTopicSlice',
+                    'TestHistoricalFixtureTopicRetention/historical_default',
+                    'TestHistoricalFixtureTopicRetention/finite_override',
                     'TestRunningSourceOffsetOutOfRangeFailsWithoutSavingProgress',
                     'TestExpiredSourceProgressRestartReportsGapAndCopiesRetainedRecords'],
     'load': ['TestLoadBoundedKafkaCopy/default'] + ['TestLoadBoundedKafkaCopy/' + name for name in LOAD_PROFILES],
@@ -32,7 +41,7 @@ EXPECTED = {
     'fault': ['TestBlockingCommitAcrossBrokerOutage', 'TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits',
               'TestCrashResumeReconcilesRetainedRecords', 'TestRecoveryBlockedOutput'],
     'recovery': ['TestRecoveryBlockedOutput'],
-    'fault-replicated': ['TestReplicatedZombieWorker'],
+    'fault-replicated': list(REPLICATED_CASES.values()),
     'qualification': [
         'TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight', 'TestSaslTlsScramMechanisms/SCRAM-SHA-256',
         'TestSaslTlsScramMechanisms/SCRAM-SHA-512', 'TestSaslTlsExternalAuthentication/OAUTHBEARER',
@@ -50,11 +59,29 @@ def fault_timeout_catalog():
     catalog = json.loads((Path(__file__).resolve().parents[2]/'src/tests/qualification/fault-timeouts-ms.json').read_text())
     standard = {'session.timeout.ms', 'delivery_timeout', 'shutdown_timeout'}
     ownership = standard | {'socket.timeout.ms', 'progress_save_timeout'}
-    if not catalog or any(not budgets or set(budgets)-(ownership if id == 'ownership/zombie-worker' else standard) or
+    broker = ownership | {'replica.lag.time.max.ms'}
+    def allowed(id):
+        if id in REPLICATED_CASES and id.startswith('ownership/') and id != 'ownership/zombie-worker':
+            return ownership | {'max.poll.interval.ms'} | ({'replica.lag.time.max.ms'} if id == 'ownership/coordinator-kill-rebalance' else set())
+        return broker if id in REPLICATED_CASES and id.startswith('broker/') else ownership if id in REPLICATED_CASES else standard
+    if not catalog or any(not budgets or set(budgets)-allowed(id) or
+                          id in REPLICATED_CASES and set(budgets) != allowed(id) or
                           any(type(ms) is not int or ms <= 0 for ms in budgets.values())
                           for id, budgets in catalog.items()):
         raise ValueError('fault observation timeout catalog must contain positive milliseconds')
     return catalog
+
+
+def replicated_execution_seconds(selected):
+    catalog = fault_timeout_catalog()
+    if not selected or len(selected) != len(set(selected)) or any(id not in REPLICATED_CASES or id not in catalog for id in selected):
+        raise ValueError('unknown or unregistered replicated fault case')
+    # Preserve the zombie's existing four-minute outer deadline. Each new
+    # deterministic case adds its own complete configured recovery sum. The
+    # network healthy reference grows from one session to thirty seconds.
+    return sum(240 + (sum(catalog[id].values())+999)//1000 +
+               (30-catalog[id]['session.timeout.ms']//1000 if id.startswith('network/') else 0)
+               if id != 'ownership/zombie-worker' else 240 for id in selected)
 
 
 def fault_execution_seconds():
@@ -74,6 +101,8 @@ def command(name, go='go', output='-json', timeout=None, packages='./src/tests/s
         packages = './src/tests/compatibility'
     if name == 'fault' and timeout is None:
         timeout = f'{fault_execution_seconds()}s'
+    if name == 'fault-replicated' and timeout is None:
+        timeout = f'{replicated_execution_seconds(list(REPLICATED_CASES))}s'
     result = [go, 'test', '-count=1']
     if output:
         result.append(output)

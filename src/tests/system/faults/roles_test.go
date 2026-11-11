@@ -146,6 +146,27 @@ func TestRolesResolveCurrentStateAndHealOriginalContainers(t *testing.T) {
 	require.Equal(t, 1, starts)
 }
 
+func TestRollingBrokerRoleVisitsOnlyTheSelectedOwnedBroker(t *testing.T) {
+	// Given explicit logical IDs for a rolling restart in the owned fixture.
+	docker := newDockerStub()
+	lab := &Lab{Project: docker.project, Docker: docker.run}
+	for broker := int32(1); broker <= 3; broker++ {
+		// When resolved, then every route belongs to exactly that broker. No
+		// metadata role can silently select a previously restarted broker again.
+		targets, err := lab.Resolve(t.Context(), Role{Kind: "broker", Cluster: "source", Broker: broker})
+		require.NoError(t, err)
+		require.Len(t, targets, 6)
+		for _, target := range targets {
+			require.Equal(t, broker, target.Broker)
+			require.Equal(t, fmt.Sprintf("source-%d", broker), target.Service)
+		}
+	}
+	for _, broker := range []int32{0, 4} {
+		_, err := lab.Resolve(t.Context(), Role{Kind: "broker", Cluster: "source", Broker: broker})
+		require.Error(t, err)
+	}
+}
+
 func TestRolesRejectMissingStateAndForeignOwnership(t *testing.T) {
 	// Given invalid roles, never mutate or inspect an unrelated fixture.
 	docker := newDockerStub()

@@ -88,6 +88,51 @@ func TestSettingsAliasesAndWorkerLimits(t *testing.T) {
 	}
 }
 
+func TestProducerBatchLimitsReachClientWithoutOverflow(t *testing.T) {
+	for _, tc := range []struct {
+		name, configured, broker string
+		want                     int32
+	}{
+		{"default", "", "", 1000000},
+		{"explicit minimum", "1000", "", 1000},
+		{"explicit maximum", "1000000000", "", 1000000000},
+		{"broker below minimum", "", "999", 1000},
+		{"broker minimum", "", "1000", 1000},
+		{"broker above minimum", "", "1001", 1001},
+		{"broker below maximum", "", "999999999", 999999999},
+		{"broker maximum", "", "1000000000", 1000000000},
+		{"broker above maximum", "", "1000000001", 1000000000},
+		{"broker above int32", "", "2147483648", 1000000000},
+		{"broker max int64", "", "9223372036854775807", 1000000000},
+		{"broker min int64 ignored", "", "-9223372036854775808", 1000000},
+		{"larger broker preserves explicit limit", "2000", "9223372036854775807", 2000},
+		{"smaller broker lowers explicit limit", "2000", "999", 1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given parsed connection settings and the broker's optional record limit.
+			properties := map[string]string{}
+			if tc.configured != "" {
+				properties["message.max.bytes"] = tc.configured
+			}
+			s, err := parseSettings(testPlan(t, properties).Destination.Properties)
+			require.NoError(t, err)
+			s, err = s.withTopicLimit(map[string]string{"max.message.bytes": tc.broker}).bounded(config.Defaults("").Worker)
+			require.NoError(t, err)
+			options, err := s.commonOptions()
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			// When constructing the actual producer without opening network connections.
+			options = append(options, s.producerOptions()...)
+			client, err := kgo.NewClient(append(options, kgo.WithContext(ctx))...)
+			require.NoError(t, err)
+			defer client.Close()
+			// Then the client retains the supported batch limit without a narrowing overflow.
+			require.Equal(t, tc.want, client.OptValue(kgo.ProducerBatchMaxBytes))
+		})
+	}
+}
+
 func TestSettingsFormattingNeverRevealsCredentials(t *testing.T) {
 	// Given valid SASL credentials.
 	s, err := parseSettings(testPlan(t, map[string]string{"security.protocol": "SASL_SSL", "sasl.username": "private-user", "sasl.password": "private-password"}).Source.Properties)

@@ -24,11 +24,11 @@ jobs:
       - run: make build
       - name: Compile fault fixtures
         run: go test -run '^$' -tags=integration,fault ./src/tests/system
-      - name: Compile standalone fault and parallel fixtures
+      - name: Compile standalone fault fixtures
         env:
           CGO_ENABLED: "1"
         run: go test -run '^$' -tags=integration,fault ./src/tests/system
-      - name: Compile capture and parallel streaming fixtures
+      - name: Compile capture and streaming fixtures
         env:
           CGO_ENABLED: "1"
         run: go test -run '^$' -tags=integration,load ./src/tests/compatibility
@@ -125,7 +125,7 @@ jobs:
       - run: python3 -m tools.ci.ci integration go test -count=1 -json -race -tags=integration -coverpkg=./... -coverprofile=build-results/coverage.out ./src/tests/system
         env:
           CGO_ENABLED: "1"
-      - run: python3 -m tools.ci.ci verify-tests integration 'TestCLIInterruptCommitsAndResumeDoesNotRecopy' 'TestAllFileDirectionsAndResume' 'TestTopicToTopicSlice'
+      - run: python3 -m tools.ci.ci verify-tests integration 'TestCLIInterruptCommitsAndResumeDoesNotRecopy' 'TestAllFileDirectionsAndResume' 'TestTopicToTopicSlice' 'TestHistoricalFixtureTopicRetention/historical_default' 'TestHistoricalFixtureTopicRetention/finite_override'
       - name: Check progress and archives against the PR base
         if: github.event_name == 'pull_request'
         env:

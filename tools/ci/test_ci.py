@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -9,7 +10,18 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools.ci.ci import summarize, verify_tests
+from tools.ci.ci import capture, summarize, verify_tests
+
+
+class CaptureTest(unittest.TestCase):
+    def test_timeout_returns_empty_metadata(self):
+        # Given a metadata command that exceeds its time limit.
+        command = ['docker', 'compose', 'images']
+        with patch('tools.ci.ci.subprocess.run',
+                   side_effect=subprocess.TimeoutExpired(command, 10)) as run:
+            # When metadata capture times out, then it returns no metadata.
+            self.assertEqual(capture(command), '')
+        run.assert_called_once_with(command, capture_output=True, text=True, timeout=10)
 
 
 class SelectedTestsTest(unittest.TestCase):

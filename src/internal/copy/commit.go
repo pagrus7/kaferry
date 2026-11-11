@@ -33,7 +33,7 @@ func (r *Runner) save(ids []int32, releasing bool) error {
 	results, err := SaveProgress(ctx, r.store, cursors, r.observer)
 	if err != nil {
 		if !r.released(releasing, cursors, err) {
-			return err
+			return fmt.Errorf("save progress: %w", err)
 		}
 		return nil
 	}
@@ -45,7 +45,7 @@ func (r *Runner) save(ids []int32, releasing bool) error {
 		}
 		if err != nil {
 			if !r.released(releasing, []Cursor{cursor}, err) {
-				failed = errors.Join(failed, err)
+				failed = errors.Join(failed, fmt.Errorf("save progress: %w", err))
 			}
 			continue
 		}

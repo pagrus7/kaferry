@@ -13,8 +13,32 @@ KAFKA_TEST_DEST_BROKERS ?= 127.0.0.1:40092
 KAFERRY_TEST_OUTPUT ?= -v
 SOAK_TEST_TIMEOUT ?= 1h
 REPLICATED_HELPER_TESTS := \
+	TestOwnershipCaseRejectsUnprovedMembership \
+	TestOwnershipCoordinatorRestartRequiresRecordedScope \
+	TestOwnershipKilledWorkerKeepsEarlierPeak \
+	TestOwnershipGenerationsReuseOneAuditSnapshot \
+	TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy \
 	TestReplicatedPublisherAcknowledgesAllPartitionsAndStops \
 	TestReplicatedPublisherStopsAfterRejectedBatch \
+	TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites \
+	TestReplicatedBrokerPublisherCatchesUpDelayedSchedule \
+	TestReplicatedBrokerPublisherCancellationDrainsDelayedOffers \
+	TestReplicatedBrokerPublisherErrorDrainsDelayedOffers \
+	TestNetworkMeasurementRequiresCaughtUpSourceAndOutput \
+	TestNetworkHealthyPreconditionNeedsThirtySecondsAndBothRates \
+	TestNetworkDestinationLeadersRemainStableAcrossPhases \
+	TestBrokerWorkCapsRequireActualSamplesAndKeepMissingPeaksUnavailable \
+	TestBrokerRestartRequiresCurrentLifetimeInsideRecoveryWindow \
+	TestNetworkOutageRestartRequiresFirstWorkerRSSAndActiveCut \
+	TestBrokerCurrentProgressDoesNotWaitForChildExit \
+	TestBrokerCurrentProgressRequiresReadableCompleteEvidence \
+	TestBrokerCurrentProgressRejectsMalformedCompleteRows \
+	TestBrokerRestartRechecksFailureAfterHealthObservation \
+	TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions \
+	TestBrokerISRSelectionRequiresActiveSameLeaderBacklog \
+	TestBrokerReadinessRequiresFreshPinnedMetadataWithinSharedBudget \
+	TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss \
+	TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound \
 	TestReplicatedAuditFailureCleanupRetainsDiagnostics \
 	TestReplicatedAuditFailureCleanupSkipsPassingCases \
 	TestReplicatedAuditFailureCaptureSharesDeadline \
@@ -24,6 +48,7 @@ REPLICATED_HELPER_TESTS := \
 	TestReplicatedAuditReadinessReadsEveryBrokerConcurrently \
 	TestReplicatedAuditReadinessRejectsIncompleteBrokerReads \
 	TestReplicatedAuditReadinessSharesCancellation \
+	TestReplicatedAuditCohortUsesOneCompleteParsedSnapshot \
 	TestReplicatedZombieRSSStopsAtProcessExit \
 	TestReplicatedZombieExposureSpansSessionWithinSaveDeadline
 ifeq ($(KAFERRY_TEST_BINARY),)

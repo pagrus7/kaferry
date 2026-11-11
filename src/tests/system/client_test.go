@@ -84,6 +84,37 @@ func TestRecordFidelityAndTopicID(t *testing.T) {
 	}
 }
 
+func TestHistoricalFixtureTopicRetention(t *testing.T) {
+	for _, scenario := range []struct {
+		name       string
+		properties map[string]*string
+		retention  string
+		stamp      time.Time
+	}{
+		{name: "historical default", retention: "-1", stamp: time.UnixMilli(946684800123)},
+		{name: "finite override", properties: map[string]*string{"retention.ms": kadm.StringPtr("600000")}, retention: "600000", stamp: time.Now().Truncate(time.Millisecond)},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			// Given a fixture topic with either its default retention or an explicit finite override.
+			a := admin(t)
+			name := configuredTopic(t, a, 1, 1, scenario.properties)
+			record := &kgo.Record{Topic: name, Partition: 0, Value: []byte("retained fixture"), Timestamp: scenario.stamp}
+
+			// When Kafka acknowledges the record and reports its effective retention setting.
+			publish(t, producer(t), record)
+			waitTopicConfig(t, a, name, "retention.ms", scenario.retention)
+			c := consumer(t)
+			assign(t, c, name, 1)
+			got := read(t, c)
+
+			// Then an explicit offset-zero read preserves the record and its timestamp.
+			require.Zero(t, got.Offset)
+			require.Equal(t, record.Value, got.Value)
+			require.True(t, got.Timestamp.Equal(record.Timestamp), "timestamp: got %v, want %v", got.Timestamp, record.Timestamp)
+		})
+	}
+}
+
 func TestTransactionVisibilityAndCommittedProgress(t *testing.T) {
 	for _, abort := range []bool{false, true} {
 		t.Run(fmt.Sprintf("abort=%v", abort), func(t *testing.T) {

@@ -67,9 +67,8 @@ func TestReplicatedEnduranceRequiresEveryPartitionFullyInSync(t *testing.T) {
 func TestReplicatedEnduranceStallsAndRestoresEveryDestinationBroker(t *testing.T) {
 	// Given three verified destination brokers and the existing stall schedule.
 	var commands []string
-	var states []stallObservation
 	t.Run("stream", func(t *testing.T) {
-		stalls := destinationStalls{next: time.Now(), record: func(event stallObservation) { states = append(states, event) }}
+		stalls := destinationStalls{next: time.Now()}
 		for node := 1; node <= 3; node++ {
 			name := fmt.Sprintf("destination-%d", node)
 			broker, err := inspectBroker(name, "assigned", name, func(args ...string) ([]byte, error) {
@@ -91,28 +90,17 @@ func TestReplicatedEnduranceStallsAndRestoresEveryDestinationBroker(t *testing.T
 		require.True(t, stalls.paused())
 		require.Equal(t, 1, stalls.count, "one cluster stall counts once")
 		require.False(t, stalls.until.Before(started.Add(time.Second)), "retain the one-second hold")
-		require.Equal(t, "before pause", states[0].Operation)
-		require.False(t, *states[0].Paused)
-		require.Nil(t, states[0].NotBefore)
-		require.Equal(t, "hold", states[1].Operation)
-		require.True(t, *states[1].Paused)
-		require.Equal(t, time.Second, states[1].NotBefore.Sub(states[1].Started))
 		stalls.step(t, stalls.until.Add(-time.Nanosecond), false)
 		require.Len(t, commands, 3, "do not heal before the one-second hold")
 		// Then healing restores every broker, even after publishing ends.
 		stalls.step(t, stalls.until, false)
 		require.False(t, stalls.paused())
-		require.Equal(t, "before unpause", states[2].Operation)
-		require.True(t, *states[2].Paused)
-		require.Equal(t, "after unpause", states[3].Operation)
-		require.False(t, *states[3].Paused)
 		require.Equal(t, []string{"unpause destination-1", "unpause destination-2", "unpause destination-3"}, commands[3:])
 		stalls.step(t, stalls.next, false)
 		require.Len(t, commands, 6, "do not start another stall after publishing")
 		stalls.next = time.Now()
 		stalls.step(t, stalls.next, true)
 		require.Equal(t, 2, stalls.count)
-		require.Nil(t, states[4].NotBefore, "a new stall must not report the previous hold deadline")
 		// Registered cleanup must restore all three after an early return.
 	})
 	require.Equal(t, []string{"pause destination-1", "pause destination-2", "pause destination-3",

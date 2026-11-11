@@ -13,7 +13,7 @@ The repository has one Go module at its root. Tests and helpers importing `src/i
 
 ## Setup
 
-Use Go 1.27.3, Python 3.11+ and a C compiler for race tests. Run commands from the repository root:
+Use Go 1.27.4, Python 3.11+ and a C compiler for race tests. Run commands from the repository root:
 
 ```sh
 make build

@@ -23,6 +23,10 @@ on:
       - 'tools/qualification/ownership_audit.py'
       - 'tools/qualification/test_fault_oracle.py'
       - 'tools/qualification/test_ownership_audit.py'
+      - 'tools/qualification/ownership_cases.py'
+      - 'tools/qualification/test_ownership_cases.py'
+      - 'tools/qualification/replicated_results.py'
+      - 'tools/qualification/test_replicated_results.py'
       - 'tools/ci/suites.py'
       - '.github/workflows/replicated-lab.yml'
 permissions:
@@ -60,6 +64,10 @@ jobs:
           assert set(services) == brokers | {'toxiproxy'}
           assert len({services[name]['environment']['KAFKA_LOG_DIRS'] for name in brokers}) == 6
           assert services['toxiproxy']['image'] == network.IMAGE
+          assert services['toxiproxy']['sysctls'] == {network.RESERVATION: network.reserved_ports()}
+          assert not services['toxiproxy'].get('privileged')
+          assert not services['toxiproxy'].get('network_mode')
+          assert not services['toxiproxy'].get('cap_add')
           assert {port['published'] for port in services['toxiproxy']['ports']} == {str(port) for port in (*network.client_ports(), 48074)}
           for name in brokers:
               service = services[name]
@@ -83,11 +91,11 @@ jobs:
         run: |
           make qualification-setup
           echo "sha256=$(sha256sum bin/kaferry | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-      - name: Check endurance gates and diagnostic retention without brokers
+      - name: Check endurance gates without brokers
         env:
           KAFERRY_TEST_BINARY: ${{ github.workspace }}/bin/kaferry
           KAFERRY_EXPECT_BINARY_SHA256: ${{ steps.candidate.outputs.sha256 }}
-        run: go test -race -tags=integration,load -run '^(TestLoadReport|TestReplicatedEndurance|TestOwnedBroker|TestStallTrace|TestEndurance|TestSoak)' ./src/tests/system
+        run: go test -race -tags=integration,load -run '^(TestLoadReport|TestReplicatedEndurance|TestOwnedBroker|TestEndurance|TestSoak)' ./src/tests/system
       - name: Copy and independently reconcile the replicated fixture
         run: python3 -m tools.qualification.qualify run replicated --binary bin/kaferry --output build-results/replicated
       - name: Verify fixture teardown
@@ -141,6 +149,58 @@ jobs:
         with:
           name: replicated-zombie-evidence
           path: build-results/replicated-zombie
+          retention-days: 14
+  faults:
+    needs: smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: worker-kill-rebalance, case: ownership/worker-kill-rebalance}
+          - {name: worker-scale, case: ownership/worker-scale}
+          - {name: source-leader, case: broker/source-leader}
+          - {name: destination-leader, case: broker/destination-leader}
+          - {name: rolling-source, case: broker/rolling-source}
+          - {name: rolling-destination, case: broker/rolling-destination}
+          - {name: destination-isr-loss, case: broker/destination-isr-loss}
+          - {name: network-destination-outage, case: network/destination-outage}
+          - {name: network-destination-leaders-outage, case: network/destination-leaders-outage}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-name: pr-brokers
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: replicated-fixture-candidate
+          path: bin
+      - name: Verify selected candidate and install the independent checker
+        env:
+          EXPECTED_BINARY_SHA256: ${{ needs.smoke.outputs.binary_sha256 }}
+        run: |
+          test "${#EXPECTED_BINARY_SHA256}" = 64
+          printf '%s  bin/kaferry\n' "$EXPECTED_BINARY_SHA256" | sha256sum --check --strict
+          chmod +x bin/kaferry
+          bin/kaferry --version
+          python3 -m tools.qualification.qualify setup
+      - name: Qualify selected replicated fault
+        env:
+          CASE: ${{ matrix.case }}
+        run: python3 -m tools.qualification.qualify run fault-replicated --case "$CASE" --binary bin/kaferry --output build-results/replicated-fault
+      - name: Verify fault fixture teardown
+        if: always()
+        run: |
+          test -z "$(docker ps -aq --filter label=com.docker.compose.project=kaferry-replicated)"
+          test -z "$(docker volume ls -q --filter label=com.docker.compose.project=kaferry-replicated)"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: replicated-${{ matrix.name }}-evidence
+          path: build-results/replicated-fault
           retention-days: 14
   endurance:
     needs: smoke

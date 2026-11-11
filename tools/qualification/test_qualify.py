@@ -2,8 +2,8 @@
 
 import argparse
 import hashlib
+import itertools
 from contextlib import contextmanager, nullcontext
-from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import signal
@@ -16,7 +16,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools.qualification.qualify import duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, suite_command, valid_receipts, parallel_allowance, parallel_capacity, parallel_run
+from tools.qualification.qualify import cleanup_replicated, duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, verify_replicated_tests, InconclusivePrecondition, suite_command, valid_receipts
 from tools.qualification.broker_probe import logical, reconcile, records, replicated_topology, topic_ready
 
 
@@ -26,6 +26,9 @@ class MatrixTest(unittest.TestCase):
             'binary_platform': 'linux-amd64', 'execution_platform': 'linux-amd64'})
         identity.start()
         self.addCleanup(identity.stop)
+        images = patch('tools.qualification.qualify.fixture_images', return_value='fixture')
+        images.start()
+        self.addCleanup(images.stop)
 
     def suite_args(self, directory, suite, **options):
         binary = directory / 'candidate'
@@ -77,112 +80,6 @@ class MatrixTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '24h'):
             suite_command(args, {})
 
-    def test_parallel_jobs_overlap_with_distinct_fixtures_and_combined_allowance(self):
-        # Given two jobs sharing one host lease, require both to reach the barrier.
-        barrier = threading.Barrier(2, timeout=2)
-        observed = []
-        def run(args, *, fixture, cancelled):
-            args.output.mkdir()
-            barrier.wait()
-            observed.append((args.suite, fixture))
-            (args.output / 'manifest.json').write_text(json.dumps({'suite': args.suite, 'status': 'passed'}))
-        with tempfile.TemporaryDirectory() as temporary:
-            binary = Path(temporary)/'candidate'; binary.write_bytes(b'candidate')
-            args = argparse.Namespace(output=Path(temporary)/'run', companion='recovery', duration=60,
-                companion_duration=60, binary=str(binary), source='3.9.2', destination='3.9.2')
-            with patch('tools.qualification.qualify.LAB_LOCK', Path(temporary)/'host.lock'), patch('tools.qualification.qualify.run_suite', side_effect=run):
-                parallel_run(args)
-            self.assertEqual(2, len(observed))
-            self.assertNotEqual(observed[0][1]['project'], observed[1][1]['project'])
-            self.assertFalse(set(observed[0][1]['ports']) & set(observed[1][1]['ports']))
-            self.assertEqual(observed[0][1]['reserved_bytes'], observed[1][1]['reserved_bytes'])
-            result = json.loads((args.output/'parallel.json').read_text())
-            self.assertEqual('passed', result['status'])
-            self.assertEqual(2, len(result['cases']))
-
-    def test_parallel_failure_cancels_peer_and_preserves_both_receipts(self):
-        barrier = threading.Barrier(2, timeout=2)
-        def run(args, *, fixture, cancelled):
-            args.output.mkdir()
-            barrier.wait()
-            status = 'failed' if args.suite == 'recovery' else 'interrupted'
-            if args.suite != 'recovery': self.assertTrue(cancelled.wait(2))
-            (args.output/'manifest.json').write_text(json.dumps({'suite': args.suite, 'status': status}))
-            if args.suite == 'recovery': raise RuntimeError('injected failure')
-        with tempfile.TemporaryDirectory() as temporary:
-            binary = Path(temporary)/'candidate'; binary.write_bytes(b'candidate')
-            args = argparse.Namespace(output=Path(temporary)/'run', companion='recovery', duration=60,
-                companion_duration=60, binary=str(binary), source='3.9.2', destination='3.9.2')
-            with patch('tools.qualification.qualify.LAB_LOCK', Path(temporary)/'host.lock'), patch('tools.qualification.qualify.run_suite', side_effect=run):
-                with self.assertRaisesRegex(RuntimeError, 'injected failure'): parallel_run(args)
-            result = json.loads((args.output/'parallel.json').read_text())
-            self.assertEqual('failed', result['status'])
-            self.assertEqual({'failed', 'interrupted'}, {case['status'] for case in result['cases']})
-
-    def test_interrupt_during_second_submission_cancels_started_worker(self):
-        # Given an executor whose first job runs before the next submission is interrupted.
-        with tempfile.TemporaryDirectory() as temporary, ThreadPoolExecutor(max_workers=2) as pool:
-            root = Path(temporary)
-            binary = root/'candidate'; binary.write_bytes(b'candidate')
-            args = argparse.Namespace(output=root/'run', companion='recovery', duration=60,
-                companion_duration=60, binary=str(binary), source='3.9.2', destination='3.9.2')
-            started, stopped = threading.Event(), threading.Event()
-            def run(args, *, fixture, cancelled):
-                args.output.mkdir()
-                started.set()
-                if cancelled.wait(2): stopped.set()
-                (args.output/'manifest.json').write_text(json.dumps({'suite': args.suite, 'status': 'interrupted'}))
-            submit = pool.submit
-            def interrupt(*args, **kwargs):
-                if started.is_set(): raise KeyboardInterrupt()
-                future = submit(*args, **kwargs)
-                self.assertTrue(started.wait(2))
-                return future
-            # When submission is interrupted, then the first worker is cancelled before pool exit waits.
-            with patch('tools.qualification.qualify.ThreadPoolExecutor', return_value=pool), patch.object(pool, 'submit', side_effect=interrupt), \
-                 patch('tools.qualification.qualify.LAB_LOCK', root/'host.lock'), patch('tools.qualification.qualify.run_suite', side_effect=run):
-                with self.assertRaises(KeyboardInterrupt): parallel_run(args)
-            self.assertTrue(stopped.is_set(), 'started worker was left running after interruption')
-            result = json.loads((args.output/'parallel.json').read_text())
-            self.assertEqual('interrupted', result['status'])
-            self.assertEqual({'interrupted', 'missing'}, {case['status'] for case in result['cases']})
-
-    def test_parallel_capacity_rejects_space_that_only_fits_one_run(self):
-        required = parallel_allowance(86400, 'capture', 86400)
-        self.assertGreater(required, parallel_allowance(86400, 'recovery', 7200))
-        with tempfile.TemporaryDirectory() as temporary:
-            output = Path(temporary)
-            with patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=required-1)), \
-                 patch('tools.qualification.qualify.subprocess.check_output', return_value=f'Filesystem Blocks Used Available Capacity Mounted\nfs 0 0 {required//1024+1} 0% /tmp\n'):
-                with self.assertRaisesRegex(ValueError, 'combined'): parallel_capacity(required, output, ['docker'], {})
-            self.assertEqual(required, json.loads((output/'parallel-capacity.json').read_text())['required_combined_bytes'])
-
-    @patch('tools.qualification.fault_results.configure', new=lambda env: env.update(KAFERRY_ORACLE_RUN='fixture'))
-    def test_parallel_child_uses_only_its_assigned_fixture_on_failure(self):
-        # Given a child admitted by the coordinator with its own project and ports.
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            args = self.suite_args(root, 'recovery', rate=50)
-            fixture = dict(project='kaferry-lab-test-2', ports=[45292, 45293], reserved_bytes=1000,
-                           binary_sha256=hashlib.sha256(Path(args.binary).read_bytes()).hexdigest())
-            calls = []
-            def command(command, output, label, env, **kwargs):
-                calls.append((command, label, env.copy()))
-                if label == 'suite': raise RuntimeError('injected failure')
-            with patch('tools.qualification.qualify.capture', return_value='fixture'), patch('tools.qualification.qualify.parallel_capacity', return_value={}), \
-                 patch('tools.qualification.qualify.lab_lock', side_effect=AssertionError('child reacquired coordinator lease')), \
-                 patch('tools.qualification.qualify.logged', side_effect=command), patch('tools.qualification.qualify.subprocess.run') as logs:
-                # When the suite fails, then diagnostics and teardown address only that project.
-                with self.assertRaisesRegex(RuntimeError, 'injected failure'):
-                    run_suite(args, fixture=fixture)
-            for command, label, env in calls:
-                if label != 'suite': self.assertEqual('kaferry-lab-test-2', command[command.index('-p') + 1])
-                self.assertEqual('127.0.0.1:45292', env['KAFKA_TEST_BROKERS'])
-                self.assertEqual('127.0.0.1:45293', env['KAFKA_TEST_DEST_BROKERS'])
-                self.assertEqual('kaferry-lab-test-2-kafka-dr-1', env['KAFKA_FAULT_DEST_CONTAINER'])
-                self.assertEqual('kaferry-lab-test-2', env['KAFERRY_FIXTURE_PROJECT'])
-            self.assertEqual('kaferry-lab-test-2', logs.call_args.args[0][logs.call_args.args[0].index('-p') + 1])
-            self.assertEqual('failed', json.loads((args.output/'manifest.json').read_text())['status'])
 
     def test_log_cancellation_stops_running_subprocess(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -227,7 +124,7 @@ class MatrixTest(unittest.TestCase):
             root = Path(temporary)
             for suite, timeout in [('capture', 370), ('recovery', 660)]:
                 with self.subTest(suite=suite):
-                    spec = resolve_run(self.suite_args(root, suite, rate=50), {}, None)
+                    spec = resolve_run(self.suite_args(root, suite, rate=50), {})
                     self.assertEqual(timeout, spec.timeout)
 
     def test_dedicated_endurance_defaults_and_short_soak_remain_separate(self):
@@ -440,7 +337,7 @@ class MatrixTest(unittest.TestCase):
         rows[0].pop('working_tree_dirty')
         self.assertFalse(valid_receipts(rows, 'full', 'b'*40, 'a'*64))
 
-    def test_external_and_migration_require_explicit_inputs(self):
+    def test_migration_requires_explicit_previous_binary(self):
         args = argparse.Namespace(suite='migration', previous_binary=None)
         with self.assertRaisesRegex(ValueError, 'previous-binary'):
             suite_command(args, {})
@@ -458,7 +355,7 @@ class MatrixTest(unittest.TestCase):
                     identity_platforms('/candidate', 'go')
 
     def test_replicated_defaults_use_only_newest_images_and_owned_storage(self):
-        # Given the replicated entrypoint, no broker version or external storage is implicit.
+        # Given the replicated entrypoint, the newest broker image and disposable storage are selected.
         with patch('tools.qualification.qualify.run_suite') as run:
             main(['run', 'replicated'])
         requested = run.call_args.args[0]
@@ -466,15 +363,13 @@ class MatrixTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             args = self.suite_args(Path(temporary), 'replicated', source='4.4.0', destination='4.4.0')
             receipt = {}
-            with patch('tools.qualification.qualify.capture', return_value='fixture'), patch.dict(os.environ, {
-                    'KAFERRY_REPLICATED_BROKER_VOLUME': 'unrequested', 'KAFERRY_REPLICATED_VOLUME_EXTERNAL': 'true'}):
-                # When resolving, then the fixture cannot inherit someone else's volume.
-                spec = resolve_run(args, receipt, None)
+            with patch('tools.qualification.qualify.capture', return_value='fixture'):
+                # When resolving, then every worker uses the dedicated replicated fixture.
+                spec = resolve_run(args, receipt)
             self.assertIn('src/tests/replicated/compose.yaml', spec.compose)
             self.assertEqual('kaferry-replicated', receipt['fixture_project'])
             self.assertEqual('disposable-volume', receipt['fixture_storage']['mode'])
             self.assertRegex(receipt['fixture_storage']['run_id'], r'^[a-f0-9]{32}$')
-            self.assertEqual('false', spec.env['KAFERRY_REPLICATED_VOLUME_EXTERNAL'])
             self.assertEqual('127.0.0.1:46092,127.0.0.1:46093,127.0.0.1:46094', spec.env['KAFKA_TEST_BROKERS'])
             self.assertEqual('127.0.0.1:47092,127.0.0.1:47093,127.0.0.1:47094', spec.env['KAFKA_TEST_DEST_BROKERS'])
             self.assertIn('--replicated', spec.command)
@@ -500,7 +395,7 @@ class MatrixTest(unittest.TestCase):
             # receive the same checked candidate executable and independent oracle.
             with patch('tools.qualification.qualify.capture', return_value='fixture'), \
                  patch('tools.qualification.fault_results.configure', side_effect=configure):
-                spec = resolve_run(args, receipt, None)
+                spec = resolve_run(args, receipt)
             self.assertEqual(['ownership/zombie-worker'], receipt['case_selection'])
             self.assertIn('src/tests/replicated/compose.yaml', spec.compose)
             self.assertIn('-tags=integration,fault,load', spec.command)
@@ -522,36 +417,158 @@ class MatrixTest(unittest.TestCase):
                 with self.subTest(suite=suite, case=case, source=source):
                     args = self.suite_args(Path(temporary), suite, case=case, source=source, destination='4.4.0')
                     with patch('tools.qualification.qualify.capture') as execute, self.assertRaises(ValueError):
-                        resolve_run(args, {}, None)
+                        resolve_run(args, {})
                     execute.assert_not_called()
 
-    def test_broker_volume_rejects_unsupported_suites_names_and_old_replicated_images(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            # Given explicit storage requests, when invalid, then no Docker command is issued.
-            for suite, volume, source in [('broker', 'lab', '4.4.0'), ('replicated', '-foreign', '4.4.0'),
-                                           ('replicated', 'lab', '3.9.2')]:
-                with self.subTest(suite=suite, volume=volume, source=source):
-                    args = self.suite_args(Path(temporary), suite, source=source, destination='4.4.0', broker_volume=volume)
-                    with patch('tools.qualification.qualify.capture') as execute, self.assertRaises(ValueError):
-                        resolve_run(args, {}, None)
-                    execute.assert_not_called()
-
-    def test_replicated_admission_rejects_resource_shortages_and_foreign_volumes(self):
-        runtime = {'NCPU': 4, 'MemTotal': 16 * 1024**3}
-        env = {'KAFERRY_REPLICATED_BROKER_VOLUME': 'lab-storage', 'KAFERRY_REPLICATED_VOLUME_EXTERNAL': 'true'}
-        # Given an existing external volume, reject missing ownership before a storage helper can start.
-        for labels, accepted in [(None, False), ({'kaferry.lab.storage': 'false'}, False),
-                                  ({'kaferry.lab.storage': 'true'}, True)]:
-            with self.subTest(labels=labels), tempfile.TemporaryDirectory() as temporary:
-                with patch('tools.qualification.qualify.capture', side_effect=[json.dumps(runtime), json.dumps(labels)]), \
-                     patch('tools.qualification.qualify.socket.socket') as sockets, \
-                     patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=10**12)):
-                    if accepted:
-                        replicated_admission(Path(temporary), env)
-                        self.assertEqual(25, sockets.return_value.__enter__.return_value.bind.call_count)
+    def test_network_precondition_reruns_once_and_keeps_each_attempt_under_one_lease(self):
+        selected = 'network/destination-leaders-outage'
+        test = 'TestReplicatedNetworkFaults/destination-leaders-outage'
+        scenarios = [(['inconclusive', 'passed'], 'passed', None), (['passed-dirty'], 'passed', None),
+                     (['inconclusive', 'inconclusive'], 'inconclusive', InconclusivePrecondition),
+                     (['product'], 'failed', RuntimeError), (['cancel'], 'interrupted', InterruptedError),
+                     (['cleanup'], 'failed', RuntimeError), (['safety'], 'failed', ValueError),
+                     (['other-fail'], 'failed', ValueError), (['identity'], 'failed', ValueError),
+                     (['cancel-after-precondition'], 'interrupted', InterruptedError), (['dirty-source'], 'failed', ValueError),
+                     (['untracked-added'], 'failed', ValueError), (['untracked-before'], 'failed', ValueError),
+                     (['passed-untracked'], 'passed', None)]
+        for outcomes, expected_status, error in scenarios:
+            with self.subTest(outcomes=outcomes), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                args = self.suite_args(root, 'fault-replicated', source='4.4.0', destination='4.4.0', case=selected)
+                sequence, runs = [], []
+                cancelled = threading.Event()
+                checkout = root/'checkout'
+                checkout.mkdir()
+                tracked_source, untracked_source = checkout/'fixture.go', checkout/'extra_test.go'
+                tracked_source.write_text('first fixture')
+                for command in (['git', 'init', '-q'], ['git', 'add', 'fixture.go'],
+                                ['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture']):
+                    subprocess.run(command, cwd=checkout, check=True, capture_output=True)
+                if outcomes[0] in ('dirty-source', 'passed-dirty'):
+                    tracked_source.write_text('dirty fixture')
+                if outcomes[0] in ('untracked-before', 'passed-untracked'):
+                    untracked_source.write_text('first fixture')
+                def capture(command):
+                    if command[0] == 'git':
+                        return subprocess.check_output(command, cwd=checkout, text=True).strip()
+                    return 'fixture'
+                @contextmanager
+                def fixture(attempt, spec, receipt, cancelled, *, lease_held):
+                    self.assertTrue(lease_held)
+                    with self.assertRaisesRegex(ValueError, 'owns this host'):
+                        with lab_lock():
+                            pass
+                    number = len(runs)
+                    sequence.append(('start', attempt.output.name))
+                    try:
+                        yield
+                    finally:
+                        sequence.append(('cleanup', attempt.output.name))
+                        if outcomes[number] == 'cancel-after-precondition':
+                            cancelled.set()
+                        if outcomes[number] == 'cleanup':
+                            raise RuntimeError('writer shutdown failed')
+                def command(command, output, label, env, **kwargs):
+                    number = len(runs)
+                    runs.append((output, env.copy()))
+                    outcome = outcomes[number]
+                    action = 'pass' if outcome in ('passed', 'passed-dirty', 'passed-untracked') else 'skip'
+                    events = [dict(Action=action, Test=test), dict(Action='pass', Test='TestReplicatedNetworkFaults'), dict(Action='pass')]
+                    if outcome == 'other-fail':
+                        events.append(dict(Action='fail', Test='UnrelatedCleanup'))
+                    (output/'suite.log').write_text(''.join(json.dumps(event)+'\n' for event in events))
+                    if outcome in ('untracked-added', 'untracked-before'):
+                        untracked_source.write_text('changed fixture')
+                    if outcome == 'dirty-source':
+                        tracked_source.write_text('changed fixture')
+                    if outcome == 'identity':
+                        Path(args.binary).write_bytes(b'changed candidate')
+                    if outcome == 'product':
+                        raise RuntimeError('product assertion failed')
+                    if outcome == 'cancel':
+                        raise InterruptedError('cancelled')
+                def collect(*unused):
+                    if outcomes[len(runs)-1] == 'safety':
+                        raise ValueError('unsafe saved prefix')
+                    return [dict(id=selected, status='passed' if outcomes[len(runs)-1] in ('passed', 'passed-dirty', 'passed-untracked') else 'inconclusive')]
+                # Given a completed low-rate attempt or an independent failure,
+                # when qualification finishes, then only the former can retry.
+                with patch('tools.qualification.qualify.LAB_LOCK', root/'host.lock'), \
+                     patch('tools.qualification.qualify.capture', side_effect=capture), \
+                     patch('tools.qualification.fault_results.configure', side_effect=lambda env: env.update(KAFERRY_ORACLE_RUN=os.urandom(4).hex())), \
+                     patch('tools.qualification.qualify.broker_fixture', side_effect=fixture), \
+                     patch('tools.qualification.qualify.logged', side_effect=command), \
+                     patch('tools.qualification.replicated_results.collect', side_effect=collect):
+                    if error:
+                        with self.assertRaises(error):
+                            run_suite(args, cancelled=cancelled)
                     else:
-                        with self.assertRaisesRegex(ValueError, 'label'):
-                            replicated_admission(Path(temporary), env)
+                        run_suite(args, cancelled=cancelled)
+                receipt = json.loads((args.output/'manifest.json').read_text())
+                self.assertEqual(expected_status, receipt['status'])
+                self.assertEqual(len(outcomes), len(runs))
+                self.assertEqual([item for number in range(1, len(runs)+1) for item in
+                                  [('start', f'attempt-{number}'), ('cleanup', f'attempt-{number}')]], sequence)
+                self.assertEqual(len(runs), len({env['KAFERRY_REPLICATED_RUN_ID'] for _, env in runs}))
+                for number, (output, env) in enumerate(runs, 1):
+                    attempt = json.loads((output/'manifest.json').read_text())
+                    self.assertEqual(f'attempt-{number}', output.name)
+                    self.assertEqual(attempt['status'], receipt['attempts'][number-1]['status'])
+                    self.assertEqual(hashlib.sha256(b'fixture').hexdigest(), attempt['binary_sha256'])
+                    self.assertEqual(outcomes[0] in ('dirty-source', 'passed-dirty', 'untracked-before', 'passed-untracked'), attempt['working_tree_dirty'])
+                    self.assertTrue((output/'suite.log').is_file())
+                if outcomes[0] in ('dirty-source', 'untracked-added', 'untracked-before'):
+                    # Then changed tracked or untracked source with the same HEAD
+                    # cannot start a second fixture or erase the first receipt.
+                    first, second = receipt['attempts']
+                    changed_source = tracked_source if outcomes == ['dirty-source'] else untracked_source
+                    self.assertEqual('changed fixture', changed_source.read_text())
+                    self.assertEqual(first['source_commit'], second['source_commit'])
+                    self.assertEqual(outcomes != ['untracked-added'], first['working_tree_dirty'])
+                    self.assertTrue(second['working_tree_dirty'])
+                    self.assertEqual(('inconclusive', 'failed'), (first['status'], second['status']))
+                    self.assertIn('requires a clean unchanged checkout', receipt['error'])
+                if len(runs) == 2:
+                    self.assertEqual('inconclusive', receipt['attempts'][0]['status'])
+                    self.assertIn('"Action": "skip"', (runs[0][0]/'suite.log').read_text())
+
+    def test_network_skips_need_exact_typed_proof_and_no_other_go_failures(self):
+        test = 'TestReplicatedNetworkFaults/latency'
+        proof = [dict(id='network/latency', status='inconclusive')]
+        skipped = '\n'.join(json.dumps(event) for event in [dict(Action='skip', Test=test),
+                                                         dict(Action='pass', Test='TestReplicatedNetworkFaults')])
+        # Given a typed no-fault outcome, when a different test failed or the
+        # selected leaf did not skip, then no marker can turn it into a retry.
+        verify_replicated_tests(skipped, [test], proof)
+        for log, cases in [(skipped, []), ('', proof), (skipped+'\n'+json.dumps(dict(Action='fail', Test='Cleanup')), proof),
+                           (json.dumps(dict(Action='pass', Test=test)), proof)]:
+            with self.subTest(log=log), self.assertRaises(ValueError):
+                verify_replicated_tests(log, [test], cases)
+
+    def test_replicated_broker_selection_and_all_case_budget(self):
+        # Given each implemented broker case, when selected, then run its exact
+        # subtest and retain its complete119s recovery window in both deadlines.
+        from tools.ci.suites import REPLICATED_CASES
+        with tempfile.TemporaryDirectory() as temporary:
+            for selected in [*REPLICATED_CASES, None]:
+                with self.subTest(selected=selected):
+                    args = self.suite_args(Path(temporary), 'fault-replicated', source='4.4.0', destination='4.4.0', case=selected)
+                    receipt = {}
+                    with patch('tools.qualification.qualify.capture', return_value='fixture'), \
+                         patch('tools.qualification.fault_results.configure', side_effect=lambda env: env.update(KAFERRY_ORACLE_RUN='fresh')):
+                        spec = resolve_run(args, receipt)
+                    expected = [REPLICATED_CASES[selected]] if selected else list(REPLICATED_CASES.values())
+                    self.assertEqual(expected, spec.expected)
+                    self.assertEqual([selected] if selected else list(REPLICATED_CASES), receipt['case_selection'])
+                    seconds = (240 if selected == 'ownership/zombie-worker' else 353 if selected and selected.startswith('network/') else 389 if selected == 'ownership/coordinator-kill-rebalance' else 359 if selected else 4907)
+                    self.assertEqual(seconds+60, spec.timeout)
+                    self.assertIn('-timeout='+('4m' if selected == 'ownership/zombie-worker' else str(seconds)+'s'), spec.command)
+                    if selected:
+                        self.assertEqual('/'.join('^'+part+'$' for part in expected[0].split('/')), spec.command[spec.command.index('-run')+1])
+
+
+    def test_replicated_admission_rejects_resource_shortages_and_busy_ports(self):
+        runtime = {'NCPU': 4, 'MemTotal': 16 * 1024**3}
         # When CPU, memory or evidence space is inadequate, then preserve the rejected capacity snapshot.
         for cpu, memory, disk in [(1, 16 * 1024**3, 10**12), (4, 1024**3, 10**12), (4, 16 * 1024**3, 0)]:
             with self.subTest(cpu=cpu, memory=memory, disk=disk), tempfile.TemporaryDirectory() as temporary:
@@ -559,23 +576,24 @@ class MatrixTest(unittest.TestCase):
                 with patch('tools.qualification.qualify.capture', return_value=json.dumps({'NCPU': cpu, 'MemTotal': memory})), \
                      patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=disk)):
                     with self.assertRaisesRegex(ValueError, 'capacity'):
-                        replicated_admission(root, env)
+                        replicated_admission(root)
                 self.assertTrue((root / 'capacity.json').is_file())
         with tempfile.TemporaryDirectory() as temporary:
             with patch('tools.qualification.qualify.capture', return_value=json.dumps(runtime)), \
                  patch('tools.qualification.qualify.socket.socket') as sockets, \
                  patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=10**12)):
+                replicated_admission(Path(temporary))
+                self.assertEqual(25, sockets.return_value.__enter__.return_value.bind.call_count)
                 sockets.return_value.__enter__.return_value.bind.side_effect = OSError('already bound')
                 with self.assertRaisesRegex(ValueError, 'port 46092'):
-                    replicated_admission(Path(temporary), dict(env, KAFERRY_REPLICATED_VOLUME_EXTERNAL='false'))
+                    replicated_admission(Path(temporary))
 
     def test_replicated_failures_clean_only_owned_scope_and_preserve_unverified_storage(self):
         # Given an interruption or a failed storage ownership check after copying.
-        for suite, interruption, volume in [(suite, interruption, volume) for suite in ('replicated', 'endurance')
-                for interruption, volume in [(True, 'dedicated-storage'), (False, 'dedicated-storage'), (False, None)]]:
-            with self.subTest(suite=suite, interruption=interruption, volume=volume), tempfile.TemporaryDirectory() as temporary:
+        for suite, interruption in itertools.product(('replicated', 'endurance'), (True, False)):
+            with self.subTest(suite=suite, interruption=interruption), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
-                args = self.suite_args(root, suite, source='4.4.0', destination='4.4.0', broker_volume=volume,
+                args = self.suite_args(root, suite, source='4.4.0', destination='4.4.0',
                                        topology='replicated' if suite == 'endurance' else None, rate=200)
                 calls = []
                 def command(command, output, label, env, **kwargs):
@@ -596,7 +614,7 @@ class MatrixTest(unittest.TestCase):
                     # When finishing, then writers stop before cleanup and a cleanup failure cannot qualify.
                     with self.assertRaises(KeyboardInterrupt if interruption else RuntimeError):
                         run_suite(args)
-                self.assertEqual(60 if suite == 'endurance' else None, admission.call_args.args[2])
+                self.assertEqual(60 if suite == 'endurance' else None, admission.call_args.args[1])
                 phases = ['storage-capacity', 'storage-prepare', 'proxy-up', 'proxy-configure', 'brokers-up']
                 if suite == 'replicated':
                     phases.append('proxy-proof')
@@ -604,7 +622,6 @@ class MatrixTest(unittest.TestCase):
                 self.assertEqual(phases, [label for _, label, _ in calls])
                 self.assertEqual(1, len({env['KAFERRY_REPLICATED_RUN_ID'] for _, _, env in calls}))
                 for command, label, env in calls:
-                    self.assertEqual('true' if volume else 'false', env['KAFERRY_REPLICATED_VOLUME_EXTERNAL'])
                     if label not in ('suite', 'proxy-configure', 'proxy-proof'):
                         self.assertEqual('kaferry-replicated', command[command.index('-p') + 1])
                     self.assertNotEqual(['docker', 'volume', 'rm'], command[:3])
@@ -616,7 +633,23 @@ class MatrixTest(unittest.TestCase):
                     self.assertNotIn('proxy_path_check', receipt, 'endurance must not run the cut/heal proxy proof')
                     self.assertEqual('replicated', receipt['workload']['topology'])
                     self.assertEqual((3, 2), (receipt['workload']['replication_factor'], receipt['workload']['min_insync_replicas']))
-                self.assertNotIn('dedicated-storage', json.dumps(receipt), 'keep private resource names out of receipts')
+
+    def test_replicated_cleanup_stops_writers_before_deletion_and_keeps_first_error(self):
+        # Given either writer shutdown or owned-directory deletion fails.
+        for failure in ('brokers-stop', 'storage-clean'):
+            with self.subTest(failure=failure):
+                original = RuntimeError('first cleanup failure')
+                labels = []
+                def command(cmd, output, label, env, **kwargs):
+                    labels.append(label)
+                    if label == failure:
+                        raise original
+                with patch('tools.qualification.qualify.logged', side_effect=command):
+                    # When cleanup runs, then failed shutdown cannot lead to deletion.
+                    errors = cleanup_replicated(Path('/unused'), ['compose'], {})
+                self.assertEqual(['brokers-stop'] if failure == 'brokers-stop' else
+                                 ['brokers-stop', 'storage-clean'], labels)
+                self.assertEqual([{'phase': 'storage-clean', 'error': str(original)}], errors)
 
     def test_replicated_broker_space_is_admitted_before_preparing_or_starting_brokers(self):
         # Given a volume with less than the full fixture allowance.
@@ -630,6 +663,7 @@ class MatrixTest(unittest.TestCase):
                     replicated_storage(output, ['compose'], {}, {'required_broker_bytes': 4096}, None)
             self.assertEqual(1, execute.call_count)
             self.assertEqual(1024, json.loads((output / 'capacity.json').read_text())['broker_free_bytes'])
+
 
     def test_replicated_uses_the_same_host_lease_before_any_fixture_mutation(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -676,7 +710,7 @@ class ReplicatedStorageTest(unittest.TestCase):
         return result
 
     def test_cleanup_removes_only_the_marked_run_and_preserves_a_peer(self):
-        # Given two independent runs and unrelated external-volume data.
+        # Given two independent runs and unrelated data.
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             first, peer = 'a' * 32, 'b' * 32
@@ -717,13 +751,15 @@ class ReplicatedStorageTest(unittest.TestCase):
 case "$target" in
     "$KAFERRY_TEST_RUN")
         /bin/rm -f -- "$target/.kaferry-owned" "$target/source-1/removed"
-        echo 'injected partial deletion failure' >&2; exit 1 ;;
+        echo 'injected partial deletion failure' >&2; exit 7 ;;
     "$KAFERRY_TEST_RUN/source-1")
         /bin/rm -f -- "$target/removed"
-        echo 'injected partial deletion failure' >&2; exit 1 ;;
+        echo 'injected partial deletion failure' >&2; exit 7 ;;
 esac
 ''')
+            self.assertEqual(7, result.returncode)
             self.assertIn('injected partial deletion failure', result.stderr)
+            self.assertTrue((folder / 'source-3').is_dir(), 'stop at the first deletion error')
             self.assertFalse(removed.exists())
             self.assertEqual(original, marker.read_bytes())
             self.assertEqual(b'preserve', (folder / 'source-1/keep').read_bytes())
@@ -733,6 +769,7 @@ esac
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertFalse(folder.exists())
             self.assertTrue(self.run_path(root, peer).exists())
+
 
     def test_failed_final_directory_removal_restores_the_marker(self):
         # Given deletion completes but a filesystem reports a new entry at final removal.
@@ -744,9 +781,10 @@ esac
 if [ "$target" = "$KAFERRY_TEST_RUN" ]; then
     printf 'preserve' > "$target/$KAFERRY_TEST_ENTRY"
     echo 'injected directory not empty' >&2
-    exit 1
+    exit 7
 fi
 ''', KAFERRY_TEST_ENTRY=entry)
+                self.assertEqual(7, result.returncode)
                 if entry == 'late-entry':
                     self.assertIn('ownership marker restored', result.stderr)
                     self.assertEqual(original, (folder / '.kaferry-owned').read_bytes())

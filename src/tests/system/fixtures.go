@@ -39,7 +39,7 @@ func configuredTopic(t *testing.T, a *kadm.Client, partitions int, replicas int1
 	name := fmt.Sprintf("kaferry-compat-%d", time.Now().UnixNano())
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	settings := map[string]*string{"message.timestamp.before.max.ms": kadm.StringPtr("9223372036854775807"), "message.timestamp.after.max.ms": kadm.StringPtr("9223372036854775807")}
+	settings := map[string]*string{"message.timestamp.before.max.ms": kadm.StringPtr("9223372036854775807"), "message.timestamp.after.max.ms": kadm.StringPtr("9223372036854775807"), "retention.ms": kadm.StringPtr("-1")}
 	for name, value := range properties {
 		settings[name] = value
 	}

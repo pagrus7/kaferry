@@ -96,6 +96,11 @@ func (l *Lab) proxyFault(ctx context.Context, target Target, fault Fault) (resto
 		}
 		return undo, l.request(ctx, http.MethodPost, path, map[string]bool{"enabled": false}, nil)
 	}
+	return l.addToxic(ctx, target, fault)
+}
+
+func (l *Lab) addToxic(ctx context.Context, target Target, fault Fault) (restoration, error) {
+	path := "/proxies/" + target.Proxy
 	name := "kaferry-" + rand.Text()
 	stream := fault.Stream
 	if stream == "" {
@@ -106,6 +111,59 @@ func (l *Lab) proxyFault(ctx context.Context, target Target, fault Fault) (resto
 		"attributes": map[string]int64{attribute: fault.Value}}
 	undo := func(heal context.Context) error { return l.removeToxic(heal, target, path, name) }
 	return undo, l.request(ctx, http.MethodPost, path+"/toxics", toxic, nil)
+}
+
+// CloseWorkerConnections supplies EOF to an already injected downstream slow
+// close. The upstream timeout closes only the original worker destinations;
+// it is an explicit auxiliary stimulus, with its own event and cleanup.
+func (l *Lab) CloseWorkerConnections(ctx context.Context, slow *Injection) (*Injection, error) {
+	if slow == nil || slow.Event.Role.Kind != "worker-destination" || slow.Event.Role.Cluster != "destination" ||
+		slow.Event.Role.Worker < 1 || slow.Event.Role.Worker > 3 || !slow.Event.Heal.IsZero() ||
+		slow.Event.Fault.Kind != "slow_close" || slow.Event.Fault.Stream != "downstream" || len(slow.Event.Targets) != 3 {
+		return nil, errors.New("close stimulus requires an active whole worker destination slow-close injection")
+	}
+	injection := &Injection{Event: Event{Role: slow.Event.Role, Fault: Fault{Kind: "timeout", Stream: "upstream", Value: 1},
+		Targets: append([]Target(nil), slow.Event.Targets...), Start: time.Now().UTC()}}
+	seen := make(map[int32]bool)
+	for _, target := range injection.Event.Targets {
+		if target.Cluster != "destination" || target.Listener != fmt.Sprintf("worker%d", slow.Event.Role.Worker) ||
+			target.Broker < 1 || target.Broker > 3 || seen[target.Broker] {
+			return nil, errors.New("close stimulus requires exactly the original three worker destination routes")
+		}
+		seen[target.Broker] = true
+	}
+	for _, target := range injection.Event.Targets {
+		if err := l.checkSlowClose(ctx, target, slow.Event.Fault.Value); err != nil {
+			return injection, errors.Join(err, injection.Heal(ctx))
+		}
+		undo, err := l.addToxic(ctx, target, injection.Event.Fault)
+		if undo != nil {
+			injection.undo = append(injection.undo, undo)
+		}
+		if err != nil {
+			return injection, errors.Join(err, injection.Heal(ctx))
+		}
+	}
+	return injection, nil
+}
+
+func (l *Lab) checkSlowClose(ctx context.Context, target Target, delay int64) error {
+	if err := l.ownedProxy(ctx, target, false); err != nil {
+		return err
+	}
+	var current proxy
+	if err := l.request(ctx, http.MethodGet, "/proxies/"+target.Proxy, nil, &current); err != nil {
+		return err
+	}
+	var toxic struct {
+		Type, Stream string
+		Attributes   struct{ Delay int64 }
+	}
+	if len(current.Toxics) != 1 || json.Unmarshal(current.Toxics[0], &toxic) != nil ||
+		toxic.Type != "slow_close" || toxic.Stream != "downstream" || toxic.Attributes.Delay != delay {
+		return errors.New("slow-close route has an unrelated or missing toxic")
+	}
+	return nil
 }
 
 func (l *Lab) removeToxic(ctx context.Context, target Target, path, name string) error {

@@ -142,7 +142,7 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(metadata.Close)
 	lab := &faults.Lab{Project: os.Getenv("KAFERRY_FIXTURE_PROJECT"), API: os.Getenv("KAFERRY_TOXIPROXY_API"), Metadata: metadata}
-	source, destination := metadata["source"], metadata["destination"]
+	source, destination := metadata["source"].Client, metadata["destination"].Client
 	prefix := fmt.Sprintf("kaferry-zombie-%d", time.Now().UnixNano())
 	src, dst, group := prefix+"-source", prefix+"-destination", prefix+"-group"
 	replicatedTopic(ctx, t, source, src)
@@ -311,7 +311,7 @@ func (s *zombieOwnership) generationReady(ctx context.Context, t *testing.T) boo
 		if member.ClientID == s.clients[0] {
 			var ready bool
 			var err error
-			s.generation, ready, err = s.audit.ready(ctx, s.clients[0], s.group, member.MemberID, member.Partitions, nil)
+			s.generation, ready, err = s.audit.ready(ctx, s.clients[0], s.group, member.MemberID, member.Partitions, nil, time.Time{})
 			require.NoError(t, err)
 			return ready
 		}
@@ -347,7 +347,7 @@ func (s *zombieOwnership) peerReady(ctx context.Context, t *testing.T) bool {
 		}
 	}
 	peerGeneration, accepted, queryErr := s.audit.ready(ctx, s.clients[1], s.group, s.peerProgress.Members[0].MemberID,
-		s.peerProgress.Members[0].Partitions, minimum)
+		s.peerProgress.Members[0].Partitions, minimum, s.transfer.Finished)
 	require.NoError(t, queryErr)
 	return accepted && peerGeneration > s.generation
 }
