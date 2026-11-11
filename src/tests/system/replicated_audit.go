@@ -9,13 +9,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -48,6 +51,7 @@ type replicatedAudit struct {
 	marks          map[string]auditMark
 	faultAttempted bool
 	failureCommand func(context.Context, ...string) ([]byte, error)
+	levelRequest   func(context.Context, kmsg.Request) (kmsg.Response, error)
 }
 
 type auditMark struct {
@@ -249,7 +253,15 @@ func (a *replicatedAudit) level(ctx context.Context, broker int32, logger, level
 	request := kmsg.NewPtrIncrementalAlterConfigsRequest()
 	request.Resources = []kmsg.IncrementalAlterConfigsRequestResource{{ResourceType: kmsg.ConfigResourceTypeBrokerLogger,
 		ResourceName: fmt.Sprint(broker), Configs: []kmsg.IncrementalAlterConfigsRequestResourceConfig{{Name: logger, Value: &level}}}}
-	result, err := a.client.Broker(int(broker)).Request(ctx, request)
+	send := a.levelRequest
+	if send == nil {
+		send = a.client.Broker(int(broker)).Request
+	}
+	result, err := send(ctx, request)
+	// Setting a logger level is idempotent; retry once if its connection closed.
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+		result, err = send(ctx, request)
+	}
 	if err != nil {
 		return err
 	}

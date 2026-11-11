@@ -42,6 +42,7 @@ HELPERS = (
     'TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound',
 ) + (
     # Audit and zombie helpers retain their independent measurements.
+    'TestReplicatedAuditLevelRetriesConnectionErrorOnce',
     'TestReplicatedAuditFailureCleanupRetainsDiagnostics',
     'TestReplicatedAuditFailureCleanupSkipsPassingCases',
     'TestReplicatedAuditFailureCaptureSharesDeadline',

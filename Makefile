@@ -39,6 +39,7 @@ REPLICATED_HELPER_TESTS := \
 	TestBrokerReadinessRequiresFreshPinnedMetadataWithinSharedBudget \
 	TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss \
 	TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound \
+	TestReplicatedAuditLevelRetriesConnectionErrorOnce \
 	TestReplicatedAuditFailureCleanupRetainsDiagnostics \
 	TestReplicatedAuditFailureCleanupSkipsPassingCases \
 	TestReplicatedAuditFailureCaptureSharesDeadline \
