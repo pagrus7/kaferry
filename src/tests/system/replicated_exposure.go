@@ -3,9 +3,11 @@
 package compat
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -68,7 +70,9 @@ func watchReplicatedSamples(t *testing.T, process *cliProcess, sample func() (in
 			case <-tick.C:
 				rss, err := sample()
 				if err != nil {
-					if process.finished() {
+					// ESRCH proves the task is gone even before the sole Wait
+					// goroutine publishes completion through process.done.
+					if process.finished() || errors.Is(err, syscall.ESRCH) {
 						result <- stats
 						return
 					}
