@@ -33,7 +33,7 @@ race:
 	CGO_ENABLED=1 $(GO) test -vet=off -race ./...
 wording:
 	wording_status=0; \
-	git grep -nEi '(since|as of|through|until|prior to|starting (in|with)|introduced in)[[:space:]]+v[0-9]+\.[0-9]+|first[[:space:]]+observed[[:space:]]+(on|in)[[:space:]]+[0-9]{4}' -- README.md docs src/cmd src/internal ':!docs/design/debates' ':!docs/releases' || wording_status=$$?; \
+	git grep -nEi '(since|as of|through|until|prior to|starting (in|with)|introduced in)[[:space:]]+v[0-9]+\.[0-9]+|first[[:space:]]+observed[[:space:]]+(on|in)[[:space:]]+[0-9]{4}' -- README.md docs src/cmd src/internal ':!docs/releases' || wording_status=$$?; \
 	if [ "$$wording_status" -ne 1 ]; then \
 		echo 'Living docs, comments and diagnostics must describe current behavior; keep release and investigation history in release notes, commits or PRs.'; \
 		exit 1; \
@@ -93,7 +93,7 @@ benchmark:
 	$(GO) test -run '^$$' -bench 'Benchmark(Encode|Decode)$$' -benchmem ./src/internal/archive/avro
 	$(GO) test -run '^$$' -bench "Benchmark(ReplayOverlap|CheckpointEncoding|CheckpointSaving)" -benchmem ./src/internal/archive/replay
 metrics:
-	@rg --files src/cmd src/internal -g '*.go' -g '!**/*_test.go' | xargs wc -l
+	@git ls-files -z -- 'src/cmd/*.go' 'src/internal/*.go' ':!src/**/*_test.go' | xargs -0 wc -l
 duplicates:
 	$(JSCPD) --config .jscpd.json --baseline-from-ref "$(DUPLICATION_BASE)" --fail-on-new-clones --no-tips
 lint:
