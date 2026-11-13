@@ -61,7 +61,7 @@ smoke: $(TEST_BINARY_PREREQUISITE)
 	$(PYTHON) -m tools.ci.suites verify smoke "$${KAFERRY_REPORT_DIR:-build-results}/smoke.log"
 replicated-helpers:
 	pattern=$$($(PYTHON) -m tools.ci.suites pattern replicated-helpers) && \
-	CGO_ENABLED=1 $(PYTHON) -m tools.ci.ci replicated-helpers $(GO) test -count=1 -json -race -tags=integration,fault,load -run "$$pattern" ./src/tests/system
+	CGO_ENABLED=1 $(PYTHON) -m tools.ci.ci replicated-helpers $(GO) test -count=1 -json -race -tags=integration,fault,load,harness -run "$$pattern" ./src/tests/system ./src/tests/system/faults
 	$(PYTHON) -m tools.ci.suites verify replicated-helpers "$${KAFERRY_REPORT_DIR:-build-results}/replicated-helpers.log"
 broker:
 	docker compose -f src/tests/compose.yaml -p kaferry-compat --profile cross-cluster up -d --wait --wait-timeout 60
