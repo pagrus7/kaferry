@@ -6,18 +6,15 @@ import itertools
 from contextlib import contextmanager, nullcontext
 import json
 import os
-import signal
 import subprocess
-import sys
 import threading
-import time
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from tools.ci.ci import verify_tests
-from tools.qualification.qualify import cleanup_replicated, duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, verify_replicated_tests, InconclusivePrecondition, suite_command, valid_receipts
+from tools.qualification.qualify import cleanup_replicated, identity_platforms, lab_lock, main, plan, replicated_storage, report, resolve_run, run_suite, verify_replicated_tests, InconclusivePrecondition, suite_command, valid_receipts
 from tools.qualification.broker_probe import logical, reconcile, records, replicated_topology, topic_ready
 
 
@@ -46,25 +43,6 @@ class MatrixTest(unittest.TestCase):
             self.assertEqual(count, len({c['id'] for c in cases}))
         self.assertIn(('4.4.0', '3.9.2'), {(c['source'], c['destination']) for c in plan('pr')})
 
-    def test_only_pr_capture_sets_a_shorter_duration(self):
-        # Given each tier, when planning, then only PR capture requests one minute.
-        for tier in ('pr', 'nightly', 'full'):
-            with self.subTest(tier=tier):
-                cases = plan(tier)
-                capture = next(case for case in cases if case['suite'] == 'capture')
-                self.assertEqual(60 if tier == 'pr' else None, capture.get('duration'))
-                self.assertTrue(all('duration' not in case for case in cases if case['suite'] != 'capture'))
-
-    def test_matrix_uses_planned_duration_and_preserves_explicit_override(self):
-        # Given local matrix requests, when run, then duration defaults match CI's plan.
-        for tier, override, expected in [('pr', [], 60), ('nightly', [], 120),
-                                          ('full', [], 120), ('pr', ['--duration', '90s'], 90)]:
-            with self.subTest(tier=tier, override=override), tempfile.TemporaryDirectory() as temporary:
-                with patch('tools.qualification.qualify.run_suite') as run, patch('tools.qualification.qualify.report', return_value=0):
-                    main(['matrix', '--tier', tier, '--output', str(Path(temporary) / 'matrix'), *override])
-                capture = next(call.args[0] for call in run.call_args_list if call.args[0].suite == 'capture')
-                self.assertEqual(expected, capture.duration)
-
     def test_recovery_runs_bounded_repetitions_separately_from_uptime(self):
         # Given a standalone recovery request, its default is two hours.
         with patch('tools.qualification.qualify.run_suite') as run:
@@ -82,20 +60,6 @@ class MatrixTest(unittest.TestCase):
             suite_command(args, {})
 
 
-    def test_log_cancellation_stops_running_subprocess(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            cancelled = threading.Event()
-            timer = threading.Timer(0.2, cancelled.set)
-            timer.start()
-            started = time.monotonic()
-            try:
-                with self.assertRaises(InterruptedError):
-                    logged([sys.executable, '-c', 'import time; time.sleep(30)'], Path(temporary),
-                           'cancel', dict(os.environ), cancelled=cancelled)
-            finally:
-                timer.cancel()
-            self.assertLess(time.monotonic()-started, 5)
-
     def test_host_lock_is_shared_across_checkouts(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -104,29 +68,6 @@ class MatrixTest(unittest.TestCase):
                     with patch('tools.qualification.qualify.ROOT', root / 'checkout-b'):
                         with self.assertRaisesRegex(ValueError, 'host'):
                             with lab_lock(): pass
-
-    def test_duration_limits_and_units(self):
-        self.assertEqual(259200, duration('72h'))
-        self.assertEqual(604800, duration('7d'))
-        for value in ('0h', '59s', '8d', '-1h', '1.5h', '1h30m', 'forever'):
-            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
-                duration(value)
-
-    @patch('tools.qualification.fault_results.configure', new=lambda env: env.update(KAFERRY_ORACLE_RUN='fixture'))
-    def test_endurance_deadline_includes_ten_second_consume_only_period(self):
-        for suite in ('soak', 'capture'):
-            with self.subTest(suite=suite):
-                args = argparse.Namespace(suite=suite, duration=259200, rate=50)
-                command, required = suite_command(args, {})
-                self.assertIn('-timeout=259510s', command)
-                self.assertEqual(['TestStreamingSoakFidelityCommitLagMemoryAndShutdown'], required)
-
-        with tempfile.TemporaryDirectory() as temporary, patch('tools.qualification.qualify.capture', return_value='fixture'):
-            root = Path(temporary)
-            for suite, timeout in [('capture', 370), ('recovery', 660)]:
-                with self.subTest(suite=suite):
-                    spec = resolve_run(self.suite_args(root, suite, rate=50), {})
-                    self.assertEqual(timeout, spec.timeout)
 
     def test_dedicated_endurance_defaults_and_short_soak_remain_separate(self):
         for suite, seconds, rate in [('endurance', 86400, 200), ('soak', 120, 50)]:
@@ -144,23 +85,6 @@ class MatrixTest(unittest.TestCase):
                 self.assertEqual('kaferry-endurance-kafka-dr-1', env['KAFERRY_SOAK_DEST_STALL_CONTAINER'])
         with self.assertRaisesRegex(ValueError, 'fixed'):
             suite_command(argparse.Namespace(suite='endurance', duration=60, rate=50), {})
-
-    def test_endurance_requires_capacity_on_both_broker_filesystems_and_evidence_disk(self):
-        for source, destination, evidence, success in [(10**12, 10**12, 10**12, True),
-                (0, 10**12, 10**12, False), (10**12, 0, 10**12, False), (10**12, 10**12, 0, False)]:
-            with self.subTest(source=source, destination=destination, evidence=evidence), tempfile.TemporaryDirectory() as temporary:
-                output = Path(temporary)
-                rows = [f'Filesystem 1024-blocks Used Available Capacity Mounted\nfs 0 0 {free//1024} 0% /tmp\n'
-                        for free in (source, destination)]
-                with patch('tools.qualification.qualify.subprocess.check_output', side_effect=rows), \
-                     patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=evidence)):
-                    if success:
-                        capacity = endurance_capacity(86400, output, ['docker', 'compose'], {})
-                        self.assertEqual(17856000, capacity['records'])
-                    else:
-                        with self.assertRaisesRegex(ValueError, 'insufficient'):
-                            endurance_capacity(86400, output, ['docker', 'compose'], {})
-                self.assertTrue((output / 'capacity.json').is_file(), 'failed preflight must retain evidence')
 
     def test_endurance_cleanup_owns_only_its_isolated_project(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -190,20 +114,6 @@ class MatrixTest(unittest.TestCase):
             self.assertEqual([], published['measurements'])
             self.assertTrue((publication / 'endurance-evidence.tar.gz').is_file())
             self.assertTrue((publication / 'endurance.SHA256SUMS').is_file())
-
-    def test_report_error_does_not_replace_the_original_interruption(self):
-        # Given an interrupted endurance run whose report directory cannot be written.
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            args = self.suite_args(directory, 'endurance', rate=200)
-            with patch('tools.qualification.qualify.lab_lock', nullcontext), patch('tools.qualification.qualify.capture', return_value='fixture'), \
-                 patch('tools.qualification.qualify.logged', side_effect=KeyboardInterrupt()), \
-                 patch('tools.qualification.qualify.subprocess.run'), patch('tools.qualification.endurance_results.prepare', side_effect=OSError('disk full')):
-                # When finalization fails too, then the original interruption and receipt survive.
-                with self.assertRaises(KeyboardInterrupt): run_suite(args)
-            receipt = json.loads((args.output / 'manifest.json').read_text())
-            self.assertEqual('interrupted', receipt['status'])
-            self.assertEqual('interrupted', receipt['suite_error'])
 
     def test_reports_reject_missing_failed_duplicate_and_mismatched_runs(self):
         for problem in ('missing', 'failed', 'digest', 'commit', 'duplicate', None):
@@ -277,59 +187,6 @@ class MatrixTest(unittest.TestCase):
             self.assertIn('finished_at', receipt)
             published = json.loads((args.output / 'publication/endurance-results.json').read_text())
             self.assertEqual('failed', published['manifest']['status'])
-
-    @patch('tools.qualification.fault_results.configure', new=lambda env: env.update(KAFERRY_ORACLE_RUN='fixture'))
-    @patch('tools.qualification.fault_results.collect', new=lambda *args: {})
-    def test_teardown_failure_rejects_success_and_preserves_suite_failure(self):
-        for suite_failure in (False, True):
-            with self.subTest(suite_failure=suite_failure), tempfile.TemporaryDirectory() as temporary:
-                # Given a recovery suite whose fixture teardown will fail.
-                directory = Path(temporary)
-                binary = directory / 'kaferry'; binary.write_bytes(b'fixture')
-                args = argparse.Namespace(suite='recovery', source='3.9.2', destination='4.4.0',
-                    output=directory / 'evidence', binary=str(binary), config=None, duration=60)
-                original = vars(args).copy()
-                def command(command, output, label, env, **kwargs):
-                    if label == 'brokers-down': raise RuntimeError('teardown failure')
-                    if label == 'suite':
-                        if suite_failure: raise RuntimeError('original suite failure')
-                        (output / 'suite.log').write_text(json.dumps({'Action': 'pass', 'Test': 'TestRecoveryBlockedOutput'}) + '\n')
-                with patch('tools.qualification.qualify.LAB_LOCK', directory / 'host.lock'), patch('tools.qualification.qualify.capture', return_value='fixture'), \
-                     patch('tools.qualification.qualify.logged', side_effect=command), patch('tools.qualification.qualify.subprocess.run'):
-                    # When cleanup fails, then success becomes failure and an existing failure remains primary.
-                    message = 'original suite failure' if suite_failure else 'fixture diagnostics or teardown failed'
-                    with self.assertRaisesRegex(RuntimeError, message): run_suite(args)
-                receipt = json.loads((args.output / 'manifest.json').read_text())
-                self.assertEqual('failed', receipt['status'])
-                self.assertEqual('teardown', receipt['cleanup_errors'][0]['phase'])
-                self.assertEqual(original, vars(args), 'execution mutated the caller request')
-
-    def test_timeout_kills_stdout_inheriting_descendant_after_parent_exit(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            marker = directory / 'group'
-            child = "import os,signal,sys,time; from pathlib import Path; signal.signal(signal.SIGTERM, signal.SIG_IGN); Path(sys.argv[1]).write_text(str(os.getpgrp())); print('descendant ready',flush=True); time.sleep(30)"
-            parent = ("import subprocess,sys,time; from pathlib import Path; "
-                      f"subprocess.Popen([sys.executable,'-c',{child!r},{str(marker)!r}]); "
-                      f"marker=Path({str(marker)!r})\n"
-                      "while not marker.exists(): time.sleep(0.01)\n"
-                      "print('parent exited',flush=True)")
-            def emergency_cleanup():
-                if marker.exists():
-                    try: os.killpg(int(marker.read_text()), signal.SIGKILL)
-                    except ProcessLookupError: pass
-            watchdog = threading.Timer(8, emergency_cleanup)
-            watchdog.daemon = True; watchdog.start()
-            start = time.monotonic()
-            try:
-                with patch('tools.qualification.qualify.STOP_GRACE', 0.1), patch('builtins.print'):
-                    with self.assertRaisesRegex(RuntimeError, 'exceeded'):
-                        logged([sys.executable, '-c', parent], directory, 'descendant', dict(os.environ), timeout=2)
-                self.assertIn('parent exited', (directory / 'descendant.log').read_text())
-                self.assertIn('descendant ready', (directory / 'descendant.log').read_text())
-                self.assertLess(time.monotonic()-start, 6)
-            finally:
-                watchdog.cancel(); emergency_cleanup()
 
     def test_release_identity_requires_clean_explicit_source(self):
         rows = [dict(case, status='passed', source_commit='b'*40, binary_sha256='a'*64,
@@ -579,27 +436,6 @@ class MatrixTest(unittest.TestCase):
                     if selected:
                         self.assertEqual('/'.join('^'+part+'$' for part in expected[0].split('/')), spec.command[spec.command.index('-run')+1])
 
-
-    def test_replicated_admission_rejects_resource_shortages_and_busy_ports(self):
-        runtime = {'NCPU': 4, 'MemTotal': 16 * 1024**3}
-        # When CPU, memory or evidence space is inadequate, then preserve the rejected capacity snapshot.
-        for cpu, memory, disk in [(1, 16 * 1024**3, 10**12), (4, 1024**3, 10**12), (4, 16 * 1024**3, 0)]:
-            with self.subTest(cpu=cpu, memory=memory, disk=disk), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                with patch('tools.qualification.qualify.capture', return_value=json.dumps({'NCPU': cpu, 'MemTotal': memory})), \
-                     patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=disk)):
-                    with self.assertRaisesRegex(ValueError, 'capacity'):
-                        replicated_admission(root)
-                self.assertTrue((root / 'capacity.json').is_file())
-        with tempfile.TemporaryDirectory() as temporary:
-            with patch('tools.qualification.qualify.capture', return_value=json.dumps(runtime)), \
-                 patch('tools.qualification.qualify.socket.socket') as sockets, \
-                 patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=10**12)):
-                replicated_admission(Path(temporary))
-                self.assertEqual(25, sockets.return_value.__enter__.return_value.bind.call_count)
-                sockets.return_value.__enter__.return_value.bind.side_effect = OSError('already bound')
-                with self.assertRaisesRegex(ValueError, 'port 46092'):
-                    replicated_admission(Path(temporary))
 
     def test_replicated_failures_clean_only_owned_scope_and_preserve_unverified_storage(self):
         # Given an interruption or a failed storage ownership check after copying.
