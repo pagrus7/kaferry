@@ -13,7 +13,7 @@ Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157
 | M2 dead Python outside CI | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: dependency probe and callback bindings are used |
 | M3 unused system Go helpers | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: all 141 partial-tag findings are live in full harness builds |
 | M4 soak/load diagnostics | maintainability/harness-soak-tests | https://github.com/pagrus7/kaferry/pull/200 | 96d83e5d674777a83f77474d1cbdbff468755e04 | fresh corrected-head CI running; local checks passed | Docs Passed (follow-up); Tests follow-up Pending | fresh CI and tests follow-up |
-| M4 faults | maintainability/harness-fault-tests | https://github.com/pagrus7/kaferry/pull/201 | 35942bfae9bac785b60dca89be58bcb30f869225 | Failed: replicated fixture Docker preflight; likely timeout | Pending | fresh automatic CI or owner-authorized retry; source reviews running |
+| M4 faults | maintainability/harness-fault-tests | https://github.com/pagrus7/kaferry/pull/201 | 35942bfae9bac785b60dca89be58bcb30f869225 | Failed: replicated fixture Docker preflight; likely timeout | Docs source complete; Tests source complete | owner exception for one failed-job retry, or normal branch update |
 | M4 fixtures/process | maintainability/harness-fixture-tests | https://github.com/pagrus7/kaferry/pull/202 | 05d4492ba83069358311c83a4f5d59a40ad78a44 | watching; all local checks passed | Pending | CI and independent reviews |
 | M5 harness selection | pending | pending | pending | pending | pending | #193 merge |
 | M6 workflow reuse | pending | pending | pending | pending | pending | #193 merge |
@@ -192,3 +192,7 @@ Keep the rejection/release guarantees. The owner may decide whether their curren
 ## Active review correction
 
 M4 soak/load must retain `TestConsumeOnlyStartAllowsLatePublishingGrace` and its required-list entry. It prevents a late final submission from shortening the required ten-second drain period while still passing reconciliation and the five idle-sample gate. The exact baseline test and required-list entry are restored in 96d83e5d. Product coverage remains 95.895652%; all 113 Darwin helper tests passed. Fresh CI, native follow-up reviews and updated combined counts are pending; the composition figures above describe the initial frozen heads.
+
+## CI preflight blocker
+
+PR #201 run 43446674470 completed with one failed job: 131960243521, `faults (worker-kill-rebalance, ownership/worker-kill-rebalance)`. Failure occurred before Go tests: empty Docker-capacity output could not be decoded as JSON, consistent with the unchanged ten-second Docker-info timeout path. The diagnostics were discarded, so the exact timeout cause is not proven. Both independent source reviews are complete with no findings. Manual starts remain prohibited; an owner exception for one failed-job retry is pending, or a normal branch update can trigger fresh CI. No retry or gate weakening has occurred.
