@@ -14,7 +14,7 @@ Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157
 | M3 unused system Go helpers | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: all 141 partial-tag findings are live in full harness builds |
 | M4 soak/load diagnostics | maintainability/harness-soak-tests | https://github.com/pagrus7/kaferry/pull/200 | 96d83e5d674777a83f77474d1cbdbff468755e04 | fresh corrected-head CI running; local checks passed | Docs Passed (follow-up); Tests follow-up Pending | fresh CI and tests follow-up |
 | M4 faults | maintainability/harness-fault-tests | https://github.com/pagrus7/kaferry/pull/201 | 35942bfae9bac785b60dca89be58bcb30f869225 | Failed: replicated fixture Docker preflight; likely timeout | Docs source complete; Tests source complete | owner exception for one failed-job retry, or normal branch update |
-| M4 fixtures/process | maintainability/harness-fixture-tests | https://github.com/pagrus7/kaferry/pull/202 | 05d4492ba83069358311c83a4f5d59a40ad78a44 | watch passed; independent raw-evidence verification running | Docs source complete; Tests source complete | final-head CI verification |
+| M4 fixtures/process | maintainability/harness-fixture-tests | https://github.com/pagrus7/kaferry/pull/202 | 05d4492ba83069358311c83a4f5d59a40ad78a44 | Passed; final-head raw evidence independently verified | Docs Passed; Tests Passed | Stacked on #193; ready |
 | M5 harness selection | pending | pending | pending | pending | pending | #193 merge |
 | M6 workflow reuse | pending | pending | pending | pending | pending | #193 merge |
 | M7 CI and audit tests | pending | pending | pending | pending | pending | #193 merge |
