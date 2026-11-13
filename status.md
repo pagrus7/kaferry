@@ -13,7 +13,7 @@ Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157
 | M2 dead Python outside CI | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: dependency probe and callback bindings are used |
 | M3 unused system Go helpers | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: all 141 partial-tag findings are live in full harness builds |
 | M4 soak/load diagnostics | maintainability/harness-soak-tests | https://github.com/pagrus7/kaferry/pull/200 | 96d83e5d674777a83f77474d1cbdbff468755e04 | Passed; corrected final-head raw evidence independently verified | Docs Passed; Tests Passed (follow-ups) | Stacked on #193; ready |
-| M4 faults | maintainability/harness-fault-tests | https://github.com/pagrus7/kaferry/pull/201 | 35942bfae9bac785b60dca89be58bcb30f869225 | Failed: replicated fixture Docker preflight; likely timeout | Docs source complete; Tests source complete | owner exception for one failed-job retry, or normal branch update |
+| M4 faults | maintainability/harness-fault-tests | https://github.com/pagrus7/kaferry/pull/201 | 35942bfae9bac785b60dca89be58bcb30f869225 | Failed: replicated fixture Docker preflight; likely timeout | Docs Passed; Tests source complete, CI Pending | owner exception for one failed-job retry, or normal branch update |
 | M4 fixtures/process | maintainability/harness-fixture-tests | https://github.com/pagrus7/kaferry/pull/202 | 05d4492ba83069358311c83a4f5d59a40ad78a44 | Passed; final-head raw evidence independently verified | Docs Passed; Tests Passed | Stacked on #193; ready |
 | M5 harness selection | pending | pending | pending | pending | pending | #193 merge |
 | M6 workflow reuse | pending | pending | pending | pending | pending | #193 merge |
@@ -194,6 +194,7 @@ Keep the rejection/release guarantees. The owner may decide whether their curren
 | 2026-11-13 16:59:23 | OPEN |
 | 2026-11-13 17:29:23 | OPEN |
 | 2026-11-13 17:59:23 | OPEN |
+| 2026-11-13 18:29:23 | OPEN |
 
 ## Active review correction
 
@@ -207,7 +208,7 @@ Corrected combined composition includes the restored late-drain guard and all ot
 
 ## Current readiness
 
-Seven Phase 1 PRs are ready: #195–#200 and #202. PR #201 has complete source reviews but remains a draft with failed CI from pre-test Docker preflight. An owner exception for a single failed-job retry is pending; manual workflow starts remain prohibited. PR #193 was still OPEN at the 17:59 UTC poll. Source work is frozen while waiting for the next permitted CI or base update.
+Seven Phase 1 PRs are ready: #195–#200 and #202. PR #201 has complete source reviews but remains a draft with failed CI from pre-test Docker preflight. An owner exception for a single failed-job retry is pending; manual workflow starts remain prohibited. PR #193 was still OPEN at the 18:29 UTC poll. Source work is frozen while waiting for the next permitted CI or base update.
 
 ## Ownership update at 17:30 UTC
 
