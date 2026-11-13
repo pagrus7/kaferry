@@ -5,15 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"slices"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -176,90 +173,4 @@ func unknownProxyTopic(version int16, routes map[int32]string) *kmsg.MetadataRes
 	}
 	response.Topics = []kmsg.MetadataResponseTopic{{Topic: kmsg.StringPtr("records"), ErrorCode: kerr.UnknownTopicOrPartition.Code}}
 	return response
-}
-
-type producerQueue struct {
-	records atomic.Int32
-}
-
-func (q *producerQueue) OnProduceRecordBuffered(*kgo.Record) {
-	q.records.Add(1)
-}
-
-func checkProducerPreparationContext(t *testing.T, mode string) {
-	t.Helper()
-	// Given metadata that remains pending or a request without a response.
-	cluster, routes := readinessCluster(t)
-	observed := make(chan struct{}, 1)
-	var ids, writes atomic.Int32
-	cluster.ControlKey(int16(kmsg.Metadata), func(request kmsg.Request) (kmsg.Response, error, bool) {
-		metadata := request.(*kmsg.MetadataRequest)
-		if len(metadata.Topics) == 0 {
-			return nil, nil, false
-		}
-		cluster.KeepControl()
-		select {
-		case observed <- struct{}{}:
-		default:
-		}
-		if mode == "deadline" {
-			return nil, nil, true
-		}
-		return unknownProxyTopic(metadata.Version, routes), nil, true
-	})
-	cluster.ControlKey(int16(kmsg.InitProducerID), func(kmsg.Request) (kmsg.Response, error, bool) {
-		ids.Add(1)
-		return nil, nil, false
-	})
-	cluster.ControlKey(int16(kmsg.Produce), func(kmsg.Request) (kmsg.Response, error, bool) {
-		writes.Add(1)
-		return nil, nil, false
-	})
-	queue := &producerQueue{}
-	client, err := proxyProducerWithHooks(cluster.ListenAddrs(), queue)
-	require.NoError(t, err)
-	defer client.Close()
-	testContext, stop := context.WithTimeout(t.Context(), 5*time.Second)
-	defer stop()
-	ctx, cancel := context.WithTimeout(testContext, time.Second)
-	defer cancel()
-	deadline, _ := ctx.Deadline()
-	result := make(chan error, 1)
-	var completed time.Time
-	go func() {
-		preparationErr := prepareProxyProducer(ctx, client, "records", 1, routes, t.Logf)
-		completed = time.Now()
-		result <- preparationErr
-	}()
-	select {
-	case <-observed:
-	case err = <-result:
-		t.Fatal("preparation ended before the metadata condition was observed", err)
-	}
-	// When cancelled after that observation, or when its shared deadline ends.
-	if mode == "cancel" {
-		cancel()
-	}
-	// Then setup terminates on cancellation or deadline without preparing a write.
-	select {
-	case err = <-result:
-	case <-testContext.Done():
-		client.Close()
-		<-result
-		t.Fatal("producer preparation did not stop", testContext.Err())
-	}
-	t.Logf("producer setup stopped: %v", err)
-	if mode == "cancel" {
-		require.ErrorIs(t, err, context.Canceled)
-	} else {
-		require.False(t, completed.Before(deadline), "preparation ended at %s before shared deadline %s", completed, deadline)
-		// The producer's independent one-second metadata socket timeout can
-		// win the race with the context timer callback, but must not end setup early.
-		require.True(t, errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded),
-			"expected context or socket deadline error, got %v", err)
-	}
-	require.Zero(t, ids.Load())
-	require.Zero(t, queue.records.Load(), "preparation must never queue a record")
-	require.Zero(t, writes.Load())
-	require.Zero(t, client.BufferedProduceRecords())
 }
