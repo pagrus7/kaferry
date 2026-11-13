@@ -14,7 +14,7 @@ Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157
 | M3 unused system Go helpers | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: all 141 partial-tag findings are live in full harness builds |
 | M4 soak/load diagnostics | maintainability/harness-soak-tests | pending | f3b271c6a31c6813b4a6cd9975a29c5e264adb9a | all local checks passed; PR next | Pending | CI and independent reviews |
 | M4 faults | maintainability/harness-fault-tests | pending | 35942bfae9bac785b60dca89be58bcb30f869225 | all local checks passed; PR next | Pending | CI and independent reviews |
-| M4 fixtures/process | maintainability/harness-fixture-tests | pending | pending | before/after coverage running | pending | worker and coverage |
+| M4 fixtures/process | maintainability/harness-fixture-tests | pending | 05d4492ba83069358311c83a4f5d59a40ad78a44 | all local checks passed; PR next | Pending | CI and independent reviews |
 | M5 harness selection | pending | pending | pending | pending | pending | #193 merge |
 | M6 workflow reuse | pending | pending | pending | pending | pending | #193 merge |
 | M7 CI and audit tests | pending | pending | pending | pending | pending | #193 merge |
@@ -41,6 +41,7 @@ Baseline statement coverage of `./src/internal/... ./src/cmd/...`, combining uni
 | --- | ---: | ---: | ---: | --- |
 | M4 soak/load | 95.895652% (5,514/5,750) | 95.895652% (5,514/5,750) | 0.000000 | 121 → 112; exact nine-test difference |
 | M4 faults | 95.895652% (5,514/5,750) | 95.895652% (5,514/5,750) | 0.000000 | 121 → 112; exact nine-test difference |
+| M4 fixtures/process | 95.895652% (5,514/5,750) | 95.895652% (5,514/5,750) | 0.000000 | 121 → 116; exact five-test difference |
 
 Both branches reran unit and all selected harness tests under race/atomic before and after. Patch coverage is N/A: no non-test product Go changed.
 
