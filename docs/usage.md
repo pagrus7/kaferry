@@ -187,10 +187,10 @@ Copies the retained backlog, then follows new records until you press Ctrl+C. Ad
 ### First copy with Docker
 
 ```sh
-docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
+docker run --rm --mount source=kaferry-archive-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
 ```
 
-The image bundles [copy.sql](../examples/archive-demo/copy.sql), its configuration and three sample records in Avro files. With a fresh `kaferry-demo` volume, it copies `input` to `output` and saves progress for group `archive-demo`. The JSON `copy summary` on stderr includes these fields (others omitted):
+The image bundles [copy.sql](../examples/archive-demo/copy.sql), its configuration and three sample records in Avro files. With a fresh `kaferry-archive-demo` volume, it copies `input` to `output` and saves progress for group `archive-demo`. The JSON `copy summary` on stderr includes these fields (others omitted):
 
 ```json
 {"msg":"copy summary","submitted":3,"confirmed":3}
@@ -199,7 +199,7 @@ The image bundles [copy.sql](../examples/archive-demo/copy.sql), its configurati
 Docker retains input, output and the checkpoint recording replay progress in the volume after the container exits. Inspect the saved progress:
 
 ```sh
-docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest status -c tutorial.toml -f copy.sql
+docker run --rm --mount source=kaferry-archive-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest status -c tutorial.toml -f copy.sql
 ```
 
 The status begins with this excerpt:
@@ -213,7 +213,7 @@ Reason: file selection completed
 This reports saved source progress, not a comparison with destination contents. Keep output and checkpoints together; saved completion cannot recreate deleted output. [Status meanings](reference.md#saved-status).
 
 ```sh
-docker run --rm --mount source=kaferry-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
+docker run --rm --mount source=kaferry-archive-demo,target=/demo --workdir /demo ghcr.io/pagrus7/kaferry:latest run -c tutorial.toml -f copy.sql
 ```
 
 The same group resumes from its saved position; the summary excerpt is:
@@ -225,7 +225,7 @@ The same group resumes from its saved position; the summary excerpt is:
 To delete the demo's input, output and checkpoints, run:
 
 ```sh
-docker volume rm kaferry-demo
+docker volume rm kaferry-archive-demo
 ```
 
 The first command then starts a fresh copy. [Copy between Kafka topics](#copy-between-kafka-topics) · [Run your own files in a container](#containers).
@@ -309,10 +309,13 @@ Quote dotted TOML keys. [Supported properties](reference.md#connection-propertie
 'ssl.ca.location' = '/etc/kafka/ca.pem'
 ```
 
-Set `PROD_PASSWORD` in the environment, then prefix the SQL statement with:
+TOML does not expand environment variables. Set `PROD_PASSWORD` in the environment, then add a `WITH CONNECTION` prefix using `ENV()` to each SQL file that uses `prod`. For example, `copy.sql` becomes:
 
 ```sql
 WITH CONNECTION prod AS ('sasl.password' = ENV('PROD_PASSWORD'))
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-snapshot')
+WHERE RECORD_OFFSET < LATEST;
 ```
 
 Keep passwords out of SQL literals and shell arguments. SQL connection properties override TOML; use `-c connections.toml` to load profiles. [Configuration](reference.md#configuration-and-cli).
@@ -331,7 +334,7 @@ For an OAuth issuer that accepts the client credentials grant, configure its HTT
 'sasl.oauthbearer.scope' = 'kafka.read kafka.write'
 ```
 
-Set `KAFKA_OAUTH_SECRET` in the environment and prefix the copy statement with:
+Set `KAFKA_OAUTH_SECRET` in the environment and prefix each SQL file that uses `prod` with:
 
 ```sql
 WITH CONNECTION prod AS ('sasl.oauthbearer.client.secret' = ENV('KAFKA_OAUTH_SECRET'))
@@ -352,6 +355,8 @@ Prepare AWS credentials through the standard AWS SDK chain: environment variable
 
 The SDK renews temporary credentials when the selected provider supports renewal; environment credentials and static profile entries are loaded once. Do not set `sasl.username` or `sasl.password`. In containers, pass the required AWS environment or mount profile files at paths selected by `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE`.
 
+Release checks do not contact MSK; IAM signing and credential refresh have component tests only.
+
 ### Kerberos
 
 Obtain a client keytab and a `krb5.conf` that reaches your realm's key distribution center. The broker hostname must match its Kerberos service principal:
@@ -370,7 +375,7 @@ Kaferry acquires tickets with the keytab and renews them while the client runs. 
 
 ## Permissions
 
-Kafka needs source topic/group READ and destination WRITE (including DESCRIBE); some brokers also need cluster IDEMPOTENT_WRITE. Without a named `GROUP`, grant group READ on the `kaferry-` prefix. File-only copies need no Kafka grants. [Optional DESCRIBE_CONFIGS](design/client-compatibility.md#optional-destination-configuration).
+Grant the source principal topic/group READ and the destination principal topic WRITE (including DESCRIBE). The destination principal also needs cluster IDEMPOTENT_WRITE on brokers that require it for idempotent producers. Without a named `GROUP`, grant the source principal group READ on the `kaferry-` prefix. File-only copies need no Kafka grants. [Optional DESCRIBE_CONFIGS](design/client-compatibility.md#optional-destination-configuration).
 
 ## Stop and check results
 
