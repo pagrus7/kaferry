@@ -12,7 +12,7 @@ Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157
 | M1 qualification storage | maintainability/python-storage-tests | https://github.com/pagrus7/kaferry/pull/199 | 06d34e2648419e2f638ed0224628ce586cb91658 | watching; local full 205 tests passed | Docs source complete; Tests source complete | final-head CI verification |
 | M2 dead Python outside CI | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: dependency probe and callback bindings are used |
 | M3 unused system Go helpers | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: all 141 partial-tag findings are live in full harness builds |
-| M4 soak/load diagnostics | maintainability/harness-soak-tests | https://github.com/pagrus7/kaferry/pull/200 | f3b271c6a31c6813b4a6cd9975a29c5e264adb9a | old-head CI running; fix pending | Docs source complete; Tests Failed: restore late drain guard | reviewer rework and new-head CI |
+| M4 soak/load diagnostics | maintainability/harness-soak-tests | https://github.com/pagrus7/kaferry/pull/200 | 96d83e5d674777a83f77474d1cbdbff468755e04 | new-head CI pending; local checks passed | follow-up Pending after late-drain restoration | fresh CI and review follow-ups |
 | M4 faults | maintainability/harness-fault-tests | https://github.com/pagrus7/kaferry/pull/201 | 35942bfae9bac785b60dca89be58bcb30f869225 | watch exited nonzero; diagnosis pending | Pending | CI diagnosis and independent source reviews |
 | M4 fixtures/process | maintainability/harness-fixture-tests | https://github.com/pagrus7/kaferry/pull/202 | 05d4492ba83069358311c83a4f5d59a40ad78a44 | watching; all local checks passed | Pending | CI and independent reviews |
 | M5 harness selection | pending | pending | pending | pending | pending | #193 merge |
@@ -43,7 +43,7 @@ Baseline statement coverage of `./src/internal/... ./src/cmd/...`, combining uni
 
 | Go removal | Before | After (proposed combined state) | Change (percentage points) | Harness selection, Darwin |
 | --- | ---: | ---: | ---: | --- |
-| M4 soak/load | 95.895652% (5,514/5,750) | 95.895652% (5,514/5,750) | 0.000000 | 121 → 112; exact nine-test difference |
+| M4 soak/load | 95.895652% (5,514/5,750) | 95.895652% (5,514/5,750) | 0.000000 | 121 → 113; exact eight-test difference |
 | M4 faults | 95.895652% (5,514/5,750) | 95.895652% (5,514/5,750) | 0.000000 | 121 → 112; exact nine-test difference |
 | M4 fixtures/process | 95.895652% (5,514/5,750) | 95.895652% (5,514/5,750) | 0.000000 | 121 → 116; exact five-test difference |
 
@@ -191,4 +191,4 @@ Keep the rejection/release guarantees. The owner may decide whether their curren
 
 ## Active review correction
 
-M4 soak/load must retain `TestConsumeOnlyStartAllowsLatePublishingGrace` and its required-list entry. It prevents a late final submission from shortening the required ten-second drain period while still passing reconciliation and the five idle-sample gate. Restoration and updated combined line counts are pending; the composition figures above describe the initial frozen heads.
+M4 soak/load must retain `TestConsumeOnlyStartAllowsLatePublishingGrace` and its required-list entry. It prevents a late final submission from shortening the required ten-second drain period while still passing reconciliation and the five idle-sample gate. The exact baseline test and required-list entry are restored in 96d83e5d. Product coverage remains 95.895652%; all 113 Darwin helper tests passed. Fresh CI, native follow-up reviews and updated combined counts are pending; the composition figures above describe the initial frozen heads.
