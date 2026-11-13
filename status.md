@@ -5,9 +5,9 @@ Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157
 | Item | Branch | PR URL | Head SHA | CI | Reviews | Blocked by |
 | --- | --- | --- | --- | --- | --- | --- |
 | M0 inventory | notes/maintainability | No PR | branch tip | N/A | three read-only scouts complete | none |
-| M1 docs tests | maintainability/python-doc-tests | https://github.com/pagrus7/kaferry/pull/195 | e914c01deba7b292a045e3917ebb046a1520d811 | watching; local 213 Python tests passed | Docs source complete; Tests source complete | final-head CI verification |
+| M1 docs tests | maintainability/python-doc-tests | https://github.com/pagrus7/kaferry/pull/195 | e914c01deba7b292a045e3917ebb046a1520d811 | watch passed; independent raw-evidence verification running | Docs source complete; Tests source complete | final-head CI verification |
 | M1 release tests | maintainability/python-release-tests | https://github.com/pagrus7/kaferry/pull/196 | ffdd57f2b1e0b60e2aef9d59877bedecf8d46e1e | watching; local 214 Python tests passed | Docs source complete; Tests source complete | final-head CI verification |
-| M1 qualification accounting | maintainability/python-accounting-tests | https://github.com/pagrus7/kaferry/pull/197 | 04461399416d06269e8c6ffad56762185f99b6e5 | watching; local full 204 tests passed | Pending | CI and independent reviews |
+| M1 qualification accounting | maintainability/python-accounting-tests | https://github.com/pagrus7/kaferry/pull/197 | 04461399416d06269e8c6ffad56762185f99b6e5 | watching; local full 204 tests passed | Docs source complete; Tests source complete | final-head CI verification |
 | M1 qualification runner | maintainability/python-runner-tests | https://github.com/pagrus7/kaferry/pull/198 | 6efcad82c760c9b6aeaf39151f6a0a86b916e324 | watching; local full 204 tests passed | Pending | CI and independent reviews |
 | M1 qualification storage | maintainability/python-storage-tests | https://github.com/pagrus7/kaferry/pull/199 | 06d34e2648419e2f638ed0224628ce586cb91658 | watching; local full 205 tests passed | Pending | CI and independent reviews |
 | M2 dead Python outside CI | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: dependency probe and callback bindings are used |
@@ -23,21 +23,25 @@ Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157
 
 Physical tracked source lines at the baseline stack top. Product is non-test Go in `src/internal` and `src/cmd`; unit tests are test Go in those trees; system Go is all Go in `src/tests`. Support sums unit tests, system Go, all Python tooling (including its tests once), and workflow YAML.
 
-| Category | Before | After |
+| Category | Before | After (proposed combined state) |
 | --- | ---: | ---: |
-| Product Go | 12,502 | 12,502 (no changes yet) |
-| Unit Go tests | 20,099 | 20,099 (no changes yet) |
-| System Go | 18,437 | 18,437 (no changes yet) |
-| Python tooling, including tests | 9,827 | 9,827 (no changes yet) |
-| Python tests (subset) | 5,151 | 5,151 (no changes yet) |
-| Workflow YAML | 1,468 | 1,468 (no changes yet) |
-| Support / product | 3.985842 | 3.985842 (no changes yet) |
+| Product Go | 12,502 | 12,502 |
+| Unit Go tests | 20,099 | 20,099 |
+| System Go | 18,437 | 17,619 |
+| Python tooling, including tests | 9,827 | 8,943 |
+| Python tests (subset) | 5,151 | 4,269 |
+| Workflow YAML | 1,468 | 1,468 |
+| Support / product | 3.985842 | 3.849704 |
 
 ## Product coverage
 
+The eight proposed patches were combined in a detached analysis worktree. Support lines fall from 49,831 to 48,129: **1,725 unique lines removed / 23 added**. Individual PR deltas sum to 1,727 removed / 24 added; shared import/blank-line changes overlap. Combining them required mechanical union of deleted methods/imports in `test_qualify.py` and 23 deleted helper names in `suites.py`. These overlaps can require merge resolution as PRs land. No PR was merged and no product source changed.
+
+The combined tree passed all 172 remaining Python tests, unit tests and all 98 remaining Darwin harness tests. Retained Python method ASTs are unchanged. Combined product statement coverage is 5,514/5,750 = 95.895652%, identical to baseline (0.000000 percentage-point change).
+
 Baseline statement coverage of `./src/internal/... ./src/cmd/...`, combining unit and every harness test: 5,514 / 5,750 = **95.895652%**. Go 1.27.4, Darwin arm64, race/atomic profiles, measured at the baseline stack top. Unit-only coverage is identical. Both runs passed. Per-PR after measurements pending. Maximum allowed decrease per Go removal PR: 0.1 percentage points.
 
-| Go removal | Before | After | Change (percentage points) | Harness selection, Darwin |
+| Go removal | Before | After (proposed combined state) | Change (percentage points) | Harness selection, Darwin |
 | --- | ---: | ---: | ---: | --- |
 | M4 soak/load | 95.895652% (5,514/5,750) | 95.895652% (5,514/5,750) | 0.000000 | 121 → 112; exact nine-test difference |
 | M4 faults | 95.895652% (5,514/5,750) | 95.895652% (5,514/5,750) | 0.000000 | 121 → 112; exact nine-test difference |
