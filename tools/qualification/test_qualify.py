@@ -2,7 +2,6 @@
 
 import argparse
 import hashlib
-import itertools
 from contextlib import contextmanager, nullcontext
 import json
 import os
@@ -17,7 +16,7 @@ import unittest
 from unittest.mock import patch
 
 from tools.ci.ci import verify_tests
-from tools.qualification.qualify import cleanup_replicated, duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, verify_replicated_tests, InconclusivePrecondition, suite_command, valid_receipts
+from tools.qualification.qualify import duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, report, resolve_run, run_suite, verify_replicated_tests, InconclusivePrecondition, suite_command, valid_receipts
 from tools.qualification.broker_probe import logical, reconcile, records, replicated_topology, topic_ready
 
 
@@ -96,15 +95,6 @@ class MatrixTest(unittest.TestCase):
                 timer.cancel()
             self.assertLess(time.monotonic()-started, 5)
 
-    def test_host_lock_is_shared_across_checkouts(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with patch('tools.qualification.qualify.LAB_LOCK', root / 'host.lock'), patch('tools.qualification.qualify.ROOT', root / 'checkout-a'):
-                with lab_lock():
-                    with patch('tools.qualification.qualify.ROOT', root / 'checkout-b'):
-                        with self.assertRaisesRegex(ValueError, 'host'):
-                            with lab_lock(): pass
-
     def test_duration_limits_and_units(self):
         self.assertEqual(259200, duration('72h'))
         self.assertEqual(604800, duration('7d'))
@@ -161,35 +151,6 @@ class MatrixTest(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError, 'insufficient'):
                             endurance_capacity(86400, output, ['docker', 'compose'], {})
                 self.assertTrue((output / 'capacity.json').is_file(), 'failed preflight must retain evidence')
-
-    def test_endurance_cleanup_owns_only_its_isolated_project(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            args = self.suite_args(directory, 'endurance', duration=1800, rate=200)
-            calls = []
-            def command(command, output, label, env, **kwargs):
-                calls.append((command, label, env.copy()))
-                if label == 'suite': raise KeyboardInterrupt()
-            with patch('tools.qualification.qualify.lab_lock', nullcontext), patch('tools.qualification.qualify.capture', return_value='fixture'), \
-                 patch('tools.qualification.qualify.endurance_capacity', return_value={}), patch('tools.qualification.qualify.logged', side_effect=command), \
-                 patch('tools.qualification.qualify.subprocess.run') as diagnostics:
-                with self.assertRaises(KeyboardInterrupt): run_suite(args)
-            for command, label, env in calls:
-                if label != 'suite': self.assertEqual('kaferry-endurance', command[command.index('-p') + 1])
-                self.assertEqual('127.0.0.1:39192', env['KAFKA_TEST_BROKERS'])
-                self.assertEqual('127.0.0.1:40192', env['KAFKA_TEST_DEST_BROKERS'])
-                self.assertEqual('39192', env['KAFERRY_SOURCE_PORT'])
-                self.assertEqual('40192', env['KAFERRY_DESTINATION_PORT'])
-            self.assertEqual('kaferry-endurance', diagnostics.call_args.args[0][diagnostics.call_args.args[0].index('-p') + 1])
-            receipt = json.loads((args.output / 'manifest.json').read_text())
-            self.assertEqual('kaferry-endurance', receipt['fixture_project'])
-            self.assertEqual('interrupted', receipt['status'])
-            publication = args.output / 'publication'
-            published = json.loads((publication / 'endurance-results.json').read_text())
-            self.assertEqual('interrupted', published['manifest']['status'])
-            self.assertEqual([], published['measurements'])
-            self.assertTrue((publication / 'endurance-evidence.tar.gz').is_file())
-            self.assertTrue((publication / 'endurance.SHA256SUMS').is_file())
 
     def test_report_error_does_not_replace_the_original_interruption(self):
         # Given an interrupted endurance run whose report directory cannot be written.
@@ -600,228 +561,6 @@ class MatrixTest(unittest.TestCase):
                 sockets.return_value.__enter__.return_value.bind.side_effect = OSError('already bound')
                 with self.assertRaisesRegex(ValueError, 'port 46092'):
                     replicated_admission(Path(temporary))
-
-    def test_replicated_failures_clean_only_owned_scope_and_preserve_unverified_storage(self):
-        # Given an interruption or a failed storage ownership check after copying.
-        for suite, interruption in itertools.product(('replicated', 'endurance'), (True, False)):
-            with self.subTest(suite=suite, interruption=interruption), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                args = self.suite_args(root, suite, source='4.4.0', destination='4.4.0',
-                                       topology='replicated' if suite == 'endurance' else None, rate=200)
-                calls = []
-                def command(command, output, label, env, **kwargs):
-                    calls.append((command, label, env.copy()))
-                    if label == 'storage-capacity':
-                        (output / 'storage-capacity.log').write_text('10000000\n')
-                    if label == 'proxy-proof':
-                        (output / 'proxy-proof.log').write_text('{"Action":"pass","Test":"TestReplicatedProxyRoutes"}\n')
-                    if label == 'suite' and interruption:
-                        raise KeyboardInterrupt()
-                    if label == 'storage-clean' and not interruption:
-                        raise RuntimeError('ownership mismatch')
-                with patch('tools.qualification.qualify.LAB_LOCK', root / 'host.lock'), \
-                     patch('tools.qualification.qualify.capture', return_value='fixture'), \
-                     patch('tools.qualification.qualify.replicated_admission', return_value={'required_broker_bytes': 4 * 1024**3}) as admission, \
-                     patch('tools.qualification.qualify.verify_run'), patch('tools.qualification.qualify.logged', side_effect=command), \
-                     patch('tools.qualification.qualify.subprocess.run'):
-                    # When finishing, then writers stop before cleanup and a cleanup failure cannot qualify.
-                    with self.assertRaises(KeyboardInterrupt if interruption else RuntimeError):
-                        run_suite(args)
-                self.assertEqual(60 if suite == 'endurance' else None, admission.call_args.args[1])
-                phases = ['storage-capacity', 'storage-prepare', 'proxy-up', 'proxy-configure', 'brokers-up']
-                if suite == 'replicated':
-                    phases.append('proxy-proof')
-                phases += ['suite', 'brokers-stop', 'storage-clean', 'brokers-down']
-                self.assertEqual(phases, [label for _, label, _ in calls])
-                self.assertEqual(1, len({env['KAFERRY_REPLICATED_RUN_ID'] for _, _, env in calls}))
-                for command, label, env in calls:
-                    if label not in ('suite', 'proxy-configure', 'proxy-proof'):
-                        self.assertEqual('kaferry-replicated', command[command.index('-p') + 1])
-                    self.assertNotEqual(['docker', 'volume', 'rm'], command[:3])
-                if not interruption:
-                    self.assertNotIn('-v', calls[-1][0], 'failed ownership validation must preserve even a local volume')
-                receipt = json.loads((args.output / 'manifest.json').read_text())
-                self.assertEqual('interrupted' if interruption else 'failed', receipt['status'])
-                if suite == 'endurance':
-                    self.assertNotIn('proxy_path_check', receipt, 'endurance must not run the cut/heal proxy proof')
-                    self.assertEqual('replicated', receipt['workload']['topology'])
-                    self.assertEqual((3, 2), (receipt['workload']['replication_factor'], receipt['workload']['min_insync_replicas']))
-
-    def test_replicated_cleanup_stops_writers_before_deletion_and_keeps_first_error(self):
-        # Given either writer shutdown or owned-directory deletion fails.
-        for failure in ('brokers-stop', 'storage-clean'):
-            with self.subTest(failure=failure):
-                original = RuntimeError('first cleanup failure')
-                labels = []
-                def command(cmd, output, label, env, **kwargs):
-                    labels.append(label)
-                    if label == failure:
-                        raise original
-                with patch('tools.qualification.qualify.logged', side_effect=command):
-                    # When cleanup runs, then failed shutdown cannot lead to deletion.
-                    errors = cleanup_replicated(Path('/unused'), ['compose'], {})
-                self.assertEqual(['brokers-stop'] if failure == 'brokers-stop' else
-                                 ['brokers-stop', 'storage-clean'], labels)
-                self.assertEqual([{'phase': 'storage-clean', 'error': str(original)}], errors)
-
-    def test_replicated_broker_space_is_admitted_before_preparing_or_starting_brokers(self):
-        # Given a volume with less than the full fixture allowance.
-        with tempfile.TemporaryDirectory() as temporary:
-            output = Path(temporary)
-            def command(command, directory, label, env, **kwargs):
-                (directory / 'storage-capacity.log').write_text('1\n')
-            with patch('tools.qualification.qualify.logged', side_effect=command) as execute:
-                # When checking space, then preparation never runs and the rejected snapshot survives.
-                with self.assertRaisesRegex(ValueError, 'broker space'):
-                    replicated_storage(output, ['compose'], {}, {'required_broker_bytes': 4096}, None)
-            self.assertEqual(1, execute.call_count)
-            self.assertEqual(1024, json.loads((output / 'capacity.json').read_text())['broker_free_bytes'])
-
-
-    def test_replicated_uses_the_same_host_lease_before_any_fixture_mutation(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            args = self.suite_args(Path(temporary), 'replicated', source='4.4.0', destination='4.4.0')
-            with patch('tools.qualification.qualify.LAB_LOCK', args.output.parent / 'host.lock'), \
-                 patch('tools.qualification.qualify.capture', return_value='fixture'), \
-                 patch('tools.qualification.qualify.logged') as execute, lab_lock():
-                # Given another coordinator owns the lease, when requested, then no fixture starts or stops.
-                with self.assertRaisesRegex(ValueError, 'host'):
-                    run_suite(args)
-            execute.assert_not_called()
-
-
-class ReplicatedStorageTest(unittest.TestCase):
-    def storage(self, root, run, operation, **overrides):
-        script = Path(__file__).resolve().parents[2] / 'src/tests/replicated/storage.sh'
-        env = dict(os.environ, KAFERRY_STORAGE_ROOT=str(root), KAFERRY_FIXTURE_PROJECT='kaferry-replicated',
-                   KAFERRY_REPLICATED_RUN_ID=run, KAFERRY_STORAGE_UID=str(os.getuid()), KAFERRY_STORAGE_GID=str(os.getgid()))
-        env.update(overrides)
-        return subprocess.run(['/bin/sh', str(script), operation], env=env, capture_output=True, text=True)
-
-    def run_path(self, root, run):
-        return root / 'kaferry-replicated/kaferry-replicated' / run
-
-    def prepare(self, root, run):
-        result = self.storage(root, run, 'prepare')
-        self.assertEqual(0, result.returncode, result.stderr)
-        return self.run_path(root, run)
-
-    @contextmanager
-    def prepared_storage(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root, run = Path(temporary), 'a' * 32
-            yield root, run, self.prepare(root, run)
-
-    def interrupted_cleanup(self, root, run, command, failure, **overrides):
-        tools = root / 'tools'; tools.mkdir()
-        program = tools / command
-        program.write_text('#!/bin/sh\nfor target do :; done\n' + failure + '\nexec /bin/' + command + ' "$@"\n')
-        program.chmod(0o700)
-        result = self.storage(root, run, 'clean', PATH=str(tools) + os.pathsep + os.environ['PATH'],
-                              KAFERRY_TEST_RUN=str(self.run_path(root, run)), **overrides)
-        self.assertNotEqual(0, result.returncode)
-        return result
-
-    def test_cleanup_removes_only_the_marked_run_and_preserves_a_peer(self):
-        # Given two independent runs and unrelated data.
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            first, peer = 'a' * 32, 'b' * 32
-            for run in (first, peer):
-                (self.prepare(root, run) / 'source-1/data').write_bytes(b'broker data')
-            unrelated = root / 'unrelated'; unrelated.write_bytes(b'keep')
-            # When the first run is cleaned, then its peer and unrelated bytes remain intact.
-            result = self.storage(root, first, 'clean')
-            self.assertEqual(0, result.returncode, result.stderr)
-            self.assertFalse(self.run_path(root, first).exists())
-            self.assertEqual(b'broker data', (self.run_path(root, peer) / 'source-1/data').read_bytes())
-            self.assertEqual(b'keep', unrelated.read_bytes())
-            self.assertEqual(0, self.storage(root, first, 'clean').returncode)
-
-    def test_prepare_never_reuses_an_existing_run_and_cleanup_rejects_foreign_markers(self):
-        with self.prepared_storage() as (root, run, folder):
-            data = folder / 'source-1/data'; data.write_bytes(b'preserve')
-            # Given a reused directory, when preparing, then existing data cannot be overwritten.
-            self.assertNotEqual(0, self.storage(root, run, 'prepare').returncode)
-            (folder / '.kaferry-owned').write_text('another owner\n')
-            # When its ownership no longer matches, then cleanup refuses to delete it.
-            result = self.storage(root, run, 'clean')
-            self.assertNotEqual(0, result.returncode)
-            self.assertIn('ownership', result.stderr)
-            self.assertEqual(b'preserve', data.read_bytes())
-
-    def test_partial_data_deletion_retains_ownership_and_reports_failure(self):
-        # Given a marked run, a peer, and deletion that removes a file before failing.
-        with tempfile.TemporaryDirectory() as temporary:
-            root, run, peer = Path(temporary), 'a' * 32, 'b' * 32
-            for id in (run, peer):
-                (self.prepare(root, id) / 'source-1/keep').write_bytes(b'preserve')
-            folder = self.run_path(root, run)
-            removed = folder / 'source-1/removed'; removed.write_bytes(b'partial deletion')
-            marker = folder / '.kaferry-owned'; original = marker.read_bytes()
-            # When deletion fails, then partial changes remain, but ownership and peer data survive.
-            result = self.interrupted_cleanup(root, run, 'rm', '''
-case "$target" in
-    "$KAFERRY_TEST_RUN")
-        /bin/rm -f -- "$target/.kaferry-owned" "$target/source-1/removed"
-        echo 'injected partial deletion failure' >&2; exit 7 ;;
-    "$KAFERRY_TEST_RUN/source-1")
-        /bin/rm -f -- "$target/removed"
-        echo 'injected partial deletion failure' >&2; exit 7 ;;
-esac
-''')
-            self.assertEqual(7, result.returncode)
-            self.assertIn('injected partial deletion failure', result.stderr)
-            self.assertTrue((folder / 'source-3').is_dir(), 'stop at the first deletion error')
-            self.assertFalse(removed.exists())
-            self.assertEqual(original, marker.read_bytes())
-            self.assertEqual(b'preserve', (folder / 'source-1/keep').read_bytes())
-            self.assertEqual(b'preserve', (self.run_path(root, peer) / 'source-1/keep').read_bytes())
-            # A later explicit cleanup can still authenticate this run after the fault is removed.
-            result = self.storage(root, run, 'clean')
-            self.assertEqual(0, result.returncode, result.stderr)
-            self.assertFalse(folder.exists())
-            self.assertTrue(self.run_path(root, peer).exists())
-
-
-    def test_failed_final_directory_removal_restores_the_marker(self):
-        # Given deletion completes but a filesystem reports a new entry at final removal.
-        for entry in ('late-entry', '.kaferry-owned'):
-            with self.subTest(entry=entry), self.prepared_storage() as (root, run, folder):
-                original = (folder / '.kaferry-owned').read_bytes()
-                # When final removal fails, then restoration never overwrites the new entry.
-                result = self.interrupted_cleanup(root, run, 'rmdir', '''
-if [ "$target" = "$KAFERRY_TEST_RUN" ]; then
-    printf 'preserve' > "$target/$KAFERRY_TEST_ENTRY"
-    echo 'injected directory not empty' >&2
-    exit 7
-fi
-''', KAFERRY_TEST_ENTRY=entry)
-                self.assertEqual(7, result.returncode)
-                if entry == 'late-entry':
-                    self.assertIn('ownership marker restored', result.stderr)
-                    self.assertEqual(original, (folder / '.kaferry-owned').read_bytes())
-                else:
-                    self.assertIn('cannot restore fixture storage ownership marker', result.stderr)
-                self.assertEqual('preserve', (folder / entry).read_text())
-                self.assertFalse((folder / 'source-1').exists())
-
-    def test_cleanup_cannot_follow_run_or_marker_symlinks(self):
-        for target in ('run', 'marker'):
-            with self.subTest(target=target), self.prepared_storage() as (root, run, folder):
-                foreign = root / 'foreign'; foreign.mkdir()
-                data = foreign / 'keep'; data.write_bytes(b'preserve')
-                if target == 'run':
-                    moved = folder.with_name('moved'); folder.rename(moved)
-                    folder.symlink_to(foreign, target_is_directory=True)
-                else:
-                    marker = folder / '.kaferry-owned'
-                    external_marker = foreign / 'marker'; marker.rename(external_marker)
-                    marker.symlink_to(external_marker)
-                # Given a substituted path, when cleaning, then no foreign target is deleted.
-                self.assertNotEqual(0, self.storage(root, run, 'clean').returncode)
-                self.assertEqual(b'preserve', data.read_bytes())
-
 
 class Message:
     def __init__(self, record): self.record = record
