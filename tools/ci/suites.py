@@ -30,6 +30,7 @@ RECOVERY_CASES = {'recovery/'+name for name in
 FAULT_CASES = RECOVERY_CASES | {'fault/crash', 'fault/churn', 'fault/blocking-commit'}
 LOAD_PROFILES = ('near-limit-v1', 'hot-keys-v1', 'headers-v1', 'tombstones-v1',
                  'source-none-v1', 'source-gzip-v1', 'source-snappy-v1', 'source-lz4-v1', 'source-zstd-v1')
+OBSERVABILITY_TEST = 'TestLoadObservability/round-0/disabled'
 EXPECTED = {
     'integration': ['TestAllFileDirectionsAndResume', 'TestTopicToTopicSlice',
                     'TestLatestEndRemainsPinnedAfterCompletion',
@@ -54,10 +55,56 @@ EXPECTED = {
         'TestSaslTlsExternalAuthentication/GSSAPI', 'TestSaslTlsOAuthTokenFile',
         'TestSaslTlsOAuthRenewalAndKeyRotation', 'TestMutualTlsCopy', 'TestServerTlsCopy',
         'TestReplicatedClusterLeaderFailurePreservesCopy'],
+    'quickstart': ['TestKafkaQuickStart'],
+    'smoke': [OBSERVABILITY_TEST, 'TestArchiveTutorial', 'TestArchiveTutorialCancellation'],
+    'replicated-helpers': '''
+        TestOwnershipCaseRejectsUnprovedMembership
+        TestOwnershipCoordinatorRestartRequiresRecordedScope
+        TestOwnershipKilledWorkerKeepsEarlierPeak
+        TestOwnershipGenerationsReuseOneAuditSnapshot
+        TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy
+        TestReplicatedPublisherAcknowledgesAllPartitionsAndStops
+        TestReplicatedPublisherStopsAfterRejectedBatch
+        TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites
+        TestReplicatedBrokerPublisherCatchesUpDelayedSchedule
+        TestReplicatedBrokerPublisherCancellationDrainsDelayedOffers
+        TestReplicatedBrokerPublisherErrorDrainsDelayedOffers
+        TestNetworkMeasurementRequiresCaughtUpSourceAndOutput
+        TestNetworkHealthyPreconditionNeedsThirtySecondsAndBothRates
+        TestNetworkDestinationLeadersRemainStableAcrossPhases
+        TestBrokerWorkCapsRequireActualSamplesAndKeepMissingPeaksUnavailable
+        TestBrokerRestartRequiresCurrentLifetimeInsideRecoveryWindow
+        TestNetworkOutageRestartRequiresFirstWorkerRSSAndActiveCut
+        TestBrokerCurrentProgressDoesNotWaitForChildExit
+        TestBrokerCurrentProgressRequiresReadableCompleteEvidence
+        TestBrokerCurrentProgressRejectsMalformedCompleteRows
+        TestBrokerRestartRechecksFailureAfterHealthObservation
+        TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions
+        TestBrokerISRSelectionRequiresActiveSameLeaderBacklog
+        TestBrokerReadinessRequiresFreshPinnedMetadataWithinSharedBudget
+        TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss
+        TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound
+        TestReplicatedAuditLevelRetriesConnectionErrorOnce
+        TestReplicatedAuditFailureCleanupRetainsDiagnostics
+        TestReplicatedAuditFailureCleanupSkipsPassingCases
+        TestReplicatedAuditFailureCaptureSharesDeadline
+        TestReplicatedAuditFailureOutputIsBounded
+        TestReplicatedAuditArmsOnlyAfterCurrentGenerationAcceptedProgress
+        TestReplicatedAuditPreservesDecodedConfigurationAndOriginalDigest
+        TestReplicatedAuditReadinessReadsEveryBrokerConcurrently
+        TestReplicatedAuditReadinessRejectsIncompleteBrokerReads
+        TestReplicatedAuditReadinessSharesCancellation
+        TestReplicatedAuditCohortUsesOneCompleteParsedSnapshot
+        TestReplicatedZombieRSSStopsAtProcessExit
+        TestReplicatedZombieExposureSpansSessionWithinSaveDeadline
+    '''.split(),
 }
-CI_EXTRA = {
-    'integration': ['TestCLIInterruptCommitsAndResumeDoesNotRecopy', 'TestKafkaQuickStart'],
-    'load': ['TestLoadObservability/round-0/disabled'],
+EXPECTED['kafka'] = EXPECTED['integration'] + ['TestCLIInterruptCommitsAndResumeDoesNotRecopy']
+EXPECTED['ci-integration'] = EXPECTED['kafka'] + EXPECTED['quickstart']
+EXPECTED['ci-load'] = EXPECTED['load'] + [OBSERVABILITY_TEST]
+PATTERNS = {
+    'smoke': '^(TestArchiveTutorial(Cancellation)?|TestLoadObservability)$/^round-0$/^disabled$',
+    'replicated-helpers': '^(' + '|'.join(EXPECTED['replicated-helpers']) + ')$',
 }
 
 
@@ -132,7 +179,8 @@ def ci(name):
     directory = Path('build-results')
     code = run(name, cmd, directory)
     if code == 0:
-        verify_tests((directory / (name + '.log')).read_text(), EXPECTED.get(name, []) + CI_EXTRA.get(name, []))
+        suite = 'ci-' + name if 'ci-' + name in EXPECTED else name
+        verify_tests((directory / (name + '.log')).read_text(), EXPECTED.get(suite, []), suite=suite)
     return code
 
 
@@ -147,9 +195,27 @@ def main():
     local.add_argument('--packages', default='./src/tests/system')
     remote = sub.add_parser('ci')
     remote.add_argument('suite', choices=('integration', 'load', 'soak', 'qualification', 'fault', 'fuzz', 'benchmark'))
+    names = sub.add_parser('names')
+    names.add_argument('suite', choices=EXPECTED)
+    pattern = sub.add_parser('pattern')
+    pattern.add_argument('suite', choices=PATTERNS)
+    verify = sub.add_parser('verify')
+    verify.add_argument('suite', choices=EXPECTED)
+    verify.add_argument('log', type=Path)
     args = parser.parse_args()
     if args.action == 'ci':
         return ci(args.suite)
+    if args.action == 'names':
+        print('\n'.join(EXPECTED[args.suite]))
+        return 0
+    if args.action == 'pattern':
+        print(PATTERNS[args.suite])
+        return 0
+    if args.action == 'verify':
+        if not EXPECTED[args.suite]:
+            parser.error('suite has no required tests')
+        verify_tests(args.log.read_text(), EXPECTED[args.suite], suite=args.suite)
+        return 0
     cmd = command(args.suite, args.go, args.output, args.timeout, args.packages)
     if args.suite in ('fault', 'recovery'):
         from tools.qualification.fault_results import collect, configure

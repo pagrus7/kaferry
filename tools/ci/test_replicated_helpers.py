@@ -10,57 +10,17 @@ import sys
 import tempfile
 import unittest
 
+from tools.ci.suites import EXPECTED
+
 
 ROOT = Path(__file__).resolve().parents[2]
-HELPERS = (
-    'TestOwnershipCaseRejectsUnprovedMembership',
-    'TestOwnershipCoordinatorRestartRequiresRecordedScope',
-    'TestOwnershipKilledWorkerKeepsEarlierPeak',
-    'TestOwnershipGenerationsReuseOneAuditSnapshot',
-    'TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy',
-) + (
-    'TestReplicatedPublisherAcknowledgesAllPartitionsAndStops',
-    'TestReplicatedPublisherStopsAfterRejectedBatch',
-    'TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites',
-    'TestReplicatedBrokerPublisherCatchesUpDelayedSchedule',
-    'TestReplicatedBrokerPublisherCancellationDrainsDelayedOffers',
-    'TestReplicatedBrokerPublisherErrorDrainsDelayedOffers',
-    'TestNetworkMeasurementRequiresCaughtUpSourceAndOutput',
-    'TestNetworkHealthyPreconditionNeedsThirtySecondsAndBothRates',
-    'TestNetworkDestinationLeadersRemainStableAcrossPhases',
-    'TestBrokerWorkCapsRequireActualSamplesAndKeepMissingPeaksUnavailable',
-    'TestBrokerRestartRequiresCurrentLifetimeInsideRecoveryWindow',
-    'TestNetworkOutageRestartRequiresFirstWorkerRSSAndActiveCut',
-    'TestBrokerCurrentProgressDoesNotWaitForChildExit',
-    'TestBrokerCurrentProgressRequiresReadableCompleteEvidence',
-    'TestBrokerCurrentProgressRejectsMalformedCompleteRows',
-    'TestBrokerRestartRechecksFailureAfterHealthObservation',
-    'TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions',
-    'TestBrokerISRSelectionRequiresActiveSameLeaderBacklog',
-    'TestBrokerReadinessRequiresFreshPinnedMetadataWithinSharedBudget',
-    'TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss',
-    'TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound',
-) + (
-    # Audit and zombie helpers retain their independent measurements.
-    'TestReplicatedAuditLevelRetriesConnectionErrorOnce',
-    'TestReplicatedAuditFailureCleanupRetainsDiagnostics',
-    'TestReplicatedAuditFailureCleanupSkipsPassingCases',
-    'TestReplicatedAuditFailureCaptureSharesDeadline',
-    'TestReplicatedAuditFailureOutputIsBounded',
-    'TestReplicatedAuditArmsOnlyAfterCurrentGenerationAcceptedProgress',
-    'TestReplicatedAuditPreservesDecodedConfigurationAndOriginalDigest',
-    'TestReplicatedAuditReadinessReadsEveryBrokerConcurrently',
-    'TestReplicatedAuditReadinessRejectsIncompleteBrokerReads',
-    'TestReplicatedAuditReadinessSharesCancellation',
-    'TestReplicatedAuditCohortUsesOneCompleteParsedSnapshot',
-    'TestReplicatedZombieRSSStopsAtProcessExit',
-    'TestReplicatedZombieExposureSpansSessionWithinSaveDeadline',
-)
+HELPERS = EXPECTED['replicated-helpers']
 
 
 class ReplicatedHelpersTest(unittest.TestCase):
     def test_shared_fast_target_requires_exact_completed_helper_passes(self):
         # Given a Go command that exits zero with actual, absent or wrong events.
+        self.assertTrue(HELPERS)
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             fake = directory/'go'

@@ -12,46 +12,6 @@ KAFKA_TEST_BROKERS ?= 127.0.0.1:39092
 KAFKA_TEST_DEST_BROKERS ?= 127.0.0.1:40092
 KAFERRY_TEST_OUTPUT ?= -v
 SOAK_TEST_TIMEOUT ?= 1h
-REPLICATED_HELPER_TESTS := \
-	TestOwnershipCaseRejectsUnprovedMembership \
-	TestOwnershipCoordinatorRestartRequiresRecordedScope \
-	TestOwnershipKilledWorkerKeepsEarlierPeak \
-	TestOwnershipGenerationsReuseOneAuditSnapshot \
-	TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy \
-	TestReplicatedPublisherAcknowledgesAllPartitionsAndStops \
-	TestReplicatedPublisherStopsAfterRejectedBatch \
-	TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites \
-	TestReplicatedBrokerPublisherCatchesUpDelayedSchedule \
-	TestReplicatedBrokerPublisherCancellationDrainsDelayedOffers \
-	TestReplicatedBrokerPublisherErrorDrainsDelayedOffers \
-	TestNetworkMeasurementRequiresCaughtUpSourceAndOutput \
-	TestNetworkHealthyPreconditionNeedsThirtySecondsAndBothRates \
-	TestNetworkDestinationLeadersRemainStableAcrossPhases \
-	TestBrokerWorkCapsRequireActualSamplesAndKeepMissingPeaksUnavailable \
-	TestBrokerRestartRequiresCurrentLifetimeInsideRecoveryWindow \
-	TestNetworkOutageRestartRequiresFirstWorkerRSSAndActiveCut \
-	TestBrokerCurrentProgressDoesNotWaitForChildExit \
-	TestBrokerCurrentProgressRequiresReadableCompleteEvidence \
-	TestBrokerCurrentProgressRejectsMalformedCompleteRows \
-	TestBrokerRestartRechecksFailureAfterHealthObservation \
-	TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions \
-	TestBrokerISRSelectionRequiresActiveSameLeaderBacklog \
-	TestBrokerReadinessRequiresFreshPinnedMetadataWithinSharedBudget \
-	TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss \
-	TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound \
-	TestReplicatedAuditLevelRetriesConnectionErrorOnce \
-	TestReplicatedAuditFailureCleanupRetainsDiagnostics \
-	TestReplicatedAuditFailureCleanupSkipsPassingCases \
-	TestReplicatedAuditFailureCaptureSharesDeadline \
-	TestReplicatedAuditFailureOutputIsBounded \
-	TestReplicatedAuditArmsOnlyAfterCurrentGenerationAcceptedProgress \
-	TestReplicatedAuditPreservesDecodedConfigurationAndOriginalDigest \
-	TestReplicatedAuditReadinessReadsEveryBrokerConcurrently \
-	TestReplicatedAuditReadinessRejectsIncompleteBrokerReads \
-	TestReplicatedAuditReadinessSharesCancellation \
-	TestReplicatedAuditCohortUsesOneCompleteParsedSnapshot \
-	TestReplicatedZombieRSSStopsAtProcessExit \
-	TestReplicatedZombieExposureSpansSessionWithinSaveDeadline
 ifeq ($(KAFERRY_TEST_BINARY),)
 TEST_BINARY_PREREQUISITE = build
 # A leading "load " is a GNU Make plugin directive.
@@ -96,13 +56,13 @@ fast: wording fmt lint duplicates vulnerabilities race
 	$(PYTHON) -m tools.release.install_smoke
 	$(MAKE) smoke KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry
 smoke: $(TEST_BINARY_PREREQUISITE)
-	$(PYTHON) -m tools.ci.ci smoke $(GO) test -count=1 -json -tags=integration,load -run '^(TestArchiveTutorial(Cancellation)?|TestLoadObservability)$$/^round-0$$/^disabled$$' ./src/tests/system
-	$(PYTHON) -m tools.ci.ci verify-tests smoke 'TestLoadObservability/round-0/disabled' 'TestArchiveTutorial' 'TestArchiveTutorialCancellation'
+	pattern=$$($(PYTHON) -m tools.ci.suites pattern smoke) && \
+	$(PYTHON) -m tools.ci.ci smoke $(GO) test -count=1 -json -tags=integration,load -run "$$pattern" ./src/tests/system
+	$(PYTHON) -m tools.ci.suites verify smoke "$${KAFERRY_REPORT_DIR:-build-results}/smoke.log"
 replicated-helpers:
-	test -n "$(strip $(REPLICATED_HELPER_TESTS))"
-	pattern=$$(printf '%s|' $(REPLICATED_HELPER_TESTS)); \
-	CGO_ENABLED=1 $(PYTHON) -m tools.ci.ci replicated-helpers $(GO) test -count=1 -json -race -tags=integration,fault,load -run "^($${pattern%|})$$" ./src/tests/system
-	$(PYTHON) -m tools.ci.ci verify-tests replicated-helpers $(REPLICATED_HELPER_TESTS)
+	pattern=$$($(PYTHON) -m tools.ci.suites pattern replicated-helpers) && \
+	CGO_ENABLED=1 $(PYTHON) -m tools.ci.ci replicated-helpers $(GO) test -count=1 -json -race -tags=integration,fault,load -run "$$pattern" ./src/tests/system
+	$(PYTHON) -m tools.ci.suites verify replicated-helpers "$${KAFERRY_REPORT_DIR:-build-results}/replicated-helpers.log"
 broker:
 	docker compose -f src/tests/compose.yaml -p kaferry-compat --profile cross-cluster up -d --wait --wait-timeout 60
 	# Listening sockets precede cold group-coordinator readiness.

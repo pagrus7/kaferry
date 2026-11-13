@@ -16,6 +16,58 @@ from tools.qualification.fault_results import FAULT_CASES
 
 
 class SuitesTest(unittest.TestCase):
+    def test_cli_catalog_and_verification_keep_quickstart_contexts_distinct(self):
+        # Given the Kafka job's full required evidence and its intentional opt-out.
+        events = [dict(Action='pass', Test=name) for name in suites.EXPECTED['kafka']]
+        events.append(dict(Action='skip', Test='TestKafkaQuickStart'))
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary)/'integration.log'
+            log.write_text('\n'.join(json.dumps(event) for event in events))
+            # When the CLI selects the evidence contract, then the Kafka context
+            # permits that opt-out and enabled quickstart still requires a pass.
+            for suite, valid in [('kafka', True), ('ci-integration', False)]:
+                result = subprocess.run([sys.executable, '-m', 'tools.ci.suites', 'verify', suite, str(log)],
+                                        text=True, capture_output=True)
+                self.assertEqual(valid, result.returncode == 0, result.stdout+result.stderr)
+                if not valid:
+                    self.assertIn('Required tests did not pass: TestKafkaQuickStart', result.stderr)
+            result = subprocess.run([sys.executable, '-m', 'tools.ci.suites', 'names', 'kafka'],
+                                    text=True, capture_output=True, check=True)
+            self.assertEqual(suites.EXPECTED['kafka'], result.stdout.splitlines())
+            result = subprocess.run([sys.executable, '-m', 'tools.ci.suites', 'pattern', 'smoke'],
+                                    text=True, capture_output=True, check=True)
+            self.assertEqual(suites.PATTERNS['smoke'], result.stdout.strip())
+
+    def test_smoke_make_target_preserves_pattern_and_requires_passes(self):
+        # Given a fake Go process that records Make's actual selector and emits
+        # complete, incomplete or unexpectedly skipped test results.
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            executable = directory/'go'
+            arguments = directory/'args.json'
+            executable.write_text('#!'+sys.executable+'\nimport json, os, sys\n'
+                                  'from pathlib import Path\n'
+                                  'Path(os.environ["SMOKE_ARGUMENTS"]).write_text(json.dumps(sys.argv[1:]))\n'
+                                  'for event in json.loads(os.environ["SMOKE_EVENTS"]):\n'
+                                  '    print(json.dumps(event))\n')
+            executable.chmod(0o700)
+            passes = [dict(Action='pass', Test=name) for name in suites.EXPECTED['smoke']]
+            for events, error in [(passes, None), (passes[:-1], 'Required tests did not pass'),
+                                  (passes + [dict(Action='skip', Test='Unexpected')], 'Unexpected skip events')]:
+                env = dict(os.environ, KAFERRY_REPORT_DIR=str(directory/'results'),
+                           SMOKE_ARGUMENTS=str(arguments), SMOKE_EVENTS=json.dumps(events))
+                result = subprocess.run(['make', '--no-print-directory', 'smoke', 'GO='+str(executable),
+                                         'PYTHON='+sys.executable, 'KAFERRY_TEST_BINARY=/unused'],
+                                        env=env, text=True, capture_output=True, timeout=60)
+                # When the actual target runs, then shell expansion preserves
+                # the shared selector and its evidence gate rejects non-passes.
+                self.assertEqual(error is None, result.returncode == 0, result.stdout+result.stderr)
+                if error:
+                    self.assertIn(error, result.stderr)
+                args = json.loads(arguments.read_text())
+                self.assertEqual(suites.PATTERNS['smoke'], args[args.index('-run')+1])
+                self.assertIn('-json', args)
+
     def test_replicated_broker_budgets_are_registered_and_selection_scoped(self):
         # Given five broker recipes and the unchanged ownership recipe, when
         # selecting deadlines, then each uses only its actual registered bounds.
