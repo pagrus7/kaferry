@@ -15,17 +15,17 @@ Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157
 
 ## Line counts
 
-Physical tracked source lines; exact inclusion rules and measurements pending.
+Physical tracked source lines at the baseline stack top. Product is non-test Go in `src/internal` and `src/cmd`; unit tests are test Go in those trees; system Go is all Go in `src/tests`. Support sums unit tests, system Go, all Python tooling (including its tests once), and workflow YAML.
 
 | Category | Before | After |
 | --- | ---: | ---: |
-| Product Go | pending | pending |
-| Unit Go tests | pending | pending |
-| System Go | pending | pending |
-| Python tooling, including tests | pending | pending |
-| Python tests (subset) | pending | pending |
-| Workflow YAML | pending | pending |
-| Support / product | pending | pending |
+| Product Go | 12,502 | 12,502 (no changes yet) |
+| Unit Go tests | 20,099 | 20,099 (no changes yet) |
+| System Go | 18,437 | 18,437 (no changes yet) |
+| Python tooling, including tests | 9,827 | 9,827 (no changes yet) |
+| Python tests (subset) | 5,151 | 5,151 (no changes yet) |
+| Workflow YAML | 1,468 | 1,468 (no changes yet) |
+| Support / product | 3.985842 | 3.985842 (no changes yet) |
 
 ## Product coverage
 
