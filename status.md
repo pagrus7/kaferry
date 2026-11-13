@@ -1,10 +1,12 @@
 # Maintainability status
 
-Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157aeff82679187a3`. PR #193 is OPEN. Phase 2 waits until it is MERGED; poll at 30-minute intervals through 2026-11-13 22:29:23 UTC.
+Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157aeff82679187a3`. The eight-hour wait ended at 22:29:23 UTC with #193 still OPEN after sixteen scheduled half-hour polls. Phase 2 was not started; its plan is below.
+
+Seven Phase 1 PRs are ready. PR #201 remains a draft: its independent source reviews are complete, but a pre-test Docker preflight failure prevents final CI approval. No manual retry was approved or performed. The full readiness condition is therefore still blocked.
 
 | Item | Branch | PR URL | Head SHA | CI | Reviews | Blocked by |
 | --- | --- | --- | --- | --- | --- | --- |
-| M0 inventory | notes/maintainability | No PR | branch tip | N/A | three read-only scouts complete | none |
+| M0 inventory | notes/maintainability | No PR | 94f1fb7e6a79c2fd87dc13781ab6a457d132d13f (inventory revision) | N/A | three read-only scouts complete | none |
 | M1 docs tests | maintainability/python-doc-tests | https://github.com/pagrus7/kaferry/pull/195 | e914c01deba7b292a045e3917ebb046a1520d811 | Passed; final-head raw evidence independently verified | Docs Passed; Tests Passed | Stacked on #193; ready |
 | M1 release tests | maintainability/python-release-tests | https://github.com/pagrus7/kaferry/pull/196 | ffdd57f2b1e0b60e2aef9d59877bedecf8d46e1e | Passed; final-head raw evidence independently verified | Docs Passed; Tests Passed | Stacked on #193; ready |
 | M1 qualification accounting | maintainability/python-accounting-tests | https://github.com/pagrus7/kaferry/pull/197 | 04461399416d06269e8c6ffad56762185f99b6e5 | Passed; final-head raw evidence independently verified | Docs Passed; Tests Passed | Stacked on #193; ready |
@@ -15,9 +17,9 @@ Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157
 | M4 soak/load diagnostics | maintainability/harness-soak-tests | https://github.com/pagrus7/kaferry/pull/200 | 96d83e5d674777a83f77474d1cbdbff468755e04 | Passed; corrected final-head raw evidence independently verified | Docs Passed; Tests Passed (follow-ups) | Stacked on #193; ready |
 | M4 faults | maintainability/harness-fault-tests | https://github.com/pagrus7/kaferry/pull/201 | 35942bfae9bac785b60dca89be58bcb30f869225 | Failed: replicated fixture Docker preflight; likely timeout | Docs Passed; Tests source complete, CI Pending | owner exception for one failed-job retry, or normal branch update |
 | M4 fixtures/process | maintainability/harness-fixture-tests | https://github.com/pagrus7/kaferry/pull/202 | 05d4492ba83069358311c83a4f5d59a40ad78a44 | Passed; final-head raw evidence independently verified | Docs Passed; Tests Passed | Stacked on #193; ready |
-| M5 harness selection | pending | pending | pending | pending | pending | #193 merge |
-| M6 workflow reuse | pending | pending | pending | pending | pending | #193 merge |
-| M7 CI and audit tests | pending | pending | pending | pending | pending | #193 merge |
+| M5 harness selection | planned: maintainability/harness-selection | No PR | not started | not run | not started | #193 not MERGED at deadline |
+| M6 workflow reuse | planned: maintainability/workflow-composites | No PR | not started | not run | not started | #193 not MERGED at deadline |
+| M7 CI and audit tests | planned: maintainability/ci-audit-tests | No PR | not started | not run | not started | #193 not MERGED at deadline |
 
 ## Line counts
 
@@ -41,7 +43,7 @@ The combined tree passed all 172 remaining Python tests, unit tests and all 99 r
 
 Baseline statement coverage of `./src/internal/... ./src/cmd/...`, combining unit and every harness test: 5,514 / 5,750 = **95.895652%**. Go 1.27.4, Darwin arm64, race/atomic profiles, measured at the baseline stack top. Unit-only coverage is identical. Both runs passed. All three per-PR before/after measurements are recorded below. Maximum allowed decrease per Go removal PR: 0.1 percentage points.
 
-| Go removal | Before | After (proposed combined state) | Change (percentage points) | Harness selection, Darwin |
+| Go removal | Before | After (branch) | Change (percentage points) | Harness selection, Darwin |
 | --- | ---: | ---: | ---: | --- |
 | M4 soak/load | 95.895652% (5,514/5,750) | 95.895652% (5,514/5,750) | 0.000000 | 121 → 113; exact eight-test difference |
 | M4 faults | 95.895652% (5,514/5,750) | 95.895652% (5,514/5,750) | 0.000000 | 121 → 112; exact nine-test difference |
@@ -55,17 +57,23 @@ Worker inspection added twelve explicit nested callback verdicts, bringing the c
 
 Fault-worker inspection adds one local wrapper verdict and reclassifies the orphan queue type, bringing the inventory to 542 unique rows. Qualification candidate rows now link to PRs #197–#199.
 
-M0 classifies 529 unique rows: all 217 Python tests, 121 harness tests (120 Linux plus one Darwin-only), the integration-only faults routing test, inspected helpers, all three vulture hits, and every one of 141 unique conditional staticcheck findings. Twenty-eight overlapping helper records are consolidated. Vulture 2.16 at confidence 80 found no dead function or module. Staticcheck 2026.2.2 covered all 12 Linux CI tag combinations and four Darwin modes; full harness mode has no U1000 findings. Exact baseline EXPECTED selection equals the current harness set, rather than about 160 names. The historical stack moved 121 Linux/122 Darwin tests, then removed two legacy SQL tests and added one delayed-input test. The stack's other starting claims were verified.
+M0 classifies 529 unique rows: all 217 Python tests, 121 harness tests (120 Linux plus one Darwin-only), the integration-only faults routing test, inspected helpers, all three vulture hits, and every one of 141 unique conditional staticcheck findings. Twenty-eight overlapping helper records are consolidated. Vulture 2.16 at confidence 80 found no dead function or module. Staticcheck 2026.2.2 covered all 12 Linux CI tag combinations and four Darwin modes; full harness mode has no U1000 findings. Exact baseline EXPECTED selection equals the baseline tagged harness set, rather than about 160 names. The historical stack moved 121 Linux/122 Darwin tests, then removed two legacy SQL tests and added one delayed-input test. The stack's other starting claims were verified.
 
 ## Owner decisions (report only)
 
 - Review-process cost: each removal PR requires two independent source reviews and a final-head CI evidence verification. Codecov changed-line review is N/A while no product implementation changes. Decide separately whether the recurring review cost is proportionate; no policy changes in this run. Personal usage evidence remains local.
 - Support-to-product ratio: decide whether to set a target after reviewing measured before/after counts.
-- Expensive tests retained solely for oracle/gate or release safety: broker-evidence tests (345 function lines), ownership-evidence tests (405), publisher reconciliation (347), and Darwin RSS calibration (73) retain unique false-green rejection. They require large fixtures or platform-sensitive calibration; measured runtime and monetary maintenance cost are unknown. Python rejection and release-safety fixtures remain for the same criterion; see the inventory's KEEP reasons.
+- Expensive tests retained solely for oracle/gate or release safety: broker-evidence fixtures (345 file lines), ownership-evidence fixtures (405), publisher reconciliation (347), and Darwin RSS calibration (73) retain unique false-green rejection. They require large fixtures or platform-sensitive calibration; measured runtime and monetary maintenance cost are unknown. Exact per-function sizes and maintenance surfaces follow below; Python rejection and release-safety fixtures remain for the same criterion.
 
 ## Phase 2 plan
 
-Blocked until #193 is MERGED. Then merge origin/main into every open branch, change PR bases to main, and push a new reviewed commit for final-base CI. M5 compares exact selected test lists before/after; M6 consolidates setup/steps repeated at least three times using existing composite actions; M7 applies the deletion criterion to tools/ci and replicated_audit tests. If #193 is still open at the deadline, retain this plan and stop after Phase 1 readiness.
+Saved after the eight-hour deadline because #193 remained OPEN. These steps are planned, not implemented.
+
+1. Verify `gh pr view 193 --json state -q .state` returns `MERGED`. Fetch origin; merge `origin/main` into every still-open branch from this run and change its PR base with `gh pr edit N --base main`. Freeze and push a new commit for CI after the base change. Recheck the complete patch against the new base with the independent docs and tests reviewers. Never rebase, force-push or merge a PR. A normal reviewed branch update may provide PR #201's missing fresh CI; otherwise its failed-job retry still needs an explicit owner exception.
+2. M5: compare the line cost of excluding product system-test files with `!harness` against giving harness tests a common name prefix; choose the smaller change. Preserve shared helpers and TestMain behavior. Remove the hand-maintained name list while retaining rejection of empty, skipped or missing required evidence. Capture sorted `go test -list` output before and after using the same `integration,fault,load,harness` tags on Linux and Darwin, then run `make replicated-helpers`. Record exact selections and counts, with no unintended test difference. The original top has 120 Linux / 121 Darwin helpers; the proposed Phase 1 composition has 98 / 99. Use the actual starting revision's counts rather than assuming which PRs have landed.
+3. M6: inventory setup and step blocks repeated at least three times across workflows. Extract each qualifying duplicate through the existing `.github/actions` composite-action pattern. Preserve versions, inputs, outputs, environment, shell, working directory, conditions, permissions, cache behavior and execution order. List every removed duplicate in this ledger; validate the resulting workflows through their normal PR CI. Add no repository dependency or formatting-mirror test.
+4. M7: refresh the inventory for the actual merged source, including the other session's Python-runner revert and qualification changes. Start with the ten tools/ci candidates (184 function lines) and five audit candidates (145 function lines) already classified. Keep product assertions, bad-evidence rejection and release safety; retain uncertain cases with reasons. Delete matching required helper names only if M5 has not already removed that list. Split coherent removal PRs at the original size limits; every removal PR must delete more than it adds.
+5. For each Phase 2 PR, use the template within 2,000 characters, link the inventory rows, retain the #193 dependency note, obtain both native read-only reviews and verify raw final-head CI evidence. Measure product statement coverage before and after every Go test removal; restore tests if the drop exceeds 0.1 percentage points. Update this ledger, counts and inventory after every state change. Personal usage records remain local.
 
 ## Retained tests with costly maintenance surfaces
 
@@ -202,6 +210,7 @@ Keep the rejection/release guarantees. The owner may decide whether their curren
 | 2026-11-13 20:59:23 | OPEN |
 | 2026-11-13 21:29:23 | OPEN |
 | 2026-11-13 21:59:23 | OPEN |
+| 2026-11-13 22:29:23 | OPEN |
 
 ## Active review correction
 
@@ -215,8 +224,12 @@ Corrected combined composition includes the restored late-drain guard and all ot
 
 ## Current readiness
 
-Seven Phase 1 PRs are ready: #195–#200 and #202. PR #201 has complete source reviews but remains a draft with failed CI from pre-test Docker preflight. An owner exception for a single failed-job retry is pending; manual workflow starts remain prohibited. PR #193 was still OPEN at the 21:59 UTC poll. Source work is frozen while waiting for the next permitted CI or base update.
+Seven Phase 1 PRs are ready: #195–#200 and #202. PR #201 has complete source reviews but remains a draft with failed CI from pre-test Docker preflight. An owner exception for a single failed-job retry is pending; manual workflow starts remain prohibited. PR #193 was still OPEN at the 22:29 UTC deadline. Source work is frozen. The wait ended with Phase 2 planned and PR #201 still blocked; no manual workflow start occurred.
 
 ## Ownership update at 17:30 UTC
 
 The lower `origin/hardening/ci-required-tests` branch advanced to 8b2a70ca; the top remains e4ef4eb9. Additional owned exclusions are `.github/workflows/quality.yml`, `docs/design/qualification.md`, `tools/ci/python_tests.py` and `tools/ci/test_python_tests.py`. The merge also imports changes to already-excluded `src/tests/system/archive_concurrent_test.go` and `src/tests/system/qualification.go`. None intersects these eight PRs. No source merge or revalidation is needed while the top remains unchanged; the Docker-preflight blocker is unaffected.
+
+## Final verification
+
+At the deadline, all eight PR heads and bases match their frozen scopes, all descriptions have the template once and are under 2,000 characters, and all retain the #193 dependency note. Fresh CI watches passed for #195–#200 and #202. PR #201 remains a draft with Docs Passed and Tests Pending because its preflight CI failure has not received permitted fresh validation. Notes are saved after the eight-hour stop condition; no PR was merged and no workflow was manually started.
