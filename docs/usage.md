@@ -171,7 +171,7 @@ Use this when records for the range are still arriving, or to finish an old rang
 - `MAX_STALENESS`: once Kaferry's clock passes 10:05, it captures each partition's current end, including unfinished transactions, saves it and reads up to it. Records appended beyond that saved end are excluded; if the deadline is already past, capture happens at startup.
 - `MAX_OUT_OF_ORDER`: reading a record stamped strictly after 10:05 stops reading that partition, even before reaching its saved end. A later record stamped 09:59 can be missed, even if already present.
 
-Increase the arrival-delay or disorder allowance to match your input, or disable the corresponding rule with `OFF`. Either rule can finish a partition independently, so increasing one does not protect against the other stopping early; neither setting limits total run time. Consumer clock lead also counts against the arrival-delay allowance. [Relative windows with `NOW()`](design/grammar.md#valid-examples).
+Increase the arrival-delay or disorder allowance to match your input, or disable the corresponding rule with `OFF`. Either rule can finish a partition independently, so increasing one does not protect against the other stopping early; neither setting limits total run time. Consumer clock lead also counts against the arrival-delay allowance. [Relative windows with `NOW()`](reference.md#timestamp-filters).
 
 ## Keep copying new records
 
@@ -294,7 +294,7 @@ SELECT * FROM ARCHIVE 'archive/orders' WITH (GROUP = 'orders-restore');"
 
 Keep the checkpoint directory and existing output to resume. See [replay selection and progress](design/archive.md#replay-and-progress) and [archive recovery and moving replay](#archive-procedures).
 
-Pass SQL with `-f file`, `-f -` (stdin), or `-e "SQL"`, as above. [Archive rotation, routing and more SQL examples](design/grammar.md#valid-examples).
+Pass SQL with `-f file`, `-f -` (stdin), or `-e "SQL"`, as above. [SQL forms and endpoint settings](reference.md#sql-statements).
 
 ## Connections
 
@@ -482,7 +482,7 @@ Keep the SQL, named group, configuration, `explain` output, stderr logs and `sta
 
 ## Errors
 
-Errors stop the copy. `ON_ERROR = SKIP` drops identified records rejected before sending; broker rejections cannot be skipped. Counts appear in `copy summary`. [Policies](reference.md#record-error-policies) · [SQL errors](design/grammar.md#invalid-examples).
+Errors stop the copy. `ON_ERROR = SKIP` drops identified records rejected before sending; broker rejections cannot be skipped. Counts appear in `copy summary`. [Policies](reference.md#record-error-policies) · [SQL errors](reference.md#sql-errors).
 
 ## Workers
 
