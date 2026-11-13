@@ -184,7 +184,7 @@ Keep the rejection/release guarantees. The owner may decide whether their curren
 
 ## Phase 2 poll log
 
-| Time (UTC) | PR #193 state |
+| Scheduled poll (UTC) | PR #193 state |
 | --- | --- |
 | 2026-11-13 14:29:23 | OPEN |
 | 2026-11-13 14:59:23 | OPEN |
@@ -192,6 +192,7 @@ Keep the rejection/release guarantees. The owner may decide whether their curren
 | 2026-11-13 15:59:23 | OPEN |
 | 2026-11-13 16:29:23 | OPEN |
 | 2026-11-13 16:59:23 | OPEN |
+| 2026-11-13 17:29:23 | OPEN |
 
 ## Active review correction
 
@@ -205,4 +206,8 @@ Corrected combined composition includes the restored late-drain guard and all ot
 
 ## Current readiness
 
-Seven Phase 1 PRs are ready: #195–#200 and #202. PR #201 has complete source reviews but remains a draft with failed CI from pre-test Docker preflight. An owner exception for a single failed-job retry is pending; manual workflow starts remain prohibited. PR #193 was still OPEN at the 16:59 UTC poll. Source work is frozen while waiting for the next permitted CI or base update.
+Seven Phase 1 PRs are ready: #195–#200 and #202. PR #201 has complete source reviews but remains a draft with failed CI from pre-test Docker preflight. An owner exception for a single failed-job retry is pending; manual workflow starts remain prohibited. PR #193 was still OPEN at the 17:29 UTC poll. Source work is frozen while waiting for the next permitted CI or base update.
+
+## Ownership update at 17:30 UTC
+
+The lower `origin/hardening/ci-required-tests` branch advanced to 8b2a70ca; the top remains e4ef4eb9. Additional owned exclusions are `.github/workflows/quality.yml`, `docs/design/qualification.md`, `tools/ci/python_tests.py` and `tools/ci/test_python_tests.py`. The merge also imports changes to already-excluded `src/tests/system/archive_concurrent_test.go` and `src/tests/system/qualification.go`. None intersects these eight PRs. No source merge or revalidation is needed while the top remains unchanged; the Docker-preflight blocker is unaffected.
