@@ -24,11 +24,15 @@ class ReplicatedHelpersTest(unittest.TestCase):
             directory = Path(temporary)
             fake = directory/'go'
             arguments = directory/'arguments.json'
-            fake.write_text('#!'+sys.executable+'\nimport json, os, sys\n'
-                            'from pathlib import Path\n'
-                            'Path(os.environ["HELPER_ARGUMENTS"]).write_text(json.dumps(dict(args=sys.argv[1:], cgo=os.environ.get("CGO_ENABLED"))))\n'
-                            'for event in json.loads(os.environ["HELPER_EVENTS"]):\n'
-                            '    print(json.dumps(event))\n')
+            fake.write_text(f'''#!{sys.executable}
+import json
+import os
+import sys
+from pathlib import Path
+Path(os.environ["HELPER_ARGUMENTS"]).write_text(json.dumps(dict(args=sys.argv[1:], cgo=os.environ.get("CGO_ENABLED"))))
+for event in json.loads(os.environ["HELPER_EVENTS"]):
+    print(json.dumps(event))
+''')
             fake.chmod(0o700)
             passes = [dict(Action='pass', Test=name) for name in HELPERS]
             cases = [(passes, None)] + [

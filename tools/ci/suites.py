@@ -58,129 +58,49 @@ EXPECTED = {
         'TestReplicatedClusterLeaderFailurePreservesCopy'],
     'quickstart': ['TestKafkaQuickStart'],
     'smoke': [OBSERVABILITY_TEST, 'TestArchiveTutorial', 'TestArchiveTutorialCancellation'],
-    'replicated-helpers': '''
-        TestArchiveFixtureDefaultWrappersRetainPayload
-        TestArchiveFixturePayloadParametersPreserveRecordContract
-        TestArchiveFixtureSeededPayloadBytes
-        TestBrokerCurrentLogChild
-        TestBrokerCurrentProgressDoesNotWaitForChildExit
-        TestBrokerCurrentProgressRejectsMalformedCompleteRows
-        TestBrokerCurrentProgressRequiresReadableCompleteEvidence
-        TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions
-        TestBrokerISRSelectionRequiresActiveSameLeaderBacklog
-        TestBrokerReadinessRequiresFreshPinnedMetadataWithinSharedBudget
-        TestBrokerRestartRechecksFailureAfterHealthObservation
-        TestBrokerRestartRequiresCurrentLifetimeInsideRecoveryWindow
-        TestBrokerWorkCapsRequireActualSamplesAndKeepMissingPeaksUnavailable
-        TestCancelledFixturePublishDoesNotWaitForReportReader
-        TestConsumeOnlyStartAllowsLatePublishingGrace
-        TestContainerInspectionRejectsMissingAmbiguousAndMalformedOwnership
-        TestDisconnectRestoresOwnedNetworkAndOriginalAliases
-        TestEnduranceRecoveryDeadlineAndBacklogBoundary
-        TestExpectedBinaryHashRejectsSubstitution
-        TestFileBinarySQLKeepsArchivePathsAndScopedSettings
-        TestHealCannotMutateAReplacementProxyContainer
-        TestInvalidPrimitivesCannotReachDockerOrProxy
-        TestKilledBrokerCleanupWaitsForTheOriginalContainer
-        TestLegacyBinarySQLKeepsTheWorkloadAndScope
-        TestLoadArchiveAccountingReleasesEachPartitionHistory
-        TestLoadDeliveryObservationMatchesIDsWhenReceiptPrecedesAcknowledgement
-        TestLoadDeliveryObservationReleasesFailedAndCompletedHistory
-        TestLoadDeliveryObservationRetainsTransientPeakAndLongestLatency
-        TestLoadDeliveryObservationSeesCallbacksBeforeReportDrain
-        TestLoadDeliveryObservationSynchronizesCallbacksAndReceipts
-        TestLoadDeliveryPercentilesCountEveryReceiptAndRetainTheTail
-        TestLoadDeliveryPercentilesCoverZeroSmallPopulationsAndLongDurations
-        TestLoadDeliveryPercentilesRoundNonIntegralRanksUp
-        TestLoadEnduranceAllowsFinalBurstToSettleDuringGrace
-        TestLoadEndurancePartitionedFidelityAndHistory
-        TestLoadEnduranceRejectsUnderloadedRuns
-        TestLoadEnduranceRejectsWrongKeyRouting
-        TestLoadEnduranceTracksBurstsWindowsAndFinalAcknowledgements
-        TestLoadFiniteVerifierAllowsDestinationPartitionSkew
-        TestLoadIntegrityDetectsKafkaAndArchiveMutationsAlongsideByteChecks
-        TestLoadIntegrityFingerprintPreservesFieldBoundariesAndNullBytes
-        TestLoadIntegrityKeepsTimestampAndArchiveProvenanceChecks
-        TestLoadIntegrityReconcilesDifferentPartitionArrivalOrdersAndReleasesHistory
-        TestLoadReceiptLedgerKeepsFirstDigestAcrossGapsAndLateDuplicates
-        TestLoadReportPreservesFullCLILogBeforeTemporaryCleanup
-        TestLoadSourceCompressionObservationRespectsDeadline
-        TestLoadSourceCompressionWaitsForDelayedObservationsAndCancellation
-        TestLoadStreamingAccountingMarksPartialEvidence
-        TestLoadStreamingAccountingRetainsAllDeliveryFailures
-        TestLoadStreamingVerifierBoundsHistory
-        TestLoadStreamingVerifierConsumesTrailingDuplicates
-        TestLoadWorkloadProfilesExerciseSizesHeadersAndHotKeys
-        TestLoadWorkloadProfilesPreserveFidelityAndIdentifyTombstones
-        TestLoadWorkloadSourceCodecNamesMatchCompressedBytes
-        TestLoadWorkloadTombstoneNullIsNotEmptyAndRequiresItsID
-        TestMetadataAdapterRejectsOmittedErroredAndUnavailableBrokerResponses
-        TestMetadataAdapterUsesSelectedClusterAndRejectsAbsentState
-        TestNativeEndpointsKeepAllWorkerPathsIndependent
-        TestNetworkCleanupHandlesNoDetachMissingNetworkAndInspectionFailure
-        TestNetworkDestinationLeadersRemainStableAcrossPhases
-        TestNetworkHealthyPreconditionNeedsThirtySecondsAndBothRates
-        TestNetworkMeasurementRequiresCaughtUpSourceAndOutput
-        TestNetworkOutageRestartRequiresFirstWorkerRSSAndActiveCut
-        TestOwnedBrokerRequiresFixtureOwnership
-        TestOwnedBrokerRestoresAfterEarlyReturnAndRetriesFailure
-        TestOwnershipCaseRejectsUnprovedMembership
-        TestOwnershipCoordinatorRestartRequiresRecordedScope
-        TestOwnershipGenerationsReuseOneAuditSnapshot
-        TestOwnershipKilledWorkerKeepsEarlierPeak
-        TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy
-        TestPartialPathCutUnwindsAndRejectsWrongOrAlreadyFaultedRoutes
-        TestPartialPhysicalFaultRestoresEarlierTargetsAndRetainsFailedCleanup
-        TestPhysicalFaultChecksStateAgainImmediatelyBeforeMutation
-        TestPinnedMetadataProbeUsesFreshSelectedTransportAndAllTopics
-        TestProducerPreparationHonorsCancellationAndDeadlineBeforeAnyWrite
-        TestProducerPreparationObservesEveryBrokerThenInitializesBeforeAnyWrite
-        TestProducerPreparationRejectsMetadataOutsideSelectedRoute
-        TestProxyOwnershipAcceptsOnlyEquivalentBoundWildcardListeners
-        TestProxyProducerCancellationCannotRetryAfterHealing
-        TestProxyProducerFirstRetriableResponseRetainsOriginalDiagnostic
-        TestProxyProducerRejectsPermanentProduceFailureWithoutRetry
-        TestRebalanceChurnTimeoutCatalogUsesMilliseconds
-        TestRebalanceChurnUsesSelectedBinary
-        TestRecoveryLedgerChecksEveryCopy
-        TestReplicatedAuditArmsOnlyAfterCurrentGenerationAcceptedProgress
-        TestReplicatedAuditCohortUsesOneCompleteParsedSnapshot
-        TestReplicatedAuditFailureCaptureSharesDeadline
-        TestReplicatedAuditFailureCleanupRetainsDiagnostics
-        TestReplicatedAuditFailureCleanupSkipsPassingCases
-        TestReplicatedAuditFailureOutputIsBounded
-        TestReplicatedAuditLevelRetriesConnectionErrorOnce
-        TestReplicatedAuditPreservesDecodedConfigurationAndOriginalDigest
-        TestReplicatedAuditReadinessReadsEveryBrokerConcurrently
-        TestReplicatedAuditReadinessRejectsIncompleteBrokerReads
-        TestReplicatedAuditReadinessSharesCancellation
-        TestReplicatedBrokerPublisherCancellationDrainsDelayedOffers
-        TestReplicatedBrokerPublisherCatchesUpDelayedSchedule
-        TestReplicatedBrokerPublisherErrorDrainsDelayedOffers
-        TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites
-        TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss
-        TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound
-        TestReplicatedEnduranceRequiresEveryPartitionFullyInSync
-        TestReplicatedEnduranceStallsAndRestoresEveryDestinationBroker
-        TestReplicatedPublisherAcknowledgesAllPartitionsAndStops
-        TestReplicatedPublisherStopsAfterRejectedBatch
-        TestReplicatedZombieExposureSpansSessionWithinSaveDeadline
-        TestReplicatedZombieRSSStopsAtProcessExit
-        TestRestartUsesOriginalContainerAndHealingDoesNotRestartHealthyBroker
-        TestRoleResolutionRequiresCurrentPartitionState
-        TestRolesRejectMissingStateAndForeignOwnership
-        TestRolesResolveCurrentStateAndHealOriginalContainers
-        TestRollingBrokerRoleVisitsOnlyTheSelectedOwnedBroker
-        TestSlowCloseStimulusRefusesOtherPathsAndUnwindsPartialFailure
-        TestSlowCloseStimulusUsesOnlyTheFrozenWorkerRoutes
-        TestSoakMonitorRequiresFiveIdleRSSSamples
-        TestToxicCleanupRetainsUnavailableStateForLaterHealing
-        TestToxicDefaultsAndUncertainCreationPreserveOtherFaults
-        TestToxicsUseDocumentedUnitsAndRemoveOnlyTheirOwnNames
-        TestUnavailableProxyAPICannotMutateRoutes
-        TestWholeClusterIncludesClientReplicationAndControllerPaths
-        TestWorkerCoordinatorCutHealsOriginalPathAfterOwnershipMoves
-    '''.split() + (['TestRSSSampleOwnedChild'] if sys.platform == 'darwin' else []),
+    'replicated-helpers': (
+        'TestArchiveFixtureDefaultWrappersRetainPayload TestArchiveFixturePayloadParametersPreserveRecordContract TestArchiveFixtureSeededPayloadBytes '
+        'TestBrokerCurrentLogChild TestBrokerCurrentProgressDoesNotWaitForChildExit TestBrokerCurrentProgressRejectsMalformedCompleteRows '
+        'TestBrokerCurrentProgressRequiresReadableCompleteEvidence TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions TestBrokerISRSelectionRequiresActiveSameLeaderBacklog '
+        'TestBrokerReadinessRequiresFreshPinnedMetadataWithinSharedBudget TestBrokerRestartRechecksFailureAfterHealthObservation TestBrokerRestartRequiresCurrentLifetimeInsideRecoveryWindow '
+        'TestBrokerWorkCapsRequireActualSamplesAndKeepMissingPeaksUnavailable TestCancelledFixturePublishDoesNotWaitForReportReader TestConsumeOnlyStartAllowsLatePublishingGrace '
+        'TestContainerInspectionRejectsMissingAmbiguousAndMalformedOwnership TestDisconnectRestoresOwnedNetworkAndOriginalAliases TestEnduranceRecoveryDeadlineAndBacklogBoundary '
+        'TestExpectedBinaryHashRejectsSubstitution TestFileBinarySQLKeepsArchivePathsAndScopedSettings TestHealCannotMutateAReplacementProxyContainer '
+        'TestInvalidPrimitivesCannotReachDockerOrProxy TestKilledBrokerCleanupWaitsForTheOriginalContainer TestLegacyBinarySQLKeepsTheWorkloadAndScope '
+        'TestLoadArchiveAccountingReleasesEachPartitionHistory TestLoadDeliveryObservationMatchesIDsWhenReceiptPrecedesAcknowledgement TestLoadDeliveryObservationReleasesFailedAndCompletedHistory '
+        'TestLoadDeliveryObservationRetainsTransientPeakAndLongestLatency TestLoadDeliveryObservationSeesCallbacksBeforeReportDrain TestLoadDeliveryObservationSynchronizesCallbacksAndReceipts '
+        'TestLoadDeliveryPercentilesCountEveryReceiptAndRetainTheTail TestLoadDeliveryPercentilesCoverZeroSmallPopulationsAndLongDurations TestLoadDeliveryPercentilesRoundNonIntegralRanksUp '
+        'TestLoadEnduranceAllowsFinalBurstToSettleDuringGrace TestLoadEndurancePartitionedFidelityAndHistory TestLoadEnduranceRejectsUnderloadedRuns '
+        'TestLoadEnduranceRejectsWrongKeyRouting TestLoadEnduranceTracksBurstsWindowsAndFinalAcknowledgements TestLoadFiniteVerifierAllowsDestinationPartitionSkew '
+        'TestLoadIntegrityDetectsKafkaAndArchiveMutationsAlongsideByteChecks TestLoadIntegrityFingerprintPreservesFieldBoundariesAndNullBytes TestLoadIntegrityKeepsTimestampAndArchiveProvenanceChecks '
+        'TestLoadIntegrityReconcilesDifferentPartitionArrivalOrdersAndReleasesHistory TestLoadReceiptLedgerKeepsFirstDigestAcrossGapsAndLateDuplicates TestLoadReportPreservesFullCLILogBeforeTemporaryCleanup '
+        'TestLoadSourceCompressionObservationRespectsDeadline TestLoadSourceCompressionWaitsForDelayedObservationsAndCancellation TestLoadStreamingAccountingMarksPartialEvidence '
+        'TestLoadStreamingAccountingRetainsAllDeliveryFailures TestLoadStreamingVerifierBoundsHistory TestLoadStreamingVerifierConsumesTrailingDuplicates '
+        'TestLoadWorkloadProfilesExerciseSizesHeadersAndHotKeys TestLoadWorkloadProfilesPreserveFidelityAndIdentifyTombstones TestLoadWorkloadSourceCodecNamesMatchCompressedBytes '
+        'TestLoadWorkloadTombstoneNullIsNotEmptyAndRequiresItsID TestMetadataAdapterRejectsOmittedErroredAndUnavailableBrokerResponses TestMetadataAdapterUsesSelectedClusterAndRejectsAbsentState '
+        'TestNativeEndpointsKeepAllWorkerPathsIndependent TestNetworkCleanupHandlesNoDetachMissingNetworkAndInspectionFailure TestNetworkDestinationLeadersRemainStableAcrossPhases '
+        'TestNetworkHealthyPreconditionNeedsThirtySecondsAndBothRates TestNetworkMeasurementRequiresCaughtUpSourceAndOutput TestNetworkOutageRestartRequiresFirstWorkerRSSAndActiveCut '
+        'TestOwnedBrokerRequiresFixtureOwnership TestOwnedBrokerRestoresAfterEarlyReturnAndRetriesFailure TestOwnershipCaseRejectsUnprovedMembership '
+        'TestOwnershipCoordinatorRestartRequiresRecordedScope TestOwnershipGenerationsReuseOneAuditSnapshot TestOwnershipKilledWorkerKeepsEarlierPeak '
+        'TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy TestPartialPathCutUnwindsAndRejectsWrongOrAlreadyFaultedRoutes TestPartialPhysicalFaultRestoresEarlierTargetsAndRetainsFailedCleanup '
+        'TestPhysicalFaultChecksStateAgainImmediatelyBeforeMutation TestPinnedMetadataProbeUsesFreshSelectedTransportAndAllTopics TestProducerPreparationHonorsCancellationAndDeadlineBeforeAnyWrite '
+        'TestProducerPreparationObservesEveryBrokerThenInitializesBeforeAnyWrite TestProducerPreparationRejectsMetadataOutsideSelectedRoute TestProxyOwnershipAcceptsOnlyEquivalentBoundWildcardListeners '
+        'TestProxyProducerCancellationCannotRetryAfterHealing TestProxyProducerFirstRetriableResponseRetainsOriginalDiagnostic TestProxyProducerRejectsPermanentProduceFailureWithoutRetry '
+        'TestRebalanceChurnTimeoutCatalogUsesMilliseconds TestRebalanceChurnUsesSelectedBinary TestRecoveryLedgerChecksEveryCopy '
+        'TestReplicatedAuditArmsOnlyAfterCurrentGenerationAcceptedProgress TestReplicatedAuditCohortUsesOneCompleteParsedSnapshot TestReplicatedAuditFailureCaptureSharesDeadline '
+        'TestReplicatedAuditFailureCleanupRetainsDiagnostics TestReplicatedAuditFailureCleanupSkipsPassingCases TestReplicatedAuditFailureOutputIsBounded '
+        'TestReplicatedAuditLevelRetriesConnectionErrorOnce TestReplicatedAuditPreservesDecodedConfigurationAndOriginalDigest TestReplicatedAuditReadinessReadsEveryBrokerConcurrently '
+        'TestReplicatedAuditReadinessRejectsIncompleteBrokerReads TestReplicatedAuditReadinessSharesCancellation TestReplicatedBrokerPublisherCancellationDrainsDelayedOffers '
+        'TestReplicatedBrokerPublisherCatchesUpDelayedSchedule TestReplicatedBrokerPublisherErrorDrainsDelayedOffers TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites '
+        'TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound TestReplicatedEnduranceRequiresEveryPartitionFullyInSync '
+        'TestReplicatedEnduranceStallsAndRestoresEveryDestinationBroker TestReplicatedPublisherAcknowledgesAllPartitionsAndStops TestReplicatedPublisherStopsAfterRejectedBatch '
+        'TestReplicatedZombieExposureSpansSessionWithinSaveDeadline TestReplicatedZombieRSSStopsAtProcessExit TestRestartUsesOriginalContainerAndHealingDoesNotRestartHealthyBroker '
+        'TestRoleResolutionRequiresCurrentPartitionState TestRolesRejectMissingStateAndForeignOwnership TestRolesResolveCurrentStateAndHealOriginalContainers '
+        'TestRollingBrokerRoleVisitsOnlyTheSelectedOwnedBroker TestSlowCloseStimulusRefusesOtherPathsAndUnwindsPartialFailure TestSlowCloseStimulusUsesOnlyTheFrozenWorkerRoutes '
+        'TestSoakMonitorRequiresFiveIdleRSSSamples TestToxicCleanupRetainsUnavailableStateForLaterHealing TestToxicDefaultsAndUncertainCreationPreserveOtherFaults '
+        'TestToxicsUseDocumentedUnitsAndRemoveOnlyTheirOwnNames TestUnavailableProxyAPICannotMutateRoutes TestWholeClusterIncludesClientReplicationAndControllerPaths '
+        'TestWorkerCoordinatorCutHealsOriginalPathAfterOwnershipMoves'
+    ).split() + (['TestRSSSampleOwnedChild'] if sys.platform == 'darwin' else []),
 }
 EXPECTED['kafka'] = EXPECTED['integration'] + ['TestCLIInterruptCommitsAndResumeDoesNotRecopy']
 EXPECTED['ci-integration'] = EXPECTED['kafka'] + EXPECTED['quickstart']
