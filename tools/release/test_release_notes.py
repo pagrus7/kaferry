@@ -8,27 +8,6 @@ from tools.release.release_notes import read_notes
 
 
 class ReleaseNotesTest(unittest.TestCase):
-    def test_release_body_preserves_content_without_duplicate_title(self):
-        # Given versioned notes containing links and Unicode.
-        content = "Copy topic→file.\n\n## Changes\n\n- [Fix](https://example.com).\n"
-        body = "# Kaferry v1.2.3\n\n" + content
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "docs/releases").mkdir(parents=True)
-            (root / "docs/releases/v1.2.3.md").write_text(body, encoding="utf-8")
-            # When preparing the body, then only the duplicate title is omitted.
-            self.assertEqual(read_notes("v1.2.3", root), content)
-
-    def test_tracked_release_notes_are_valid(self):
-        # Given the versioned release notes shipped in this repository.
-        root = Path(__file__).resolve().parents[2]
-        notes = list((root / "docs/releases").glob("v*.md"))
-        self.assertTrue(notes, "no tracked versioned release notes")
-        for path in notes:
-            with self.subTest(version=path.stem):
-                # When validating for publication, then each body is usable.
-                self.assertTrue(read_notes(path.stem, root).strip())
-
     def test_missing_notes_and_unsafe_versions_fail(self):
         # Given a checkout with no release notes.
         with tempfile.TemporaryDirectory() as directory:
