@@ -72,7 +72,7 @@ Homebrew:
 brew install pagrus7/tap/kaferry
 ```
 
-Go 1.26+:
+Go 1.27+:
 
 ```sh
 CGO_ENABLED=0 go install github.com/pagrus7/kaferry/src/cmd/kaferry@latest
