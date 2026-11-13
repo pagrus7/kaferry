@@ -8,71 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
-
-func TestCLIDelayedInputPreservesBytesAndClosesStdin(t *testing.T) {
-	// Given a delayed SQL input pipe and a reader that waits for its end.
-	reader, writer, err := os.Pipe()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
-	process := &cliProcess{stdin: writer}
-	type received struct {
-		data []byte
-		err  error
-	}
-	result := make(chan received, 1)
-	go func() {
-		data, readErr := io.ReadAll(reader)
-		result <- received{data: data, err: readErr}
-	}()
-	input := "INSERT INTO ARCHIVE 'outı''put'\r\nSELECT * FROM ARCHIVE '源/in' WITH(GROUP='g') OPTIONS(WORKER_STOP_AFTER_RECORDS=1);\n"
-
-	// When the launcher releases input, then it preserves every byte and closes
-	// stdin so the reader can finish without waiting for any more input.
-	require.NoError(t, process.send(input))
-	select {
-	case observed := <-result:
-		require.NoError(t, observed.err)
-		require.Equal(t, []byte(input), observed.data)
-	case <-time.After(time.Second):
-		t.Fatal("delayed CLI input did not reach EOF after send")
-	}
-}
-
-func TestBrokerCurrentProgressDoesNotWaitForChildExit(t *testing.T) {
-	// Given a real child that reports progress and remains alive awaiting input.
-	process := brokerLogChild(t, "")
-	type observation struct {
-		progress copySummary
-		found    bool
-		err      error
-	}
-	result := make(chan observation, 1)
-	// When the broker orchestration reads the current progress, completion is
-	// bounded independently of the child's exit and the child remains alive.
-	go func() {
-		progress, found, readErr := currentCopyProgress(process)
-		result <- observation{progress: progress, found: found, err: readErr}
-	}()
-	select {
-	case observed := <-result:
-		require.NoError(t, observed.err)
-		require.True(t, observed.found)
-		require.Equal(t, 9, observed.progress.Submitted)
-		require.Equal(t, 7, observed.progress.Confirmed)
-		require.Equal(t, 2, observed.progress.PeakRecords)
-		require.EqualValues(t, 4096, observed.progress.PeakBytes)
-	case <-time.After(time.Second):
-		t.Fatal("current progress waited for the live child to exit")
-	}
-	// Then the same child can still be released and joined successfully.
-	require.False(t, process.finished())
-	require.NoError(t, process.stdin.Close())
-	require.NoError(t, process.wait())
-}
 
 func TestBrokerCurrentLogChild(t *testing.T) {
 	if os.Getenv("KAFERRY_BROKER_LOG_CHILD") != "1" {

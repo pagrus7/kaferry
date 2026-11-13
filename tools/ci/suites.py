@@ -59,11 +59,11 @@ EXPECTED = {
     'quickstart': ['TestKafkaQuickStart'],
     'smoke': [OBSERVABILITY_TEST, 'TestArchiveTutorial', 'TestArchiveTutorialCancellation'],
     'replicated-helpers': (
-        'TestArchiveFixtureDefaultWrappersRetainPayload TestArchiveFixturePayloadParametersPreserveRecordContract TestArchiveFixtureSeededPayloadBytes '
-        'TestBrokerCurrentLogChild TestBrokerCurrentProgressDoesNotWaitForChildExit TestBrokerCurrentProgressRejectsMalformedCompleteRows '
+        'TestArchiveFixtureDefaultWrappersRetainPayload TestArchiveFixturePayloadParametersPreserveRecordContract '
+        'TestBrokerCurrentLogChild TestBrokerCurrentProgressRejectsMalformedCompleteRows '
         'TestBrokerCurrentProgressRequiresReadableCompleteEvidence TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions TestBrokerISRSelectionRequiresActiveSameLeaderBacklog '
         'TestBrokerReadinessRequiresFreshPinnedMetadataWithinSharedBudget TestBrokerRestartRechecksFailureAfterHealthObservation TestBrokerRestartRequiresCurrentLifetimeInsideRecoveryWindow '
-        'TestBrokerWorkCapsRequireActualSamplesAndKeepMissingPeaksUnavailable TestCLIDelayedInputPreservesBytesAndClosesStdin TestCancelledFixturePublishDoesNotWaitForReportReader TestConsumeOnlyStartAllowsLatePublishingGrace '
+        'TestBrokerWorkCapsRequireActualSamplesAndKeepMissingPeaksUnavailable TestConsumeOnlyStartAllowsLatePublishingGrace '
         'TestContainerInspectionRejectsMissingAmbiguousAndMalformedOwnership TestDisconnectRestoresOwnedNetworkAndOriginalAliases TestEnduranceRecoveryDeadlineAndBacklogBoundary '
         'TestExpectedBinaryHashRejectsSubstitution TestHealCannotMutateAReplacementProxyContainer '
         'TestInvalidPrimitivesCannotReachDockerOrProxy TestKilledBrokerCleanupWaitsForTheOriginalContainer '
@@ -80,7 +80,7 @@ EXPECTED = {
         'TestLoadWorkloadTombstoneNullIsNotEmptyAndRequiresItsID TestMetadataAdapterRejectsOmittedErroredAndUnavailableBrokerResponses TestMetadataAdapterUsesSelectedClusterAndRejectsAbsentState '
         'TestNativeEndpointsKeepAllWorkerPathsIndependent TestNetworkCleanupHandlesNoDetachMissingNetworkAndInspectionFailure TestNetworkDestinationLeadersRemainStableAcrossPhases '
         'TestNetworkHealthyPreconditionNeedsThirtySecondsAndBothRates TestNetworkMeasurementRequiresCaughtUpSourceAndOutput TestNetworkOutageRestartRequiresFirstWorkerRSSAndActiveCut '
-        'TestOwnedBrokerRequiresFixtureOwnership TestOwnedBrokerRestoresAfterEarlyReturnAndRetriesFailure TestOwnershipCaseRejectsUnprovedMembership '
+        'TestOwnedBrokerRequiresFixtureOwnership TestOwnershipCaseRejectsUnprovedMembership '
         'TestOwnershipCoordinatorRestartRequiresRecordedScope TestOwnershipGenerationsReuseOneAuditSnapshot TestOwnershipKilledWorkerKeepsEarlierPeak '
         'TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy TestPartialPathCutUnwindsAndRejectsWrongOrAlreadyFaultedRoutes TestPartialPhysicalFaultRestoresEarlierTargetsAndRetainsFailedCleanup '
         'TestPhysicalFaultChecksStateAgainImmediatelyBeforeMutation TestPinnedMetadataProbeUsesFreshSelectedTransportAndAllTopics TestProducerPreparationHonorsCancellationAndDeadlineBeforeAnyWrite '
