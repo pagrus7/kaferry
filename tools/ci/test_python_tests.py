@@ -44,6 +44,8 @@ class PythonTestsTest(unittest.TestCase):
         result, events = self.results(Fixture)
         # When results are retained, then only a real success is a pass.
         self.assertFalse(result.wasSuccessful())
+        self.assertEqual(1, len(result.failures))
+        self.assertEqual(1, len(result.errors))
         terminal = {e['Test'].rsplit('.', 1)[-1]: e['Action'] for e in events if e['Action'] != 'run'}
         self.assertEqual(dict(test_success='pass', test_failure='fail', test_error='fail',
                               test_skip='skip', test_expected_failure='skip', test_unexpected_success='fail'), terminal)

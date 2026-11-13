@@ -27,12 +27,13 @@ class JSONResult(unittest.TextTestResult):
         self.event('pass', test)
 
     def addFailure(self, test, err):
-        super().addFailure(test, err)
-        self.failed_subtests.discard(test)
-        self.event('fail', test)
+        self.failure(super().addFailure, test, err)
 
     def addError(self, test, err):
-        super().addError(test, err)
+        self.failure(super().addError, test, err)
+
+    def failure(self, callback, test, err):
+        callback(test, err)
         self.failed_subtests.discard(test)
         self.event('fail', test)
 
