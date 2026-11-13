@@ -33,6 +33,7 @@ LOAD_PROFILES = ('near-limit-v1', 'hot-keys-v1', 'headers-v1', 'tombstones-v1',
 EXPECTED = {
     'integration': ['TestAllFileDirectionsAndResume', 'TestTopicToTopicSlice',
                     'TestLatestEndRemainsPinnedAfterCompletion',
+                    'TestKafkaArchiveConcurrentCapture',
                     'TestHistoricalFixtureTopicRetention/historical_default',
                     'TestHistoricalFixtureTopicRetention/finite_override',
                     'TestRunningSourceOffsetOutOfRangeFailsWithoutSavingProgress',

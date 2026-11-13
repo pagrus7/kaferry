@@ -125,7 +125,7 @@ jobs:
       - run: python3 -m tools.ci.ci integration go test -count=1 -json -race -tags=integration -coverpkg=./... -coverprofile=build-results/coverage.out ./src/tests/system
         env:
           CGO_ENABLED: "1"
-      - run: python3 -m tools.ci.ci verify-tests integration 'TestCLIInterruptCommitsAndResumeDoesNotRecopy' 'TestAllFileDirectionsAndResume' 'TestTopicToTopicSlice' 'TestLatestEndRemainsPinnedAfterCompletion' 'TestHistoricalFixtureTopicRetention/historical_default' 'TestHistoricalFixtureTopicRetention/finite_override'
+      - run: python3 -m tools.ci.ci verify-tests integration 'TestCLIInterruptCommitsAndResumeDoesNotRecopy' 'TestAllFileDirectionsAndResume' 'TestTopicToTopicSlice' 'TestLatestEndRemainsPinnedAfterCompletion' 'TestKafkaArchiveConcurrentCapture' 'TestHistoricalFixtureTopicRetention/historical_default' 'TestHistoricalFixtureTopicRetention/finite_override'
       - name: Check progress and archives against the PR base
         if: github.event_name == 'pull_request'
         env:
