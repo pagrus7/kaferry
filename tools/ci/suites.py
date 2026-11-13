@@ -46,6 +46,10 @@ EXPECTED = {
     'fault-replicated': list(REPLICATED_CASES.values()),
     'qualification': [
         'TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight', 'TestSaslTlsScramMechanisms/SCRAM-SHA-256',
+        'TestSaslTlsRestrictedAclInspectionAndUnnamedCopy',
+        'TestSaslTlsRestrictedAclInspectionAndUnnamedCopy/status',
+        'TestSaslTlsRestrictedAclInspectionAndUnnamedCopy/explain',
+        'TestSaslTlsRestrictedAclInspectionAndUnnamedCopy/unnamed-group',
         'TestSaslTlsScramMechanisms/SCRAM-SHA-512', 'TestSaslTlsExternalAuthentication/OAUTHBEARER',
         'TestSaslTlsExternalAuthentication/GSSAPI', 'TestSaslTlsOAuthTokenFile',
         'TestSaslTlsOAuthRenewalAndKeyRotation', 'TestMutualTlsCopy', 'TestServerTlsCopy',

@@ -7,14 +7,17 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/pagrus7/kaferry/src/internal/inspect"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -85,7 +88,7 @@ func secureFixture(t *testing.T) (*kadm.Client, *kgo.Client, string, string, str
 	for _, acl := range []*kadm.ACLBuilder{
 		kadm.NewACLs().Topics(src).Operations(kadm.OpRead),
 		kadm.NewACLs().Topics(dst).Operations(kadm.OpWrite),
-		kadm.NewACLs().Groups(prefix).Operations(kadm.OpRead).ResourcePatternType(kadm.ACLPatternPrefixed),
+		kadm.NewACLs().Groups("kaferry-").Operations(kadm.OpRead).ResourcePatternType(kadm.ACLPatternPrefixed),
 	} {
 		results, err := a.CreateACLs(ctx, acl.Allow("User:copier").AllowHosts("*"))
 		require.NoError(t, err)
@@ -211,6 +214,78 @@ func RunSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 			require.NotContains(t, result.detail, cfg["sasl.password"], "credentials stay redacted")
 		})
 	}
+}
+
+func RunSaslTlsRestrictedAclInspectionAndUnnamedCopy(t *testing.T) {
+	// Given a completed finite copy using only source/group READ and destination WRITE.
+	a, producer, src, dst, group := secureFixture(t)
+	publish(t, producer, &kgo.Record{Topic: src, Partition: 0, Value: []byte("restricted-acl")})
+	config := secureConfig(t, secureProperties(t, "copier", "fixture-copy-secret"))
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s') WHERE RECORD_OFFSET < LATEST", dst, src, group)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	result := binaryWorker(t, ctx, statement, config)
+	require.Zero(t, result.code, result.detail)
+	require.Equal(t, 1, summaryFrom(t, result.detail).Confirmed)
+	waitMembers(t, a, group, 0, 0, nil)
+
+	inspectQuery := func(t *testing.T, verb string) []byte {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+		defer cancel()
+		command := exec.CommandContext(ctx, testBinary(t), verb, "--sql", statement, "--config", config, "--json")
+		var stdout, stderr bytes.Buffer
+		command.Stdout, command.Stderr = &stdout, &stderr
+		require.NoError(t, command.Run(), stderr.String())
+		require.NoError(t, ctx.Err(), stderr.String())
+		require.NotContains(t, stderr.String(), "fixture-copy-secret")
+		return stdout.Bytes()
+	}
+	t.Run("status", func(t *testing.T) {
+		// When the copier inspects saved status, then the original finite scope is complete.
+		var report inspect.StatusReport
+		require.NoError(t, json.Unmarshal(inspectQuery(t, "status"), &report))
+		require.Equal(t, "complete", report.Verdict)
+		require.Equal(t, group, report.Group)
+		require.Len(t, report.Partitions, 1)
+		require.Equal(t, new(int64(1)), report.Partitions[0].Position)
+		require.Equal(t, new(int64(1)), report.Partitions[0].End)
+	})
+	t.Run("explain", func(t *testing.T) {
+		// When the copier previews the same job, then its saved position is available.
+		var report inspect.Report
+		require.NoError(t, json.Unmarshal(inspectQuery(t, "explain"), &report))
+		require.Equal(t, group, report.Group)
+		require.Len(t, report.Partitions, 1)
+		require.True(t, report.Partitions[0].Saved)
+		require.EqualValues(t, 1, report.Partitions[0].Start)
+	})
+	t.Run("unnamed-group", func(t *testing.T) {
+		// Given group READ on the kaferry- prefix, when GROUP is omitted, then a fresh copy succeeds.
+		statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_OFFSET < LATEST", dst, src)
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		result := binaryWorker(t, ctx, statement, config)
+		require.Zero(t, result.code, result.detail)
+		require.Equal(t, 1, summaryFrom(t, result.detail).Confirmed)
+		var generatedGroup string
+		for _, line := range strings.Split(result.detail, "\n") {
+			var event struct {
+				Message string `json:"msg"`
+				Group   string `json:"group"`
+			}
+			if json.Unmarshal([]byte(line), &event) == nil && event.Message == "one-off group generated" {
+				generatedGroup = event.Group
+			}
+		}
+		require.True(t, strings.HasPrefix(generatedGroup, "kaferry-"), "generated group: %q", generatedGroup)
+		require.NotEqual(t, group, generatedGroup)
+		require.EqualValues(t, 2, topicRecordCount(t, a, dst, 1))
+		reader := secureReader(t, dst)
+		for range 2 {
+			require.Equal(t, []byte("restricted-acl"), read(t, reader).Value)
+		}
+	})
 }
 
 func RunSaslTlsScramMechanisms(t *testing.T) {
