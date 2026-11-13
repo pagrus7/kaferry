@@ -13,7 +13,7 @@ Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157
 | M2 dead Python outside CI | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: dependency probe and callback bindings are used |
 | M3 unused system Go helpers | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: all 141 partial-tag findings are live in full harness builds |
 | M4 soak/load diagnostics | maintainability/harness-soak-tests | https://github.com/pagrus7/kaferry/pull/200 | f3b271c6a31c6813b4a6cd9975a29c5e264adb9a | old-head CI running; fix pending | Docs source complete; Tests Failed: restore late drain guard | reviewer rework and new-head CI |
-| M4 faults | maintainability/harness-fault-tests | https://github.com/pagrus7/kaferry/pull/201 | 35942bfae9bac785b60dca89be58bcb30f869225 | watching; all local checks passed | Pending | CI and independent reviews |
+| M4 faults | maintainability/harness-fault-tests | https://github.com/pagrus7/kaferry/pull/201 | 35942bfae9bac785b60dca89be58bcb30f869225 | watch exited nonzero; diagnosis pending | Pending | CI diagnosis and independent source reviews |
 | M4 fixtures/process | maintainability/harness-fixture-tests | https://github.com/pagrus7/kaferry/pull/202 | 05d4492ba83069358311c83a4f5d59a40ad78a44 | watching; all local checks passed | Pending | CI and independent reviews |
 | M5 harness selection | pending | pending | pending | pending | pending | #193 merge |
 | M6 workflow reuse | pending | pending | pending | pending | pending | #193 merge |
