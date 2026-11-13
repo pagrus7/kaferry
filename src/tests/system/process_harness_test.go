@@ -13,6 +13,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCLIDelayedInputPreservesBytesAndClosesStdin(t *testing.T) {
+	// Given a delayed SQL input pipe and a reader that waits for its end.
+	reader, writer, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
+	process := &cliProcess{stdin: writer}
+	type received struct {
+		data []byte
+		err  error
+	}
+	result := make(chan received, 1)
+	go func() {
+		data, readErr := io.ReadAll(reader)
+		result <- received{data: data, err: readErr}
+	}()
+	input := "INSERT INTO ARCHIVE 'outı''put'\r\nSELECT * FROM ARCHIVE '源/in' WITH(GROUP='g') OPTIONS(WORKER_STOP_AFTER_RECORDS=1);\n"
+
+	// When the launcher releases input, then it preserves every byte and closes
+	// stdin so the reader can finish without waiting for any more input.
+	require.NoError(t, process.send(input))
+	select {
+	case observed := <-result:
+		require.NoError(t, observed.err)
+		require.Equal(t, []byte(input), observed.data)
+	case <-time.After(time.Second):
+		t.Fatal("delayed CLI input did not reach EOF after send")
+	}
+}
+
 func TestBrokerCurrentProgressDoesNotWaitForChildExit(t *testing.T) {
 	// Given a real child that reports progress and remains alive awaiting input.
 	process := brokerLogChild(t, "")
