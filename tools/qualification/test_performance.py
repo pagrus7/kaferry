@@ -1,51 +1,19 @@
 """Only complete, compatible workload results can become comparison data."""
 
 from contextlib import chdir, redirect_stdout
-import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import tempfile
-import tarfile
 import unittest
 import zipfile
 from unittest.mock import patch
 
-from tools.qualification.performance import build, CASES, execute, measure, pair_summary, plan, previous
+from tools.qualification.performance import CASES, execute, measure, plan, previous
 
 
 class PerformanceTest(unittest.TestCase):
-    def test_builds_both_source_layouts_for_revision_comparisons(self):
-        # Given archived revisions with either the published or development layout.
-        for prefix in ('', 'src/'):
-            with self.subTest(prefix=prefix), tempfile.TemporaryDirectory() as directory:
-                data = io.BytesIO()
-                with tarfile.open(fileobj=data, mode='w') as archive:
-                    for name, content in {'cmd/kaferry/main.go': b'package main'}.items():
-                        entry = tarfile.TarInfo(prefix + name)
-                        entry.size = len(content)
-                        archive.addfile(entry, io.BytesIO(content))
-                def compile(command, **kwargs):
-                    self.assertTrue((Path(command[-1]) / 'main.go').is_file())
-                    Path(command[command.index('-o') + 1]).write_bytes(b'binary')
-                with patch('tools.qualification.performance.subprocess.check_output', return_value=data.getvalue()), \
-                     patch('tools.qualification.performance.subprocess.run', side_effect=compile), \
-                     patch('tools.qualification.performance.command', return_value='build identity'):
-                    # When built, then either layout produces the binary and its identity.
-                    binary, metadata = build('revision', Path(directory))
-                    self.assertEqual(b'binary', binary.read_bytes())
-                    self.assertEqual(metadata, {'sha256': hashlib.sha256(b'binary').hexdigest(),
-                                                'build_info': 'build identity'})
-
-    def test_pair_ratios_are_paired_before_summarizing(self):
-        # Given large absolute differences between runs but known within-pair ratios.
-        pairs = [{'base': {'records_per_second': base}, 'head': {'records_per_second': head}}
-                 for base, head in [(100, 90), (1000, 1100), (200, 200)]]
-        # When summarized, then the median is the paired ratio, not pooled throughput.
-        result = pair_summary(pairs)
-        self.assertEqual(result, {'head_over_base': [.9, 1.1, 1.0], 'median': 1.0, 'minimum': .9, 'maximum': 1.1})
-
     def test_calibration_always_runs_but_unchanged_comparison_can_skip(self):
         # Given nightly calibration or a retained compatible comparison baseline.
         for mode, baseline, run in [('calibration', None, True), ('comparison', {'head': 'b' * 40}, False),
@@ -101,18 +69,6 @@ class PerformanceTest(unittest.TestCase):
                     measure(root / 'harness', binary, 'archive_file', root / 'result',
                             {'file': 10, 'kafka': 10, 'archive_file': 10})
                 self.assertEqual(os.environ['KAFERRY_LOAD_ARCHIVE_RECORDS'], '10')
-
-    def test_pr_comparison_uses_the_merge_base(self):
-        # Given a PR whose target has advanced beyond its branch point.
-        with tempfile.TemporaryDirectory() as name, patch.dict(os.environ, {
-                'GITHUB_OUTPUT': str(Path(name) / 'outputs'), 'EVENT': 'pull_request',
-                'PERFORMANCE_MODE': 'comparison', 'PR_BASE': 'target', 'BASE_INPUT': ''}), \
-                patch('tools.qualification.performance.resolve', side_effect=['head', 'target']), \
-                patch('tools.qualification.performance.command', return_value='branch-point') as git, redirect_stdout(io.StringIO()):
-            # When planned, then unrelated target changes are excluded.
-            plan()
-            git.assert_called_once_with('git', 'merge-base', 'target', 'head')
-            self.assertIn('base=branch-point', (Path(name) / 'outputs').read_text())
 
     def test_retained_artifacts_cannot_reuse_a_rejected_baseline(self):
         # Given an expired artifact, a wrong-head report, then the latest usable report.

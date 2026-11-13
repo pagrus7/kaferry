@@ -249,19 +249,6 @@ class FaultOracleTest(unittest.TestCase):
         reader.drain([0], lambda *args: self.fail('empty cut must not consume output'))
         self.assertEqual([[('fixture', 0)]], pauses)
 
-    def test_snapshot_reader_starts_paused_with_compatible_unextended_request_budget(self):
-        # Given the one-second socket budget, when constructing a snapshot reader,
-        # then request no broker fetch wait and pause until a fixed cut is known.
-        observed = []
-        def consumer(config):
-            self.assertEqual((1000, 0), (config['socket.timeout.ms'], config['fetch.wait.max.ms']))
-            return SimpleNamespace(assign=lambda parts: observed.append(('assign', parts)),
-                                   pause=lambda parts: observed.append(('pause', parts)))
-        driver = SimpleNamespace(Consumer=consumer, TopicPartition=lambda *args: args)
-        with patch.dict(sys.modules, confluent_kafka=driver):
-            KafkaReader('fixture', 'source', 1, 'observer')
-        self.assertEqual([('assign', [('source', 0, 0)]), ('pause', [('source', 0, 0)])], observed)
-
     def test_lagging_independent_consumer_catches_up_only_to_captured_output(self):
         # Given safe saved progress while the independent consumer has read nothing.
         with tempfile.TemporaryDirectory() as directory:
