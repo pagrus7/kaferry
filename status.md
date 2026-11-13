@@ -5,11 +5,11 @@ Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157
 | Item | Branch | PR URL | Head SHA | CI | Reviews | Blocked by |
 | --- | --- | --- | --- | --- | --- | --- |
 | M0 inventory | notes/maintainability | No PR | branch tip | N/A | three read-only scouts complete | none |
-| M1 docs tests | maintainability/python-doc-tests | pending | pending | local checks running | pending | none |
-| M1 release tests | maintainability/python-release-tests | pending | pending | local checks running | pending | none |
-| M1 qualification accounting | pending | pending | pending | pending | pending | worker |
-| M1 qualification runner | pending | pending | pending | pending | pending | worker |
-| M1 qualification storage | pending | pending | pending | pending | pending | worker |
+| M1 docs tests | maintainability/python-doc-tests | https://github.com/pagrus7/kaferry/pull/195 | e914c01deba7b292a045e3917ebb046a1520d811 | watching; local 213 Python tests passed | Pending | CI and independent reviews |
+| M1 release tests | maintainability/python-release-tests | https://github.com/pagrus7/kaferry/pull/196 | ffdd57f2b1e0b60e2aef9d59877bedecf8d46e1e | watching; local 214 Python tests passed | Pending | CI and independent reviews |
+| M1 qualification accounting | maintainability/python-accounting-tests | pending | pending | implementation | pending | worker |
+| M1 qualification runner | maintainability/python-runner-tests | pending | pending | implementation | pending | worker |
+| M1 qualification storage | maintainability/python-storage-tests | pending | pending | implementation | pending | worker |
 | M2 dead Python outside CI | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: dependency probe and callback bindings are used |
 | M3 unused system Go helpers | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: all 141 partial-tag findings are live in full harness builds |
 | M4 soak/load diagnostics | pending | pending | pending | pending | pending | worker and coverage |
