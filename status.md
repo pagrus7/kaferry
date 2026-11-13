@@ -4,11 +4,17 @@ Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157
 
 | Item | Branch | PR URL | Head SHA | CI | Reviews | Blocked by |
 | --- | --- | --- | --- | --- | --- | --- |
-| M0 inventory | notes/maintainability | No PR | pending | N/A | scouts running | exhaustive inventory and baseline measurements |
-| M1 Python tests outside CI | pending | pending | pending | pending | pending | M0 |
-| M2 dead Python outside CI | pending | pending | pending | pending | pending | M0 reachability confirmation |
-| M3 unused system Go helpers | pending | pending | pending | pending | pending | M0 staticcheck |
-| M4 harness tests | pending | pending | pending | pending | pending | M0 and product coverage |
+| M0 inventory | notes/maintainability | No PR | branch tip | N/A | three read-only scouts complete | none |
+| M1 docs tests | maintainability/python-doc-tests | pending | pending | local checks running | pending | none |
+| M1 release tests | maintainability/python-release-tests | pending | pending | local checks running | pending | none |
+| M1 qualification accounting | pending | pending | pending | pending | pending | worker |
+| M1 qualification runner | pending | pending | pending | pending | pending | worker |
+| M1 qualification storage | pending | pending | pending | pending | pending | worker |
+| M2 dead Python outside CI | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: dependency probe and callback bindings are used |
+| M3 unused system Go helpers | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: all 141 partial-tag findings are live in full harness builds |
+| M4 soak/load diagnostics | pending | pending | pending | pending | pending | worker and coverage |
+| M4 faults | pending | pending | pending | pending | pending | worker and coverage |
+| M4 fixtures/process | pending | pending | pending | pending | pending | worker and coverage |
 | M5 harness selection | pending | pending | pending | pending | pending | #193 merge |
 | M6 workflow reuse | pending | pending | pending | pending | pending | #193 merge |
 | M7 CI and audit tests | pending | pending | pending | pending | pending | #193 merge |
@@ -29,13 +35,17 @@ Physical tracked source lines at the baseline stack top. Product is non-test Go 
 
 ## Product coverage
 
-Before/after statement coverage of `./src/internal/... ./src/cmd/...`, combining unit and harness tests: pending. Maximum allowed decrease per Go removal PR: 0.1 percentage points.
+Baseline statement coverage of `./src/internal/... ./src/cmd/...`, combining unit and every harness test: 5,514 / 5,750 = **95.895652%**. Go 1.27.4, Darwin arm64, race/atomic profiles, measured at the baseline stack top. Unit-only coverage is identical. Both runs passed. Per-PR after measurements pending. Maximum allowed decrease per Go removal PR: 0.1 percentage points.
+
+## Inventory evidence
+
+M0 classifies 529 unique rows: all 217 Python tests, 121 harness tests (120 Linux plus one Darwin-only), the integration-only faults routing test, inspected helpers, all three vulture hits, and every one of 141 unique conditional staticcheck findings. Twenty-eight overlapping helper records are consolidated. Vulture 2.16 at confidence 80 found no dead function or module. Staticcheck 2026.2.2 covered all 12 Linux CI tag combinations and four Darwin modes; full harness mode has no U1000 findings. Exact baseline EXPECTED selection equals the current harness set, rather than about 160 names. The historical stack moved 121 Linux/122 Darwin tests, then removed two legacy SQL tests and added one delayed-input test. The stack's other starting claims were verified.
 
 ## Owner decisions (report only)
 
-- Review-process cost: assess independent docs/tests reviews and mandatory Codecov changed-line inspection; measurements pending. No policy changes in this run.
+- Review-process cost: each removal PR requires two independent source reviews and a final-head CI evidence verification. Codecov changed-line review is N/A while no product implementation changes. Decide separately whether the recurring review cost is proportionate; no policy changes in this run. Personal usage evidence remains local.
 - Support-to-product ratio: decide whether to set a target after reviewing measured before/after counts.
-- Expensive tests retained solely for oracle/gate or release safety: inventory pending.
+- Expensive tests retained solely for oracle/gate or release safety: broker-evidence tests (345 function lines), ownership-evidence tests (405), publisher reconciliation (347), and Darwin RSS calibration (73) retain unique false-green rejection. They require large fixtures or platform-sensitive calibration; measured runtime and monetary maintenance cost are unknown. Python rejection and release-safety fixtures remain for the same criterion; see the inventory's KEEP reasons.
 
 ## Phase 2 plan
 
