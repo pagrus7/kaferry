@@ -63,6 +63,9 @@ replicated-helpers:
 	pattern=$$($(PYTHON) -m tools.ci.suites pattern replicated-helpers) && \
 	CGO_ENABLED=1 $(PYTHON) -m tools.ci.ci replicated-helpers $(GO) test -count=1 -json -race -tags=integration,fault,load,harness -run "$$pattern" ./src/tests/system ./src/tests/system/faults
 	$(PYTHON) -m tools.ci.suites verify replicated-helpers "$${KAFERRY_REPORT_DIR:-build-results}/replicated-helpers.log"
+	# Coverage uses the integration source scope shared with the other uploads.
+	pattern=$$($(PYTHON) -m tools.ci.suites pattern replicated-helpers) && \
+	CGO_ENABLED=1 $(PYTHON) -m tools.ci.ci replicated-helpers-coverage $(GO) test -count=1 -json -race -covermode=atomic -coverpkg=./... -coverprofile="$${KAFERRY_REPORT_DIR:-build-results}/replicated-helpers.coverage.out" -tags=integration,harness -run "$$pattern" ./src/tests/system ./src/tests/system/faults
 broker:
 	docker compose -f src/tests/compose.yaml -p kaferry-compat --profile cross-cluster up -d --wait --wait-timeout 60
 	# Listening sockets precede cold group-coordinator readiness.

@@ -29,7 +29,9 @@ import json
 import os
 import sys
 from pathlib import Path
-Path(os.environ["HELPER_ARGUMENTS"]).write_text(json.dumps(dict(args=sys.argv[1:], cgo=os.environ.get("CGO_ENABLED"))))
+entry = json.dumps(dict(args=sys.argv[1:], cgo=os.environ.get("CGO_ENABLED")))
+with Path(os.environ["HELPER_ARGUMENTS"]).open("a") as log:
+    log.write(entry+"\\n")
 for event in json.loads(os.environ["HELPER_EVENTS"]):
     print(json.dumps(event))
 ''')
@@ -43,6 +45,7 @@ for event in json.loads(os.environ["HELPER_EVENTS"]):
             cases.append((passes + [dict(Action='skip', Test='Unexpected')], 'Unexpected skip events'))
             for events, error in cases:
                 with self.subTest(events=events):
+                    arguments.unlink(missing_ok=True)
                     env = dict(os.environ, KAFERRY_REPORT_DIR=str(directory/'results'),
                                HELPER_ARGUMENTS=str(arguments), HELPER_EVENTS=json.dumps(events))
                     result = subprocess.run(['make', '--no-print-directory', 'replicated-helpers',
@@ -55,7 +58,9 @@ for event in json.loads(os.environ["HELPER_EVENTS"]):
                     else:
                         self.assertNotEqual(0, result.returncode)
                         self.assertIn(error, result.stderr)
-                    captured = json.loads(arguments.read_text())
+                    commands = [json.loads(line) for line in arguments.read_text().splitlines()]
+                    self.assertEqual(2 if error is None else 1, len(commands))
+                    captured = commands[0]
                     self.assertEqual('1', captured['cgo'])
                     args = captured['args']
                     for flag in ('-race', '-count=1', '-json', '-tags=integration,fault,load,harness'):
@@ -66,6 +71,15 @@ for event in json.loads(os.environ["HELPER_EVENTS"]):
                     for excluded in ('TestReplicatedZombieWorker', 'TestReplicatedProxyRoutes',
                                      'TestLoadBoundedKafkaCopy', 'TestReplicatedBrokerFaults', HELPERS[0]+'Extra'):
                         self.assertIsNone(re.fullmatch(pattern, excluded))
+                    if error is None:
+                        coverage = commands[1]
+                        self.assertEqual('1', coverage['cgo'])
+                        for flag in ('-race', '-count=1', '-json', '-covermode=atomic', '-coverpkg=./...',
+                                     '-tags=integration,harness',
+                                     '-coverprofile='+str(directory/'results/replicated-helpers.coverage.out')):
+                            self.assertIn(flag, coverage['args'])
+                        self.assertEqual(args[-2:], coverage['args'][-2:])
+                        self.assertEqual(pattern, coverage['args'][coverage['args'].index('-run')+1])
 
 
 if __name__ == '__main__':
