@@ -81,14 +81,14 @@ soak: $(TEST_BINARY_PREREQUISITE)
 qualification: $(TEST_BINARY_PREREQUISITE)
 	GO=$(GO) sh src/tests/qualification/run.sh
 fuzz:
-	$(GO) test -run '^$$' -fuzz FuzzProgressLifecycle -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/copy
-	$(GO) test -run '^$$' -fuzz FuzzParse -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/sql
-	$(GO) test -run '^$$' -fuzz FuzzContainer -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/archive/avro
-	$(GO) test -run '^$$' -fuzz FuzzState -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/archive/capture
-	$(GO) test -run '^$$' -fuzz FuzzCheckpoint -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/archive/replay
+	$(GO) test $(KAFERRY_TEST_OUTPUT) -run '^$$' -fuzz FuzzProgressLifecycle -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/copy
+	$(GO) test $(KAFERRY_TEST_OUTPUT) -run '^$$' -fuzz FuzzParse -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/sql
+	$(GO) test $(KAFERRY_TEST_OUTPUT) -run '^$$' -fuzz FuzzContainer -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/archive/avro
+	$(GO) test $(KAFERRY_TEST_OUTPUT) -run '^$$' -fuzz FuzzState -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/archive/capture
+	$(GO) test $(KAFERRY_TEST_OUTPUT) -run '^$$' -fuzz FuzzCheckpoint -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/archive/replay
 benchmark:
-	$(GO) test -run '^$$' -bench 'Benchmark(Encode|Decode)$$' -benchmem ./src/internal/archive/avro
-	$(GO) test -run '^$$' -bench "Benchmark(ReplayOverlap|CheckpointEncoding|CheckpointSaving)" -benchmem ./src/internal/archive/replay
+	$(GO) test $(KAFERRY_TEST_OUTPUT) -run '^$$' -bench 'Benchmark(Encode|Decode)$$' -benchmem ./src/internal/archive/avro
+	$(GO) test $(KAFERRY_TEST_OUTPUT) -run '^$$' -bench "Benchmark(ReplayOverlap|CheckpointEncoding|CheckpointSaving)" -benchmem ./src/internal/archive/replay
 metrics:
 	@rg --files src/cmd src/internal -g '*.go' -g '!**/*_test.go' | xargs wc -l
 duplicates:

@@ -74,6 +74,8 @@ Security covers PLAIN, SCRAM-SHA-256/512, signed OAuth client credentials, token
 
 Compatibility tests live in `src/tests/compatibility`, using regular helpers from `src/tests/system`. Relevant PR changes run the matrix; unrelated documentation/reviewer changes may skip it. Unknown paths run it. Scheduled main jobs may reuse a passing suite/tier on the same commit only while its test executions are less than 30 days old. Failed/cancelled attempts retry; skipped tests and aggregate report reruns do not renew evidence. Nightly cannot replace full. The planner links reused executions. Weekly fuzzing, vulnerability scans and performance calibration continue separately. Releases always test their packaged executable.
 
+Manual qualification also runs streaming archive capture and the application endurance profile on separate hosted runners. Both use the Kafka soak's `soak_duration` input, with a one-minute minimum; runs shorter than 24 hours remain rehearsals. The fault suite includes the five blocked-output recovery cases. Artifacts retain individual JSON results for script tests, Go suites and each platform's packaged smoke tests. Benchmark evidence requires named measurement rows and passing package results, because Go benchmarks do not emit individual test-pass events.
+
 ## Plain replicated smoke
 
 ```sh

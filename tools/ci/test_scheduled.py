@@ -191,8 +191,18 @@ class ScheduledTests(unittest.TestCase):
                         decisions = scheduled.plan(kind, 'full', {'EVENT': event})
                         self.assertTrue(all(d['run'] for d in decisions))
                         if kind == 'qualification' and event == 'workflow_dispatch':
-                            self.assertEqual(scheduled.WEEKLY, [d['suite'] for d in decisions])
+                            self.assertEqual(scheduled.WEEKLY + ['capture', 'endurance'], [d['suite'] for d in decisions])
             self.assertTrue(scheduled.plan('compatibility', 'full', {'EVENT': 'schedule', 'FORCE_RUN': 'true'})[0]['run'])
+
+    def test_manual_profiles_do_not_expand_the_weekly_schedule(self):
+        # Given a weekly schedule and an explicit manual qualification request.
+        with patch('tools.ci.scheduled.gh', return_value=[{'workflow_runs': []}]):
+            weekly = scheduled.plan('qualification', 'nightly', {'EVENT': 'schedule', 'WEEKLY': 'true',
+                'GITHUB_REPOSITORY': 'example/repo', 'GITHUB_SHA': HEAD})
+        manual = scheduled.plan('qualification', 'nightly', {'EVENT': 'workflow_dispatch'})
+        # When selected, then only the manual request adds the two streaming profiles.
+        self.assertEqual(scheduled.WEEKLY, [d['suite'] for d in weekly])
+        self.assertEqual(['capture', 'endurance'], [d['suite'] for d in manual if d['suite'] not in scheduled.WEEKLY])
 
     def test_history_failure_runs_tests_and_hides_cli_stderr(self):
         env = {'EVENT': 'schedule', 'GITHUB_REPOSITORY': 'example/repo', 'GITHUB_SHA': HEAD}

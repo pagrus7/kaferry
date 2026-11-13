@@ -43,7 +43,7 @@ jobs:
         env:
           JSCPD: ${{ github.workspace }}/.cache/quality-tools/jscpd
           GOLANGCI_LINT: ${{ github.workspace }}/.cache/quality-tools/golangci-lint-2.15.0-linux-amd64/golangci-lint
-        run: python3 -m unittest discover -s tools -t . -p 'test_*.py'
+        run: python3 -m tools.ci.python_tests
       - name: Go lint gate
         run: make lint GOLANGCI_LINT=.cache/quality-tools/golangci-lint-2.15.0-linux-amd64/golangci-lint
       - name: Duplication gate

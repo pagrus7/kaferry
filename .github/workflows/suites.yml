@@ -61,7 +61,7 @@ jobs:
           python3 -m tools.ci.ci build make build
           echo "KAFERRY_TEST_BINARY=$PWD/bin/kaferry" >> "$GITHUB_ENV"
       - name: Start plain Kafka fixtures
-        if: contains(fromJSON('["integration","load","soak","fault"]'), matrix.suite)
+        if: contains(fromJSON('["integration","load","soak","capture","endurance","fault"]'), matrix.suite)
         run: python3 -m tools.ci.ci broker make broker
       - name: Install independent fault observer
         if: matrix.suite == 'fault'
@@ -76,7 +76,7 @@ jobs:
       - name: Reject source rebuilds in archive tests
         if: always() && inputs.artifact != ''
         run: test ! -e bin/kaferry
-      - if: always() && contains(fromJSON('["integration","load","soak","fault"]'), matrix.suite)
+      - if: always() && contains(fromJSON('["integration","load","soak","capture","endurance","fault"]'), matrix.suite)
         run: |
           mkdir -p build-results
           docker compose -f src/tests/compose.yaml -p kaferry-compat --profile cross-cluster logs --no-color > build-results/brokers.log

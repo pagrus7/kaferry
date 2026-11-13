@@ -43,6 +43,16 @@ class QualityTest(unittest.TestCase):
                                           "BenchmarkOther": (10.0, 0, 0),
                                           "BenchmarkEncode/tiny": (268976.0, 750079, 2036)})
 
+    def test_benchmark_json_preserves_split_output_and_measurements(self):
+        # Given Go JSON that splits a benchmark row across output events.
+        events = [dict(Action='start', Package='codec'),
+                  dict(Action='output', Package='codec', Output='BenchmarkEncode/normal-2\t'),
+                  dict(Action='output', Package='codec', Output='100 42.5 ns/op 8 B/op 1 allocs/op\n'),
+                  dict(Action='pass', Package='codec')]
+        # When parsed, then retain the same numeric result as plain Go output.
+        self.assertEqual({'BenchmarkEncode/normal': (42.5, 8, 1)},
+                         benchmarks('\n'.join(json.dumps(event) for event in events)))
+
     def test_history_uses_test_environment_and_image_identity(self):
         # Given the fixture startup environment is identical but actual test images differ.
         with tempfile.TemporaryDirectory() as name:
