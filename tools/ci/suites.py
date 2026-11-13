@@ -32,6 +32,7 @@ LOAD_PROFILES = ('near-limit-v1', 'hot-keys-v1', 'headers-v1', 'tombstones-v1',
                  'source-none-v1', 'source-gzip-v1', 'source-snappy-v1', 'source-lz4-v1', 'source-zstd-v1')
 EXPECTED = {
     'integration': ['TestAllFileDirectionsAndResume', 'TestTopicToTopicSlice',
+                    'TestLatestEndRemainsPinnedAfterCompletion',
                     'TestHistoricalFixtureTopicRetention/historical_default',
                     'TestHistoricalFixtureTopicRetention/finite_override',
                     'TestRunningSourceOffsetOutOfRangeFailsWithoutSavingProgress',
