@@ -32,6 +32,15 @@ func TestSoakMonitorRequiresFiveIdleRSSSamples(t *testing.T) {
 	require.ErrorContains(t, monitor.checkIdleRSS(5), "got 0, need 5")
 }
 
+func TestConsumeOnlyStartAllowsLatePublishingGrace(t *testing.T) {
+	scheduledEnd := time.Unix(0, 0)
+	require.Equal(t, scheduledEnd.Add(10*time.Second),
+		consumeOnlyStart(scheduledEnd, scheduledEnd.Add(-time.Second)).Add(soakDrainDuration))
+	lastPublish := scheduledEnd.Add(5 * time.Second)
+	deadline := consumeOnlyStart(scheduledEnd, lastPublish).Add(soakDrainDuration)
+	require.Equal(t, scheduledEnd.Add(15*time.Second), deadline)
+}
+
 func TestLoadStreamingAccountingRetainsAllDeliveryFailures(t *testing.T) {
 	// Given acknowledged source IDs with two gaps and one corrupted value.
 	stream := newStreamRecords("fixture", time.Now().Truncate(time.Millisecond))
