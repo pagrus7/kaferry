@@ -14,32 +14,53 @@ import (
 )
 
 func TestKafkaArchiveConcurrentCapture(t *testing.T) {
-	// Given a finite four-partition source and two processes sharing a group and archive directory.
+	// Given an uncommitted four-partition source and two processes sharing a group and archive directory.
 	const partitions, count = 4, 400
 	a := admin(t)
 	source, destination := topic(t, a, partitions), topic(t, a, partitions)
 	group := source + "-archive"
 	archive := filepath.Join(t.TempDir(), "archive")
-	p := producer(t)
+	p := producer(t, kgo.TransactionalID(source+"-capture"))
+	require.NoError(t, p.BeginTransaction())
+	defer func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		_ = p.EndTransaction(cleanup, kgo.TryAbort)
+	}()
 	expected := make(map[string]int, count)
 	for id := range count {
 		value := fmt.Sprintf("record-%d", id)
 		expected[value] = 1
 		publish(t, p, &kgo.Record{Topic: source, Partition: int32(id % partitions), Value: []byte(value)})
 	}
-	// A one-record cap forces durability work throughout capture, keeping concurrent ownership observable.
+	// A one-record cap exercises shared archive durability throughout capture.
 	config := configuration(t, "record_cap=1")
-	statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) WHERE RECORD_OFFSET < LATEST", archive, source, group)
+	// The literal end is already replicated, but read-committed capture must wait for the transaction.
+	statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) WHERE RECORD_OFFSET < %d", archive, source, group, count/partitions)
 	binary := testBinary(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
-	// When both capture processes start before either is awaited.
+	// When both capture processes acquire partitions before the transaction makes records readable.
 	workers := []*cliProcess{
 		startCLI(t, ctx, binary, statement, "run", "--file", "-", "--config", config),
 		startCLI(t, ctx, binary, statement, "run", "--file", "-", "--config", config),
 	}
 	waitMembers(t, a, group, 2, partitions, nil)
+	groups, err := a.DescribeGroups(ctx, group)
+	require.NoError(t, err)
+	require.NoError(t, groups[group].Err)
+	require.Len(t, groups[group].Members, len(workers))
+	for _, member := range groups[group].Members {
+		assignment, ok := member.Assigned.AsConsumer()
+		require.True(t, ok, "capture member must have a consumer assignment")
+		owned := 0
+		for _, topic := range assignment.Topics {
+			owned += len(topic.Partitions)
+		}
+		require.Positive(t, owned, "each capture process must own partitions before commit")
+	}
+	require.NoError(t, p.EndTransaction(ctx, kgo.TryCommit))
 	confirmed := 0
 	for _, worker := range workers {
 		require.NoError(t, worker.wait(), worker.logs())
@@ -50,7 +71,7 @@ func TestKafkaArchiveConcurrentCapture(t *testing.T) {
 		confirmed += summary.Confirmed
 	}
 
-	// Then both exit successfully after capturing exactly the pinned source range.
+	// Then both exit successfully after capturing exactly the fixed source range.
 	require.Equal(t, count, confirmed)
 	for _, partition := range committedPartitions(t, a, group, source, partitions) {
 		require.EqualValues(t, count/partitions, partition.At)
