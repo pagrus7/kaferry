@@ -7,14 +7,14 @@ Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157
 | M0 inventory | notes/maintainability | No PR | branch tip | N/A | three read-only scouts complete | none |
 | M1 docs tests | maintainability/python-doc-tests | https://github.com/pagrus7/kaferry/pull/195 | e914c01deba7b292a045e3917ebb046a1520d811 | watching; local 213 Python tests passed | Pending | CI and independent reviews |
 | M1 release tests | maintainability/python-release-tests | https://github.com/pagrus7/kaferry/pull/196 | ffdd57f2b1e0b60e2aef9d59877bedecf8d46e1e | watching; local 214 Python tests passed | Pending | CI and independent reviews |
-| M1 qualification accounting | maintainability/python-accounting-tests | pending | pending | implementation | pending | worker |
-| M1 qualification runner | maintainability/python-runner-tests | pending | pending | implementation | pending | worker |
-| M1 qualification storage | maintainability/python-storage-tests | pending | pending | implementation | pending | worker |
+| M1 qualification accounting | maintainability/python-accounting-tests | pending | 04461399416d06269e8c6ffad56762185f99b6e5 | local full 204 tests passed; PR next | Pending | CI and independent reviews |
+| M1 qualification runner | maintainability/python-runner-tests | pending | 6efcad82c760c9b6aeaf39151f6a0a86b916e324 | local full 204 tests passed; PR next | Pending | CI and independent reviews |
+| M1 qualification storage | maintainability/python-storage-tests | pending | 06d34e2648419e2f638ed0224628ce586cb91658 | local full 205 tests passed; PR next | Pending | CI and independent reviews |
 | M2 dead Python outside CI | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: dependency probe and callback bindings are used |
 | M3 unused system Go helpers | no branch | No PR needed | baseline | N/A | inventory complete | no justified removal: all 141 partial-tag findings are live in full harness builds |
-| M4 soak/load diagnostics | pending | pending | pending | pending | pending | worker and coverage |
-| M4 faults | pending | pending | pending | pending | pending | worker and coverage |
-| M4 fixtures/process | pending | pending | pending | pending | pending | worker and coverage |
+| M4 soak/load diagnostics | maintainability/harness-soak-tests | pending | pending | before/after coverage running | pending | worker and coverage |
+| M4 faults | maintainability/harness-fault-tests | pending | pending | before/after coverage running | pending | worker and coverage |
+| M4 fixtures/process | maintainability/harness-fixture-tests | pending | pending | before/after coverage running | pending | worker and coverage |
 | M5 harness selection | pending | pending | pending | pending | pending | #193 merge |
 | M6 workflow reuse | pending | pending | pending | pending | pending | #193 merge |
 | M7 CI and audit tests | pending | pending | pending | pending | pending | #193 merge |
@@ -38,6 +38,8 @@ Physical tracked source lines at the baseline stack top. Product is non-test Go 
 Baseline statement coverage of `./src/internal/... ./src/cmd/...`, combining unit and every harness test: 5,514 / 5,750 = **95.895652%**. Go 1.27.4, Darwin arm64, race/atomic profiles, measured at the baseline stack top. Unit-only coverage is identical. Both runs passed. Per-PR after measurements pending. Maximum allowed decrease per Go removal PR: 0.1 percentage points.
 
 ## Inventory evidence
+
+Worker inspection added twelve explicit nested callback verdicts, bringing the current inventory to 541 unique rows. Five pre-existing storage helper rows were deduplicated. Docs and release candidate rows now link to their PRs.
 
 M0 classifies 529 unique rows: all 217 Python tests, 121 harness tests (120 Linux plus one Darwin-only), the integration-only faults routing test, inspected helpers, all three vulture hits, and every one of 141 unique conditional staticcheck findings. Twenty-eight overlapping helper records are consolidated. Vulture 2.16 at confidence 80 found no dead function or module. Staticcheck 2026.2.2 covered all 12 Linux CI tag combinations and four Darwin modes; full harness mode has no U1000 findings. Exact baseline EXPECTED selection equals the current harness set, rather than about 160 names. The historical stack moved 121 Linux/122 Darwin tests, then removed two legacy SQL tests and added one delayed-input test. The stack's other starting claims were verified.
 

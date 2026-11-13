@@ -1,6 +1,6 @@
 # Maintainability inventory
 
-Run started **2026-11-13 14:29:23 UTC**. Inventory baseline: `e4ef4eb93ec6e117325f815157aeff82679187a3`, fetched `origin/hardening/make-cleanup`; notes branch starts from `origin/main` (`2e5b3add0e12fa33c9de54963e2a8af68ef44410`). This inventory precedes every removal PR. Proposed group names become PR links when opened.
+Run started **2026-11-13 14:29:23 UTC**. Inventory baseline: `e4ef4eb93ec6e117325f815157aeff82679187a3`, fetched `origin/hardening/make-cleanup`; notes branch starts from `origin/main` (`2e5b3add0e12fa33c9de54963e2a8af68ef44410`). This inventory precedes every removal PR. Opened groups link to their PRs; pending groups retain their item names.
 
 The keep/delete/merge decision follows the requested protection criterion: retain product behavior assertions, oracle/gate rejection of bad evidence, and release safety checks. Remove report presentation, third-party behavior, fail-loud plumbing and repeated assertions. Uncertain cases remain with reasons. Live helpers are not dead merely because a narrower build excludes their callers; helper deletions here are limited to support made unreachable by their associated test removals.
 
@@ -14,29 +14,29 @@ Product coverage baseline: **5,514 / 5,750 statements = 95.89565217391305%**, un
 
 These are plans, not approval to weaken the retained tests. Phase 1 excludes tools/ci, replicated_audit*, workflows and the other session's owned files. M2 has no confirmed dead Python code; M3 has no confirmed dead Go helper. Phase 2 waits for #193 to merge.
 
-| Group / anchor | Phase | Tests | Affected helpers | Candidate span lines | Decision |
-| --- | ---: | ---: | ---: | ---: | --- |
-| [M1 docs](#m1-docs) | 1 | 4 | 0 | 65 | delete presentation, duplicate, third-party or fail-loud plumbing checks |
-| [M1 qualification accounting](#m1-qualification-accounting) | 1 | 13 | 0 | 166 | delete presentation, duplicate, third-party or fail-loud plumbing checks |
-| [M1 qualification runner](#m1-qualification-runner) | 1 | 13 | 0 | 239 | delete presentation, duplicate, third-party or fail-loud plumbing checks |
-| [M1 qualification storage](#m1-qualification-storage) | 1 | 12 | 5 | 272 | delete presentation, duplicate, third-party or fail-loud plumbing checks |
-| [M1 release](#m1-release) | 1 | 3 | 0 | 42 | delete presentation, duplicate, third-party or fail-loud plumbing checks |
-| [M7 Python CI](#m7-python-ci) | 2 | 10 | 0 | 184 | delete presentation, duplicate, third-party or fail-loud plumbing checks |
-| [M4 soak/load accounting](#m4-soak) | 1 | 9 | 0 | 220 | delete presentation, duplicate, third-party or fail-loud plumbing checks |
-| [M4 faults](#m4-faults) | 1 | 9 | 3 | 365 | delete presentation, duplicate, third-party or fail-loud plumbing checks |
-| [M4 fixtures/process](#m4-fixtures) | 1 | 5 | 0 | 133 | delete presentation, duplicate, third-party or fail-loud plumbing checks |
-| [M7 audit](#m7-audit) | 2 | 5 | 0 | 145 | delete presentation, duplicate, third-party or fail-loud plumbing checks |
-| [M2 unused Python](#m2-no-change) | 1 | 0 | 0 | 0 | no-change: all three vulture hits have registered/runtime uses |
-| [M3 unused Go](#unused-helpers) | 1 | 0 | 0 | 0 | no-change: all 141 partial-tag findings are live under complete harness tags |
+| Group / anchor | Phase | Tests | Affected helpers | Candidate span lines | Decision | PR |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| [M1 docs](#m1-docs) | 1 | 4 | 0 | 65 | delete presentation, duplicate, third-party or fail-loud plumbing checks | [#195](https://github.com/pagrus7/kaferry/pull/195) |
+| [M1 qualification accounting](#m1-qualification-accounting) | 1 | 13 | 2 | 166 | delete presentation, duplicate, third-party or fail-loud plumbing checks | Pending |
+| [M1 qualification runner](#m1-qualification-runner) | 1 | 13 | 5 | 239 | delete presentation, duplicate, third-party or fail-loud plumbing checks | Pending |
+| [M1 qualification storage](#m1-qualification-storage) | 1 | 12 | 10 | 272 | delete presentation, duplicate, third-party or fail-loud plumbing checks | Pending |
+| [M1 release](#m1-release) | 1 | 3 | 0 | 42 | delete presentation, duplicate, third-party or fail-loud plumbing checks | [#196](https://github.com/pagrus7/kaferry/pull/196) |
+| [M7 Python CI](#m7-python-ci) | 2 | 10 | 0 | 184 | delete presentation, duplicate, third-party or fail-loud plumbing checks | Pending |
+| [M4 soak/load accounting](#m4-soak) | 1 | 9 | 0 | 220 | delete presentation, duplicate, third-party or fail-loud plumbing checks | Pending |
+| [M4 faults](#m4-faults) | 1 | 9 | 3 | 365 | delete presentation, duplicate, third-party or fail-loud plumbing checks | Pending |
+| [M4 fixtures/process](#m4-fixtures) | 1 | 5 | 0 | 133 | delete presentation, duplicate, third-party or fail-loud plumbing checks | Pending |
+| [M7 audit](#m7-audit) | 2 | 5 | 0 | 145 | delete presentation, duplicate, third-party or fail-loud plumbing checks | Pending |
+| [M2 unused Python](#m2-no-change) | 1 | 0 | 0 | 0 | no-change: all three vulture hits have registered/runtime uses | No PR needed |
+| [M3 unused Go](#unused-helpers) | 1 | 0 | 0 | 0 | no-change: all 141 partial-tag findings are live under complete harness tags | No PR needed |
 
 M1 docs can remove its entire 78-line test module (65 method-span lines). Other groups remain below the requested approximate 400-line Python or 500-line Go deletion limits before orphan import/fixture cleanup; workers must report actual patch sizes. No new test helper layer or repository dependency is proposed.
 
 ## Inventory completeness
 
-- Python: **217 unittest methods**, **6 affected test helpers**, and **3 vulture hits**; vulture >=80% found no confirmed dead module/function.
+- Python: **217 unittest methods**, **18 affected test helpers** (including nested callbacks), and **3 vulture hits**; vulture >=80% found no confirmed dead module/function.
 - Harness/faults: **121 harness functions** including Darwin, **one integration-only fault-route test** (`TestReplicatedProxyRoutes`, oracle-gate), plus **68 inspected helpers**.
 - Staticcheck: **141 unique reported declarations** across every Linux CI tag combination and supplemental Darwin modes; zero findings in full harness selections. Associated types, fields and constants are included.
-- Combined inventory: **529 distinct rows**; **28** helper/declaration overlaps appear once, with the specific harness-test removal verdict taking precedence and the staticcheck reachability note retained. No test row is deduplicated away.
+- Combined inventory: **541 distinct rows**; **28** helper/declaration overlaps appear once, with the specific harness-test removal verdict taking precedence and the staticcheck reachability note retained. No test row is deduplicated away. Twelve nested callbacks identified during implementation are now explicit rows; five existing storage-helper rows were not duplicated.
 
 <a id="python-tests"></a>
 ## Python tests and affected helpers
@@ -58,10 +58,10 @@ Vulture 2.16: `vulture tools --min-confidence 80` returns exactly three hits, al
 
 | path | test or function | lines | category | verdict | one-line reason | PR |
 | --- | --- | ---: | --- | --- | --- | --- |
-| `tools/docs/test_docs.py` | `DocsTest.test_shell_examples_are_checked_without_execution` | 15 | formatting | delete | Checks the documentation shell-example checker; no product behavior or release evidence is exercised. | M1-docs |
-| `tools/docs/test_docs.py` | `DocsTest.test_reference_links_check_files_and_headings` | 17 | formatting | delete | Checks Markdown links and headings rather than product or release evidence. | M1-docs |
-| `tools/docs/test_docs.py` | `DocsTest.test_html_images_check_local_sources` | 18 | formatting | delete | Checks documentation image markup rather than product or release evidence. | M1-docs |
-| `tools/docs/test_docs.py` | `DocsTest.test_links_and_duplicate_anchors_ignore_code_blocks` | 15 | formatting | delete | Checks Markdown parsing and generated anchors; failures affect documentation validation only. | M1-docs |
+| `tools/docs/test_docs.py` | `DocsTest.test_shell_examples_are_checked_without_execution` | 15 | formatting | delete | Checks the documentation shell-example checker; no product behavior or release evidence is exercised. | [#195](https://github.com/pagrus7/kaferry/pull/195) |
+| `tools/docs/test_docs.py` | `DocsTest.test_reference_links_check_files_and_headings` | 17 | formatting | delete | Checks Markdown links and headings rather than product or release evidence. | [#195](https://github.com/pagrus7/kaferry/pull/195) |
+| `tools/docs/test_docs.py` | `DocsTest.test_html_images_check_local_sources` | 18 | formatting | delete | Checks documentation image markup rather than product or release evidence. | [#195](https://github.com/pagrus7/kaferry/pull/195) |
+| `tools/docs/test_docs.py` | `DocsTest.test_links_and_duplicate_anchors_ignore_code_blocks` | 15 | formatting | delete | Checks Markdown parsing and generated anchors; failures affect documentation validation only. | [#195](https://github.com/pagrus7/kaferry/pull/195) |
 
 <a id="m1-qualification-accounting"></a>
 #### M1-qualification-accounting
@@ -81,6 +81,8 @@ Vulture 2.16: `vulture tools --min-confidence 80` returns exactly three hits, al
 | `tools/qualification/test_performance.py` | `PerformanceTest.test_builds_both_source_layouts_for_revision_comparisons` | 21 | plumbing | delete | Checks mocked build layout selection; an unbuildable revision fails the comparison loudly. | M1-qualification-accounting |
 | `tools/qualification/test_performance.py` | `PerformanceTest.test_pair_ratios_are_paired_before_summarizing` | 7 | formatting | delete | Checks numerical report aggregation; the performance report has no product-regression pass/fail threshold. | M1-qualification-accounting |
 | `tools/qualification/test_performance.py` | `PerformanceTest.test_pr_comparison_uses_the_merge_base` | 11 | plumbing | delete | Checks Git command argument forwarding for a report baseline rather than a product pass/fail gate. | M1-qualification-accounting |
+| `tools/qualification/test_fault_oracle.py` | `FaultOracleTest.test_snapshot_reader_starts_paused_with_compatible_unextended_request_budget.consumer` | 4 | plumbing | delete | Nested fake callback used only by the removed setup/build-plumbing test. | M1-qualification-accounting pending |
+| `tools/qualification/test_performance.py` | `PerformanceTest.test_builds_both_source_layouts_for_revision_comparisons.compile` | 3 | plumbing | delete | Nested fake callback used only by the removed setup/build-plumbing test. | M1-qualification-accounting pending |
 
 <a id="m1-qualification-runner"></a>
 #### M1-qualification-runner
@@ -100,6 +102,11 @@ Vulture 2.16: `vulture tools --min-confidence 80` returns exactly three hits, al
 | `tools/qualification/test_qualify.py` | `MatrixTest.test_timeout_kills_stdout_inheriting_descendant_after_parent_exit` | 26 | plumbing | delete | Checks process-group termination and inherited pipes; failures hang or fail loudly rather than accept bad product evidence. | M1-qualification-runner |
 | `tools/qualification/test_qualify.py` | `MatrixTest.test_replicated_admission_rejects_resource_shortages_and_busy_ports` | 20 | plumbing | delete | Checks CPU/memory/disk/port fixture admission; bad resources make setup or tests fail loudly. | M1-qualification-runner |
 | `tools/qualification/test_startup_cleanup.py` | `StartupCleanupTest.test_fixture_collects_bulk_logs_only_after_failure_or_inconclusive_result` | 52 | plumbing | delete | Checks bulk-log collection, teardown attempts and cleanup error precedence; independent suite-failure propagation remains covered. | M1-qualification-runner |
+| `tools/qualification/test_endurance_topology.py` | `ReplicatedEnduranceTest.test_capacity_counts_three_replicas_of_both_clusters_before_starting_brokers.disk` | 2 | plumbing | delete | Nested fixture callback used only by the removed plumbing test; no independent caller or product assertion. | M1-qualification-runner pending |
+| `tools/qualification/test_qualify.py` | `MatrixTest.test_teardown_failure_rejects_success_and_preserves_suite_failure.command` | 5 | plumbing | delete | Nested fixture callback used only by the removed plumbing test; no independent caller or product assertion. | M1-qualification-runner pending |
+| `tools/qualification/test_qualify.py` | `MatrixTest.test_timeout_kills_stdout_inheriting_descendant_after_parent_exit.emergency_cleanup` | 4 | plumbing | delete | Nested fixture callback used only by the removed plumbing test; no independent caller or product assertion. | M1-qualification-runner pending |
+| `tools/qualification/test_startup_cleanup.py` | `StartupCleanupTest.test_fixture_collects_bulk_logs_only_after_failure_or_inconclusive_result.command` | 6 | plumbing | delete | Nested fixture callback used only by the removed plumbing test; no independent caller or product assertion. | M1-qualification-runner pending |
+| `tools/qualification/test_startup_cleanup.py` | `StartupCleanupTest.test_fixture_collects_bulk_logs_only_after_failure_or_inconclusive_result.logs` | 4 | plumbing | delete | Nested fixture callback used only by the removed plumbing test; no independent caller or product assertion. | M1-qualification-runner pending |
 
 <a id="m1-qualification-storage"></a>
 #### M1-qualification-storage
@@ -123,15 +130,20 @@ Vulture 2.16: `vulture tools --min-confidence 80` returns exactly three hits, al
 | `tools/qualification/test_qualify.py` | `ReplicatedStorageTest.test_partial_data_deletion_retains_ownership_and_reports_failure` | 32 | plumbing | delete | Checks recovery of fixture cleanup after filesystem failure; no product behavior or evidence gate is evaluated. | M1-qualification-storage |
 | `tools/qualification/test_qualify.py` | `ReplicatedStorageTest.test_failed_final_directory_removal_restores_the_marker` | 21 | plumbing | delete | Checks fixture cleanup marker restoration after rmdir failure; no product or release evidence is evaluated. | M1-qualification-storage |
 | `tools/qualification/test_qualify.py` | `ReplicatedStorageTest.test_cleanup_cannot_follow_run_or_marker_symlinks` | 15 | plumbing | delete | Checks fixture-directory cleanup safety; no product or release pass can be made false green by the asserted behavior. | M1-qualification-storage |
+| `tools/qualification/test_qualify.py` | `MatrixTest.test_endurance_cleanup_owns_only_its_isolated_project.command` | 3 | plumbing | delete | Fixture helper is only called by storage cleanup tests removed in this PR; no product behavior or release evidence is evaluated. | M1-qualification-storage pending |
+| `tools/qualification/test_qualify.py` | `MatrixTest.test_replicated_failures_clean_only_owned_scope_and_preserve_unverified_storage.command` | 10 | plumbing | delete | Fixture helper is only called by storage cleanup tests removed in this PR; no product behavior or release evidence is evaluated. | M1-qualification-storage pending |
+| `tools/qualification/test_qualify.py` | `MatrixTest.test_replicated_cleanup_stops_writers_before_deletion_and_keeps_first_error.command` | 4 | plumbing | delete | Fixture helper is only called by storage cleanup tests removed in this PR; no product behavior or release evidence is evaluated. | M1-qualification-storage pending |
+| `tools/qualification/test_qualify.py` | `MatrixTest.test_replicated_broker_space_is_admitted_before_preparing_or_starting_brokers.command` | 2 | plumbing | delete | Fixture helper is only called by storage cleanup tests removed in this PR; no product behavior or release evidence is evaluated. | M1-qualification-storage pending |
+| `tools/qualification/test_broker_storage.py` | `ReplicatedBrokerStorageTest.test_replicated_endurance_uses_replicated_storage_and_preserves_unverified_data.command` | 7 | plumbing | delete | Fixture helper is only called by storage cleanup tests removed in this PR; no product behavior or release evidence is evaluated. | M1-qualification-storage pending |
 
 <a id="m1-release"></a>
 #### M1-release
 
 | path | test or function | lines | category | verdict | one-line reason | PR |
 | --- | --- | ---: | --- | --- | --- | --- |
-| `tools/release/test_container_smoke.py` | `ContainerWrapperTest.test_runtime_working_directory_and_arguments_survive_shell_quoting` | 23 | plumbing | delete | Exercises a fake Docker wrapper; bad working directories or arguments make smoke runs fail loudly; exact-pass and demo-failure gates remain. | M1-release |
-| `tools/release/test_release_notes.py` | `ReleaseNotesTest.test_release_body_preserves_content_without_duplicate_title` | 10 | formatting | delete | Checks body/title presentation; exact-version and empty/missing-note rejection tests remain. | M1-release |
-| `tools/release/test_release_notes.py` | `ReleaseNotesTest.test_tracked_release_notes_are_valid` | 9 | formatting | delete | Checks text in checked-in release documents; synthetic wrong-version, missing-note and empty-change publication gates remain. | M1-release |
+| `tools/release/test_container_smoke.py` | `ContainerWrapperTest.test_runtime_working_directory_and_arguments_survive_shell_quoting` | 23 | plumbing | delete | Exercises a fake Docker wrapper; bad working directories or arguments make smoke runs fail loudly; exact-pass and demo-failure gates remain. | [#196](https://github.com/pagrus7/kaferry/pull/196) |
+| `tools/release/test_release_notes.py` | `ReleaseNotesTest.test_release_body_preserves_content_without_duplicate_title` | 10 | formatting | delete | Checks body/title presentation; exact-version and empty/missing-note rejection tests remain. | [#196](https://github.com/pagrus7/kaferry/pull/196) |
+| `tools/release/test_release_notes.py` | `ReleaseNotesTest.test_tracked_release_notes_are_valid` | 9 | formatting | delete | Checks text in checked-in release documents; synthetic wrong-version, missing-note and empty-change publication gates remain. | [#196](https://github.com/pagrus7/kaferry/pull/196) |
 
 <a id="m2-no-change"></a>
 #### M2-no-change
