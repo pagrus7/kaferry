@@ -5,8 +5,8 @@ Started 2026-11-13 14:29:23 UTC. Baseline stack top: `e4ef4eb93ec6e117325f815157
 | Item | Branch | PR URL | Head SHA | CI | Reviews | Blocked by |
 | --- | --- | --- | --- | --- | --- | --- |
 | M0 inventory | notes/maintainability | No PR | branch tip | N/A | three read-only scouts complete | none |
-| M1 docs tests | maintainability/python-doc-tests | https://github.com/pagrus7/kaferry/pull/195 | e914c01deba7b292a045e3917ebb046a1520d811 | watching; local 213 Python tests passed | Pending | CI and independent reviews |
-| M1 release tests | maintainability/python-release-tests | https://github.com/pagrus7/kaferry/pull/196 | ffdd57f2b1e0b60e2aef9d59877bedecf8d46e1e | watching; local 214 Python tests passed | Pending | CI and independent reviews |
+| M1 docs tests | maintainability/python-doc-tests | https://github.com/pagrus7/kaferry/pull/195 | e914c01deba7b292a045e3917ebb046a1520d811 | watching; local 213 Python tests passed | Docs source complete; Tests source complete | final-head CI verification |
+| M1 release tests | maintainability/python-release-tests | https://github.com/pagrus7/kaferry/pull/196 | ffdd57f2b1e0b60e2aef9d59877bedecf8d46e1e | watching; local 214 Python tests passed | Docs source complete; Tests source complete | final-head CI verification |
 | M1 qualification accounting | maintainability/python-accounting-tests | https://github.com/pagrus7/kaferry/pull/197 | 04461399416d06269e8c6ffad56762185f99b6e5 | watching; local full 204 tests passed | Pending | CI and independent reviews |
 | M1 qualification runner | maintainability/python-runner-tests | https://github.com/pagrus7/kaferry/pull/198 | 6efcad82c760c9b6aeaf39151f6a0a86b916e324 | watching; local full 204 tests passed | Pending | CI and independent reviews |
 | M1 qualification storage | maintainability/python-storage-tests | https://github.com/pagrus7/kaferry/pull/199 | 06d34e2648419e2f638ed0224628ce586cb91658 | watching; local full 205 tests passed | Pending | CI and independent reviews |
