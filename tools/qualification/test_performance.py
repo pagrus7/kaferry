@@ -1,6 +1,7 @@
 """Only complete, compatible workload results can become comparison data."""
 
 from contextlib import chdir, redirect_stdout
+import hashlib
 import io
 import json
 import os
@@ -21,9 +22,7 @@ class PerformanceTest(unittest.TestCase):
             with self.subTest(prefix=prefix), tempfile.TemporaryDirectory() as directory:
                 data = io.BytesIO()
                 with tarfile.open(fileobj=data, mode='w') as archive:
-                    for name, content in {'cmd/kaferry/main.go': b'package main',
-                                          'internal/sql/options.go': b'package sql',
-                                          'internal/sql/parser.go': b'p.take("ARCHIVE")'}.items():
+                    for name, content in {'cmd/kaferry/main.go': b'package main'}.items():
                         entry = tarfile.TarInfo(prefix + name)
                         entry.size = len(content)
                         archive.addfile(entry, io.BytesIO(content))
@@ -33,11 +32,11 @@ class PerformanceTest(unittest.TestCase):
                 with patch('tools.qualification.performance.subprocess.check_output', return_value=data.getvalue()), \
                      patch('tools.qualification.performance.subprocess.run', side_effect=compile), \
                      patch('tools.qualification.performance.command', return_value='build identity'):
-                    # When built, then the selected source and capability metadata agree.
+                    # When built, then either layout produces the binary and its identity.
                     binary, metadata = build('revision', Path(directory))
                     self.assertEqual(b'binary', binary.read_bytes())
-                    self.assertTrue(metadata['scoped_sql'])
-                    self.assertTrue(metadata['archive_sql'])
+                    self.assertEqual(metadata, {'sha256': hashlib.sha256(b'binary').hexdigest(),
+                                                'build_info': 'build identity'})
 
     def test_pair_ratios_are_paired_before_summarizing(self):
         # Given large absolute differences between runs but known within-pair ratios.
@@ -134,16 +133,20 @@ class PerformanceTest(unittest.TestCase):
                     self.assertEqual(previous('owner/repo'), reports[1] if compatible else None)
 
     def test_execution_records_complete_pairs_or_an_explicit_unavailable_result(self):
-        # Given successful warmups or a baseline/head failure in the head's correctness workload.
-        for failure in (None, 'base', 'head'):
+        # Given successful warmups or a baseline/head failure, including after one complete workload.
+        for failure in (None, 'base', 'later-base', 'head'):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as name, chdir(name):
-                effects = ([{'records_per_second': 100}, ValueError('baseline failed')] if failure == 'base'
-                           else [OSError('head failed')] if failure == 'head' else None)
+                def workload(harness, binary, case, directory, counts):
+                    if binary == Path('base') and (failure == 'base' or failure == 'later-base' and case == 'file'):
+                        raise ValueError('baseline rejects current SQL')
+                    if binary == Path('head') and failure == 'head':
+                        raise OSError('head failed')
+                    return {'records_per_second': 100}
                 with patch.dict(os.environ), patch('tools.qualification.performance.resolve', side_effect=lambda ref: ref), \
                         patch('tools.qualification.performance.command', return_value='fixture-images'), \
-                        patch('tools.qualification.performance.build', side_effect=lambda ref, root: (Path(ref), {'sha256': ref, 'archive_sql': ref == 'head'})), \
+                        patch('tools.qualification.performance.build', side_effect=lambda ref, root: (Path(ref), {'sha256': ref})), \
                         patch('tools.qualification.performance.subprocess.run'), \
-                        patch('tools.qualification.performance.measure', side_effect=effects, return_value={'records_per_second': 100}), \
+                        patch('tools.qualification.performance.measure', side_effect=workload), \
                         redirect_stdout(io.StringIO()):
                     # When executed, then no exception or rejected baseline can publish partial samples.
                     if failure == 'head':
@@ -151,13 +154,15 @@ class PerformanceTest(unittest.TestCase):
                             execute('base', 'head', 2, {'kafka': 10, 'file': 10})
                     else:
                         execute('base', 'head', 2, {'kafka': 10, 'file': 10})
-                    self.assertEqual(os.environ['KAFERRY_FILE_SQL_BINARIES'], 'base')
                 report = json.loads(Path('build-results/performance.json').read_text())
                 self.assertEqual(report['compatible'], failure is None)
                 if failure:
                     self.assertEqual(report['workloads'], {})
                     self.assertIn('unavailable', report)
+                    if failure != 'head':
+                        self.assertIn('baseline failed the current workload', report['unavailable'])
                 else:
+                    self.assertEqual(set(report['workloads']), set(CASES))
                     for workload in report['workloads'].values():
                         self.assertEqual([pair['first'] for pair in workload['samples']], ['base', 'head'])
                         self.assertEqual(workload['median'], 1)

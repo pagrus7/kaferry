@@ -41,18 +41,6 @@ type cliProcess struct {
 
 func startCLI(t *testing.T, ctx context.Context, binary, input string, args ...string) *cliProcess {
 	t.Helper()
-	for i := 0; i < len(args)-1; i++ {
-		if args[i] == "-e" || args[i] == "--sql" {
-			var err error
-			args[i+1], err = binarySQL(binary, args[i+1])
-			require.NoError(t, err)
-		}
-	}
-	if input != "" {
-		var err error
-		input, err = binarySQL(binary, input)
-		require.NoError(t, err)
-	}
 	p := &cliProcess{command: exec.CommandContext(ctx, binary, args...), done: make(chan struct{})}
 	p.command.Stdin = strings.NewReader(input)
 	p.start(t)
@@ -124,11 +112,7 @@ func (p *cliProcess) start(t *testing.T) {
 	})
 }
 func (p *cliProcess) send(input string) error {
-	input, err := binarySQL(p.command.Path, input)
-	if err != nil {
-		return err
-	}
-	_, err = io.WriteString(p.stdin, input)
+	_, err := io.WriteString(p.stdin, input)
 	return errors.Join(err, p.stdin.Close())
 }
 

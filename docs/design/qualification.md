@@ -283,7 +283,7 @@ This comparison runs one revision after the other on the same quiet host:
 sh tools/qualification/performance_run.sh origin/main HEAD --pairs 6 --archives
 ```
 
-The wrapper cleans up on success, failure or interruption. [Performance CI](../../.github/workflows/performance.yml) is separate from required checks. It uses warm-ups and six interleaved sequential pairs, alternating first revision. Kafka input is capped at 160,000 records; file/archive input at 200,000. Both revisions need Avro support for archive comparisons. Summaries retain median throughput and ranges, with raw metrics/identities/images for 30 days; shared-runner rates have no merge gate.
+The wrapper cleans up on success, failure or interruption. [Performance CI](../../.github/workflows/performance.yml) is separate from required checks. It uses warm-ups and six interleaved sequential pairs, alternating first revision. Kafka input is capped at 160,000 records; file/archive input at 200,000. Both revisions must accept the current workload SQL; archive comparisons also require Avro support. A baseline that cannot complete the current workloads makes the comparison unavailable. Summaries retain median throughput and ranges, with raw metrics/identities/images for 30 days; shared-runner rates have no merge gate.
 
 Nightly A/A calibration uses the same binary on both sides. Review at least 20 calibration runs before setting `PERFORMANCE_MODE=comparison`. Changed-main comparisons use the last compatible retained scheduled result; missing/expired data requires calibration. Manual dispatch accepts a base; `ci:performance` opts PRs into the configured mode, using the merge base in comparison mode. Choose warnings only after measuring calibration noise.
 
