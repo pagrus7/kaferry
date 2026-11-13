@@ -27,19 +27,19 @@ Physical tracked source lines at the baseline stack top. Product is non-test Go 
 | --- | ---: | ---: |
 | Product Go | 12,502 | 12,502 |
 | Unit Go tests | 20,099 | 20,099 |
-| System Go | 18,437 | 17,619 |
+| System Go | 18,437 | 17,628 |
 | Python tooling, including tests | 9,827 | 8,943 |
 | Python tests (subset) | 5,151 | 4,269 |
 | Workflow YAML | 1,468 | 1,468 |
-| Support / product | 3.985842 | 3.849704 |
+| Support / product | 3.985842 | 3.850424 |
 
 ## Product coverage
 
-The eight proposed patches were combined in a detached analysis worktree. Support lines fall from 49,831 to 48,129: **1,725 unique lines removed / 23 added**. Individual PR deltas sum to 1,727 removed / 24 added; shared import/blank-line changes overlap. Combining them required mechanical union of deleted methods/imports in `test_qualify.py` and 23 deleted helper names in `suites.py`. These overlaps can require merge resolution as PRs land. No PR was merged and no product source changed.
+The eight proposed patches were combined in a detached analysis worktree. Support lines fall from 49,831 to 48,138: **1,716 unique lines removed / 23 added**. Individual PR deltas sum to 1,717 removed / 23 added; one deletion overlaps. Combining them required mechanical union of deleted methods/imports in `test_qualify.py` and 22 deleted helper names in `suites.py`. These overlaps can require merge resolution as PRs land. No PR was merged and no product source changed.
 
-The combined tree passed all 172 remaining Python tests, unit tests and all 98 remaining Darwin harness tests. Retained Python method ASTs are unchanged. Combined product statement coverage is 5,514/5,750 = 95.895652%, identical to baseline (0.000000 percentage-point change).
+The combined tree passed all 172 remaining Python tests, unit tests and all 99 remaining Darwin harness tests. Retained Python method ASTs are unchanged. Combined product statement coverage is 5,514/5,750 = 95.895652%, identical to baseline (0.000000 percentage-point change).
 
-Baseline statement coverage of `./src/internal/... ./src/cmd/...`, combining unit and every harness test: 5,514 / 5,750 = **95.895652%**. Go 1.27.4, Darwin arm64, race/atomic profiles, measured at the baseline stack top. Unit-only coverage is identical. Both runs passed. Per-PR after measurements pending. Maximum allowed decrease per Go removal PR: 0.1 percentage points.
+Baseline statement coverage of `./src/internal/... ./src/cmd/...`, combining unit and every harness test: 5,514 / 5,750 = **95.895652%**. Go 1.27.4, Darwin arm64, race/atomic profiles, measured at the baseline stack top. Unit-only coverage is identical. Both runs passed. All three per-PR before/after measurements are recorded below. Maximum allowed decrease per Go removal PR: 0.1 percentage points.
 
 | Go removal | Before | After (proposed combined state) | Change (percentage points) | Harness selection, Darwin |
 | --- | ---: | ---: | ---: | --- |
@@ -47,7 +47,7 @@ Baseline statement coverage of `./src/internal/... ./src/cmd/...`, combining uni
 | M4 faults | 95.895652% (5,514/5,750) | 95.895652% (5,514/5,750) | 0.000000 | 121 → 112; exact nine-test difference |
 | M4 fixtures/process | 95.895652% (5,514/5,750) | 95.895652% (5,514/5,750) | 0.000000 | 121 → 116; exact five-test difference |
 
-Both branches reran unit and all selected harness tests under race/atomic before and after. Patch coverage is N/A: no non-test product Go changed.
+All three branches reran unit and all selected harness tests under race/atomic before and after. Patch coverage is N/A: no non-test product Go changed.
 
 ## Inventory evidence
 
@@ -191,8 +191,10 @@ Keep the rejection/release guarantees. The owner may decide whether their curren
 
 ## Active review correction
 
-M4 soak/load must retain `TestConsumeOnlyStartAllowsLatePublishingGrace` and its required-list entry. It prevents a late final submission from shortening the required ten-second drain period while still passing reconciliation and the five idle-sample gate. The exact baseline test and required-list entry are restored in 96d83e5d. Product coverage remains 95.895652%; all 113 Darwin helper tests passed. Fresh CI, native follow-up reviews and updated combined counts are pending; the composition figures above describe the initial frozen heads.
+M4 soak/load must retain `TestConsumeOnlyStartAllowsLatePublishingGrace` and its required-list entry. It prevents a late final submission from shortening the required ten-second drain period while still passing reconciliation and the five idle-sample gate. The exact baseline test and required-list entry are restored in 96d83e5d. Product coverage remains 95.895652%; all 113 Darwin helper tests passed. Fresh CI and the native tests follow-up are pending; corrected combined counts and aggregate protection results are recorded above.
 
 ## CI preflight blocker
 
 PR #201 run 43446674470 completed with one failed job: 131960243521, `faults (worker-kill-rebalance, ownership/worker-kill-rebalance)`. Failure occurred before Go tests: empty Docker-capacity output could not be decoded as JSON, consistent with the unchanged ten-second Docker-info timeout path. The diagnostics were discarded, so the exact timeout cause is not proven. Both independent source reviews are complete with no findings. Manual starts remain prohibited; an owner exception for one failed-job retry is pending, or a normal branch update can trigger fresh CI. No retry or gate weakening has occurred.
+
+Corrected combined composition includes the restored late-drain guard and all other final source-review changes: 1,716 unique lines deleted, 23 added; 1,693 net removed. All 99 Darwin / 98 Linux remaining harness functions match EXPECTED. The composed tree passed unit plus harness race/coverage checks and all 172 Python tests; product statement coverage remains 95.895652%.
