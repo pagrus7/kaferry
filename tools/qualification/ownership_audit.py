@@ -397,6 +397,7 @@ def _validate(directory, identity=None):
         raise ValueError('traffic absence alone lacks positive fencing or legitimate current-generation progress')
     proof = dict(implementation='Kafka 4.4 correlated broker request log',
                 session_expiry_observations=len(expiries), expiry_before_transfer_observed=True,
+                session_expiry_causal_margins_seconds=[at-earliest_expiry for at in expiries],
                 received_commits=sum(received.values()), completed_commits=sum(completed.values()),
                 stale_member=old_member, stale_generation=generation, stale_requests=len(stale),
                 stale_rejections=len(rejected), accepted_stale_commits=0,

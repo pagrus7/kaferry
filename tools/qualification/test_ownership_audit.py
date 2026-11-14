@@ -152,18 +152,20 @@ class OwnershipAuditTest(unittest.TestCase):
 
     def test_expiry_window_requires_causal_delay_but_allows_delayed_completion(self):
         # Given expiry at 17s, a six-second session and one-second heartbeat.
-        for label, submission, acceptance, completion, qualifies in (
-                ('delayed completion', 11, 11.01, 17.5, True),
-                ('inclusive boundary', 12, 12.01, 16.1, True),
-                ('1ms before causal bound', 12.001, 12.011, 16.1, False),
-                ('expiry during preflight', 17.1, 17.2, 17.5, False),
-                ('expiry only 1s after submission', 16, 16.01, 16.1, False)):
+        for label, submission, acceptance, completion, qualifies, expected_margin in (
+                ('delayed completion', 11, 11.01, 17.5, True, 1.0),
+                ('inclusive boundary', 12, 12.01, 16.1, True, 0.0),
+                ('1ms before causal bound', 12.001, 12.011, 16.1, False, None),
+                ('expiry during preflight', 17.1, 17.2, 17.5, False, None),
+                ('expiry only 1s after submission', 16, 16.01, 16.1, False, None)):
             with self.subTest(case=label):
                 self.case['fault']['mutations'][0].update(started=when(submission), accepted=when(acceptance))
                 self.safety['fault_events'][0]['injections'][0]['at'] = completion
                 # When audited, then only causally possible expiry qualifies.
                 if qualifies:
-                    self.assertEqual(1, self.validate()['ownership_fencing']['session_expiry_observations'])
+                    proof = self.validate()['ownership_fencing']
+                    self.assertEqual(1, proof['session_expiry_observations'])
+                    self.assertEqual([expected_margin], proof['session_expiry_causal_margins_seconds'])
                 else:
                     with self.assertRaisesRegex(ValueError, 'session-expiry'):
                         self.validate()
