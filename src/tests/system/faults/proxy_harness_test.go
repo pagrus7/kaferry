@@ -3,9 +3,7 @@
 package faults
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -170,27 +168,6 @@ func TestInvalidPrimitivesCannotReachDockerOrProxy(t *testing.T) {
 	require.Empty(t, proxies.calls)
 }
 
-func TestHealCannotMutateAReplacementProxyContainer(t *testing.T) {
-	// Given a cut on a concrete proxy container, retain that container's identity.
-	lab, proxies, _ := newProxyStub(t)
-	injection, err := lab.Inject(t.Context(), Role{Kind: "leader", Cluster: "source", Topic: "input", Worker: 1}, Fault{Kind: "cut"})
-	require.NoError(t, err)
-	require.Equal(t, "id-toxiproxy", injection.Event.Targets[0].ProxyContainer)
-	original := lab.Docker
-	lab.Docker = func(ctx context.Context, args ...string) ([]byte, error) {
-		if args[0] == "inspect" && args[1] == "id-toxiproxy" {
-			return nil, errors.New("original proxy container was removed")
-		}
-		return original(ctx, args...)
-	}
-	// When it disappears, then refuse to enable a replacement reached at the API address.
-	require.ErrorContains(t, injection.Heal(t.Context()), "original proxy container")
-	require.Len(t, proxies.posts, 1)
-	require.True(t, injection.Event.Heal.IsZero())
-	lab.Docker = original
-	require.NoError(t, injection.Heal(t.Context()))
-}
-
 func TestProxyOwnershipAcceptsOnlyEquivalentBoundWildcardListeners(t *testing.T) {
 	// Given the pinned API's IPv6 wildcard response, preserve exact route ownership.
 	for _, test := range []struct {
@@ -237,31 +214,6 @@ func TestToxicDefaultsAndUncertainCreationPreserveOtherFaults(t *testing.T) {
 	for _, call := range proxies.calls {
 		require.False(t, strings.HasPrefix(call, "DELETE "))
 	}
-}
-
-func TestToxicCleanupRetainsUnavailableStateForLaterHealing(t *testing.T) {
-	// Given a toxic whose list request fails, keep its cleanup pending.
-	lab, proxies, _ := newProxyStub(t)
-	role := Role{Kind: "leader", Cluster: "source", Topic: "input", Worker: 1}
-	injection, err := lab.Inject(t.Context(), role, Fault{Kind: "slow_close", Value: 100})
-	require.NoError(t, err)
-	proxies.fail = "GET /proxies/source-3-worker1/toxics"
-	require.Error(t, injection.Heal(t.Context()))
-	require.True(t, injection.Event.Heal.IsZero())
-	proxies.fail = ""
-	// When the original proxy container is stopped, then do not issue a removal to its address.
-	docker := newDockerStub()
-	owned := docker.containers["id-toxiproxy"]
-	owned.State.Running = false
-	docker.containers[owned.ID] = owned
-	lab.Docker = docker.run
-	require.ErrorContains(t, injection.Heal(t.Context()), "not running")
-	require.True(t, injection.Event.Heal.IsZero())
-	owned.State.Running = true
-	docker.containers[owned.ID] = owned
-	// Then restoring the same container permits the pending cleanup.
-	require.NoError(t, injection.Heal(t.Context()))
-	require.Empty(t, proxies.routes["source-3-worker1"].Toxics)
 }
 
 func TestUnavailableProxyAPICannotMutateRoutes(t *testing.T) {

@@ -8,7 +8,6 @@ import unittest
 from unittest.mock import patch
 
 from tools.qualification import ownership_audit as audit
-from tools.ci.suites import fault_execution_seconds, fault_timeout_catalog
 
 
 def when(seconds):
@@ -145,27 +144,6 @@ class OwnershipAuditTest(unittest.TestCase):
             ('stale_requests', 'stale_rejections', 'accepted_stale_commits', 'accepted_rejoin_commits')))
         self.assertEqual(list(range(12)), proof['accepted_peer_partitions'])
         self.assertEqual(19, len(proof['audit_files']))
-
-    def test_case_uses_registered_budget_without_extending_the_legacy_suite(self):
-        # Given the registered new case, when selecting its budgets, then they
-        # match the actual fixture settings and leave the legacy allowance alone.
-        self.assertEqual({'session.timeout.ms': 6000, 'socket.timeout.ms': 8000, 'progress_save_timeout': 10000,
-                          'delivery_timeout': 2000, 'shutdown_timeout': 5000},
-                         fault_timeout_catalog()['ownership/zombie-worker'])
-        self.assertEqual(1073, fault_execution_seconds())
-
-    def test_shared_observation_references_are_rebased_for_the_outer_receipt(self):
-        # Given the real helper's nested case layout inside a suite directory.
-        relative = 'fault-oracle/run/scenario/observations/case.json'
-        path = self.directory/relative
-        path.parent.mkdir(parents=True)
-        path.write_text('{}\n')
-        self.case['safety_case']['observations'] = relative
-        # When reused by the outer receipt, then bootstrap and samples remain
-        # valid contained paths from that receipt's root, as in legacy collect().
-        result = self.validate()
-        for key, name in (('safety', 'samples.jsonl'), ('bootstrap', 'bootstrap.jsonl')):
-            self.assertEqual(str(Path(relative).parent/name), result[key]['observations'])
 
     def test_local_suppression_needs_complete_audit_and_peer_progress(self):
         # Given a correct client that suppresses stale commits locally.

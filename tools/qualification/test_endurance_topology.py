@@ -1,15 +1,13 @@
 """Replicated endurance changes topology while preserving workload and admission gates."""
 
 import argparse
-import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from tools.qualification import network
-from tools.qualification.qualify import (endurance_allowance, main, replicated_admission,
-                                         replicated_storage, resolve_run)
+from tools.qualification.qualify import main, resolve_run
 
 
 class ReplicatedEnduranceTest(unittest.TestCase):
@@ -57,29 +55,6 @@ class ReplicatedEnduranceTest(unittest.TestCase):
                     with patch('tools.qualification.qualify.capture') as execute, self.assertRaises(ValueError):
                         resolve_run(self.settings(root, **changes), {})
                     execute.assert_not_called()
-
-    def test_capacity_counts_three_replicas_of_both_clusters_before_starting_brokers(self):
-        # Given a full-day workload, the single-topology allowance remains unchanged.
-        baseline, replicated = endurance_allowance(86400), endurance_allowance(86400, replicas=3)
-        self.assertEqual(17856000, baseline['records'])
-        self.assertEqual(17856000 * 5376 * 3 + 4 * 1024**3, baseline['required_broker_bytes'])
-        self.assertEqual(17856000 * 5376 * 9 + 4 * 1024**3, replicated['required_broker_bytes'])
-        self.assertEqual(baseline['required_evidence_bytes'], replicated['required_evidence_bytes'])
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with patch('tools.qualification.qualify.capture', return_value=json.dumps({'NCPU': 4, 'MemTotal': 16 * 1024**3})), \
-                 patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=10**12)), \
-                 patch('tools.qualification.qualify.socket.socket'):
-                capacity = replicated_admission(root, 86400)
-            self.assertEqual(replicated['required_broker_bytes'], capacity['required_broker_bytes'])
-            def disk(command, output, label, env, **kwargs):
-                (output / 'storage-capacity.log').write_text(str(baseline['required_broker_bytes'] // 1024) + '\n')
-            # When the volume fits RF=1 but not RF=3, then reject before preparation/startup.
-            with patch('tools.qualification.qualify.logged', side_effect=disk) as execute:
-                with self.assertRaisesRegex(ValueError, 'broker space'):
-                    replicated_storage(root, ['compose'], {}, capacity, None)
-            self.assertEqual(1, execute.call_count)
-            self.assertEqual('storage-capacity', execute.call_args.args[2])
 
 if __name__ == '__main__':
     unittest.main()

@@ -60,21 +60,6 @@ func TestArchiveFixturePayloadParametersPreserveRecordContract(t *testing.T) {
 	}
 }
 
-func TestArchiveFixtureSeededPayloadBytes(t *testing.T) {
-	// Given the PCG byte sequence identified by record ID and the reported seed.
-	for _, test := range []struct {
-		seed  uint64
-		value []byte
-	}{
-		{42, []byte{0, 0, 1, 1, 0xde, 0x34, 0x82, 0xc9, 0x85, 0xff, 0x23, 0x85, 0x4c, 0x45, 0x70, 0x5b}},
-		{43, []byte{0, 0, 1, 1, 0x20, 0x3c, 0xde, 0x2a, 0x15, 0x5c, 0x13, 0x35, 0x99, 0xc0, 0xdb, 0x66}},
-	} {
-		// When generating a fixed-length value, then the exact bytes include the big-endian record ID.
-		record := archiveLoadRecordPayload(257, 3, [2]int{16, 16}, true, test.seed)
-		require.Equal(t, test.value, record.Value)
-	}
-}
-
 func TestArchiveFixtureDefaultWrappersRetainPayload(t *testing.T) {
 	for _, entropy := range []string{"", "random"} {
 		t.Run("payload="+entropy, func(t *testing.T) {

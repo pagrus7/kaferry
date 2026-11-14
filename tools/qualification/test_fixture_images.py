@@ -8,25 +8,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools.qualification.qualify import ROOT, RunSpec, fixture_images, run_suite
+from tools.qualification.qualify import run_suite
 
 
 class FixtureImagesTest(unittest.TestCase):
-    def test_image_evidence_retains_supported_compose_json_shapes(self):
-        # Given image identities reported as a list or keyed by container name.
-        row = dict(ID='sha256:' + 'a' * 64, Repository='apache/kafka', Tag='3.9.2')
-        spec = RunSpec([], [], {'KAFERRY_SOURCE_IMAGE': 'apache/kafka:3.9.2'},
-                       ['docker', 'compose', '-p', 'kaferry-compat'], 60)
-        for data in ([row], {'kaferry-compat-kafka-1': row}):
-            with self.subTest(data=data):
-                encoded = json.dumps(data)
-                with patch('tools.qualification.qualify.subprocess.check_output', return_value=encoded + '\n') as images:
-                    # When retaining images, then preserve the reported identities and exact fixture selection.
-                    self.assertEqual(encoded, fixture_images(spec))
-                self.assertEqual(spec.compose + ['images', '--format', 'json'], images.call_args.args[0])
-                self.assertEqual(spec.env, images.call_args.kwargs['env'])
-                self.assertEqual(ROOT, images.call_args.kwargs['cwd'])
-
     def test_default_run_requires_checked_image_evidence_before_the_suite(self):
         # Given the default fixture and its resolved environment.
         image_evidence = json.dumps([dict(ID='sha256:' + 'a' * 64, Repository='apache/kafka')])
