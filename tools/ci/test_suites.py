@@ -13,6 +13,7 @@ from unittest.mock import patch
 import tools.ci.suites as suites
 from tools.qualification.qualify import suite_command
 from tools.qualification.fault_results import FAULT_CASES
+from tools.ci.replicated_suites import lab_matrix
 
 
 class SuitesTest(unittest.TestCase):
@@ -197,10 +198,10 @@ class SuitesTest(unittest.TestCase):
                 suites.fault_timeout_catalog()
         self.assertIn('^TestReplicatedOwnershipCases$',suites.GO_SUITES['fault-replicated'][1])
         workflow=(Path(__file__).resolve().parents[2]/'.github/workflows/replicated-lab.yml').read_text()
-        import re
         hosted = set(suites.REPLICATED_CASES)-{'ownership/zombie-worker', 'ownership/coordinator-kill-rebalance',
                                              'network/latency', 'network/bandwidth', 'network/slow-close'}
-        self.assertEqual(hosted,set(re.findall(r'case: ([a-z/-]+)',workflow)))
+        self.assertIn('matrix: ${{ fromJSON(needs.smoke.outputs.fault_matrix) }}', workflow)
+        self.assertEqual(hosted, {row['case'] for row in lab_matrix(False)['include']})
         self.assertIn('--case ownership/zombie-worker ',workflow)
         self.assertEqual(1073,suites.fault_execution_seconds())
         self.assertEqual(240,suites.replicated_execution_seconds(['ownership/zombie-worker']))
