@@ -16,6 +16,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from tools.qualification import qualify
 from tools.qualification.qualify import cleanup_replicated, duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, verify_replicated_tests, InconclusivePrecondition, suite_command, valid_receipts
 from tools.qualification.broker_probe import logical, reconcile, records, replicated_topology, topic_ready
 
@@ -573,13 +574,15 @@ class MatrixTest(unittest.TestCase):
         for cpu, memory, disk in [(1, 16 * 1024**3, 10**12), (4, 1024**3, 10**12), (4, 16 * 1024**3, 0)]:
             with self.subTest(cpu=cpu, memory=memory, disk=disk), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
-                with patch('tools.qualification.qualify.capture', return_value=json.dumps({'NCPU': cpu, 'MemTotal': memory})), \
+                result = subprocess.CompletedProcess([], 0, json.dumps({'NCPU': cpu, 'MemTotal': memory}).encode(), b'')
+                with patch('tools.qualification.qualify.subprocess.run', return_value=result), \
                      patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=disk)):
                     with self.assertRaisesRegex(ValueError, 'capacity'):
                         replicated_admission(root)
                 self.assertTrue((root / 'capacity.json').is_file())
         with tempfile.TemporaryDirectory() as temporary:
-            with patch('tools.qualification.qualify.capture', return_value=json.dumps(runtime)), \
+            result = subprocess.CompletedProcess([], 0, json.dumps(runtime).encode(), b'')
+            with patch('tools.qualification.qualify.subprocess.run', return_value=result), \
                  patch('tools.qualification.qualify.socket.socket') as sockets, \
                  patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=10**12)):
                 replicated_admission(Path(temporary))
@@ -866,6 +869,86 @@ class ReconciliationTest(unittest.TestCase):
         self.assertNotEqual(logical(None, None, [], 0), logical(b'', b'', [], 0))
         self.assertNotEqual(logical(None, None, [('dup', None), ('dup', b'')], 0),
                             logical(None, None, [('dup', b''), ('dup', None)], 0))
+
+
+class FixtureCapacityTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.output = Path(temporary.name)
+        execute = patch('tools.qualification.qualify.subprocess.run')
+        self.execute = execute.start()
+        self.addCleanup(execute.stop)
+
+    def rejected_attempts(self, message):
+        with self.assertRaisesRegex(ValueError, message):
+            qualify.fixture_capacity(self.output, {})
+        self.assertEqual(3, self.execute.call_count)
+        records = [json.loads(path.read_text()) for path in sorted(self.output.glob('docker-info-attempt-*.json'))]
+        self.assertEqual(3, len(records))
+        self.assertFalse((self.output / 'capacity.json').exists())
+        for call, record in zip(self.execute.call_args_list, records, strict=True):
+            self.assertEqual(['docker', 'info', '--format', '{{json .}}'], call.args[0])
+            self.assertEqual(60, call.kwargs['timeout'])
+            self.assertTrue(call.kwargs['capture_output'])
+            self.assertGreaterEqual(record['duration_seconds'], 0)
+            self.assertTrue(record['error'])
+        return records
+
+    def test_timeout_is_explicit_and_keeps_partial_output(self):
+        # Given repeated Docker timeouts with partial output.
+        self.execute.side_effect = subprocess.TimeoutExpired('docker info', 60, output=b'partial', stderr=b'daemon busy')
+        # When admission exhausts its attempts, then the cause and output survive.
+        records = self.rejected_attempts('docker info.*timed out after 60 seconds')
+        self.assertTrue(all(record['timed_out'] and record['exit_status'] is None for record in records))
+        self.assertTrue(all(record['stdout'] == 'partial' and record['stderr'] == 'daemon busy' for record in records))
+
+    def test_nonzero_exit_includes_stderr_even_with_json_stdout(self):
+        # Given valid-looking output from a failed Docker command.
+        self.execute.return_value = subprocess.CompletedProcess([], 7, b'{}', b'daemon refused the request')
+        # When admission rejects it, then the exit status and stderr explain why.
+        records = self.rejected_attempts('exited with code 7: daemon refused the request')
+        self.assertTrue(all(record['exit_status'] == 7 and not record['timed_out'] for record in records))
+        self.assertTrue(all(record['stderr'] == 'daemon refused the request' for record in records))
+
+    def test_execution_failure_is_explicit_and_retained(self):
+        # Given Docker cannot be executed, retain the cause instead of parsing empty output.
+        self.execute.side_effect = FileNotFoundError('docker executable is unavailable')
+        # When admission exhausts its attempts, then a ValueError identifies that cause.
+        records = self.rejected_attempts('could not execute: docker executable is unavailable')
+        self.assertTrue(all(record['exit_status'] is None and not record['timed_out'] for record in records))
+        self.assertTrue(all(record['stderr'] == 'docker executable is unavailable' for record in records))
+
+    def test_empty_invalid_and_non_object_bodies_fail_explicitly(self):
+        # Given successful commands with unusable Docker-info bodies.
+        for body, message in [(b'', 'empty output'), (b'not-json', 'unparsable output'), (b'[]', 'expected a JSON object')]:
+            with self.subTest(body=body):
+                self.execute.reset_mock()
+                self.execute.return_value = subprocess.CompletedProcess([], 0, body, b'')
+                # When all attempts fail to parse, then a ValueError replaces JSON decode errors.
+                records = self.rejected_attempts(message)
+                self.assertTrue(all(record['stdout'] == body.decode() and record['exit_status'] == 0 for record in records))
+
+    def test_failure_then_success_records_both_attempts_before_admission(self):
+        # Given a failed command followed by a usable Docker capacity snapshot.
+        runtime = dict(NCPU=4, MemTotal=16 * 1024**3)
+        self.execute.side_effect = [subprocess.TimeoutExpired('docker info', 60),
+            subprocess.CompletedProcess([], 0, json.dumps(runtime).encode(), b'warning')]
+        required = dict(required_cpus=2, required_runtime_memory_bytes=8 * 1024**3, required_evidence_bytes=1)
+        with patch('tools.qualification.qualify.shutil.disk_usage', return_value=argparse.Namespace(free=10**12)):
+            # When a retry succeeds, then capacity validation uses it and stops retrying.
+            capacity = qualify.fixture_capacity(self.output, required)
+        self.assertEqual(2, self.execute.call_count)
+        first = json.loads((self.output / 'docker-info-attempt-1.json').read_text())
+        second = json.loads((self.output / 'docker-info-attempt-2.json').read_text())
+        self.assertTrue(first['timed_out'])
+        self.assertEqual(('', '', None), (first['stdout'], first['stderr'], first['exit_status']))
+        self.assertEqual((0, False, None), (second['exit_status'], second['timed_out'], second['error']))
+        self.assertEqual(runtime, json.loads(second['stdout']))
+        self.assertEqual('warning', second['stderr'])
+        self.assertFalse((self.output / 'docker-info-attempt-3.json').exists())
+        self.assertEqual((4, runtime['MemTotal']), (capacity['runtime_cpus'], capacity['runtime_memory_bytes']))
+        self.assertEqual(capacity, json.loads((self.output / 'capacity.json').read_text()))
 
 
 if __name__ == '__main__':
