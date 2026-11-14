@@ -93,9 +93,9 @@ func (f Fault) validate(role Role) error {
 	return nil
 }
 
-func (l *Lab) apply(ctx context.Context, target Target, fault Fault) (restoration, error) {
+func (l *Lab) apply(ctx context.Context, target Target, fault Fault, event *Event) (restoration, error) {
 	if !fault.physical() {
-		return l.proxyFault(ctx, target, fault)
+		return l.proxyFault(ctx, target, fault, event)
 	}
 	owned, err := l.container(ctx, target.Container, target.Service)
 	if err != nil {
