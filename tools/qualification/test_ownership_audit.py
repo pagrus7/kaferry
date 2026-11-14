@@ -102,6 +102,11 @@ class OwnershipAuditTest(unittest.TestCase):
             timeout_basis={'session.timeout.ms': 6, 'socket.timeout.ms': 8, 'progress_save_timeout': 10, 'delivery_timeout': 2, 'shutdown_timeout': 5},
             target=self.case['fault']['role'], injections=[dict(at=10.1, kind='timeout', target={
                 key: self.case['fault'][key] for key in ('role', 'fault', 'targets', 'start')})])]
+        self.case['fault']['mutations'] = [dict(target=self.case['fault']['targets'][0],
+                                               started=when(10.02), accepted=when(10.05))]
+        self.case['worker_connection_milliseconds'] = {
+            'session.timeout.ms': 6000, 'heartbeat.interval.ms': 1000, 'socket.timeout.ms': 8000}
+        self.safety['fault_events'][0]['injections'][0]['target']['mutations'] = self.case['fault']['mutations']
         self.start = [record(.5, 'guard', 'API_VERSIONS', {}, {}, 0)]
         self.traffic = [commit(7, 'one', 'old', 2, range(12), 10, 0, 1),
                         commit(7, 'two', 'peer', 2, range(12, 24), 10, 0, 1),
@@ -144,6 +149,65 @@ class OwnershipAuditTest(unittest.TestCase):
             ('stale_requests', 'stale_rejections', 'accepted_stale_commits', 'accepted_rejoin_commits')))
         self.assertEqual(list(range(12)), proof['accepted_peer_partitions'])
         self.assertEqual(19, len(proof['audit_files']))
+
+    def test_expiry_window_requires_causal_delay_but_allows_delayed_completion(self):
+        # Given expiry at 17s, a six-second session and one-second heartbeat.
+        for label, submission, acceptance, completion, qualifies in (
+                ('delayed completion', 11, 11.01, 17.5, True),
+                ('inclusive boundary', 12, 12.01, 16.1, True),
+                ('1ms before causal bound', 12.001, 12.011, 16.1, False),
+                ('expiry during preflight', 17.1, 17.2, 17.5, False),
+                ('expiry only 1s after submission', 16, 16.01, 16.1, False)):
+            with self.subTest(case=label):
+                self.case['fault']['mutations'][0].update(started=when(submission), accepted=when(acceptance))
+                self.safety['fault_events'][0]['injections'][0]['at'] = completion
+                # When audited, then only causally possible expiry qualifies.
+                if qualifies:
+                    self.assertEqual(1, self.validate()['ownership_fencing']['session_expiry_observations'])
+                else:
+                    with self.assertRaisesRegex(ValueError, 'session-expiry'):
+                        self.validate()
+
+    def test_missing_or_invalid_recorded_heartbeat_cannot_shorten_causal_bound(self):
+        # Given missing, nonpositive, fractional or session-sized heartbeat evidence.
+        for heartbeat in (None, False, 0, -1000, 1000.5, 6000, 7000):
+            with self.subTest(heartbeat=heartbeat):
+                self.case['worker_connection_milliseconds']['heartbeat.interval.ms'] = heartbeat
+                # When checked, then invalid configuration cannot qualify expiry.
+                with self.assertRaisesRegex(ValueError, 'heartbeat configuration'):
+                    self.validate()
+        del self.case['worker_connection_milliseconds']
+        with self.assertRaisesRegex(ValueError, 'heartbeat configuration'):
+            self.validate()
+
+    def test_missing_or_inconsistent_mutation_evidence_fails_explicitly(self):
+        # Given incomplete receipts, reversed clocks, or mismatched oracle evidence.
+        original_case, original_safety = copy.deepcopy(self.case), copy.deepcopy(self.safety)
+        for invalid in ('missing', 'no-start', 'no-acceptance', 'reversed', 'before-preflight',
+                        'after-completion', 'wrong-target', 'oracle-mismatch', 'malformed'):
+            with self.subTest(invalid=invalid):
+                self.case, self.safety = copy.deepcopy(original_case), copy.deepcopy(original_safety)
+                self.safety['fault_events'][0]['injections'][0]['target']['mutations'] = self.case['fault']['mutations']
+                receipt = self.case['fault']['mutations'][0]
+                if invalid == 'missing':
+                    del self.case['fault']['mutations']
+                elif invalid in ('no-start', 'no-acceptance'):
+                    del receipt['started' if invalid == 'no-start' else 'accepted']
+                elif invalid == 'reversed':
+                    receipt['accepted'] = when(10.01)
+                elif invalid == 'before-preflight':
+                    receipt['started'] = when(9)
+                elif invalid == 'after-completion':
+                    receipt['accepted'] = when(11)
+                elif invalid == 'wrong-target':
+                    receipt['target'] = dict(broker=3)
+                elif invalid == 'oracle-mismatch':
+                    self.safety['fault_events'][0]['injections'][0]['target']['mutations'] = []
+                else:
+                    receipt['started'] = 'invalid'
+                # When audited, then invalid mutation proof cannot silently pass.
+                with self.assertRaisesRegex(ValueError, 'mutation'):
+                    self.validate()
 
     def test_local_suppression_needs_complete_audit_and_peer_progress(self):
         # Given a correct client that suppresses stale commits locally.

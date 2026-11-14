@@ -170,11 +170,18 @@ type Fault struct {
 }
 
 type Event struct {
-	Role    Role      `json:"role"`
-	Fault   Fault     `json:"fault"`
-	Targets []Target  `json:"targets"`
-	Start   time.Time `json:"start"`
-	Heal    time.Time `json:"heal,omitempty"`
+	Role      Role             `json:"role"`
+	Fault     Fault            `json:"fault"`
+	Targets   []Target         `json:"targets"`
+	Start     time.Time        `json:"start"`
+	Heal      time.Time        `json:"heal,omitempty"`
+	Mutations []*ProxyMutation `json:"mutations,omitempty"`
+}
+
+type ProxyMutation struct {
+	Target   Target    `json:"target"`
+	Started  time.Time `json:"started"`
+	Accepted time.Time `json:"accepted"`
 }
 
 type restoration func(context.Context) error
@@ -219,7 +226,7 @@ func (l *Lab) Inject(ctx context.Context, role Role, fault Fault) (*Injection, e
 			continue
 		}
 		seen[target.Container] = true
-		undo, injectErr := l.apply(ctx, target, fault)
+		undo, injectErr := l.apply(ctx, target, fault, &injection.Event)
 		if undo != nil {
 			injection.undo = append(injection.undo, undo)
 		}
