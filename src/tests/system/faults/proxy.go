@@ -20,7 +20,7 @@ type proxy struct {
 	Toxics   []json.RawMessage `json:"toxics"`
 }
 
-func (l *Lab) request(ctx context.Context, method, path string, value, result any) error {
+func (l *Lab) request(ctx context.Context, method, path string, value, result any, mutation ...*ProxyMutation) error {
 	body, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -34,6 +34,9 @@ func (l *Lab) request(ctx context.Context, method, path string, value, result an
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
+	if len(mutation) != 0 {
+		mutation[0].Started = time.Now().UTC()
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return err
@@ -41,6 +44,9 @@ func (l *Lab) request(ctx context.Context, method, path string, value, result an
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("proxy %s %s returned %d", method, path, response.StatusCode)
+	}
+	if len(mutation) != 0 {
+		mutation[0].Accepted = time.Now().UTC()
 	}
 	if result != nil {
 		return json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(result)
@@ -82,7 +88,7 @@ func wildcardListener(address string, port int) bool {
 	return address == fmt.Sprintf("0.0.0.0:%d", port) || address == fmt.Sprintf("[::]:%d", port)
 }
 
-func (l *Lab) proxyFault(ctx context.Context, target Target, fault Fault) (restoration, error) {
+func (l *Lab) proxyFault(ctx context.Context, target Target, fault Fault, event *Event) (restoration, error) {
 	if err := l.ownedProxy(ctx, target, true); err != nil {
 		return nil, err
 	}
@@ -96,10 +102,10 @@ func (l *Lab) proxyFault(ctx context.Context, target Target, fault Fault) (resto
 		}
 		return undo, l.request(ctx, http.MethodPost, path, map[string]bool{"enabled": false}, nil)
 	}
-	return l.addToxic(ctx, target, fault)
+	return l.addToxic(ctx, target, fault, event)
 }
 
-func (l *Lab) addToxic(ctx context.Context, target Target, fault Fault) (restoration, error) {
+func (l *Lab) addToxic(ctx context.Context, target Target, fault Fault, event *Event) (restoration, error) {
 	path := "/proxies/" + target.Proxy
 	name := "kaferry-" + rand.Text()
 	stream := fault.Stream
@@ -110,7 +116,9 @@ func (l *Lab) addToxic(ctx context.Context, target Target, fault Fault) (restora
 	toxic := map[string]any{"name": name, "type": fault.Kind, "stream": stream, "toxicity": 1,
 		"attributes": map[string]int64{attribute: fault.Value}}
 	undo := func(heal context.Context) error { return l.removeToxic(heal, target, path, name) }
-	return undo, l.request(ctx, http.MethodPost, path+"/toxics", toxic, nil)
+	mutation := &ProxyMutation{Target: target}
+	event.Mutations = append(event.Mutations, mutation)
+	return undo, l.request(ctx, http.MethodPost, path+"/toxics", toxic, nil, mutation)
 }
 
 // CloseWorkerConnections supplies EOF to an already injected downstream slow
@@ -136,7 +144,7 @@ func (l *Lab) CloseWorkerConnections(ctx context.Context, slow *Injection) (*Inj
 		if err := l.checkSlowClose(ctx, target, slow.Event.Fault.Value); err != nil {
 			return injection, errors.Join(err, injection.Heal(ctx))
 		}
-		undo, err := l.addToxic(ctx, target, injection.Event.Fault)
+		undo, err := l.addToxic(ctx, target, injection.Event.Fault, &injection.Event)
 		if undo != nil {
 			injection.undo = append(injection.undo, undo)
 		}

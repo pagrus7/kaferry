@@ -36,9 +36,15 @@ func zombieWorkerSettings(timeouts map[string]time.Duration) string {
 		timeouts["delivery_timeout"], timeouts["shutdown_timeout"])
 }
 
+func zombieWorkerConnection(timeouts map[string]time.Duration) map[string]int64 {
+	return map[string]int64{"session.timeout.ms": timeouts["session.timeout.ms"].Milliseconds(),
+		"heartbeat.interval.ms": 1000, "socket.timeout.ms": timeouts["socket.timeout.ms"].Milliseconds()}
+}
+
 func zombieWorkerSQL(timeouts map[string]time.Duration, worker int, marker, src, dst, group string) string {
-	return fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='%s','session.timeout.ms'='%d','heartbeat.interval.ms'='1000','socket.timeout.ms'='%d'), CONNECTION destination AS ('bootstrap.servers'='%s','client.id'='%s') INSERT INTO TOPIC '%s@destination' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST)",
-		strings.Join(faults.Endpoints("source", worker), ","), marker, timeouts["session.timeout.ms"].Milliseconds(), timeouts["socket.timeout.ms"].Milliseconds(),
+	connection := zombieWorkerConnection(timeouts)
+	return fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='%s','session.timeout.ms'='%d','heartbeat.interval.ms'='%d','socket.timeout.ms'='%d'), CONNECTION destination AS ('bootstrap.servers'='%s','client.id'='%s') INSERT INTO TOPIC '%s@destination' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST)",
+		strings.Join(faults.Endpoints("source", worker), ","), marker, connection["session.timeout.ms"], connection["heartbeat.interval.ms"], connection["socket.timeout.ms"],
 		strings.Join(faults.Endpoints("destination", worker), ","), marker, dst, src, group)
 }
 
