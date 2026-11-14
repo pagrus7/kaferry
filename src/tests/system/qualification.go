@@ -162,6 +162,70 @@ func waitCopierPermissions(t *testing.T, src, dst string) {
 	}
 }
 
+func waitOneOffGroupPermissions(t *testing.T, a *kadm.Client, cfg map[string]string) {
+	t.Helper()
+	// A recovered broker can wait for the five-minute preferred-leader check.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute+90*time.Second)
+	defer cancel()
+	metadata, err := a.BrokerMetadata(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, metadata.Brokers)
+	brokers := make(map[int32]bool, len(metadata.Brokers))
+	for _, broker := range metadata.Brokers {
+		brokers[broker.NodeID] = true
+	}
+	reader := kadm.NewClient(secureClient(t, cfg))
+	probes := make(map[int32]string, len(brokers))
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	consecutive := 0
+	var coordinators kadm.FindCoordinatorResponses
+	var offsetErr error
+	for n := 0; ; n++ {
+		groups := make([]string, 0, len(probes)+1)
+		for _, group := range probes {
+			groups = append(groups, group)
+		}
+		if len(probes) < len(brokers) {
+			groups = append(groups, fmt.Sprintf("kaferry-acl-probe-%d", n))
+		}
+		coordinators = a.FindGroupCoordinators(ctx, groups...)
+		probes = make(map[int32]string, len(brokers))
+		for _, coordinator := range coordinators {
+			if coordinator.Err == nil && brokers[coordinator.NodeID] {
+				probes[coordinator.NodeID] = coordinator.Name
+			}
+		}
+		if len(probes) == len(brokers) {
+			ready := true
+			for _, group := range probes {
+				offsets, err := reader.FetchOffsets(ctx, group)
+				if err == nil {
+					err = offsets.Error()
+				}
+				if err != nil {
+					ready, offsetErr = false, err
+				}
+			}
+			if ready {
+				consecutive++
+			} else {
+				consecutive = 0
+			}
+			if consecutive == 3 {
+				return
+			}
+		} else {
+			consecutive = 0
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("one-off group permissions not ready on every broker: brokers=%+v probes=%+v coordinators=%+v offset_error=%v", metadata.Brokers, probes, coordinators, offsetErr)
+		case <-tick.C:
+		}
+	}
+}
+
 func secureReader(t *testing.T, topic string) *kgo.Client {
 	t.Helper()
 	client := secureClient(t, secureProperties(t, "admin", "fixture-admin-secret"), kgo.FetchIsolationLevel(kgo.ReadCommitted()))
@@ -281,6 +345,7 @@ func RunSaslTlsRestrictedAclInspectionAndUnnamedCopy(t *testing.T) {
 		cfg := secureProperties(t, "one-off-copier", "fixture-one-off-secret")
 		cfg["sasl.mechanism"] = "SCRAM-SHA-256"
 		waitSecureFixture(t, a, src, dst, group+"-unnamed", cfg)
+		waitOneOffGroupPermissions(t, a, cfg)
 
 		// When GROUP is omitted, then a fresh copy succeeds.
 		statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_OFFSET < LATEST", dst, src)
