@@ -16,6 +16,16 @@ from tools.qualification.fault_results import FAULT_CASES
 
 
 class SuitesTest(unittest.TestCase):
+    def test_replicated_lab_filters_unrelated_suite_changes(self):
+        # Given the lab's pull-request paths, when only another suite's list
+        # changes in suites.py, then the lab stays idle; its own catalog triggers it.
+        import fnmatch
+        import re
+        workflow = (Path(__file__).resolve().parents[2]/'.github/workflows/replicated-lab.yml').read_text()
+        paths = re.findall(r"^      - '([^']+)'$", workflow, re.MULTILINE)
+        self.assertFalse(any(fnmatch.fnmatchcase('tools/ci/suites.py', path) for path in paths))
+        self.assertTrue(any(fnmatch.fnmatchcase('tools/ci/replicated_suites.py', path) for path in paths))
+
     def test_streaming_profiles_keep_modes_ownership_and_required_passes(self):
         # Given separate hosted jobs with an inherited destination-stall setting.
         for name in ('capture', 'endurance'):

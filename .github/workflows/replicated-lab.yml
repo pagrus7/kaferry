@@ -27,7 +27,7 @@ on:
       - 'tools/qualification/test_ownership_cases.py'
       - 'tools/qualification/replicated_results.py'
       - 'tools/qualification/test_replicated_results.py'
-      - 'tools/ci/suites.py'
+      - 'tools/ci/replicated_suites.py'
       - '.github/workflows/replicated-lab.yml'
 permissions:
   contents: read
