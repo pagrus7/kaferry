@@ -104,6 +104,8 @@ class OwnershipAuditTest(unittest.TestCase):
                 key: self.case['fault'][key] for key in ('role', 'fault', 'targets', 'start')})])]
         self.case['fault']['mutations'] = [dict(target=self.case['fault']['targets'][0],
                                                started=when(10.02), accepted=when(10.05))]
+        self.case['worker_connection_milliseconds'] = {
+            'session.timeout.ms': 6000, 'heartbeat.interval.ms': 1000, 'socket.timeout.ms': 8000}
         self.safety['fault_events'][0]['injections'][0]['target']['mutations'] = self.case['fault']['mutations']
         self.start = [record(.5, 'guard', 'API_VERSIONS', {}, {}, 0)]
         self.traffic = [commit(7, 'one', 'old', 2, range(12), 10, 0, 1),
@@ -149,10 +151,24 @@ class OwnershipAuditTest(unittest.TestCase):
         self.assertEqual(19, len(proof['audit_files']))
 
     def test_expiry_after_mutation_before_delayed_completion_qualifies(self):
-        # Given an accepted mutation followed by expiry at 17s while the oracle samples.
+        # Given submission at 11s and a six-second session expiring at 17s.
+        self.case['fault']['mutations'][0].update(started=when(11), accepted=when(11.01))
         self.safety['fault_events'][0]['injections'][0]['at'] = 17.5
         # When the delayed completion marker is checked, then expiry still qualifies.
         self.assertEqual(1, self.validate()['ownership_fencing']['session_expiry_observations'])
+
+    def test_causal_lower_bound_is_inclusive_without_tolerance(self):
+        # Given expiry at 17s and a five-second minimum heartbeat-free interval.
+        for submission, qualifies in ((12, True), (12.001, False)):
+            with self.subTest(submission=submission):
+                self.case['fault']['mutations'][0].update(started=when(submission), accepted=when(submission+.01))
+                self.safety['fault_events'][0]['injections'][0]['at'] = 16.1
+                # When checked, then the boundary qualifies and 1ms too early fails.
+                if qualifies:
+                    self.assertEqual(1, self.validate()['ownership_fencing']['session_expiry_observations'])
+                else:
+                    with self.assertRaisesRegex(ValueError, 'session-expiry'):
+                        self.validate()
 
     def test_expiry_during_preflight_before_mutation_cannot_qualify(self):
         # Given expiry at 17s during preflight, before submission and acceptance.
@@ -160,6 +176,26 @@ class OwnershipAuditTest(unittest.TestCase):
         self.safety['fault_events'][0]['injections'][0]['at'] = 17.5
         # When audited, then operation start cannot falsely qualify that expiry.
         with self.assertRaisesRegex(ValueError, 'session-expiry'):
+            self.validate()
+
+    def test_expiry_one_second_after_submission_cannot_be_caused_by_fault(self):
+        # Given a six-second session and one-second heartbeat, submitted at 16s.
+        self.case['fault']['mutations'][0].update(started=when(16), accepted=when(16.01))
+        self.safety['fault_events'][0]['injections'][0]['at'] = 16.1
+        # When expiry at 17s is audited, then a previously silent worker cannot qualify.
+        with self.assertRaisesRegex(ValueError, 'session-expiry'):
+            self.validate()
+
+    def test_missing_or_invalid_recorded_heartbeat_cannot_shorten_causal_bound(self):
+        # Given missing, nonpositive, fractional or session-sized heartbeat evidence.
+        for heartbeat in (None, False, 0, -1000, 1000.5, 6000, 7000):
+            with self.subTest(heartbeat=heartbeat):
+                self.case['worker_connection_milliseconds']['heartbeat.interval.ms'] = heartbeat
+                # When checked, then invalid configuration cannot qualify expiry.
+                with self.assertRaisesRegex(ValueError, 'heartbeat configuration'):
+                    self.validate()
+        del self.case['worker_connection_milliseconds']
+        with self.assertRaisesRegex(ValueError, 'heartbeat configuration'):
             self.validate()
 
     def test_missing_or_inconsistent_mutation_evidence_fails_explicitly(self):

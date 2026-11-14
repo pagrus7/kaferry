@@ -103,6 +103,7 @@ func TestReplicatedZombieRSSStopsAtProcessExit(t *testing.T) {
 func TestReplicatedZombieExposureSpansSessionWithinSaveDeadline(t *testing.T) {
 	// Given the actual registered RPC/session/save bounds.
 	timeouts := faultTimeouts(t, "ownership/zombie-worker")
+	require.Equal(t, map[string]int64{"session.timeout.ms": 6000, "heartbeat.interval.ms": 1000, "socket.timeout.ms": 8000}, zombieWorkerConnection(timeouts))
 	// When constructing the stimulus, then bytes upstream are dropped without
 	// an immediate close and the RPC straddles session expiry within save10s.
 	fault, err := zombieCoordinatorFault(timeouts)
@@ -123,6 +124,7 @@ func TestReplicatedZombieExposureSpansSessionWithinSaveDeadline(t *testing.T) {
 		planned, err := plan.NewPlanner(nil).Build(statement, plan.Profiles{})
 		require.NoError(t, err)
 		require.Equal(t, "6000", planned.Source.Properties.Get("session.timeout.ms"))
+		require.Equal(t, "1000", planned.Source.Properties.Get("heartbeat.interval.ms"))
 		require.Equal(t, "8000", planned.Source.Properties.Get("socket.timeout.ms"))
 	}
 	var configured config.Config

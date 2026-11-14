@@ -230,6 +230,14 @@ def _validate(directory, identity=None):
                                         'delivery_timeout': 2, 'shutdown_timeout': 5} or
             window['recovery_seconds'] != 31):
         raise ValueError('ownership fault target, timing or configured recovery window differs from independent safety evidence')
+    connection = case.get('worker_connection_milliseconds', {})
+    heartbeat = connection.get('heartbeat.interval.ms') if isinstance(connection, dict) else None
+    session = window['timeout_basis']['session.timeout.ms']
+    if (type(heartbeat) is not int or not 0 < heartbeat < session*1000 or
+            connection.get('session.timeout.ms') != session*1000 or
+            connection.get('socket.timeout.ms') != window['timeout_basis']['socket.timeout.ms']*1000):
+        raise ValueError('ownership worker heartbeat configuration is missing or inconsistent')
+    earliest_expiry = submitted + session - heartbeat/1000
     rows = []
     expiries = []
     received = Counter()
@@ -259,7 +267,7 @@ def _validate(directory, identity=None):
             if not match:
                 raise ValueError('broker session expiry log has an unverified timestamp')
             at = datetime.strptime(match[1], '%Y-%m-%d %H:%M:%S,%f').replace(tzinfo=timezone.utc).timestamp()
-            if broker == targets[0]['broker'] and submitted <= at <= stamp(transfer['finished']):
+            if broker == targets[0]['broker'] and earliest_expiry <= at <= stamp(transfer['finished']):
                 expiries.append(at)
         before = directory/f'source-{broker}.baseline.requests.log'
         after = directory/f'source-{broker}.final.requests.log'
