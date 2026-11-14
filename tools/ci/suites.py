@@ -52,6 +52,7 @@ EXPECTED = {
     'integration': ['TestAllFileDirectionsAndResume', 'TestTopicToTopicSlice',
                     'TestLatestEndRemainsPinnedAfterCompletion',
                     'TestKafkaArchiveConcurrentCapture',
+                    'TestArchiveCaptureCrashRecoversAcknowledgedData',
                     'TestHistoricalFixtureTopicRetention/historical_default',
                     'TestHistoricalFixtureTopicRetention/finite_override',
                     'TestRunningSourceOffsetOutOfRangeFailsWithoutSavingProgress',
