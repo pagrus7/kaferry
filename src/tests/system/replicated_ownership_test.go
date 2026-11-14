@@ -250,8 +250,9 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	require.NoError(t, err)
 	data, err := json.MarshalIndent(map[string]any{"id": "ownership/zombie-worker", "source_partitions": replicatedPartitions,
 		"source_topic": src, "destination_topic": dst, "group": group, "workers": clients, "audit_guard": audit.guard,
-		"audit_marks": audit.marks,
-		"baseline":    state.baseline, "baseline_generation": state.generation, "baseline_saved": state.saved, "transfer": state.transfer, "peer_progress": state.peerProgress, "peer_saved": state.peerSaved,
+		"audit_marks":                    audit.marks,
+		"worker_connection_milliseconds": zombieWorkerConnection(timeouts),
+		"baseline":                       state.baseline, "baseline_generation": state.generation, "baseline_saved": state.saved, "transfer": state.transfer, "peer_progress": state.peerProgress, "peer_saved": state.peerSaved,
 		"publishing_before_fault": before, "publishing_after_heal": atHeal, "healed": state.healed, "fault": injection.Event,
 		"heal_started":                   healStarted,
 		"processes_alive_after_transfer": aliveTransfer, "processes_alive_before_heal": aliveBeforeHeal, "processes_alive_after_heal": aliveHeal,
