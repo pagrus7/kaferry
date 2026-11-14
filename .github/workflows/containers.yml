@@ -4,6 +4,8 @@ on:
     paths:
       - '.github/workflows/containers.yml'
       - '.github/workflows/release.yml'
+      - 'README.md'
+      - 'docs/usage.md'
       - 'tools/release/**'
       - 'src/tests/system/container_test.go'
       - 'examples/archive-demo/**'

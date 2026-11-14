@@ -511,12 +511,17 @@ Progress logs default to 30 s; `worker.progress_interval='0'` disables them. [Me
 
 ## Containers
 
-For released images (Linux AMD64/ARM64):
+For released images (Linux AMD64/ARM64), run the [README command](../README.md#docker-quick-start) from the directory containing `connections.toml` and `copy.sql`. It mounts that directory at `/work` and runs as your host user. Use `/work/...` paths in SQL and TOML; your user must be able to read inputs and write output directories.
 
-```sh
-docker run --rm --stop-timeout 35 --user "$(id -u):$(id -g)" \
-  --mount "type=bind,src=$PWD,dst=/work" ghcr.io/pagrus7/kaferry:latest \
-  run --file /work/copy.sql --config /work/connections.toml
+For the running [local Kafka playground](#local-kafka-playground), insert `--network container:kaferry-kafka-demo` before the image in the README command. This works on Linux Docker Engine and Docker Desktop running Linux containers on macOS/Windows: [sharing the broker's network](https://docs.docker.com/engine/network/#container-networks) makes its advertised `localhost:9092` reachable from Kaferry. Keep the broker running until the copy finishes. Replacing only the bootstrap address with `host.docker.internal` does not fix the broker's advertised `localhost` address.
+
+For example, keep the playground's `copy.sql` and create `connections.toml` in the same directory:
+
+```toml
+[connections.default]
+'bootstrap.servers' = 'localhost:9092'
 ```
 
-Use container paths and reachable broker addresses. Set `worker.checkpoint_dir` to `/work/checkpoints` for resume; `--rm` deletes container-only files. The stop timeout must exceed `worker.shutdown_timeout` (30s by default). [Image verification](install.md#container-images).
+For other brokers, both bootstrap and advertised addresses must be reachable from the container. A broker running directly on a Linux host and advertising `localhost` can use `--network host`; this is a different network mode from sharing the playground container.
+
+For archive replay, run `mkdir -p checkpoints` on the host and set `worker.checkpoint_dir = '/work/checkpoints'` in TOML. Keep archive output under `/work` too. The bind mount preserves these files after `--rm` removes the container. Stop a following copy with `docker stop CONTAINER` (find its ID with `docker ps`) and wait for a successful exit before resuming. The command's 35-second stop timeout exceeds `worker.shutdown_timeout` (30s by default); increase it if you raise that setting. [Image verification](install.md#container-images).

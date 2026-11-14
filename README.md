@@ -106,13 +106,14 @@ No local files, Kafka setup, credentials or host ports are needed. Each run star
 
 **Run your own SQL and configuration.** [Prepare your topics and connections](docs/usage.md#copy-between-kafka-topics), then run from the directory containing `connections.toml` and `copy.sql` (macOS/Linux):
 
+<!-- container-run -->
 ```sh
 docker run --rm --stop-timeout 35 --user "$(id -u):$(id -g)" \
   --mount "type=bind,src=$PWD,dst=/work" ghcr.io/pagrus7/kaferry:latest \
   run -c /work/connections.toml -f /work/copy.sql
 ```
 
-Use broker addresses reachable from the container. For archive replay, create `checkpoints` locally and set `worker.checkpoint_dir = '/work/checkpoints'` in TOML; keep archive output under `/work` too. [Container paths and stopping](docs/usage.md#containers) · [Archive demo and resume](docs/usage.md#first-copy-with-docker).
+For a local broker, follow the [container networking instructions](docs/usage.md#containers). For archive replay, create `checkpoints` locally and set `worker.checkpoint_dir = '/work/checkpoints'` in TOML; keep archive output under `/work` too. [Container paths and stopping](docs/usage.md#containers) · [Archive demo and resume](docs/usage.md#first-copy-with-docker).
 
 ## Choosing a tool
 
