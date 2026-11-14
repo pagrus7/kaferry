@@ -150,41 +150,23 @@ class OwnershipAuditTest(unittest.TestCase):
         self.assertEqual(list(range(12)), proof['accepted_peer_partitions'])
         self.assertEqual(19, len(proof['audit_files']))
 
-    def test_expiry_after_mutation_before_delayed_completion_qualifies(self):
-        # Given submission at 11s and a six-second session expiring at 17s.
-        self.case['fault']['mutations'][0].update(started=when(11), accepted=when(11.01))
-        self.safety['fault_events'][0]['injections'][0]['at'] = 17.5
-        # When the delayed completion marker is checked, then expiry still qualifies.
-        self.assertEqual(1, self.validate()['ownership_fencing']['session_expiry_observations'])
-
-    def test_causal_lower_bound_is_inclusive_without_tolerance(self):
-        # Given expiry at 17s and a five-second minimum heartbeat-free interval.
-        for submission, qualifies in ((12, True), (12.001, False)):
-            with self.subTest(submission=submission):
-                self.case['fault']['mutations'][0].update(started=when(submission), accepted=when(submission+.01))
-                self.safety['fault_events'][0]['injections'][0]['at'] = 16.1
-                # When checked, then the boundary qualifies and 1ms too early fails.
+    def test_expiry_window_requires_causal_delay_but_allows_delayed_completion(self):
+        # Given expiry at 17s, a six-second session and one-second heartbeat.
+        for label, submission, acceptance, completion, qualifies in (
+                ('delayed completion', 11, 11.01, 17.5, True),
+                ('inclusive boundary', 12, 12.01, 16.1, True),
+                ('1ms before causal bound', 12.001, 12.011, 16.1, False),
+                ('expiry during preflight', 17.1, 17.2, 17.5, False),
+                ('expiry only 1s after submission', 16, 16.01, 16.1, False)):
+            with self.subTest(case=label):
+                self.case['fault']['mutations'][0].update(started=when(submission), accepted=when(acceptance))
+                self.safety['fault_events'][0]['injections'][0]['at'] = completion
+                # When audited, then only causally possible expiry qualifies.
                 if qualifies:
                     self.assertEqual(1, self.validate()['ownership_fencing']['session_expiry_observations'])
                 else:
                     with self.assertRaisesRegex(ValueError, 'session-expiry'):
                         self.validate()
-
-    def test_expiry_during_preflight_before_mutation_cannot_qualify(self):
-        # Given expiry at 17s during preflight, before submission and acceptance.
-        self.case['fault']['mutations'][0].update(started=when(17.1), accepted=when(17.2))
-        self.safety['fault_events'][0]['injections'][0]['at'] = 17.5
-        # When audited, then operation start cannot falsely qualify that expiry.
-        with self.assertRaisesRegex(ValueError, 'session-expiry'):
-            self.validate()
-
-    def test_expiry_one_second_after_submission_cannot_be_caused_by_fault(self):
-        # Given a six-second session and one-second heartbeat, submitted at 16s.
-        self.case['fault']['mutations'][0].update(started=when(16), accepted=when(16.01))
-        self.safety['fault_events'][0]['injections'][0]['at'] = 16.1
-        # When expiry at 17s is audited, then a previously silent worker cannot qualify.
-        with self.assertRaisesRegex(ValueError, 'session-expiry'):
-            self.validate()
 
     def test_missing_or_invalid_recorded_heartbeat_cannot_shorten_causal_bound(self):
         # Given missing, nonpositive, fractional or session-sized heartbeat evidence.
