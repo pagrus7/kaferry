@@ -11,7 +11,7 @@ Start with [installation](install.md), then [copy records with local Kafka](usag
 | How do I recover or move an archive replay? | [Archive procedures](usage.md#archive-procedures) |
 | Why is my copy idle, failing or repeating data? | [Troubleshooting](usage.md#troubleshooting) |
 | What does a setting, result or exit code mean? | [Settings and results](reference.md) |
-| Which SQL forms are accepted? | [Syntax](design/grammar.md) |
+| Which SQL forms are accepted? | [SQL statements](reference.md#sql-statements) |
 | How do delivery, ordering and restart affect my copy? | [Output rules](reference.md#kafka-sink) · [Resuming](usage.md#resume-or-start-over) |
 | Which Kafka configurations and limitations apply? | [Compatibility](design/client-compatibility.md) |
 | What files and metadata make up an archive? | [Archive format](design/archive.md) |

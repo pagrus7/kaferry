@@ -248,7 +248,39 @@ def endurance_capacity(seconds, output, compose, env):
 
 
 def fixture_capacity(output, required):
-    runtime = json.loads(capture(['docker', 'info', '--format', '{{json .}}']))
+    for attempt in range(1, 4):
+        started = time.monotonic()
+        stdout, stderr, status, timed_out = b'', b'', None, False
+        failure = None
+        try:
+            result = subprocess.run(['docker', 'info', '--format', '{{json .}}'],
+                                    capture_output=True, cwd=ROOT, timeout=60)
+            stdout, stderr, status = result.stdout or b'', result.stderr or b'', result.returncode
+            if status != 0:
+                failure = f'exited with code {status}: ' + stderr.decode(errors='replace').strip()[:400]
+        except subprocess.TimeoutExpired as error:
+            stdout, stderr = error.stdout or b'', error.stderr or b''
+            timed_out = True
+            failure = 'timed out after 60 seconds'
+        except OSError as error:
+            stderr = str(error).encode()
+            failure = 'could not execute: ' + str(error)
+        if failure is None:
+            try:
+                runtime = json.loads(stdout)
+                if not isinstance(runtime, dict):
+                    failure = 'returned unparsable output: expected a JSON object'
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                failure = 'returned unparsable output' if stdout.strip() else 'returned empty output'
+        write_json(output / f'docker-info-attempt-{attempt}.json', dict(
+            stdout=stdout.decode(errors='replace'), stderr=stderr.decode(errors='replace'),
+            exit_status=status, duration_seconds=time.monotonic() - started,
+            timed_out=timed_out, error=failure))
+        if failure is None:
+            break
+    else:
+        raise ValueError('docker info failed after 3 attempts: ' + failure +
+                         '; inspect docker-info-attempt-*.json')
     capacity = dict(required,
                     runtime_cpus=runtime.get('NCPU', 0), runtime_memory_bytes=runtime.get('MemTotal', 0),
                     evidence_free_bytes=shutil.disk_usage(output).free)

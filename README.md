@@ -41,14 +41,14 @@ WHERE RECORD_OFFSET < LATEST;
 
 **Time range**
 
-Copy records from 09:00 to 10:00 UTC, inclusive, within the current backlog and stop.
+Copy records from 09:00 inclusive to 10:00 exclusive (UTC), within the current backlog and stop.
 
 ```sql
 INSERT INTO TOPIC 'orders-copy@backup'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-hour-oct01')
 WHERE RECORD_OFFSET < LATEST
-  AND RECORD_TIMESTAMP BETWEEN TIMESTAMP '2026-10-01T09:00:00Z'
-                           AND TIMESTAMP '2026-10-01T10:00:00Z';
+  AND RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
+  AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
 ```
 
 **File to topic**
@@ -72,7 +72,7 @@ Homebrew:
 brew install pagrus7/tap/kaferry
 ```
 
-Go 1.26+:
+Go 1.27+:
 
 ```sh
 CGO_ENABLED=0 go install github.com/pagrus7/kaferry/src/cmd/kaferry@latest
