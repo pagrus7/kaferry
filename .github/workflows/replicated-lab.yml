@@ -1,6 +1,13 @@
 name: replicated fixture
 on:
+  schedule:
+    - cron: '23 7 * * 1'
   workflow_dispatch:
+    inputs:
+      weekly:
+        description: Run only the three weekly regression cases
+        type: boolean
+        default: false
   pull_request:
     paths:
       - 'src/tests/replicated/**'
@@ -30,6 +37,7 @@ on:
       - 'tools/qualification/replicated_results.py'
       - 'tools/qualification/test_replicated_results.py'
       - 'tools/ci/replicated_suites.py'
+      - 'tools/ci/test_replicated_lab.py'
       - '.github/workflows/replicated-lab.yml'
 permissions:
   contents: read
@@ -42,10 +50,16 @@ jobs:
     timeout-minutes: 15
     outputs:
       binary_sha256: ${{ steps.candidate.outputs.sha256 }}
+      fault_matrix: ${{ steps.cases.outputs.fault_matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+      - name: Select replicated fault cases
+        id: cases
+        env:
+          WEEKLY: ${{ github.event_name == 'schedule' || inputs.weekly == true }}
+        run: python3 -m tools.ci.replicated_suites >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/setup-go
         with:
           cache-name: pr-brokers
@@ -94,13 +108,16 @@ jobs:
           make qualification-setup
           echo "sha256=$(sha256sum bin/kaferry | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - name: Check endurance gates without brokers
+        if: ${{ github.event_name != 'schedule' && inputs.weekly != true }}
         env:
           KAFERRY_TEST_BINARY: ${{ github.workspace }}/bin/kaferry
           KAFERRY_EXPECT_BINARY_SHA256: ${{ steps.candidate.outputs.sha256 }}
         run: go test -race -tags=integration,load -run '^(TestLoadReport|TestReplicatedEndurance|TestOwnedBroker|TestEndurance|TestSoak)' ./src/tests/system
       - name: Copy and independently reconcile the replicated fixture
+        if: ${{ github.event_name != 'schedule' && inputs.weekly != true }}
         run: python3 -m tools.qualification.qualify run replicated --binary bin/kaferry --output build-results/replicated
       - name: Verify fixture teardown
+        if: ${{ github.event_name != 'schedule' && inputs.weekly != true }}
         run: |
           test -z "$(docker ps -aq --filter label=com.docker.compose.project=kaferry-replicated)"
           test -z "$(docker volume ls -q --filter label=com.docker.compose.project=kaferry-replicated)"
@@ -110,7 +127,7 @@ jobs:
           path: bin/kaferry
           retention-days: 14
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+        if: ${{ always() && github.event_name != 'schedule' && inputs.weekly != true }}
         with:
           name: replicated-fixture-evidence
           path: build-results/replicated
@@ -158,17 +175,7 @@ jobs:
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - {name: worker-kill-rebalance, case: ownership/worker-kill-rebalance}
-          - {name: worker-scale, case: ownership/worker-scale}
-          - {name: source-leader, case: broker/source-leader}
-          - {name: destination-leader, case: broker/destination-leader}
-          - {name: rolling-source, case: broker/rolling-source}
-          - {name: rolling-destination, case: broker/rolling-destination}
-          - {name: destination-isr-loss, case: broker/destination-isr-loss}
-          - {name: network-destination-outage, case: network/destination-outage}
-          - {name: network-destination-leaders-outage, case: network/destination-leaders-outage}
+      matrix: ${{ fromJSON(needs.smoke.outputs.fault_matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -205,6 +212,7 @@ jobs:
           path: build-results/replicated-fault
           retention-days: 14
   endurance:
+    if: ${{ github.event_name != 'schedule' && inputs.weekly != true }}
     needs: smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 15
