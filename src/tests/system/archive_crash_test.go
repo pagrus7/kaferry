@@ -96,6 +96,8 @@ func TestArchiveCaptureCrashRecoversAcknowledgedData(t *testing.T) {
 	t.Logf("pre-kill saved offsets: %+v; completed=%d private=%d", saved, len(completed), len(private))
 
 	// When SIGKILL interrupts capture, more input arrives and the same query restarts.
+	completed, err = filepath.Glob(filepath.Join(root, "*.avro"))
+	require.NoError(t, err)
 	require.NoError(t, process.signal(os.Kill))
 	require.Error(t, process.wait())
 	waitStatus, ok := process.command.ProcessState.Sys().(syscall.WaitStatus)
