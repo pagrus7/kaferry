@@ -88,7 +88,7 @@ func secureFixture(t *testing.T) (*kadm.Client, *kgo.Client, string, string, str
 	for _, acl := range []*kadm.ACLBuilder{
 		kadm.NewACLs().Topics(src).Operations(kadm.OpRead),
 		kadm.NewACLs().Topics(dst).Operations(kadm.OpWrite),
-		kadm.NewACLs().Groups("kaferry-").Operations(kadm.OpRead).ResourcePatternType(kadm.ACLPatternPrefixed),
+		kadm.NewACLs().Groups(prefix).Operations(kadm.OpRead).ResourcePatternType(kadm.ACLPatternPrefixed),
 	} {
 		results, err := a.CreateACLs(ctx, acl.Allow("User:copier").AllowHosts("*"))
 		require.NoError(t, err)
@@ -104,15 +104,15 @@ func secureFixture(t *testing.T) (*kadm.Client, *kgo.Client, string, string, str
 	waitTopicReady(t, a, src, 1)
 	waitTopicReady(t, a, dst, 1)
 	waitCopierPermissions(t, src, dst)
-	waitSecureFixture(t, a, src, dst, group)
+	waitSecureFixture(t, a, src, dst, group, secureProperties(t, "copier", "fixture-copy-secret"))
 	p := secureClient(t, cfg, kgo.RecordPartitioner(kgo.ManualPartitioner()), kgo.RetryTimeout(20*time.Second))
 	return a, p, src, dst, group
 }
 
 // Listening sockets precede topic replication and cold coordinator loading.
-func waitSecureFixture(t *testing.T, a *kadm.Client, src, dst, group string) {
+func waitSecureFixture(t *testing.T, a *kadm.Client, src, dst, group string, cfg map[string]string) {
 	t.Helper()
-	reader := kadm.NewClient(secureClient(t, secureProperties(t, "copier", "fixture-copy-secret")))
+	reader := kadm.NewClient(secureClient(t, cfg))
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	tick := time.NewTicker(100 * time.Millisecond)
@@ -261,11 +261,32 @@ func RunSaslTlsRestrictedAclInspectionAndUnnamedCopy(t *testing.T) {
 		require.EqualValues(t, 1, report.Partitions[0].Start)
 	})
 	t.Run("unnamed-group", func(t *testing.T) {
-		// Given group READ on the kaferry- prefix, when GROUP is omitted, then a fresh copy succeeds.
+		// Given a separate SCRAM user with group READ on the kaferry- prefix.
+		setupCtx, setupCancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer setupCancel()
+		credentials, err := a.AlterUserSCRAMs(setupCtx, nil, []kadm.UpsertSCRAM{{User: "one-off-copier", Mechanism: kadm.ScramSha256, Iterations: 4096, Password: "fixture-one-off-secret"}})
+		require.NoError(t, err)
+		require.Len(t, credentials, 1)
+		require.NoError(t, credentials.Error())
+		for _, acl := range []*kadm.ACLBuilder{
+			kadm.NewACLs().Topics(src).Operations(kadm.OpRead),
+			kadm.NewACLs().Topics(dst).Operations(kadm.OpWrite),
+			kadm.NewACLs().Groups("kaferry-").Operations(kadm.OpRead).ResourcePatternType(kadm.ACLPatternPrefixed),
+		} {
+			results, err := a.CreateACLs(setupCtx, acl.Allow("User:one-off-copier").AllowHosts("*"))
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.NoError(t, results[0].Err)
+		}
+		cfg := secureProperties(t, "one-off-copier", "fixture-one-off-secret")
+		cfg["sasl.mechanism"] = "SCRAM-SHA-256"
+		waitSecureFixture(t, a, src, dst, group+"-unnamed", cfg)
+
+		// When GROUP is omitted, then a fresh copy succeeds.
 		statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_OFFSET < LATEST", dst, src)
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
-		result := binaryWorker(t, ctx, statement, config)
+		result := binaryWorker(t, ctx, statement, secureConfig(t, cfg))
 		require.Zero(t, result.code, result.detail)
 		require.Equal(t, 1, summaryFrom(t, result.detail).Confirmed)
 		var generatedGroup string
@@ -384,5 +405,5 @@ func RunReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	require.Equal(t, int64(64), progress[0].At, "failover shutdown did not save confirmed progress")
 	// Restore full replication before another security test creates its topics.
 	require.NoError(t, owned.recover())
-	waitSecureFixture(t, a, src, dst, group)
+	waitSecureFixture(t, a, src, dst, group, properties)
 }

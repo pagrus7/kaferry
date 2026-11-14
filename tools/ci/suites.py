@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 from tools.ci.ci import run, verify_tests
+from tools.ci.quality import benchmarks
 
 
 # Fixture ownership, binary selection and workload environment stay with callers.
@@ -58,6 +59,7 @@ EXPECTED = {
         'TestReplicatedClusterLeaderFailurePreservesCopy'],
     'quickstart': ['TestKafkaQuickStart'],
     'smoke': [OBSERVABILITY_TEST, 'TestArchiveTutorial', 'TestArchiveTutorialCancellation'],
+    'fuzz': ['FuzzProgressLifecycle', 'FuzzParse', 'FuzzContainer', 'FuzzState', 'FuzzCheckpoint'],
     'replicated-helpers': (
         'TestArchiveFixtureDefaultWrappersRetainPayload TestArchiveFixturePayloadParametersPreserveRecordContract TestArchiveFixtureSeededPayloadBytes '
         'TestBrokerCurrentLogChild TestBrokerCurrentProgressDoesNotWaitForChildExit TestBrokerCurrentProgressRejectsMalformedCompleteRows '
@@ -105,6 +107,7 @@ EXPECTED = {
 EXPECTED['kafka'] = EXPECTED['integration'] + ['TestCLIInterruptCommitsAndResumeDoesNotRecopy']
 EXPECTED['ci-integration'] = EXPECTED['kafka'] + EXPECTED['quickstart']
 EXPECTED['ci-load'] = EXPECTED['load'] + [OBSERVABILITY_TEST]
+EXPECTED['capture'] = EXPECTED['endurance'] = EXPECTED['soak']
 PATTERNS = {
     'smoke': '^(TestArchiveTutorial(Cancellation)?|TestLoadObservability)$/^round-0$/^disabled$',
     'replicated-helpers': '^(' + '|'.join(EXPECTED['replicated-helpers']) + ')$',
@@ -172,18 +175,54 @@ def command(name, go='go', output='-json', timeout=None, packages='./src/tests/s
     return result + [packages]
 
 
+def verify_benchmarks(log):
+    required = {
+        'github.com/pagrus7/kaferry/src/internal/archive/avro': ('BenchmarkEncode', 'BenchmarkDecode'),
+        'github.com/pagrus7/kaferry/src/internal/archive/replay': (
+            'BenchmarkReplayOverlap', 'BenchmarkCheckpointEncoding', 'BenchmarkCheckpointSaving'),
+    }
+    passed = set()
+    output = {package: [] for package in required}
+    for line in log.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get('Action') == 'pass' and not event.get('Test'):
+            passed.add(event.get('Package'))
+        if isinstance(event, dict) and event.get('Action') == 'output' and event.get('Package') in output:
+            output[event['Package']].append(event.get('Output', ''))
+    missing = [package for package in required if package not in passed]
+    for package, names in required.items():
+        measured = benchmarks(''.join(output[package]))
+        missing += [name for name in names if not any(row == name or row.startswith(name+'/') for row in measured)]
+    if missing:
+        raise ValueError('Required benchmarks did not complete: ' + ', '.join(missing))
+
+
 def ci(name):
     if name == 'integration':
         cmd = ['env', 'CGO_ENABLED=1', 'KAFERRY_QUICKSTART=1'] + command(name)
     else:
-        cmd = ['make', name, 'KAFERRY_TEST_OUTPUT=-json']
-        if name == 'soak':
+        cmd = ['make', 'soak' if name in ('capture', 'endurance') else name, 'KAFERRY_TEST_OUTPUT=-json']
+        if name in ('soak', 'capture', 'endurance'):
             cmd.append('SOAK_TEST_TIMEOUT=40m')
+        if name == 'capture':
+            cmd = ['env', 'KAFERRY_SOAK_MODE=archive', 'KAFERRY_SOAK_PROFILE=',
+                   'KAFERRY_SOAK_TOPOLOGY=single', 'KAFERRY_SOAK_DEST_STALL_CONTAINER='] + cmd
+        if name == 'endurance':
+            # Each matrix job owns its own plain fixture; retain its ownership identity.
+            cmd = ['env', 'KAFERRY_SOAK_MODE=kafka', 'KAFERRY_SOAK_PROFILE=application',
+                   'KAFERRY_SOAK_TOPOLOGY=single', 'KAFERRY_SOAK_RATE=200',
+                   'KAFERRY_ARCHIVE_PAYLOAD=random', 'KAFERRY_FIXTURE_PROJECT=kaferry-compat'] + cmd
     directory = Path('build-results')
     code = run(name, cmd, directory)
     if code == 0:
         suite = 'ci-' + name if 'ci-' + name in EXPECTED else name
-        verify_tests((directory / (name + '.log')).read_text(), EXPECTED.get(suite, []), suite=suite)
+        log = (directory / (name + '.log')).read_text()
+        verify_tests(log, EXPECTED.get(suite, []), suite=suite)
+        if name == 'benchmark':
+            verify_benchmarks(log)
     return code
 
 
@@ -197,7 +236,7 @@ def main():
     local.add_argument('--timeout')
     local.add_argument('--packages', default='./src/tests/system')
     remote = sub.add_parser('ci')
-    remote.add_argument('suite', choices=('integration', 'load', 'soak', 'qualification', 'fault', 'fuzz', 'benchmark'))
+    remote.add_argument('suite', choices=('integration', 'load', 'soak', 'capture', 'endurance', 'qualification', 'fault', 'fuzz', 'benchmark'))
     names = sub.add_parser('names')
     names.add_argument('suite', choices=EXPECTED)
     pattern = sub.add_parser('pattern')

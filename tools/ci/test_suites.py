@@ -16,6 +16,69 @@ from tools.qualification.fault_results import FAULT_CASES
 
 
 class SuitesTest(unittest.TestCase):
+    def test_streaming_profiles_keep_modes_ownership_and_required_passes(self):
+        # Given separate hosted jobs with an inherited destination-stall setting.
+        for name in ('capture', 'endurance'):
+            with self.subTest(suite=name), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                log = directory/(name+'.log')
+                event = dict(Action='pass', Test='TestStreamingSoakFidelityCommitLagMemoryAndShutdown')
+                log.write_text(json.dumps(event))
+                with patch('tools.ci.suites.Path', return_value=directory), \
+                     patch('tools.ci.suites.run', return_value=0) as run:
+                    self.assertEqual(0, suites.ci(name))
+                    command = run.call_args.args[1]
+                    self.assertEqual(['make', 'soak', 'KAFERRY_TEST_OUTPUT=-json', 'SOAK_TEST_TIMEOUT=40m'],
+                                     command[command.index('make'):])
+                    if name == 'capture':
+                        self.assertIn('KAFERRY_SOAK_MODE=archive', command)
+                        self.assertIn('KAFERRY_SOAK_DEST_STALL_CONTAINER=', command)
+                    else:
+                        for setting in ('KAFERRY_SOAK_PROFILE=application', 'KAFERRY_SOAK_RATE=200',
+                                        'KAFERRY_SOAK_MODE=kafka', 'KAFERRY_ARCHIVE_PAYLOAD=random',
+                                        'KAFERRY_FIXTURE_PROJECT=kaferry-compat'):
+                            self.assertIn(setting, command)
+                    # When the selected test skips, then that profile cannot qualify.
+                    log.write_text(json.dumps(dict(event, Action='skip')))
+                    with self.assertRaisesRegex(ValueError, 'Required tests did not pass'):
+                        suites.ci(name)
+
+    def test_benchmarks_require_each_measurement_and_matching_package_pass(self):
+        # Given complete per-package Go JSON benchmark output.
+        avro = 'github.com/pagrus7/kaferry/src/internal/archive/avro'
+        replay = 'github.com/pagrus7/kaferry/src/internal/archive/replay'
+        events = [dict(Action='output', Package=package,
+                       Output=name+'-2 1 42.5 ns/op 8 B/op 1 allocs/op\n')
+                  for package, names in [(avro, ['BenchmarkEncode/tiny', 'BenchmarkDecode/tiny']),
+                                         (replay, ['BenchmarkReplayOverlap', 'BenchmarkCheckpointEncoding', 'BenchmarkCheckpointSaving'])]
+                  for name in names]
+        events += [dict(Action='pass', Package=package) for package in (avro, replay)]
+        log = lambda rows: '\n'.join(json.dumps(row) for row in rows)
+        suites.verify_benchmarks(log(events))
+        # When a measurement or package success is absent, then reject it;
+        # output from another package and a Go "bench" event are not passes.
+        for rows in (events[1:], events[:-1],
+                     [dict(row, Package=replay) if row.get('Package') == avro else row for row in events],
+                     [dict(row, Action='bench') if row['Action'] == 'pass' else row for row in events]):
+            with self.subTest(events=rows), self.assertRaisesRegex(ValueError, 'Required benchmarks did not complete'):
+                suites.verify_benchmarks(log(rows))
+
+    def test_fuzz_requires_all_five_real_pass_events(self):
+        # Given one fuzz target for each selected package, including a skipped target.
+        names = ['FuzzProgressLifecycle', 'FuzzParse', 'FuzzContainer', 'FuzzState', 'FuzzCheckpoint']
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            events = [dict(Action='pass', Test=name) for name in names]
+            for complete in (True, False):
+                (directory/'fuzz.log').write_text('\n'.join(json.dumps(event) for event in
+                    (events if complete else events[:-1]+[dict(Action='skip', Test=names[-1])])))
+                with patch('tools.ci.suites.Path', return_value=directory), patch('tools.ci.suites.run', return_value=0):
+                    if complete:
+                        self.assertEqual(0, suites.ci('fuzz'))
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'Required tests did not pass'):
+                            suites.ci('fuzz')
+
     def test_cli_catalog_and_verification_keep_quickstart_contexts_distinct(self):
         # Given the Kafka job's full required evidence and its intentional opt-out.
         events = [dict(Action='pass', Test=name) for name in suites.EXPECTED['kafka']]

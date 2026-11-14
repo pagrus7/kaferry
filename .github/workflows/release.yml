@@ -156,6 +156,14 @@ jobs:
           name: release-${{ matrix.platform }}
           path: release/
           retention-days: 30
+      - name: Retain packaged smoke results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packaged-smoke-${{ matrix.platform }}
+          path: .cache/release-smoke/smoke-${{ matrix.platform }}.log
+          include-hidden-files: true
+          retention-days: 30
   linux-validation:
     needs: build
     uses: ./.github/workflows/suites.yml
