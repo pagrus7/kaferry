@@ -1,0 +1,101 @@
+package toxiproxy
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Shopify/toxiproxy/v2/stream"
+	"github.com/Shopify/toxiproxy/v2/toxics"
+	"github.com/rs/zerolog"
+)
+
+type evidenceToxic struct{ ran chan struct{} }
+
+func (e evidenceToxic) Pipe(*toxics.ToxicStub) { close(e.ran) }
+
+func TestKaferryActivationEvidence(t *testing.T) {
+	// Given a real live pipeline and a caller that fails after applying its toxic.
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := os.Stdout
+	os.Stdout = write
+	defer func() { os.Stdout = previous; read.Close(); write.Close() }()
+	proxy := &Proxy{Name: "source-2-worker1"}
+	collection := NewToxicCollection(proxy)
+	link := NewToxicLink(proxy, collection, stream.Upstream, zerolog.Nop())
+	go link.stubs[0].Run(collection.chain[stream.Upstream][0])
+	collection.links["evidence"] = link
+	ran := make(chan struct{})
+	toxic := &toxics.ToxicWrapper{Toxic: evidenceToxic{ran}, Name: "kaferry-evidence",
+		Type: "timeout", Stream: "upstream", Direction: stream.Upstream, Toxicity: 1}
+	failure := errors.New("caller failed after applying toxic")
+	apply := func() error { collection.chainAddToxic(toxic); return failure }
+	// When the response path fails, the activation records remain on stdout.
+	if apply() != failure {
+		t.Fatal("original failure was lost")
+	}
+	select {
+	case <-ran:
+	case <-time.After(time.Second):
+		t.Fatal("toxic was not dispatched")
+	}
+	write.Close()
+	data, err := io.ReadAll(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	phases := map[string]time.Time{}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var event map[string]string
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event["kind"] != "fault-active" || event["proxy"] != proxy.Name ||
+			event["toxic_name"] != toxic.Name || event["stream"] != "upstream" || event["link"] == "" {
+			t.Fatalf("wrong activation evidence: %v", event)
+		}
+		at, err := time.Parse(time.RFC3339Nano, event["fault_active_at"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		phases[event["phase"]] = at
+	}
+	// Then both actual transition records survive, in causal timestamp order.
+	if len(phases) != 2 || phases["pipeline-installed"].IsZero() ||
+		phases["toxic-dispatch"].Before(phases["pipeline-installed"]) {
+		t.Fatalf("missing or reordered activation evidence: %v", phases)
+	}
+	link.input.Close()
+}
+
+func TestKaferryActivationEvidenceRejectsClosedLink(t *testing.T) {
+	// Given a connection closed before the toxic can be installed.
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := os.Stdout
+	os.Stdout = write
+	defer func() { os.Stdout = previous; read.Close(); write.Close() }()
+	proxy := &Proxy{Name: "source-2-worker1"}
+	collection := NewToxicCollection(proxy)
+	link := NewToxicLink(proxy, collection, stream.Upstream, zerolog.Nop())
+	link.stubs[0].Close()
+	collection.links["evidence"] = link
+	// When adding the toxic, then a closed pipeline is never reported active.
+	collection.chainAddToxic(&toxics.ToxicWrapper{Toxic: new(toxics.TimeoutToxic),
+		Name: "kaferry-closed", Type: "timeout", Stream: "upstream",
+		Direction: stream.Upstream, Toxicity: 1})
+	write.Close()
+	data, err := io.ReadAll(read)
+	if err != nil || len(data) != 0 {
+		t.Fatalf("false activation evidence: %q, %v", data, err)
+	}
+}

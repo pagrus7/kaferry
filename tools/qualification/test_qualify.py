@@ -151,6 +151,23 @@ class MatrixTest(unittest.TestCase):
             published = json.loads((args.output / 'publication/endurance-results.json').read_text())
             self.assertEqual('failed', published['manifest']['status'])
 
+    def test_replicated_pre_case_failure_retains_explicit_missing_diagnostics(self):
+        # Given failure before a replicated case or its final audit can start.
+        with tempfile.TemporaryDirectory() as temporary:
+            args = self.suite_args(Path(temporary), 'fault-replicated', case='ownership/zombie-worker')
+            with patch('tools.qualification.qualify.capture', return_value='fixture'), \
+                 patch('tools.qualification.qualify.resolve_run', side_effect=RuntimeError('before fixture')):
+                # When qualification fails, then uploadable diagnostics state
+                # what is missing while preserving the original failed receipt.
+                with self.assertRaisesRegex(RuntimeError, 'before fixture'):
+                    run_suite(args)
+            receipt = json.loads((args.output/'manifest.json').read_text())
+            evidence = json.loads((args.output/'replicated-case-evidence.json').read_text())
+            self.assertEqual('failed', receipt['status'])
+            self.assertTrue(evidence['diagnostic_only'])
+            self.assertEqual(['activations', 'session_expiries', 'completions'], evidence['missing'])
+            self.assertFalse((args.output/'replicated-ownership.json').exists())
+
     def test_release_identity_requires_clean_explicit_source(self):
         rows = [dict(case, status='passed', source_commit='b'*40, binary_sha256='a'*64,
                      working_tree_dirty=False) for case in plan('full')]

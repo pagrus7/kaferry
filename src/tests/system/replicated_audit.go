@@ -52,6 +52,7 @@ type replicatedAudit struct {
 	faultAttempted bool
 	failureCommand func(context.Context, ...string) ([]byte, error)
 	levelRequest   func(context.Context, kmsg.Request) (kmsg.Response, error)
+	growth         *auditGrowth
 }
 
 type auditMark struct {
@@ -70,7 +71,9 @@ func startReplicatedAudit(ctx context.Context, t *testing.T, lab *faults.Lab, ou
 	client := fixtureClient(t, strings.Join(faults.Endpoints("source", 0), ","), kgo.ClientID(guard))
 	audit := &replicatedAudit{client: client, targets: targets, levels: make(map[int32]map[string]string), output: output, guard: guard,
 		guards: make(map[int32]int), marks: make(map[string]auditMark)}
+	audit.startGrowth()
 	t.Cleanup(func() {
+		audit.stopGrowth()
 		// Failed cases retain diagnostics before logger restoration. They never
 		// create the final files consumed by the strict qualification validator.
 		audit.retainFailure(t)
@@ -189,6 +192,9 @@ func (a *replicatedAudit) captureFailedArtifact(ctx context.Context, target faul
 	attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
 	data, err := run(attempt, args...)
 	cancel()
+	if kind == "requests" {
+		a.recordGrowth(target.Broker, "failure", data, err)
+	}
 	if err != nil {
 		artifact.Errors = append(artifact.Errors, err.Error())
 	}
@@ -454,7 +460,17 @@ func (a *replicatedAudit) ready(ctx context.Context, client, group, member strin
 	if err := context.Cause(ctx); err != nil {
 		return 0, false, err
 	}
-	all, err := readAuditRequests(ctx, a.targets, faults.Docker)
+	all, err := readAuditRequests(ctx, a.targets, func(query context.Context, args ...string) ([]byte, error) {
+		data, err := faults.Docker(query, args...)
+		if len(data) > auditCaptureLimit {
+			for _, target := range a.targets {
+				if target.Container == args[1] {
+					a.recordGrowth(target.Broker, "readiness-cap", data, err)
+				}
+			}
+		}
+		return data, err
+	})
 	if err != nil {
 		return 0, false, err
 	}
@@ -507,6 +523,7 @@ func (a *replicatedAudit) capture(ctx context.Context, t *testing.T, phase strin
 		for {
 			var err error
 			data, err = faults.Docker(poll, "exec", target.Container, "sh", "-ec", requestLogFiles)
+			a.recordGrowth(target.Broker, phase, data, err)
 			require.NoError(t, err)
 			require.LessOrEqual(t, len(data), 16<<20, "broker request audit exceeds bounded evidence size")
 			count := strings.Count(string(data), `"clientId":"`+a.guard+`"`)
