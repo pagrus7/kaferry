@@ -25,7 +25,9 @@ def replicated_helpers(root=None, platform=sys.platform):
                 continue
             source = path.read_text()
             tag = re.search(r'^//go:build (.+)$', source, re.MULTILINE)
-            if tag and 'harness' in [part.strip() for part in tag[1].split('&&')]:
+            if tag and re.search(r'\bharness\b', tag[1]):
+                if '!' in tag[1] or '||' in tag[1]:
+                    raise ValueError(f'{path}: harness build tags must use positive conjunctions')
                 names.extend(re.findall(r'^func (Test\w+)\(', source, re.MULTILINE))
     if not names:
         raise ValueError('harness build tag selected no tests')

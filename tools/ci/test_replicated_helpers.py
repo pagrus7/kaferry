@@ -24,7 +24,7 @@ class ReplicatedHelpersTest(unittest.TestCase):
             root = Path(temporary)
             directory = root/'src/tests/system'
             directory.mkdir(parents=True)
-            (directory/'added_test.go').write_text('//go:build integration && harness\n\nfunc TestAdded(t *testing.T) {}\n')
+            (directory/'added_test.go').write_text('//go:build (integration && harness)\n\nfunc TestAdded(t *testing.T) {}\n')
             (directory/'broker_test.go').write_text('//go:build integration\n\nfunc TestBroker(t *testing.T) {}\n')
             (directory/'rss_darwin_test.go').write_text('//go:build harness\n\nfunc TestRSS(t *testing.T) {}\n')
             # When discovering helpers, then the new test is mandatory and broker tests stay out.
@@ -32,6 +32,9 @@ class ReplicatedHelpersTest(unittest.TestCase):
             self.assertEqual(['TestAdded', 'TestRSS'], replicated_helpers(root, 'darwin'))
             with self.assertRaisesRegex(ValueError, 'TestAdded'):
                 verify_tests(json.dumps(dict(Action='pass', Test='TestBroker')), replicated_helpers(root, 'linux'))
+            (directory/'added_test.go').write_text('//go:build integration && harness || harness && fault\n\nfunc TestAdded(t *testing.T) {}\n')
+            with self.assertRaisesRegex(ValueError, 'positive conjunctions'):
+                replicated_helpers(root, 'linux')
             (directory/'added_test.go').unlink()
             with self.assertRaisesRegex(ValueError, 'selected no tests'):
                 replicated_helpers(root, 'linux')
