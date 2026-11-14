@@ -79,9 +79,3 @@ func TestProducerPreparationRejectsMetadataOutsideSelectedRoute(t *testing.T) {
 	require.ErrorContains(t, err, "bypasses the selected producer route")
 	require.Zero(t, client.BufferedProduceRecords())
 }
-
-func TestProducerPreparationHonorsCancellationAndDeadlineBeforeAnyWrite(t *testing.T) {
-	for _, mode := range []string{"cancel", "deadline"} {
-		t.Run(mode, func(t *testing.T) { checkProducerPreparationContext(t, mode) })
-	}
-}

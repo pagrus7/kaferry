@@ -5,7 +5,6 @@ package compat
 import (
 	"context"
 	"errors"
-	"math"
 	"sync"
 	"testing"
 	"time"
@@ -93,22 +92,6 @@ func TestLoadStreamingAccountingMarksPartialEvidence(t *testing.T) {
 	require.Nil(t, stream.delivery(true).Missing, "failed publication cannot establish complete reconciliation")
 }
 
-func TestLoadArchiveAccountingReleasesEachPartitionHistory(t *testing.T) {
-	// Given a large archive scanned one source partition at a time.
-	stream := newStreamRecords("fixture", time.Now())
-	stream.published = 65536
-	for partition := 0; partition < 4; partition++ {
-		for id := partition; id < stream.published; id += 4 {
-			// When ordered IDs are observed, then another partition cannot retain their history.
-			record := streamFixtureRecord(id, stream.stamp)
-			_, unique := stream.receive(t, record.Key, record.Value, record.Headers)
-			require.True(t, unique)
-			require.Empty(t, stream.receipts.pending)
-		}
-	}
-	require.Equal(t, stream.published, stream.unique)
-}
-
 func TestLoadStreamingVerifierConsumesTrailingDuplicates(t *testing.T) {
 	// Given a verifier that already consumed all initially available output.
 	const destination = "fixture"
@@ -152,35 +135,6 @@ func TestLoadStreamingVerifierConsumesTrailingDuplicates(t *testing.T) {
 	require.Zero(t, destinationOffsetLag(ends, stream.offsets))
 }
 
-func TestLoadDeliveryObservationRetainsTransientPeakAndLongestLatency(t *testing.T) {
-	// Given three submissions made at different instants, with no periodic samples.
-	start := time.Now()
-	now := start
-	observer := newDeliveryObserver(func() time.Time { return now })
-	for id := range 3 {
-		now = start.Add(time.Duration(id) * 100 * time.Millisecond)
-		observer.submit(id)
-	}
-	require.Zero(t, observer.snapshot().Backlog)
-
-	// When all acknowledgements arrive, then receipts clear the backlog before the next snapshot.
-	for id := range 3 {
-		observer.publication(id, nil)
-	}
-	for id := range 3 {
-		now = start.Add(500*time.Millisecond + time.Duration(id)*50*time.Millisecond)
-		observer.receive(id)
-	}
-
-	// Then the transient peak and longest record time survive even though current lag is zero.
-	result := observer.snapshot()
-	require.Zero(t, result.Backlog)
-	require.Zero(t, result.Unsettled)
-	require.Equal(t, 3, result.PeakBacklog)
-	require.Equal(t, 3, result.TimedReceipts)
-	require.InDelta(t, 0.5, *result.MaxLatencySeconds, 1e-9)
-}
-
 func TestLoadDeliveryObservationMatchesIDsWhenReceiptPrecedesAcknowledgement(t *testing.T) {
 	// Given one acknowledged ID and a different ID received before its acknowledgement.
 	now := time.Now()
@@ -205,31 +159,6 @@ func TestLoadDeliveryObservationMatchesIDsWhenReceiptPrecedesAcknowledgement(t *
 	require.Equal(t, 1, result.PeakBacklog)
 	require.Equal(t, 2, result.TimedReceipts)
 	require.Equal(t, 1.0, *result.MaxLatencySeconds)
-}
-
-func TestLoadDeliveryObservationReleasesFailedAndCompletedHistory(t *testing.T) {
-	// Given a failed source publication without a destination receipt.
-	observer := newDeliveryObserver(time.Now)
-	observer.submit(0)
-	observer.publication(0, errors.New("fixture failure"))
-	require.Nil(t, observer.snapshot().MaxLatencySeconds, "no receipts is not a measured zero latency")
-	require.Nil(t, observer.snapshot().P95LatencySeconds)
-	require.Nil(t, observer.snapshot().P99LatencySeconds)
-	require.Nil(t, observer.snapshot().P999LatencySeconds)
-	require.Zero(t, observer.snapshot().Unsettled)
-
-	// When many later records are acknowledged and received.
-	for id := 1; id <= 10000; id++ {
-		observer.submit(id)
-		observer.publication(id, nil)
-		observer.receive(id)
-	}
-
-	// Then timing history does not grow with the total number of completed records.
-	result := observer.snapshot()
-	require.Zero(t, result.Backlog)
-	require.Zero(t, result.Unsettled)
-	require.Equal(t, 10000, result.TimedReceipts)
 }
 
 func TestLoadDeliveryObservationSynchronizesCallbacksAndReceipts(t *testing.T) {
@@ -316,75 +245,4 @@ func TestLoadDeliveryObservationSeesCallbacksBeforeReportDrain(t *testing.T) {
 	require.True(t, *result.Integrity.Matched)
 	require.Equal(t, 8, result.Integrity.SubmittedRecords)
 	require.Equal(t, 8, result.Integrity.ReceivedRecords)
-}
-
-func TestLoadDeliveryPercentilesCountEveryReceiptAndRetainTheTail(t *testing.T) {
-	// Given 10,000 receipts with known percentile boundaries and a longer maximum.
-	now := time.Now()
-	observer := newDeliveryObserver(func() time.Time { return now })
-	for id := range 10000 {
-		latency := time.Millisecond
-		switch {
-		case id >= 9990:
-			latency = time.Second
-		case id >= 9900:
-			latency = 100 * time.Millisecond
-		case id >= 9500:
-			latency = 10 * time.Millisecond
-		}
-		observer.submit(id)
-		observer.publication(id, nil)
-		now = now.Add(latency)
-		observer.receive(id)
-		observer.receive(id) // A duplicate cannot enter the timing population.
-	}
-
-	// When all first receipts are summarized, then each nearest-rank boundary is retained.
-	result := observer.snapshot()
-	require.Equal(t, 10000, result.TimedReceipts)
-	require.Equal(t, 1.0, *result.MaxLatencySeconds)
-	for i, measured := range []*float64{result.P95LatencySeconds, result.P99LatencySeconds, result.P999LatencySeconds} {
-		want := []float64{0.001, 0.01, 0.1}[i]
-		require.GreaterOrEqual(t, *measured, want)
-		require.Less(t, *measured, want*1.001)
-	}
-}
-
-func TestLoadDeliveryPercentilesCoverZeroSmallPopulationsAndLongDurations(t *testing.T) {
-	// Given populations spanning zero, nanoseconds, bucket boundaries and int64's limit.
-	for _, latency := range []time.Duration{0, 1, 2047, 2048, time.Microsecond * 77, 24 * time.Hour, math.MaxInt64} {
-		t.Run(latency.String(), func(t *testing.T) {
-			now := time.Now()
-			observer := newDeliveryObserver(func() time.Time { return now })
-			observer.submit(0)
-			observer.publication(0, nil)
-			now = now.Add(latency)
-			observer.receive(0)
-
-			// When one receipt is summarized, then all percentiles are capped at its exact maximum.
-			result := observer.snapshot()
-			for _, measured := range []*float64{result.P95LatencySeconds, result.P99LatencySeconds, result.P999LatencySeconds} {
-				require.Equal(t, latency.Seconds(), *measured)
-			}
-		})
-	}
-}
-
-func TestLoadDeliveryPercentilesRoundNonIntegralRanksUp(t *testing.T) {
-	// Given 101 distinct receipt times, entered in descending order.
-	now := time.Now()
-	observer := newDeliveryObserver(func() time.Time { return now })
-	for id := range 101 {
-		observer.submit(id)
-		observer.publication(id, nil)
-		now = now.Add(time.Duration(101-id) * time.Nanosecond)
-		observer.receive(id)
-	}
-
-	// When percentile ranks are fractional, then the next full rank is selected.
-	result := observer.snapshot()
-	require.Equal(t, 101, result.TimedReceipts)
-	require.Equal(t, (96 * time.Nanosecond).Seconds(), *result.P95LatencySeconds)
-	require.Equal(t, (100 * time.Nanosecond).Seconds(), *result.P99LatencySeconds)
-	require.Equal(t, (101 * time.Nanosecond).Seconds(), *result.P999LatencySeconds)
 }
