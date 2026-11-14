@@ -16,6 +16,10 @@ func TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 	system.RunSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t)
 }
 
+func TestSaslTlsRestrictedAclInspectionAndUnnamedCopy(t *testing.T) {
+	system.RunSaslTlsRestrictedAclInspectionAndUnnamedCopy(t)
+}
+
 func TestSaslTlsScramMechanisms(t *testing.T) {
 	system.RunSaslTlsScramMechanisms(t)
 }

@@ -1,4 +1,4 @@
-//go:build integration && fault
+//go:build integration && fault && harness
 
 package compat
 

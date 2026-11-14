@@ -11,6 +11,18 @@ import tempfile
 import time
 import uuid
 
+from tools.ci.ci import verify_tests
+from tools.ci.suites import EXPECTED, PATTERNS
+
+
+def check_file_copy(env):
+    result = subprocess.run(["go", "test", "-count=1", "-json", "-tags=integration,load", "-run",
+                             PATTERNS['smoke'], "./src/tests/system"],
+                            env=env, text=True, stdout=subprocess.PIPE, check=False)
+    print(result.stdout, end="")
+    result.check_returncode()
+    verify_tests(result.stdout, EXPECTED['smoke'], suite='smoke')
+
 
 def write_wrapper(path, root, image):
     command = ["docker", "run", "--rm", "-i", "--network=host", "--user", f"{os.getuid()}:{os.getgid()}",
@@ -156,8 +168,7 @@ def main():
     env = dict(os.environ, TMPDIR=str(temporary), KAFERRY_TEST_BINARY=str(wrapper))
     # The wrapper is not the executable; exact image/binary identity was checked above.
     env.pop("KAFERRY_EXPECT_BINARY_SHA256", None)
-    subprocess.run(["go", "test", "-count=1", "-tags=integration,load", "-run",
-                    "^(TestArchiveTutorial(Cancellation)?|TestLoadObservability)$/^round-0$/^disabled$", "./src/tests/system"], env=env, check=True)
+    check_file_copy(env)
     print("Container identity, licenses, CA certificates and file-copy fidelity verified")
 
 

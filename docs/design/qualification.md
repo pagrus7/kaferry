@@ -74,6 +74,8 @@ Security covers PLAIN, SCRAM-SHA-256/512, signed OAuth client credentials, token
 
 Compatibility tests live in `src/tests/compatibility`, using regular helpers from `src/tests/system`. Relevant PR changes run the matrix; unrelated documentation/reviewer changes may skip it. Unknown paths run it. Scheduled main jobs may reuse a passing suite/tier on the same commit only while its test executions are less than 30 days old. Failed/cancelled attempts retry; skipped tests and aggregate report reruns do not renew evidence. Nightly cannot replace full. The planner links reused executions. Weekly fuzzing, vulnerability scans and performance calibration continue separately. Releases always test their packaged executable.
 
+Manual qualification also runs streaming archive capture and the application endurance profile on separate hosted runners. Both use the Kafka soak's `soak_duration` input, with a one-minute minimum; runs shorter than 24 hours remain rehearsals. The fault suite includes the five blocked-output recovery cases. Artifacts retain Go JSON results for suites and each platform's packaged smoke tests. Benchmark evidence requires named measurement rows and passing package results, because Go benchmarks do not emit individual test-pass events.
+
 ## Plain replicated smoke
 
 ```sh
@@ -283,7 +285,7 @@ This comparison runs one revision after the other on the same quiet host:
 sh tools/qualification/performance_run.sh origin/main HEAD --pairs 6 --archives
 ```
 
-The wrapper cleans up on success, failure or interruption. [Performance CI](../../.github/workflows/performance.yml) is separate from required checks. It uses warm-ups and six interleaved sequential pairs, alternating first revision. Kafka input is capped at 160,000 records; file/archive input at 200,000. Both revisions need Avro support for archive comparisons. Summaries retain median throughput and ranges, with raw metrics/identities/images for 30 days; shared-runner rates have no merge gate.
+The wrapper cleans up on success, failure or interruption. [Performance CI](../../.github/workflows/performance.yml) is separate from required checks. It uses warm-ups and six interleaved sequential pairs, alternating first revision. Kafka input is capped at 160,000 records; file/archive input at 200,000. Both revisions must accept the current workload SQL; archive comparisons also require Avro support. A baseline that cannot complete the current workloads makes the comparison unavailable. Summaries retain median throughput and ranges, with raw metrics/identities/images for 30 days; shared-runner rates have no merge gate.
 
 Nightly A/A calibration uses the same binary on both sides. Review at least 20 calibration runs before setting `PERFORMANCE_MODE=comparison`. Changed-main comparisons use the last compatible retained scheduled result; missing/expired data requires calibration. Manual dispatch accepts a base; `ci:performance` opts PRs into the configured mode, using the merge base in comparison mode. Choose warnings only after measuring calibration noise.
 

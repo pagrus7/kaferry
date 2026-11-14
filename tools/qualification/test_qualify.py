@@ -16,6 +16,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from tools.ci.ci import verify_tests
 from tools.qualification import qualify
 from tools.qualification.qualify import cleanup_replicated, duration, endurance_capacity, identity_platforms, lab_lock, logged, main, plan, replicated_admission, replicated_storage, report, resolve_run, run_suite, verify_replicated_tests, InconclusivePrecondition, suite_command, valid_receipts
 from tools.qualification.broker_probe import logical, reconcile, records, replicated_topology, topic_ready
@@ -540,9 +541,21 @@ class MatrixTest(unittest.TestCase):
                                                          dict(Action='pass', Test='TestReplicatedNetworkFaults')])
         # Given a typed no-fault outcome, when a different test failed or the
         # selected leaf did not skip, then no marker can turn it into a retry.
-        verify_replicated_tests(skipped, [test], proof)
+        with patch('tools.qualification.qualify.verify_tests') as verify:
+            self.assertEqual('inconclusive', verify_replicated_tests(skipped, [test], proof))
+            verify.assert_not_called()
+        with self.assertRaisesRegex(ValueError, 'Required tests did not pass: OtherCase'):
+            verify_replicated_tests(skipped, [test, 'OtherCase'], proof)
+        passed = json.dumps(dict(Action='pass', Test=test))
+        with patch('tools.qualification.qualify.verify_tests', wraps=verify_tests) as verify:
+            self.assertEqual('passed', verify_replicated_tests(passed, [test], []))
+            verify.assert_called_once_with(passed, [test], suite='fault-replicated')
         for log, cases in [(skipped, []), ('', proof), (skipped+'\n'+json.dumps(dict(Action='fail', Test='Cleanup')), proof),
-                           (json.dumps(dict(Action='pass', Test=test)), proof)]:
+                           (passed, proof), (json.dumps(dict(Action='skip', Test=test)), proof),
+                           (skipped+'\n'+json.dumps(dict(Action='skip', Test='Unexpected')), proof),
+                           (skipped+'\n'+json.dumps(dict(Action='skip', Package='unexpected/package')), proof),
+                           (skipped+'\n'+json.dumps(dict(Action='skip')), proof),
+                           (skipped, proof*2)]:
             with self.subTest(log=log), self.assertRaises(ValueError):
                 verify_replicated_tests(log, [test], cases)
 

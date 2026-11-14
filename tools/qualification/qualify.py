@@ -514,7 +514,7 @@ def broker_fixture(args, spec, receipt, cancelled, *, lease_held=False):
 
 def verify_run(args, spec, receipt):
     if spec.expected and args.suite != 'fault-replicated':
-        verify_tests((args.output / 'suite.log').read_text(), spec.expected)
+        verify_tests((args.output / 'suite.log').read_text(), spec.expected, suite=args.suite)
     if args.suite == 'benchmark':
         from tools.ci.quality import benchmarks
         measured = benchmarks((args.output / 'suite.log').read_text())
@@ -538,8 +538,7 @@ def verify_run(args, spec, receipt):
     if args.suite == 'fault-replicated':
         from tools.qualification.replicated_results import collect
         cases = collect(args.output, receipt['case_selection'], receipt, spec.env['KAFERRY_ORACLE_RUN'])
-        verify_replicated_tests((args.output / 'suite.log').read_text(), spec.expected, cases)
-        status = 'inconclusive' if any(case.get('status') == 'inconclusive' for case in cases) else 'passed'
+        status = verify_replicated_tests((args.output / 'suite.log').read_text(), spec.expected, cases)
         receipt['fault_results'] = dict(schema=1, status=status, cases=cases, oracle_run=spec.env['KAFERRY_ORACLE_RUN'],
             **{key: receipt[key] for key in ('source_commit', 'binary_sha256', 'binary_platform', 'execution_platform')})
 
@@ -566,13 +565,22 @@ def verify_replicated_tests(log, expected, cases):
     if any(event.get('Action') == 'fail' for event in events):
         raise ValueError('replicated Go test or cleanup failed')
     inconclusive = {REPLICATED_CASES[case['id']] for case in cases if case.get('status') == 'inconclusive'}
-    skipped = [event['Test'] for event in events if event.get('Action') == 'skip' and event.get('Test')]
-    if set(skipped) != inconclusive or len(skipped) != len(inconclusive):
+    skipped = [event.get('Test') or event.get('Package') or '<unnamed>'
+               for event in events if event.get('Action') == 'skip']
+    if (set(skipped) != inconclusive or len(skipped) != len(inconclusive) or
+            len(inconclusive) != sum(case.get('status') == 'inconclusive' for case in cases)):
         raise ValueError('replicated skip lacks an exact inconclusive precondition proof')
     if any(event.get('Action') == 'pass' and event.get('Test') in inconclusive for event in events):
         raise ValueError('inconclusive precondition cannot pass its Go case')
-    verify_tests(log, [name for name in expected if name not in inconclusive] +
-                 sorted({name.split('/')[0] for name in inconclusive}))
+    if inconclusive:
+        # A proved precondition skip ends this attempt without passing it.
+        required = [name for name in expected if name not in inconclusive] + sorted({name.split('/')[0] for name in inconclusive})
+        passed = {event['Test'] for event in events if event.get('Action') == 'pass' and event.get('Test')}
+        if missing := [name for name in required if name not in passed]:
+            raise ValueError('Required tests did not pass: ' + ', '.join(missing))
+        return 'inconclusive'
+    verify_tests(log, expected, suite='fault-replicated')
+    return 'passed'
 
 
 def run_suite(args, *, cancelled=None):

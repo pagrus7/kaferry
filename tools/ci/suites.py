@@ -5,8 +5,10 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 from tools.ci.ci import run, verify_tests
+from tools.ci.quality import benchmarks
 
 
 # Fixture ownership, binary selection and workload environment stay with callers.
@@ -30,8 +32,11 @@ RECOVERY_CASES = {'recovery/'+name for name in
 FAULT_CASES = RECOVERY_CASES | {'fault/crash', 'fault/churn', 'fault/blocking-commit'}
 LOAD_PROFILES = ('near-limit-v1', 'hot-keys-v1', 'headers-v1', 'tombstones-v1',
                  'source-none-v1', 'source-gzip-v1', 'source-snappy-v1', 'source-lz4-v1', 'source-zstd-v1')
+OBSERVABILITY_TEST = 'TestLoadObservability/round-0/disabled'
 EXPECTED = {
     'integration': ['TestAllFileDirectionsAndResume', 'TestTopicToTopicSlice',
+                    'TestLatestEndRemainsPinnedAfterCompletion',
+                    'TestKafkaArchiveConcurrentCapture',
                     'TestHistoricalFixtureTopicRetention/historical_default',
                     'TestHistoricalFixtureTopicRetention/finite_override',
                     'TestRunningSourceOffsetOutOfRangeFailsWithoutSavingProgress',
@@ -44,14 +49,68 @@ EXPECTED = {
     'fault-replicated': list(REPLICATED_CASES.values()),
     'qualification': [
         'TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight', 'TestSaslTlsScramMechanisms/SCRAM-SHA-256',
+        'TestSaslTlsRestrictedAclInspectionAndUnnamedCopy',
+        'TestSaslTlsRestrictedAclInspectionAndUnnamedCopy/status',
+        'TestSaslTlsRestrictedAclInspectionAndUnnamedCopy/explain',
+        'TestSaslTlsRestrictedAclInspectionAndUnnamedCopy/unnamed-group',
         'TestSaslTlsScramMechanisms/SCRAM-SHA-512', 'TestSaslTlsExternalAuthentication/OAUTHBEARER',
         'TestSaslTlsExternalAuthentication/GSSAPI', 'TestSaslTlsOAuthTokenFile',
         'TestSaslTlsOAuthRenewalAndKeyRotation', 'TestMutualTlsCopy', 'TestServerTlsCopy',
         'TestReplicatedClusterLeaderFailurePreservesCopy'],
+    'quickstart': ['TestKafkaQuickStart'],
+    'smoke': [OBSERVABILITY_TEST, 'TestArchiveTutorial', 'TestArchiveTutorialCancellation'],
+    'fuzz': ['FuzzProgressLifecycle', 'FuzzParse', 'FuzzContainer', 'FuzzState', 'FuzzCheckpoint'],
+    'replicated-helpers': (
+        'TestArchiveFixtureDefaultWrappersRetainPayload TestArchiveFixturePayloadParametersPreserveRecordContract TestArchiveFixtureSeededPayloadBytes '
+        'TestBrokerCurrentLogChild TestBrokerCurrentProgressDoesNotWaitForChildExit TestBrokerCurrentProgressRejectsMalformedCompleteRows '
+        'TestBrokerCurrentProgressRequiresReadableCompleteEvidence TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions TestBrokerISRSelectionRequiresActiveSameLeaderBacklog '
+        'TestBrokerReadinessRequiresFreshPinnedMetadataWithinSharedBudget TestBrokerRestartRechecksFailureAfterHealthObservation TestBrokerRestartRequiresCurrentLifetimeInsideRecoveryWindow '
+        'TestBrokerWorkCapsRequireActualSamplesAndKeepMissingPeaksUnavailable TestCLIDelayedInputPreservesBytesAndClosesStdin TestCancelledFixturePublishDoesNotWaitForReportReader TestConsumeOnlyStartAllowsLatePublishingGrace '
+        'TestContainerInspectionRejectsMissingAmbiguousAndMalformedOwnership TestDisconnectRestoresOwnedNetworkAndOriginalAliases TestEnduranceRecoveryDeadlineAndBacklogBoundary '
+        'TestExpectedBinaryHashRejectsSubstitution TestHealCannotMutateAReplacementProxyContainer '
+        'TestInvalidPrimitivesCannotReachDockerOrProxy TestKilledBrokerCleanupWaitsForTheOriginalContainer '
+        'TestLoadArchiveAccountingReleasesEachPartitionHistory TestLoadDeliveryObservationMatchesIDsWhenReceiptPrecedesAcknowledgement TestLoadDeliveryObservationReleasesFailedAndCompletedHistory '
+        'TestLoadDeliveryObservationRetainsTransientPeakAndLongestLatency TestLoadDeliveryObservationSeesCallbacksBeforeReportDrain TestLoadDeliveryObservationSynchronizesCallbacksAndReceipts '
+        'TestLoadDeliveryPercentilesCountEveryReceiptAndRetainTheTail TestLoadDeliveryPercentilesCoverZeroSmallPopulationsAndLongDurations TestLoadDeliveryPercentilesRoundNonIntegralRanksUp '
+        'TestLoadEnduranceAllowsFinalBurstToSettleDuringGrace TestLoadEndurancePartitionedFidelityAndHistory TestLoadEnduranceRejectsUnderloadedRuns '
+        'TestLoadEnduranceRejectsWrongKeyRouting TestLoadEnduranceTracksBurstsWindowsAndFinalAcknowledgements TestLoadFiniteVerifierAllowsDestinationPartitionSkew '
+        'TestLoadIntegrityDetectsKafkaAndArchiveMutationsAlongsideByteChecks TestLoadIntegrityFingerprintPreservesFieldBoundariesAndNullBytes TestLoadIntegrityKeepsTimestampAndArchiveProvenanceChecks '
+        'TestLoadIntegrityReconcilesDifferentPartitionArrivalOrdersAndReleasesHistory TestLoadReceiptLedgerKeepsFirstDigestAcrossGapsAndLateDuplicates TestLoadReportPreservesFullCLILogBeforeTemporaryCleanup '
+        'TestLoadSourceCompressionObservationRespectsDeadline TestLoadSourceCompressionWaitsForDelayedObservationsAndCancellation TestLoadStreamingAccountingMarksPartialEvidence '
+        'TestLoadStreamingAccountingRetainsAllDeliveryFailures TestLoadStreamingVerifierBoundsHistory TestLoadStreamingVerifierConsumesTrailingDuplicates '
+        'TestLoadWorkloadProfilesExerciseSizesHeadersAndHotKeys TestLoadWorkloadProfilesPreserveFidelityAndIdentifyTombstones TestLoadWorkloadSourceCodecNamesMatchCompressedBytes '
+        'TestLoadWorkloadTombstoneNullIsNotEmptyAndRequiresItsID TestMetadataAdapterRejectsOmittedErroredAndUnavailableBrokerResponses TestMetadataAdapterUsesSelectedClusterAndRejectsAbsentState '
+        'TestNativeEndpointsKeepAllWorkerPathsIndependent TestNetworkCleanupHandlesNoDetachMissingNetworkAndInspectionFailure TestNetworkDestinationLeadersRemainStableAcrossPhases '
+        'TestNetworkHealthyPreconditionNeedsThirtySecondsAndBothRates TestNetworkMeasurementRequiresCaughtUpSourceAndOutput TestNetworkOutageRestartRequiresFirstWorkerRSSAndActiveCut '
+        'TestOwnedBrokerRequiresFixtureOwnership TestOwnedBrokerRestoresAfterEarlyReturnAndRetriesFailure TestOwnershipCaseRejectsUnprovedMembership '
+        'TestOwnershipCoordinatorRestartRequiresRecordedScope TestOwnershipGenerationsReuseOneAuditSnapshot TestOwnershipKilledWorkerKeepsEarlierPeak '
+        'TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy TestPartialPathCutUnwindsAndRejectsWrongOrAlreadyFaultedRoutes TestPartialPhysicalFaultRestoresEarlierTargetsAndRetainsFailedCleanup '
+        'TestPhysicalFaultChecksStateAgainImmediatelyBeforeMutation TestPinnedMetadataProbeUsesFreshSelectedTransportAndAllTopics TestProducerPreparationHonorsCancellationAndDeadlineBeforeAnyWrite '
+        'TestProducerPreparationObservesEveryBrokerThenInitializesBeforeAnyWrite TestProducerPreparationRejectsMetadataOutsideSelectedRoute TestProxyOwnershipAcceptsOnlyEquivalentBoundWildcardListeners '
+        'TestProxyProducerCancellationCannotRetryAfterHealing TestProxyProducerFirstRetriableResponseRetainsOriginalDiagnostic TestProxyProducerRejectsPermanentProduceFailureWithoutRetry '
+        'TestRebalanceChurnTimeoutCatalogUsesMilliseconds TestRebalanceChurnUsesSelectedBinary TestRecoveryLedgerChecksEveryCopy '
+        'TestReplicatedAuditArmsOnlyAfterCurrentGenerationAcceptedProgress TestReplicatedAuditCohortUsesOneCompleteParsedSnapshot TestReplicatedAuditFailureCaptureSharesDeadline '
+        'TestReplicatedAuditFailureCleanupRetainsDiagnostics TestReplicatedAuditFailureCleanupSkipsPassingCases TestReplicatedAuditFailureOutputIsBounded '
+        'TestReplicatedAuditLevelRetriesConnectionErrorOnce TestReplicatedAuditPreservesDecodedConfigurationAndOriginalDigest TestReplicatedAuditReadinessReadsEveryBrokerConcurrently '
+        'TestReplicatedAuditReadinessRejectsIncompleteBrokerReads TestReplicatedAuditReadinessSharesCancellation TestReplicatedBrokerPublisherCancellationDrainsDelayedOffers '
+        'TestReplicatedBrokerPublisherCatchesUpDelayedSchedule TestReplicatedBrokerPublisherErrorDrainsDelayedOffers TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites '
+        'TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound TestReplicatedEnduranceRequiresEveryPartitionFullyInSync '
+        'TestReplicatedEnduranceStallsAndRestoresEveryDestinationBroker TestReplicatedPublisherAcknowledgesAllPartitionsAndStops TestReplicatedPublisherStopsAfterRejectedBatch '
+        'TestReplicatedZombieExposureSpansSessionWithinSaveDeadline TestReplicatedZombieRSSStopsAtProcessExit TestRestartUsesOriginalContainerAndHealingDoesNotRestartHealthyBroker '
+        'TestRoleResolutionRequiresCurrentPartitionState TestRolesRejectMissingStateAndForeignOwnership TestRolesResolveCurrentStateAndHealOriginalContainers '
+        'TestRollingBrokerRoleVisitsOnlyTheSelectedOwnedBroker TestSlowCloseStimulusRefusesOtherPathsAndUnwindsPartialFailure TestSlowCloseStimulusUsesOnlyTheFrozenWorkerRoutes '
+        'TestSoakMonitorRequiresFiveIdleRSSSamples TestToxicCleanupRetainsUnavailableStateForLaterHealing TestToxicDefaultsAndUncertainCreationPreserveOtherFaults '
+        'TestToxicsUseDocumentedUnitsAndRemoveOnlyTheirOwnNames TestUnavailableProxyAPICannotMutateRoutes TestWholeClusterIncludesClientReplicationAndControllerPaths '
+        'TestWorkerCoordinatorCutHealsOriginalPathAfterOwnershipMoves'
+    ).split() + (['TestRSSSampleOwnedChild'] if sys.platform == 'darwin' else []),
 }
-CI_EXTRA = {
-    'integration': ['TestCLIInterruptCommitsAndResumeDoesNotRecopy', 'TestKafkaQuickStart'],
-    'load': ['TestLoadObservability/round-0/disabled'],
+EXPECTED['kafka'] = EXPECTED['integration'] + ['TestCLIInterruptCommitsAndResumeDoesNotRecopy']
+EXPECTED['ci-integration'] = EXPECTED['kafka'] + EXPECTED['quickstart']
+EXPECTED['ci-load'] = EXPECTED['load'] + [OBSERVABILITY_TEST]
+EXPECTED['capture'] = EXPECTED['endurance'] = EXPECTED['soak']
+PATTERNS = {
+    'smoke': '^(TestArchiveTutorial(Cancellation)?|TestLoadObservability)$/^round-0$/^disabled$',
+    'replicated-helpers': '^(' + '|'.join(EXPECTED['replicated-helpers']) + ')$',
 }
 
 
@@ -116,17 +175,54 @@ def command(name, go='go', output='-json', timeout=None, packages='./src/tests/s
     return result + [packages]
 
 
+def verify_benchmarks(log):
+    required = {
+        'github.com/pagrus7/kaferry/src/internal/archive/avro': ('BenchmarkEncode', 'BenchmarkDecode'),
+        'github.com/pagrus7/kaferry/src/internal/archive/replay': (
+            'BenchmarkReplayOverlap', 'BenchmarkCheckpointEncoding', 'BenchmarkCheckpointSaving'),
+    }
+    passed = set()
+    output = {package: [] for package in required}
+    for line in log.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get('Action') == 'pass' and not event.get('Test'):
+            passed.add(event.get('Package'))
+        if isinstance(event, dict) and event.get('Action') == 'output' and event.get('Package') in output:
+            output[event['Package']].append(event.get('Output', ''))
+    missing = [package for package in required if package not in passed]
+    for package, names in required.items():
+        measured = benchmarks(''.join(output[package]))
+        missing += [name for name in names if not any(row == name or row.startswith(name+'/') for row in measured)]
+    if missing:
+        raise ValueError('Required benchmarks did not complete: ' + ', '.join(missing))
+
+
 def ci(name):
     if name == 'integration':
         cmd = ['env', 'CGO_ENABLED=1', 'KAFERRY_QUICKSTART=1'] + command(name)
     else:
-        cmd = ['make', name, 'KAFERRY_TEST_OUTPUT=-json']
-        if name == 'soak':
+        cmd = ['make', 'soak' if name in ('capture', 'endurance') else name, 'KAFERRY_TEST_OUTPUT=-json']
+        if name in ('soak', 'capture', 'endurance'):
             cmd.append('SOAK_TEST_TIMEOUT=40m')
+        if name == 'capture':
+            cmd = ['env', 'KAFERRY_SOAK_MODE=archive', 'KAFERRY_SOAK_PROFILE=',
+                   'KAFERRY_SOAK_TOPOLOGY=single', 'KAFERRY_SOAK_DEST_STALL_CONTAINER='] + cmd
+        if name == 'endurance':
+            # Each matrix job owns its own plain fixture; retain its ownership identity.
+            cmd = ['env', 'KAFERRY_SOAK_MODE=kafka', 'KAFERRY_SOAK_PROFILE=application',
+                   'KAFERRY_SOAK_TOPOLOGY=single', 'KAFERRY_SOAK_RATE=200',
+                   'KAFERRY_ARCHIVE_PAYLOAD=random', 'KAFERRY_FIXTURE_PROJECT=kaferry-compat'] + cmd
     directory = Path('build-results')
     code = run(name, cmd, directory)
     if code == 0:
-        verify_tests((directory / (name + '.log')).read_text(), EXPECTED.get(name, []) + CI_EXTRA.get(name, []))
+        suite = 'ci-' + name if 'ci-' + name in EXPECTED else name
+        log = (directory / (name + '.log')).read_text()
+        verify_tests(log, EXPECTED.get(suite, []), suite=suite)
+        if name == 'benchmark':
+            verify_benchmarks(log)
     return code
 
 
@@ -140,10 +236,28 @@ def main():
     local.add_argument('--timeout')
     local.add_argument('--packages', default='./src/tests/system')
     remote = sub.add_parser('ci')
-    remote.add_argument('suite', choices=('integration', 'load', 'soak', 'qualification', 'fault', 'fuzz', 'benchmark'))
+    remote.add_argument('suite', choices=('integration', 'load', 'soak', 'capture', 'endurance', 'qualification', 'fault', 'fuzz', 'benchmark'))
+    names = sub.add_parser('names')
+    names.add_argument('suite', choices=EXPECTED)
+    pattern = sub.add_parser('pattern')
+    pattern.add_argument('suite', choices=PATTERNS)
+    verify = sub.add_parser('verify')
+    verify.add_argument('suite', choices=EXPECTED)
+    verify.add_argument('log', type=Path)
     args = parser.parse_args()
     if args.action == 'ci':
         return ci(args.suite)
+    if args.action == 'names':
+        print('\n'.join(EXPECTED[args.suite]))
+        return 0
+    if args.action == 'pattern':
+        print(PATTERNS[args.suite])
+        return 0
+    if args.action == 'verify':
+        if not EXPECTED[args.suite]:
+            parser.error('suite has no required tests')
+        verify_tests(args.log.read_text(), EXPECTED[args.suite], suite=args.suite)
+        return 0
     cmd = command(args.suite, args.go, args.output, args.timeout, args.packages)
     if args.suite in ('fault', 'recovery'):
         from tools.qualification.fault_results import collect, configure

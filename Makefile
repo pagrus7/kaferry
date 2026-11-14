@@ -12,46 +12,6 @@ KAFKA_TEST_BROKERS ?= 127.0.0.1:39092
 KAFKA_TEST_DEST_BROKERS ?= 127.0.0.1:40092
 KAFERRY_TEST_OUTPUT ?= -v
 SOAK_TEST_TIMEOUT ?= 1h
-REPLICATED_HELPER_TESTS := \
-	TestOwnershipCaseRejectsUnprovedMembership \
-	TestOwnershipCoordinatorRestartRequiresRecordedScope \
-	TestOwnershipKilledWorkerKeepsEarlierPeak \
-	TestOwnershipGenerationsReuseOneAuditSnapshot \
-	TestOwnershipObservationFollowsFreshCoordinatorBehindAcceptingProxy \
-	TestReplicatedPublisherAcknowledgesAllPartitionsAndStops \
-	TestReplicatedPublisherStopsAfterRejectedBatch \
-	TestReplicatedBrokerPublisherKeepsHealthyPartitionsAndDrainsUncertainWrites \
-	TestReplicatedBrokerPublisherCatchesUpDelayedSchedule \
-	TestReplicatedBrokerPublisherCancellationDrainsDelayedOffers \
-	TestReplicatedBrokerPublisherErrorDrainsDelayedOffers \
-	TestNetworkMeasurementRequiresCaughtUpSourceAndOutput \
-	TestNetworkHealthyPreconditionNeedsThirtySecondsAndBothRates \
-	TestNetworkDestinationLeadersRemainStableAcrossPhases \
-	TestBrokerWorkCapsRequireActualSamplesAndKeepMissingPeaksUnavailable \
-	TestBrokerRestartRequiresCurrentLifetimeInsideRecoveryWindow \
-	TestNetworkOutageRestartRequiresFirstWorkerRSSAndActiveCut \
-	TestBrokerCurrentProgressDoesNotWaitForChildExit \
-	TestBrokerCurrentProgressRequiresReadableCompleteEvidence \
-	TestBrokerCurrentProgressRejectsMalformedCompleteRows \
-	TestBrokerRestartRechecksFailureAfterHealthObservation \
-	TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions \
-	TestBrokerISRSelectionRequiresActiveSameLeaderBacklog \
-	TestBrokerReadinessRequiresFreshPinnedMetadataWithinSharedBudget \
-	TestReplicatedBrokerPublisherRetriesNegotiationEOFAfterConnectionLoss \
-	TestReplicatedBrokerPublisherRetriesSafeLeaderResponsesWithinDeliveryBound \
-	TestReplicatedAuditLevelRetriesConnectionErrorOnce \
-	TestReplicatedAuditFailureCleanupRetainsDiagnostics \
-	TestReplicatedAuditFailureCleanupSkipsPassingCases \
-	TestReplicatedAuditFailureCaptureSharesDeadline \
-	TestReplicatedAuditFailureOutputIsBounded \
-	TestReplicatedAuditArmsOnlyAfterCurrentGenerationAcceptedProgress \
-	TestReplicatedAuditPreservesDecodedConfigurationAndOriginalDigest \
-	TestReplicatedAuditReadinessReadsEveryBrokerConcurrently \
-	TestReplicatedAuditReadinessRejectsIncompleteBrokerReads \
-	TestReplicatedAuditReadinessSharesCancellation \
-	TestReplicatedAuditCohortUsesOneCompleteParsedSnapshot \
-	TestReplicatedZombieRSSStopsAtProcessExit \
-	TestReplicatedZombieExposureSpansSessionWithinSaveDeadline
 ifeq ($(KAFERRY_TEST_BINARY),)
 TEST_BINARY_PREREQUISITE = build
 # A leading "load " is a GNU Make plugin directive.
@@ -73,7 +33,7 @@ race:
 	CGO_ENABLED=1 $(GO) test -vet=off -race ./...
 wording:
 	wording_status=0; \
-	git grep -nEi '(since|as of|through|until|prior to|starting (in|with)|introduced in)[[:space:]]+v[0-9]+\.[0-9]+|first[[:space:]]+observed[[:space:]]+(on|in)[[:space:]]+[0-9]{4}' -- README.md docs src/cmd src/internal ':!docs/design/debates' ':!docs/releases' || wording_status=$$?; \
+	git grep -nEi '(since|as of|through|until|prior to|starting (in|with)|introduced in)[[:space:]]+v[0-9]+\.[0-9]+|first[[:space:]]+observed[[:space:]]+(on|in)[[:space:]]+[0-9]{4}' -- README.md docs src/cmd src/internal ':!docs/releases' || wording_status=$$?; \
 	if [ "$$wording_status" -ne 1 ]; then \
 		echo 'Living docs, comments and diagnostics must describe current behavior; keep release and investigation history in release notes, commits or PRs.'; \
 		exit 1; \
@@ -96,13 +56,16 @@ fast: wording fmt lint duplicates vulnerabilities race
 	$(PYTHON) -m tools.release.install_smoke
 	$(MAKE) smoke KAFERRY_TEST_BINARY=$(CURDIR)/bin/kaferry
 smoke: $(TEST_BINARY_PREREQUISITE)
-	$(PYTHON) -m tools.ci.ci smoke $(GO) test -count=1 -json -tags=integration,load -run '^(TestArchiveTutorial(Cancellation)?|TestLoadObservability)$$/^round-0$$/^disabled$$' ./src/tests/system
-	$(PYTHON) -m tools.ci.ci verify-tests smoke 'TestLoadObservability/round-0/disabled' 'TestArchiveTutorial' 'TestArchiveTutorialCancellation'
+	pattern=$$($(PYTHON) -m tools.ci.suites pattern smoke) && \
+	$(PYTHON) -m tools.ci.ci smoke $(GO) test -count=1 -json -tags=integration,load -run "$$pattern" ./src/tests/system
+	$(PYTHON) -m tools.ci.suites verify smoke "$${KAFERRY_REPORT_DIR:-build-results}/smoke.log"
 replicated-helpers:
-	test -n "$(strip $(REPLICATED_HELPER_TESTS))"
-	pattern=$$(printf '%s|' $(REPLICATED_HELPER_TESTS)); \
-	CGO_ENABLED=1 $(PYTHON) -m tools.ci.ci replicated-helpers $(GO) test -count=1 -json -race -tags=integration,fault,load -run "^($${pattern%|})$$" ./src/tests/system
-	$(PYTHON) -m tools.ci.ci verify-tests replicated-helpers $(REPLICATED_HELPER_TESTS)
+	pattern=$$($(PYTHON) -m tools.ci.suites pattern replicated-helpers) && \
+	CGO_ENABLED=1 $(PYTHON) -m tools.ci.ci replicated-helpers $(GO) test -count=1 -json -race -tags=integration,fault,load,harness -run "$$pattern" ./src/tests/system ./src/tests/system/faults
+	$(PYTHON) -m tools.ci.suites verify replicated-helpers "$${KAFERRY_REPORT_DIR:-build-results}/replicated-helpers.log"
+	# Coverage uses the integration source scope shared with the other uploads.
+	pattern=$$($(PYTHON) -m tools.ci.suites pattern replicated-helpers) && \
+	CGO_ENABLED=1 $(PYTHON) -m tools.ci.ci replicated-helpers-coverage $(GO) test -count=1 -json -race -covermode=atomic -coverpkg=./... -coverprofile="$${KAFERRY_REPORT_DIR:-build-results}/replicated-helpers.coverage.out" -tags=integration,harness -run "$$pattern" ./src/tests/system ./src/tests/system/faults
 broker:
 	docker compose -f src/tests/compose.yaml -p kaferry-compat --profile cross-cluster up -d --wait --wait-timeout 60
 	# Listening sockets precede cold group-coordinator readiness.
@@ -121,21 +84,21 @@ soak: $(TEST_BINARY_PREREQUISITE)
 qualification: $(TEST_BINARY_PREREQUISITE)
 	GO=$(GO) sh src/tests/qualification/run.sh
 fuzz:
-	$(GO) test -run '^$$' -fuzz FuzzProgressLifecycle -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/copy
-	$(GO) test -run '^$$' -fuzz FuzzParse -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/sql
-	$(GO) test -run '^$$' -fuzz FuzzContainer -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/archive/avro
-	$(GO) test -run '^$$' -fuzz FuzzState -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/archive/capture
-	$(GO) test -run '^$$' -fuzz FuzzCheckpoint -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/archive/replay
+	$(GO) test $(KAFERRY_TEST_OUTPUT) -run '^$$' -fuzz FuzzProgressLifecycle -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/copy
+	$(GO) test $(KAFERRY_TEST_OUTPUT) -run '^$$' -fuzz FuzzParse -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/sql
+	$(GO) test $(KAFERRY_TEST_OUTPUT) -run '^$$' -fuzz FuzzContainer -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/archive/avro
+	$(GO) test $(KAFERRY_TEST_OUTPUT) -run '^$$' -fuzz FuzzState -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/archive/capture
+	$(GO) test $(KAFERRY_TEST_OUTPUT) -run '^$$' -fuzz FuzzCheckpoint -fuzztime=$(FUZZ_ITERATIONS)x -parallel=2 ./src/internal/archive/replay
 benchmark:
-	$(GO) test -run '^$$' -bench 'Benchmark(Encode|Decode)$$' -benchmem ./src/internal/archive/avro
-	$(GO) test -run '^$$' -bench "Benchmark(ReplayOverlap|CheckpointEncoding|CheckpointSaving)" -benchmem ./src/internal/archive/replay
+	$(GO) test $(KAFERRY_TEST_OUTPUT) -run '^$$' -bench 'Benchmark(Encode|Decode)$$' -benchmem ./src/internal/archive/avro
+	$(GO) test $(KAFERRY_TEST_OUTPUT) -run '^$$' -bench "Benchmark(ReplayOverlap|CheckpointEncoding|CheckpointSaving)" -benchmem ./src/internal/archive/replay
 metrics:
-	@rg --files src/cmd src/internal -g '*.go' -g '!**/*_test.go' | xargs wc -l
+	@git ls-files -z -- 'src/cmd/*.go' 'src/internal/*.go' ':!src/**/*_test.go' | xargs -0 wc -l
 duplicates:
 	$(JSCPD) --config .jscpd.json --baseline-from-ref "$(DUPLICATION_BASE)" --fail-on-new-clones --no-tips
 lint:
 	$(GOLANGCI_LINT) config verify
-	$(GOLANGCI_LINT) run ./...
+	$(GOLANGCI_LINT) run --build-tags=harness ./...
 
 # Standalone qualification: Python 3.11+, Go, Docker and Compose; no agent required.
 .PHONY: qualification-setup qualification-pr qualification-full model

@@ -9,6 +9,16 @@ import sys
 
 
 def benchmarks(text):
+    output = []
+    for line in text.splitlines(keepends=True):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            output.append(line)
+        else:
+            if isinstance(event, dict) and event.get('Action') == 'output':
+                output.append(event.get('Output', ''))
+    text = ''.join(output)
     matches = re.findall(r"^(Benchmark\S+)-\d+\s+\d+\s+([\d.]+) ns/op\s+(?:[\d.]+ \S+\s+)*?(\d+) B/op\s+(\d+) allocs/op", text, re.M)
     return {name: (float(ns), int(size), int(allocations)) for name, ns, size, allocations in matches}
 

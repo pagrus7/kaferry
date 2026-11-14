@@ -120,6 +120,8 @@ def plan(kind, tier, env):
     if kind == 'qualification' and env.get('EVENT') == 'workflow_dispatch':
         weekly = True
     keys = [tier] if kind == 'compatibility' else WEEKLY if weekly else NIGHTLY
+    if kind == 'qualification' and env.get('EVENT') == 'workflow_dispatch':
+        keys = keys + ['capture', 'endurance']
     if env.get('EVENT') != 'schedule' or env.get('FORCE_RUN') == 'true':
         return [{'suite': key, 'run': True, 'reason': 'explicit, PR or release execution'} for key in keys]
     repository, head = env['GITHUB_REPOSITORY'], env['GITHUB_SHA']

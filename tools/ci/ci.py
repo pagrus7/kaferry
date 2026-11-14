@@ -15,18 +15,31 @@ from tools.ci.quality import benchmarks, markdown
 from tools.ci.history import comparison, image_ids
 
 
-def verify_tests(log, expected):
+# Ordinary integration leaves the opt-in quick start to its dedicated job.
+SKIP_ALLOWLIST = {suite: {'TestKafkaQuickStart'} for suite in ('integration', 'kafka')}
+
+
+def verify_tests(log, expected, *, suite=None):
     passed = set()
+    unexpected_skips = set()
     for line in log.splitlines():
         try:
             event = json.loads(line)
         except ValueError:
             continue
-        if isinstance(event, dict) and event.get('Action') == 'pass' and event.get('Test'):
+        if not isinstance(event, dict):
+            continue
+        if event.get('Action') == 'pass' and event.get('Test'):
             passed.add(event['Test'])
+        if event.get('Action') == 'skip':
+            name = event.get('Test') or event.get('Package') or '<unnamed>'
+            if name not in SKIP_ALLOWLIST.get(suite, set()):
+                unexpected_skips.add(name)
     missing = [name for name in expected if name not in passed]
     if missing:
         raise ValueError('Required tests did not pass: ' + ', '.join(missing))
+    if unexpected_skips:
+        raise ValueError('Unexpected skip events: ' + ', '.join(sorted(unexpected_skips)))
 
 
 def capture(command):
