@@ -9,7 +9,8 @@ import sys
 import tempfile
 import unittest
 
-from tools.ci.suites import EXPECTED
+from tools.ci.suites import EXPECTED, replicated_helpers
+from tools.ci.ci import verify_tests
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -17,6 +18,27 @@ HELPERS = EXPECTED['replicated-helpers']
 
 
 class ReplicatedHelpersTest(unittest.TestCase):
+    def test_tagged_helpers_are_required_without_a_manual_name_list(self):
+        # Given a new tagged helper beside an untagged broker test and a Darwin helper.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            directory = root/'src/tests/system'
+            directory.mkdir(parents=True)
+            (directory/'added_test.go').write_text('//go:build (integration && harness)\n\nfunc TestAdded(t *testing.T) {}\n')
+            (directory/'broker_test.go').write_text('//go:build integration\n\nfunc TestBroker(t *testing.T) {}\n')
+            (directory/'rss_darwin_test.go').write_text('//go:build harness\n\nfunc TestRSS(t *testing.T) {}\n')
+            # When discovering helpers, then the new test is mandatory and broker tests stay out.
+            self.assertEqual(['TestAdded'], replicated_helpers(root, 'linux'))
+            self.assertEqual(['TestAdded', 'TestRSS'], replicated_helpers(root, 'darwin'))
+            with self.assertRaisesRegex(ValueError, 'TestAdded'):
+                verify_tests(json.dumps(dict(Action='pass', Test='TestBroker')), replicated_helpers(root, 'linux'))
+            (directory/'added_test.go').write_text('//go:build integration && harness || harness && fault\n\nfunc TestAdded(t *testing.T) {}\n')
+            with self.assertRaisesRegex(ValueError, 'positive conjunctions'):
+                replicated_helpers(root, 'linux')
+            (directory/'added_test.go').unlink()
+            with self.assertRaisesRegex(ValueError, 'selected no tests'):
+                replicated_helpers(root, 'linux')
+
     def test_shared_fast_target_requires_exact_completed_helper_passes(self):
         # Given a Go command that exits zero with actual, absent or wrong events.
         self.assertTrue(HELPERS)
