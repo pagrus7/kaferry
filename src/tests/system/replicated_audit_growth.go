@@ -36,6 +36,8 @@ type auditGrowth struct {
 	started time.Time
 	path    string
 	mu      sync.Mutex
+	stop    sync.Once
+	closed  bool
 	cancel  context.CancelFunc
 	done    chan struct{}
 }
@@ -64,11 +66,16 @@ func (a *replicatedAudit) stopGrowth() {
 	if a.growth == nil {
 		return
 	}
-	a.growth.cancel()
-	<-a.growth.done
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-	defer cancel()
-	a.sampleGrowth(ctx, "cleanup")
+	a.growth.stop.Do(func() {
+		a.growth.cancel()
+		<-a.growth.done
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+		defer cancel()
+		a.sampleGrowth(ctx, "cleanup")
+		a.growth.mu.Lock()
+		a.growth.closed = true
+		a.growth.mu.Unlock()
+	})
 }
 
 func (a *replicatedAudit) sampleGrowth(ctx context.Context, reason string) {
@@ -93,6 +100,9 @@ func (a *replicatedAudit) recordGrowth(broker int32, reason string, data []byte,
 	}
 	a.growth.mu.Lock()
 	defer a.growth.mu.Unlock()
+	if a.growth.closed {
+		return
+	}
 	file, err := os.OpenFile(a.growth.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err == nil {
 		_, _ = file.Write(append(encoded, '\n'))

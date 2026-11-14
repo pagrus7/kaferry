@@ -914,6 +914,7 @@ func (s *ownershipCase) retainWorkers() ([]map[string]any, bool) {
 }
 
 func (s *ownershipCase) artifactChecksums() []map[string]string {
+	s.audit.stopGrowth()
 	var artifacts []map[string]string
 	entries, err := os.ReadDir(s.directory)
 	if err != nil {

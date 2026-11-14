@@ -5,8 +5,10 @@ package compat
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,4 +106,29 @@ func TestReplicatedAuditGrowthFailureCaptureRetainsAvailableCounts(t *testing.T)
 	require.Equal(t, row.ClientBytes["worker"], row.RequestBytes["FETCH"])
 	require.Contains(t, row.Error, "fixture disappeared")
 	require.False(t, row.Complete)
+}
+
+func TestReplicatedAuditGrowthIsFinalBeforeOwnershipChecksums(t *testing.T) {
+	// Given cleanup registered before the ownership receipt seals its files.
+	directory := t.TempDir()
+	var sealed []map[string]string
+	t.Run("case", func(t *testing.T) {
+		audit := &replicatedAudit{output: directory}
+		audit.startGrowth()
+		t.Cleanup(audit.stopGrowth)
+		t.Cleanup(func() { audit.recordGrowth(1, "failure", []byte("late cleanup"), nil) })
+		audit.recordGrowth(1, "interval", []byte("KAFERRY_AUDIT_FILE kafka-request.log\n"), nil)
+		// When the real ownership checksum collector runs before cleanup, then
+		// it finalizes growth once; later cleanup cannot invalidate the seal.
+		state := &ownershipCase{t: t, directory: directory, audit: audit}
+		sealed = state.artifactChecksums()
+		audit.recordGrowth(1, "after-seal", []byte("late interval"), nil)
+		audit.stopGrowth()
+	})
+	require.Len(t, sealed, 1)
+	data, err := os.ReadFile(filepath.Join(directory, sealed[0]["observations"]))
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(data)), sealed[0]["sha256"])
+	require.NotContains(t, string(data), `"reason":"after-seal"`)
+	require.NotContains(t, string(data), `"reason":"failure"`)
 }
