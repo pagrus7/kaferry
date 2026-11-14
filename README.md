@@ -66,11 +66,7 @@ More examples: [Current records](docs/usage.md#copy-between-kafka-topics) · [Of
 
 > **Warning:** Kaferry is pre-1.0. Releases may introduce breaking changes.
 
-Homebrew:
-
-```sh
-brew install pagrus7/tap/kaferry
-```
+[Release binaries](https://github.com/pagrus7/kaferry/releases/latest).
 
 Go 1.27+:
 
@@ -80,7 +76,13 @@ CGO_ENABLED=0 go install github.com/pagrus7/kaferry/src/cmd/kaferry@latest
 
 Tags v0.12.0 and older use `github.com/pagrus7/kaferry/cmd/kaferry@vX.Y.Z`.
 
-[Prebuilt binaries](https://github.com/pagrus7/kaferry/releases/latest) · [Installation details](docs/install.md).
+Homebrew:
+
+```sh
+brew install pagrus7/tap/kaferry
+```
+
+[Installation details](docs/install.md).
 
 ## Docker quick start
 

@@ -14,6 +14,8 @@ gh attestation verify kaferry-VERSION-PLATFORM.tar.gz --repo pagrus7/kaferry
 
 ## Homebrew
 
+The tap is maintained outside this repository and is not exercised by this repository's CI.
+
 ```sh
 brew install pagrus7/tap/kaferry
 kaferry --version
