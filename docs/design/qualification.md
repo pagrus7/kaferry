@@ -4,7 +4,7 @@ Run these scripts from a terminal, CI or a local scheduler. The lab starts dispo
 
 ## Prepare
 
-Use Python 3.11+, the Go version in `go.mod`, Docker Engine 25+ with Compose 2.20.2+, OpenSSL and Make. Linux and macOS AMD64/ARM64 are supported. Race tests require a C compiler; Linux may need its distribution's Python venv package. Release comparisons require authenticated `gh` with repository and attestation read access.
+Use Python 3.11+, the Go version in `go.mod`, Docker Engine 25+ with Compose 2.20.2+, OpenSSL and Make. Replicated fault runs also require `patch` to build the observed proxy. Linux and macOS AMD64/ARM64 are supported. Race tests require a C compiler; Linux may need its distribution's Python venv package. Release comparisons require authenticated `gh` with repository and attestation read access.
 
 From the repository root:
 
