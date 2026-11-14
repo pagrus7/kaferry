@@ -1,0 +1,24 @@
+package toxics
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+)
+
+// RecordActivation observes the installed pipeline and dispatch separately.
+// It never treats request submission or an HTTP reply as activation.
+func (s *ToxicStub) RecordActivation(toxic *ToxicWrapper, phase string, at time.Time) {
+	if !strings.HasPrefix(toxic.Name, "kaferry-") {
+		return
+	}
+	data, _ := json.Marshal(map[string]string{
+		"kind": "fault-active", "phase": phase,
+		"fault_active_at": at.Format(time.RFC3339Nano),
+		"proxy":           s.EvidenceProxy, "toxic_name": toxic.Name,
+		"type": toxic.Type, "stream": toxic.Stream, "link": fmt.Sprintf("%p", s),
+	})
+	_, _ = os.Stdout.Write(append(data, '\n'))
+}

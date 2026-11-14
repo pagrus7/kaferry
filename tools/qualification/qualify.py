@@ -448,6 +448,13 @@ def broker_fixture(args, spec, receipt, cancelled, *, lease_held=False):
         owns_fixture = False
         try:
             if replicated_fixture(args):
+                if args.suite == 'fault-replicated':
+                    logged([sys.executable, '-m', 'tools.qualification.proxy_evidence', '--output', str(args.output)],
+                           args.output, 'proxy-evidence-build', spec.env, timeout=300, cancelled=cancelled)
+                    override = args.output/'proxy-evidence.compose.json'
+                    write_json(override, dict(services=dict(toxiproxy=dict(volumes=[dict(type='bind',
+                        source=str(args.output/'proxy-evidence/toxiproxy'), target='/toxiproxy', read_only=True)]))))
+                    spec.compose.extend(['-f', str(override)])
                 receipt['capacity'] = replicated_admission(args.output,
                     args.duration if args.suite == 'endurance' else None)
                 owns_fixture = True
@@ -491,7 +498,7 @@ def broker_fixture(args, spec, receipt, cancelled, *, lease_held=False):
                     except (OSError, subprocess.SubprocessError) as error:
                         errors.append({'phase': 'logs', 'error': str(error)})
                 try:
-                    if 'suite_error' in receipt or receipt.get('fault_results', {}).get('status') == 'inconclusive':
+                    if args.suite == 'fault-replicated' or 'suite_error' in receipt or receipt.get('fault_results', {}).get('status') == 'inconclusive':
                         capture_logs()
                 finally:
                     owned_storage = replicated_fixture(args)
@@ -678,6 +685,12 @@ def run_suite_attempt(args, *, cancelled=None, lease_held=False, identity=None):
         receipt.update(failed_outcome(error))
         raise
     finally:
+        if args.suite == 'fault-replicated':
+            from tools.qualification.replicated_evidence import retain
+            try:
+                retain(args.output)
+            except (OSError, ValueError, KeyError) as error:
+                receipt['diagnostic_error'] = str(error)
         receipt.update(elapsed_seconds=time.monotonic() - started, finished_at=datetime.now(timezone.utc).isoformat())
         write_json(args.output / 'manifest.json', receipt)
         if args.suite == 'endurance':

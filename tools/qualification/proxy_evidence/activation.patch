@@ -1,0 +1,52 @@
+--- a/link.go
++++ b/link.go
+@@ -64,6 +64,9 @@
+ 		}
+ 
+ 		link.stubs[i] = toxics.NewToxicStub(last, next)
++		if proxy != nil {
++			link.stubs[i].EvidenceProxy = proxy.Name
++		}
+ 		last = next
+ 	}
+ 	for i := 0; i < len(link.stubs)-1; i++ {
+@@ -183,9 +186,13 @@
+ 
+ 	newin := make(chan *stream.StreamChunk, toxic.BufferSize)
+ 	link.stubs = append(link.stubs, toxics.NewToxicStub(newin, link.stubs[i-1].Output))
++	if link.proxy != nil {
++		link.stubs[i].EvidenceProxy = link.proxy.Name
++	}
+ 
+ 	// Interrupt the last toxic so that we don't have a race when moving channels
+ 	if link.stubs[i-1].InterruptToxic() {
++		activeAt := time.Now().UTC()
+ 		link.stubs[i-1].Output = newin
+ 		link.stubs[i-1].OutputDone = link.stubs[i].Done()
+ 		link.stubs[i].OutputDone = link.writeDone
+@@ -196,6 +203,7 @@
+ 
+ 		go link.stubs[i].Run(toxic)
+ 		go link.stubs[i-1].Run(link.toxics.chain[link.direction][i-1])
++		link.stubs[i].RecordActivation(toxic, "pipeline-installed", activeAt)
+ 	} else {
+ 		// This link is already closed, make sure the new toxic matches
+ 		link.stubs[i].Output = newin // The real output is already closed, close this instead
+--- a/toxics/toxic.go
++++ b/toxics/toxic.go
+@@ -66,6 +66,7 @@
+ 	Input     <-chan *stream.StreamChunk
+ 	Output    chan<- *stream.StreamChunk
+ 	State     interface{}
++	EvidenceProxy string
+ 	Interrupt chan struct{}
+ 	running   chan struct{}
+ 	closed    chan struct{}
+@@ -93,6 +94,7 @@
+ 	defer close(s.running)
+ 	randomToxicity := rand.Float32() // #nosec G404 -- was ignored before too
+ 	if randomToxicity < toxic.Toxicity {
++		s.RecordActivation(toxic, "toxic-dispatch", time.Now().UTC())
+ 		toxic.Pipe(s)
+ 	} else {
+ 		new(NoopToxic).Pipe(s)
