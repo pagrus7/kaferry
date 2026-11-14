@@ -167,6 +167,8 @@ Every lifetime requires sampled RSS at most 512 MiB and observed current work wi
 
 Hosted checks run the five broker faults, zombie fencing, worker kill, worker scaling and two destination outages: ten fault cases on separate runners. Four cases require local exact-candidate qualification alongside 24-hour endurance: `network/latency`, `network/bandwidth`, `network/slow-close` and `ownership/coordinator-kill-rebalance`. Run each with its `--case` and a fresh output directory. Missing local passes require explicit release-note exclusions. Selecting all fourteen cases gives 4,907s Go allowance plus 60s outer allowance; individual selection uses that case's budget. These local cases have no separate hosted scheduled tier. One-host clusters do not establish machine or zone-failure behavior.
 
+Every Monday at 07:23 UTC, `replicated-lab.yml` runs `ownership/worker-scale`, `ownership/zombie-worker` and `network/destination-leaders-outage` on main with fresh executions. Case evidence retains the audit-growth trace and remains available for 14 days. To run the same selection manually, use `gh workflow run replicated-lab.yml --ref main -f weekly=true`; ordinary dispatches retain the full hosted selection.
+
 ## Recovery and bounded load
 
 Run `make check` for race-enabled confirmed-prefix, stale-delivery, partial-save, shutdown and archive durability regressions. Start brokers with `make broker` before `make fault`; run `make qualification-setup` with the same Python major/minor first. Code PRs run one fault cycle. A local two-hour recovery run repeats complete cycles of the same five cases with fresh topics/processes and allows ten minutes to finish its final cycle. It does not establish continuous uptime.

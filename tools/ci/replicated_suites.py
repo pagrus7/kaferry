@@ -1,6 +1,7 @@
 """Suite data and observation budgets used by the replicated lab."""
 
 import json
+import os
 from pathlib import Path
 
 
@@ -19,6 +20,15 @@ EXPECTED = {
     'soak': ['TestStreamingSoakFidelityCommitLagMemoryAndShutdown'],
     'fault-replicated': list(REPLICATED_CASES.values()),
 }
+
+
+def lab_matrix(weekly):
+    cases = ('ownership/worker-scale', 'network/destination-leaders-outage') if weekly else (
+        'ownership/worker-kill-rebalance', 'ownership/worker-scale', 'broker/source-leader',
+        'broker/destination-leader', 'broker/rolling-source', 'broker/rolling-destination',
+        'broker/destination-isr-loss', 'network/destination-outage', 'network/destination-leaders-outage')
+    return {'include': [dict(name=('network-' if case.startswith('network/') else '')+case.split('/')[1],
+                            case=case) for case in cases]}
 
 
 def fault_timeout_catalog():
@@ -48,5 +58,12 @@ def replicated_execution_seconds(selected):
     return sum(240 + (sum(catalog[id].values())+999)//1000 +
                (30-catalog[id]['session.timeout.ms']//1000 if id.startswith('network/') else 0)
                if id != 'ownership/zombie-worker' else 240 for id in selected)
+
+
+if __name__ == '__main__':
+    weekly = os.environ['WEEKLY']
+    if weekly not in ('true', 'false'):
+        raise ValueError('weekly lab selection must be true or false')
+    print('fault_matrix='+json.dumps(lab_matrix(weekly == 'true')))
 
 
