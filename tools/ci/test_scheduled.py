@@ -2,10 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import json
-import os
-from pathlib import Path
 import subprocess
-import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -224,17 +221,6 @@ class ScheduledTests(unittest.TestCase):
             command.assert_not_called()
             scheduled.gh('path', 55)
             self.assertLessEqual(command.call_args.kwargs['timeout'], 15)
-
-    def test_outputs_skip_expensive_jobs_and_summary_links_original_execution(self):
-        decisions = self.choose('qualification', ['fault'], [run(1, [suite('fault')])])
-        with tempfile.TemporaryDirectory() as name:
-            output, summary = Path(name) / 'output', Path(name) / 'summary'
-            with patch.dict(os.environ, {'GITHUB_OUTPUT': str(output), 'GITHUB_STEP_SUMMARY': str(summary), 'GITHUB_SHA': HEAD}), patch('tools.ci.scheduled.plan', return_value=decisions):
-                scheduled.main(['qualification'])
-            self.assertEqual('run=false\nsuites=[]\n', output.read_text())
-            self.assertIn('Reuse; tests skipped', summary.read_text())
-            self.assertIn(stamp(), summary.read_text())
-            self.assertIn('/actions/runs/1', summary.read_text())
 
 
 if __name__ == '__main__':

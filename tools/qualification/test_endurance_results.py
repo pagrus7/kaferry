@@ -32,7 +32,6 @@ class PublicationTest(unittest.TestCase):
         (self.evidence / 'soak.metrics.json').write_text(json.dumps(self.metrics))
 
     def prepare(self):
-        # Existing ci summary table tests exercise rendering all metric fields.
         with patch('tools.qualification.endurance_results.summarize', return_value='## Metric tables\n'):
             return prepare(self.evidence, self.evidence / 'publication')
 
