@@ -102,6 +102,9 @@ class OwnershipAuditTest(unittest.TestCase):
             timeout_basis={'session.timeout.ms': 6, 'socket.timeout.ms': 8, 'progress_save_timeout': 10, 'delivery_timeout': 2, 'shutdown_timeout': 5},
             target=self.case['fault']['role'], injections=[dict(at=10.1, kind='timeout', target={
                 key: self.case['fault'][key] for key in ('role', 'fault', 'targets', 'start')})])]
+        self.case['fault']['mutations'] = [dict(target=self.case['fault']['targets'][0],
+                                               started=when(10.02), accepted=when(10.05))]
+        self.safety['fault_events'][0]['injections'][0]['target']['mutations'] = self.case['fault']['mutations']
         self.start = [record(.5, 'guard', 'API_VERSIONS', {}, {}, 0)]
         self.traffic = [commit(7, 'one', 'old', 2, range(12), 10, 0, 1),
                         commit(7, 'two', 'peer', 2, range(12, 24), 10, 0, 1),
@@ -144,6 +147,49 @@ class OwnershipAuditTest(unittest.TestCase):
             ('stale_requests', 'stale_rejections', 'accepted_stale_commits', 'accepted_rejoin_commits')))
         self.assertEqual(list(range(12)), proof['accepted_peer_partitions'])
         self.assertEqual(19, len(proof['audit_files']))
+
+    def test_expiry_after_mutation_before_delayed_completion_qualifies(self):
+        # Given an accepted mutation followed by expiry at 17s while the oracle samples.
+        self.safety['fault_events'][0]['injections'][0]['at'] = 17.5
+        # When the delayed completion marker is checked, then expiry still qualifies.
+        self.assertEqual(1, self.validate()['ownership_fencing']['session_expiry_observations'])
+
+    def test_expiry_during_preflight_before_mutation_cannot_qualify(self):
+        # Given expiry at 17s during preflight, before submission and acceptance.
+        self.case['fault']['mutations'][0].update(started=when(17.1), accepted=when(17.2))
+        self.safety['fault_events'][0]['injections'][0]['at'] = 17.5
+        # When audited, then operation start cannot falsely qualify that expiry.
+        with self.assertRaisesRegex(ValueError, 'session-expiry'):
+            self.validate()
+
+    def test_missing_or_inconsistent_mutation_evidence_fails_explicitly(self):
+        # Given incomplete receipts, reversed clocks, or mismatched oracle evidence.
+        original_case, original_safety = copy.deepcopy(self.case), copy.deepcopy(self.safety)
+        for invalid in ('missing', 'no-start', 'no-acceptance', 'reversed', 'before-preflight',
+                        'after-completion', 'wrong-target', 'oracle-mismatch', 'malformed'):
+            with self.subTest(invalid=invalid):
+                self.case, self.safety = copy.deepcopy(original_case), copy.deepcopy(original_safety)
+                self.safety['fault_events'][0]['injections'][0]['target']['mutations'] = self.case['fault']['mutations']
+                receipt = self.case['fault']['mutations'][0]
+                if invalid == 'missing':
+                    del self.case['fault']['mutations']
+                elif invalid in ('no-start', 'no-acceptance'):
+                    del receipt['started' if invalid == 'no-start' else 'accepted']
+                elif invalid == 'reversed':
+                    receipt['accepted'] = when(10.01)
+                elif invalid == 'before-preflight':
+                    receipt['started'] = when(9)
+                elif invalid == 'after-completion':
+                    receipt['accepted'] = when(11)
+                elif invalid == 'wrong-target':
+                    receipt['target'] = dict(broker=3)
+                elif invalid == 'oracle-mismatch':
+                    self.safety['fault_events'][0]['injections'][0]['target']['mutations'] = []
+                else:
+                    receipt['started'] = 'invalid'
+                # When audited, then invalid mutation proof cannot silently pass.
+                with self.assertRaisesRegex(ValueError, 'mutation'):
+                    self.validate()
 
     def test_local_suppression_needs_complete_audit_and_peer_progress(self):
         # Given a correct client that suppresses stale commits locally.

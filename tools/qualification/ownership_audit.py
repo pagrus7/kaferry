@@ -210,6 +210,18 @@ def _validate(directory, identity=None):
     window = windows[0]
     injected = window['injections'][0]
     actual = injected['target']
+    mutations = case['fault'].get('mutations', [])
+    if (not isinstance(mutations, list) or len(mutations) != 1 or not isinstance(mutations[0], dict) or
+            not all(mutations[0].get(key) for key in ('started', 'accepted')) or
+            actual.get('mutations') != mutations or mutations[0].get('target') != targets[0]):
+        raise ValueError('ownership mutation submission/acceptance evidence is missing or inconsistent')
+    mutation = mutations[0]
+    try:
+        submitted, accepted = stamp(mutation['started']), stamp(mutation['accepted'])
+    except (ValueError, TypeError, AttributeError) as error:
+        raise ValueError('ownership mutation timestamps are malformed') from error
+    if not stamp(case['fault']['start']) <= submitted <= accepted <= injected['at']:
+        raise ValueError('ownership mutation submission/acceptance timing is inconsistent')
     if (window['target'] != case['fault']['role'] or injected['kind'] != 'timeout' or
             any(actual[key] != case['fault'][key] for key in ('role', 'fault', 'targets', 'start')) or
             not window['started_at'] <= stamp(case['fault']['start']) <= injected['at'] <= stamp(transfer['finished']) or
@@ -247,7 +259,7 @@ def _validate(directory, identity=None):
             if not match:
                 raise ValueError('broker session expiry log has an unverified timestamp')
             at = datetime.strptime(match[1], '%Y-%m-%d %H:%M:%S,%f').replace(tzinfo=timezone.utc).timestamp()
-            if broker == targets[0]['broker'] and injected['at'] <= at <= stamp(transfer['finished']):
+            if broker == targets[0]['broker'] and submitted <= at <= stamp(transfer['finished']):
                 expiries.append(at)
         before = directory/f'source-{broker}.baseline.requests.log'
         after = directory/f'source-{broker}.final.requests.log'
