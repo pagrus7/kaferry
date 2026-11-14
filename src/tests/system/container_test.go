@@ -66,6 +66,7 @@ func testContainerCommand(t *testing.T) {
 		`--mount "type=bind,src=$PWD,dst=/work"`,
 		"<!-- container-run -->",
 		"--stop-timeout 35",
+		"run -c /work/connections.toml -f /work/copy.sql",
 	} {
 		t.Run(removed, func(t *testing.T) {
 			require.Contains(t, document, removed)
