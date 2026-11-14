@@ -1,6 +1,98 @@
-# Settings and results reference
+# SQL, settings and results reference
 
-Exact settings, inspection output, exit codes and metrics. For operating steps, see [usage](usage.md); for restarting safely, see [resume or start over](usage.md#resume-or-start-over).
+Accepted SQL, exact settings, inspection output, exit codes and metrics. For operating steps, see [usage](usage.md); for restarting safely, see [resume or start over](usage.md#resume-or-start-over).
+
+## SQL statements
+
+Each input contains one `INSERT INTO ... SELECT * FROM ...` statement, with an optional final semicolon. The destination follows `INSERT INTO`; the source follows `FROM`. Either endpoint can be `TOPIC 'topic@alias'` or `ARCHIVE 'directory'`. A topic without `@alias` uses the required `default` connection profile. Archive paths name Kaferry archive directories. The destination must differ from the source archive directory or Kafka cluster/topic, including path or connection aliases.
+
+Clauses appear in this order: optional `WITH CONNECTION` declarations, destination and its optional `WITH`, source and its optional `WITH`, optional `WHERE`, then optional `OPTIONS`. `SELECT *` copies whole records; field selection and joins are unsupported. [Endpoint settings](#endpoint-with-properties) define source progress/start rules and destination routing/rotation.
+
+Keywords are case-insensitive. Connection aliases are case-sensitive and match `[A-Za-z_][A-Za-z0-9_]*`, as in TOML profile names. Strings use single quotes; `''` represents one quote. Comments use `--` to end of line or non-nested `/* ... */`. Present connection, `WITH` and `OPTIONS` clauses must be nonempty; settings, inline aliases and properties within one connection cannot repeat.
+
+### Connections
+
+Inline declarations precede `INSERT`; separate multiple declarations with commas, repeating `CONNECTION alias AS (...)`. Property names and literal values are strings. SQL properties override the matching TOML profile. `ENV('NAME')` resolves at startup and fails if unset; keep credentials in environment variables. Aliases without inline declarations need TOML profiles. TLS needs a trusted broker CA; set `ssl.ca.location` if system roots do not include it.
+
+```sql
+WITH CONNECTION dr AS (
+  'bootstrap.servers' = 'dr-kafka:9093',
+  'security.protocol' = 'SASL_SSL',
+  'sasl.mechanism' = 'PLAIN',
+  'sasl.username' = 'copier',
+  'sasl.password' = ENV('DR_PASSWORD')
+)
+INSERT INTO TOPIC 'orders@dr'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-dr')
+WHERE RECORD_OFFSET < LATEST;
+```
+
+### WHERE filters and bounds
+
+An ungrouped `WHERE` combines predicates with `AND`, in any order. It permits one partition predicate and at most one lower and one upper bound for each of `RECORD_OFFSET` and `RECORD_TIMESTAMP`. General `OR`, equality comparisons and payload filters are unsupported.
+
+| Predicate | Accepted forms and meaning |
+| --- | --- |
+| `PARTITION` | `IN (0, 2)`, `NOT IN (0, 2)`, `BETWEEN 0 AND 2`, `NOT BETWEEN 0 AND 2`; `BETWEEN` includes every ID from the lower through the upper end |
+| `RECORD_OFFSET` | `>=`, `>`, `<`, `<=` with a nonnegative signed 64-bit integer; `BETWEEN lo AND hi`; or `< LATEST` |
+| `RECORD_TIMESTAMP` | `>=`, `>`, `<`, `<=` with a time expression; or `BETWEEN lo AND hi`; uses Kafka record timestamps, not payload fields |
+
+Partition IDs range from 0 to 2,147,483,647. Lists are nonempty; order and repeated IDs do not affect selection. Partition `BETWEEN` predicates may name at most 65,536 IDs across one statement. Every named ID must exist at startup, including exclusions. Archives use original Kafka IDs from completed-file headers across all represented source topics/clusters. `NOT` applies only to partition `IN` or `BETWEEN`.
+
+Offset and timestamp `BETWEEN` include both ends. Internally, bounds use an inclusive lower and exclusive upper end. `> x` advances the lower end by one; `<= x` advances the upper end by one. That unit is one offset or one millisecond. Empty ranges and overflowing adjustments fail. For example, `RECORD_OFFSET BETWEEN 100 AND 199` equals `RECORD_OFFSET >= 100 AND RECORD_OFFSET < 200`.
+
+Kafka numeric starts and exclusive ends must be within retained positions when initialized. Offset gaps mean a range's width is not a record count. Archive offsets are original Kafka offsets, not byte positions or replay cursors.
+
+`RECORD_OFFSET < LATEST` fixes each Kafka partition's readable committed end when first assigned and saves it for resume; later appends are excluded. An open transaction can hold that end below records already written. Partitions capture ends separately. A timestamp-derived start beyond the fixed end produces an empty snapshot. For archives, `LATEST` means the pinned completed-file selection's EOF. [Backlog and resume example](usage.md#copy-the-current-backlog-and-stop).
+
+Different offset ranges may use parenthesized branches joined by `OR`. Each branch needs `PARTITION IN` or `PARTITION BETWEEN` and an upper offset bound; selections must be disjoint. Unlisted partitions are excluded. Shared timestamp predicates may follow the branches with `AND`; shared partition/offset predicates and timestamps inside branches are unsupported:
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-offset-repair')
+WHERE (PARTITION IN (0) AND RECORD_OFFSET BETWEEN 100 AND 199)
+   OR (PARTITION IN (2) AND RECORD_OFFSET >= 900 AND RECORD_OFFSET < LATEST);
+```
+
+### Timestamp filters
+
+A time expression starts with `TIMESTAMP '2026-10-01T09:00:00Z'` or `NOW()`, followed by optional `+ INTERVAL 'n' UNIT` or `- INTERVAL 'n' UNIT` adjustments. Timestamp literals require RFC 3339 with `Z` or an explicit offset and at most three fractional digits. Interval magnitudes are nonnegative integers; units are `SECOND`, `MINUTE`, `HOUR` or `DAY` (86,400 seconds).
+
+Every `NOW()` in one resolved window uses the same instant. Saved progress keeps that resolved window on resume; separate workers can resolve different windows. Use fixed timestamps when cooperating workers need identical bounds.
+
+```sql
+INSERT INTO ARCHIVE '/data/recent-orders'
+SELECT * FROM ARCHIVE '/data/orders' WITH (GROUP = 'recent-orders')
+WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '7' DAY
+  AND RECORD_TIMESTAMP < NOW();
+```
+
+This includes the lower timestamp and excludes the upper timestamp. `BETWEEN` includes its upper millisecond too: `BETWEEN TIMESTAMP '2026-10-01T09:00:00Z' AND TIMESTAMP '2026-10-01T09:30:00Z'` normalizes to `[09:00:00.000, 09:30:00.001)` UTC.
+
+Timestamp bounds cannot be combined with explicit source `START`. A timestamp upper bound alone does not guarantee all later arrivals are copied: Kafka completion uses the configured [arrival/disorder allowances](#kafka-source), unless an explicit offset end supplies the stop. Explicit offset ends reject either allowance setting, including `OFF`. Archive replay normally examines the pinned selection; `MAX_OUT_OF_ORDER` can stop it early. [Time-range workflows and assumptions](usage.md#copy-records-in-a-time-range).
+
+### Final OPTIONS
+
+Place `OPTIONS (...)` after `WHERE`, or after the source when there is no filter. Separate settings with commas. Source settings such as `GROUP` belong in source `WITH`.
+
+| Option | Default | Values and limits |
+| --- | --- | --- |
+| `WORKER_STOP_AFTER_RECORDS` | No record limit | Integer from 1 to 9,007,199,254,740,992; caps accepted writes per worker per invocation, not records read or a shared group total |
+| `ON_ERROR` | `FAIL` | `FAIL` or `SKIP`; applies to all skippable record errors; cannot be combined with either specific policy |
+| `ON_MISSING_TIMESTAMP` | `FAIL` | `FAIL` or `SKIP`; requires timestamp bounds in `WHERE` |
+| `ON_REJECTED_TIMESTAMP` | `FAIL` | `FAIL` or `SKIP`; requires a topic destination |
+
+Filtered records, synchronous SKIP rejections and queue-full retries do not consume the worker allowance. Rerunning with the same group grants another allowance while retaining saved ends and progress. [Record-limit example](usage.md#try-a-small-copy-first) · [Skippable failures](#record-error-policies).
+
+### SQL errors
+
+SQL errors identify the first error found by one-based line and character (code point) column. LF ends a line; tabs count as one column. File and stdin input include their source name. Input values and SQL excerpts are omitted. Related declarations include their locations. Fix the reported error, then rerun.
+
+```text
+"copy.sql": line 3, column 29: expected FAIL or SKIP; found identifier
+```
+
+Common rejected forms include `PARTITION IN ()` (empty list), `OPTIONS (GROUP = 'g')` (wrong clause), `SELECT key` (only `SELECT *`), `INTERVAL '1' MONTH` (unsupported unit), and two statements separated by `;`. The [formal grammar](design/grammar.md) is a contributor reference.
 
 ## Inspection
 
@@ -56,7 +148,7 @@ Profiles can be shared by sources and destinations. Supported connection keys ar
 
 ### Endpoint WITH properties
 
-Source properties follow `FROM`; sink properties follow `INSERT INTO`. Unknown or inapplicable properties fail. Final `OPTIONS` contains worker stops and record-error policies. [Syntax and examples](design/grammar.md).
+Source properties follow `FROM`; sink properties follow `INSERT INTO`. Unknown or inapplicable properties fail. [Final `OPTIONS`](#final-options) contains worker stops and record-error policies. [SQL syntax](#sql-statements).
 
 #### Kafka source
 
@@ -71,7 +163,7 @@ For timestamp filters without saved progress, a positive lower bound starts at K
 
 Both allowances require an upper timestamp bound and reject an explicit offset end. Either enabled rule can establish completion. Raising only one allowance does not protect against an invalid assumption used by the other. Both `OFF` means following filtered records until another stop or a signal. Neither allowance limits total run time. [Allowance examples and assumptions](usage.md#allow-late-arrivals).
 
-Omitting `GROUP` generates and logs a fresh `kaferry-<hex>` group each run. Quote that logged name to resume. Use the same named group for cooperating Kafka workers; unnamed runs copy independently.
+Explicit group names must be nonblank. Quoted `GROUP = 'ONE_OFF'` is an ordinary named group. Omitting `GROUP` generates and logs a fresh `kaferry-<hex>` group each run. Quote that logged name to resume. Use the same named group for cooperating Kafka workers; unnamed runs copy independently.
 
 #### Archive source
 
@@ -99,7 +191,7 @@ Topics must exist. Recreating a destination changes its UUID and prevents resume
 | `ROTATE_AFTER_SIZE` | `1g` | Compressed container size target; case-insensitive binary k/m/g suffixes, or plain integer bytes |
 | `ROTATE_AFTER_AGE` | `INTERVAL '1' HOUR` | Elapsed file age before rotation |
 
-[Rotation and publication](design/archive.md#rotation).
+Rotation sizes and ages must be positive. [Rotation and publication](design/archive.md#rotation).
 
 ### Record-error policies
 

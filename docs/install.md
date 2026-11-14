@@ -21,7 +21,7 @@ kaferry --version
 
 ## Source installation
 
-Requires Go 1.26+; no C compiler.
+Requires Go 1.27+; no C compiler.
 
 `CGO_ENABLED=0 go install github.com/pagrus7/kaferry/src/cmd/kaferry@latest` builds the latest tagged release with the installer's Go toolchain. Use `@vX.Y.Z` for a specific published release. Tags v0.12.0 and older use `github.com/pagrus7/kaferry/cmd/kaferry@vX.Y.Z`. For development source, use `CGO_ENABLED=0 go install github.com/pagrus7/kaferry/src/cmd/kaferry@main`. `GOBIN` selects the executable directory; otherwise Go uses `$(go env GOPATH)/bin`. The supported source-build profile disables CGO. `GOFLAGS` and the selected toolchain can change the result; a locally compiled executable is not an attested release binary.
 
