@@ -1,8 +1,8 @@
 """Proxy observations require the pinned source and an intact insertion boundary."""
 
+import hashlib
 import json
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -30,15 +30,22 @@ class ProxyEvidenceTest(unittest.TestCase):
 
     def test_missing_pipeline_boundary_fails_closed(self):
         # Given source without the pinned pipeline installation boundary.
-        with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary)
-            (source/'toxics').mkdir()
-            for name in ('link.go', 'toxics/toxic.go'):
-                (source/name).write_text('package changed\n')
-            # When patching it, then failure cannot produce an instrumented build.
-            with self.assertRaises(subprocess.CalledProcessError):
-                proxy_evidence.patch_source(source)
-            self.assertFalse((source/'toxics/kaferry_evidence.go').exists())
+        for changed in proxy_evidence.PREIMAGES:
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
+                source = Path(temporary)
+                (source/'toxics').mkdir()
+                for name in proxy_evidence.PREIMAGES:
+                    (source/name).write_text('package fixture\n')
+                expected = {name: hashlib.sha256((source/name).read_bytes()).hexdigest()
+                            for name in proxy_evidence.PREIMAGES}
+                (source/changed).write_text('package changed\n')
+                # When patching it, then no insertion into changed source is attempted.
+                with patch.dict(proxy_evidence.PREIMAGES, expected, clear=True), \
+                     patch.object(proxy_evidence.subprocess, 'run') as run:
+                    with self.assertRaisesRegex(ValueError, 'preimage differs'):
+                        proxy_evidence.patch_source(source)
+                    run.assert_not_called()
+                self.assertFalse((source/'toxics/kaferry_evidence.go').exists())
 
 
 if __name__ == '__main__':

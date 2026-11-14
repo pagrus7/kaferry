@@ -13,9 +13,16 @@ MODULE = 'github.com/Shopify/toxiproxy/v2@v2.13.0'
 REVISION = 'ff428b0e2c46af894c55711c2a3e427fce6b1ef2'
 MODULE_SUM = 'h1:+SASZmq0GBNEc38gHzWvWkntJCk7olgfZr1sP6O/Bhk='
 ASSETS = Path(__file__).with_name('proxy_evidence')
+PREIMAGES = {
+    'link.go': '6fb4999d564a49befddf27135da9b389fb17a60642061a40cae65c54f811dabd',
+    'toxics/toxic.go': '2a7183c48f8848b8c7a7c970461a309e3093f780a7820987070ab0be068ed4a2',
+}
 
 
 def patch_source(source):
+    for name, expected in PREIMAGES.items():
+        if hashlib.sha256((source/name).read_bytes()).hexdigest() != expected:
+            raise ValueError('pinned proxy preimage differs: '+name)
     patch = (ASSETS/'activation.patch').read_bytes()
     subprocess.run(['patch', '--batch', '--fuzz=0', '-p1'], input=patch, cwd=source, check=True)
     shutil.copyfile(ASSETS/'activation.go.txt', source/'toxics/kaferry_evidence.go')
@@ -42,7 +49,8 @@ def prepare(output, env):
                        cwd=source, env=env, check=True)
         architecture = subprocess.check_output([go, 'env', 'GOARCH'], env=env, text=True).strip()
         binary = output/'toxiproxy'
-        subprocess.run([go, 'build', '-mod=readonly', '-o', str(binary), './cmd/server'],
+        subprocess.run([go, 'build', '-mod=readonly', '-ldflags',
+                        '-X github.com/Shopify/toxiproxy/v2.Version=2.13.0', '-o', str(binary), './cmd/server'],
                        cwd=source, env=dict(env, CGO_ENABLED='0', GOOS='linux', GOARCH=architecture), check=True)
     provenance = dict(upstream_module=MODULE, upstream_revision=REVISION, upstream_sum=MODULE_SUM,
                       observation_sha256=patch_sha, binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
