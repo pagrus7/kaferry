@@ -383,24 +383,6 @@ class FaultOracleTest(unittest.TestCase):
                 writer_observations=[dict(pid=1, exit_code=1, observation='process exited')]))
         return path/'case.json'
 
-    def test_injection_completion_receipt_survives_failed_sample(self):
-        # Given an injected fault whose next safety observation fails.
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            oracle = self.oracle(root)
-            oracle.windows = [dict()]
-            with patch.object(oracle, 'sample', side_effect=ValueError('unsafe sample')), \
-                 patch('tools.qualification.fault_oracle.time.time', return_value=17.086951):
-                # When the command fails, then the exact completion receipt is
-                # already on disk, without a successful case or safety sample.
-                with self.assertRaisesRegex(ValueError, 'unsafe sample'):
-                    oracle.command(dict(command='fault-injected', window=0, kind='timeout',
-                        target=dict(proxy='source-2-worker1'), observation='injection returned'))
-            event = json.loads((root/'fault-events.jsonl').read_text())
-            self.assertEqual(('injection-completed', 17.086951), (event['event'], event['at']))
-            self.assertEqual(dict(proxy='source-2-worker1'), event['target'])
-            self.assertFalse((root/'case.json').exists())
-
     def test_receipt_contains_event_derived_proof_and_checked_partition_coverage(self):
         # Given an observed injection and heal with configured timeout budgets.
         with tempfile.TemporaryDirectory() as directory:

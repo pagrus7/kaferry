@@ -304,10 +304,6 @@ class Oracle:
         if kind == 'fault-injected':
             self.windows[command['window']].setdefault('injections', []).append(
                 dict(at=time.time(), kind=command['kind'], target=command['target'], observation=command['observation']))
-            # Diagnostic receipt survives a failed sample or an unfinished case.
-            with (self.directory/'fault-events.jsonl').open('a') as evidence:
-                evidence.write(json.dumps(dict(event='injection-completed', window=command['window'],
-                    **self.windows[command['window']]['injections'][-1]))+'\n')
             self.sample()
         elif kind == 'fault-healed':
             window = self.windows[command['window']]

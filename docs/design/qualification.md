@@ -4,7 +4,7 @@ Run these scripts from a terminal, CI or a local scheduler. The lab starts dispo
 
 ## Prepare
 
-Use Python 3.11+, the Go version in `go.mod`, Docker Engine 25+ with Compose 2.20.2+, OpenSSL and Make. Replicated fault runs also require `patch` to build the observed proxy. Linux and macOS AMD64/ARM64 are supported. Race tests require a C compiler; Linux may need its distribution's Python venv package. Release comparisons require authenticated `gh` with repository and attestation read access.
+Use Python 3.11+, the Go version in `go.mod`, Docker Engine 25+ with Compose 2.20.2+, OpenSSL and Make. Linux and macOS AMD64/ARM64 are supported. Race tests require a C compiler; Linux may need its distribution's Python venv package. Release comparisons require authenticated `gh` with repository and attestation read access.
 
 From the repository root:
 
@@ -145,8 +145,6 @@ Zombie fencing requires correlated broker request/response observations for ever
 The zombie peer’s accepted saves must cover every transferred partition and have broker receipt times after the completed transfer observation. A request received before transfer cannot open the heal gate merely because its response completes afterward.
 
 Replicated fault runs retain diagnostic evidence even without a completed audit. `replicated-audit.growth.jsonl` records captured bytes by client and request type every ten seconds and at capture, with elapsed time, unclassified bytes and explicit truncation/errors. The 16 MiB capture ceiling and qualification checks still apply. These bounded prefixes do not establish complete traffic beyond the ceiling.
-
-The fixture builds the pinned Toxiproxy source with observation hooks and mounts that binary over the pinned image's server; `proxy-evidence/provenance.json` identifies the source, patch and executable. `replicated-case-evidence.json` combines per-connection pipeline installation and toxic execution times, broker session expiry, and independent injection-completion receipts. Hosted Linux runs share the kernel's realtime clock in UTC; broker expiry has millisecond precision. Other hosts mark Docker VM/controller clock alignment unverified. Connections activate separately. Missing observations remain explicit, and these diagnostics do not replace the ownership proof.
 
 Worker-kill and scale cases permit no restart. The coordinator case permits one restart per affected route after broker API/ISR recovery, using the same executable, SQL, group, configuration and route. Its eligible exit 1 must occur between physical kill and observed recovery. Worker 1 may carry only the recorded hold/resume signals; its peer may carry no driver stop intent. Lifecycle evidence binds PID, executable, raw log and sole OS wait; prior cancellation or unmatched signals fail.
 
