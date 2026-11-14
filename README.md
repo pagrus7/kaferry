@@ -92,7 +92,7 @@ brew install pagrus7/tap/kaferry
 docker run --rm ghcr.io/pagrus7/kaferry-demo:latest
 ```
 
-Docker downloads the demo image on first use. It starts a temporary Kafka broker, seeds three records in `orders`, prints and runs the SQL to copy them into `orders-copy`, then reads and verifies the destination:
+Docker starts a temporary Kafka broker, seeds three records in `orders`, prints and runs the SQL to copy them into `orders-copy`, then reads and verifies the destination:
 
 ```text
 order-1
@@ -102,7 +102,8 @@ order-3
 Demo passed: verified all 3 records in orders-copy.
 ```
 
-No local files, Kafka setup, credentials or host ports are needed. Each run starts fresh and exits after verification; `--rm` removes its container and data. The downloaded image stays cached. Failure or a three-minute timeout exits nonzero. [Image details](docs/install.md#container-images).
+No local setup needed.
+[Image details](docs/install.md#container-images).
 
 **Run your own SQL and configuration.** [Prepare your topics and connections](docs/usage.md#copy-between-kafka-topics), then run from the directory containing `connections.toml` and `copy.sql` (macOS/Linux):
 
