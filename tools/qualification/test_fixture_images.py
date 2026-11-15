@@ -47,7 +47,8 @@ class FixtureImagesTest(unittest.TestCase):
                     else:
                         with self.assertRaises((ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired)):
                             run_suite(args)
-                inspect.assert_called_once()
+                expected_calls = 3 if isinstance(outcome, (subprocess.CalledProcessError, subprocess.TimeoutExpired)) else 1
+                self.assertEqual(expected_calls, inspect.call_count)
                 receipt = json.loads((args.output / 'manifest.json').read_text())
                 self.assertEqual('brokers-down', labels[-1])
                 if outcome == image_evidence:
