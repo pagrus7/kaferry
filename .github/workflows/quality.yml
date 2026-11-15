@@ -70,7 +70,7 @@ jobs:
         if: (success() || failure()) && steps.analyzers.outcome == 'success'
         run: make duplicates JSCPD=.cache/quality-tools/jscpd DUPLICATION_BASE="${QUALITY_BASE_SHA:-HEAD}"
       - name: Maintainability reports
-        if: success() || failure()
+        if: (success() || failure()) && steps.analyzers.outcome == 'success'
         run: python3 -m tools.ci.quality maintainability
       - name: Go vulnerability gate
         id: vulnerabilities
