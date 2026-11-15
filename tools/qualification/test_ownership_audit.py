@@ -143,12 +143,19 @@ class OwnershipAuditTest(unittest.TestCase):
 
     def test_actual_rejection_and_legitimate_rejoin_are_distinguished(self):
         # Given correlated selected-CLI baseline, transfer, rejection and rejoin.
+        self.case['publishing']['max_acknowledgement_gap_seconds'] = 2.5
         # When validated, then only old-generation rejection is fencing evidence.
         proof = self.validate()['ownership_fencing']
         self.assertEqual((1, 1, 0, 1), tuple(proof[key] for key in
             ('stale_requests', 'stale_rejections', 'accepted_stale_commits', 'accepted_rejoin_commits')))
         self.assertEqual(list(range(12)), proof['accepted_peer_partitions'])
         self.assertEqual(19, len(proof['audit_files']))
+        # Then zero or a gap above half the six-second session cannot qualify.
+        for gap in (0, 3.01):
+            with self.subTest(gap=gap):
+                self.case['publishing']['max_acknowledgement_gap_seconds'] = gap
+                with self.assertRaisesRegex(ValueError, 'steady-publishing'):
+                    self.validate()
 
     def test_expiry_window_requires_causal_delay_but_allows_delayed_completion(self):
         # Given expiry at 17s, a six-second session and one-second heartbeat.
