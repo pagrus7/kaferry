@@ -68,8 +68,8 @@ func waitTopicReady(t *testing.T, a *kadm.Client, name string, partitions int) {
 			ready = ready && p.Err == nil && p.Leader >= 0
 		}
 		if ready {
-			offsets, err := a.ListStartOffsets(ctx, name)
-			if err == nil && offsets.Error() == nil && len(offsets[name]) == partitions {
+			offsets, offsetsErr := a.ListStartOffsets(ctx, name)
+			if offsetsErr == nil && offsets.Error() == nil && len(offsets[name]) == partitions {
 				return
 			}
 		}

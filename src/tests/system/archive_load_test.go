@@ -126,7 +126,7 @@ func measureArchiveCLI(t *testing.T, statement, cfg string, count int) *loadRepo
 	// When executing SQL through durable completion, sample the actual CLI child.
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
-	process := launchCLI(t, ctx, testBinary(t), "run", "-f", "-", "-c", cfg)
+	process := launchCLI(ctx, t, testBinary(t), "run", "-f", "-", "-c", cfg)
 	measureCLI(t, report, process, statement)
 	require.Equal(t, count, report.Records)
 	require.LessOrEqual(t, report.PeakUncommittedRecords, 20000)

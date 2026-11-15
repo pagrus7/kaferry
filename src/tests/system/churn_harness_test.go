@@ -22,7 +22,7 @@ func TestHarnessRebalanceChurnUsesSelectedBinary(t *testing.T) {
 	results := make(chan workerResult, 1)
 	// When the churn fixture starts a worker, then it executes that binary and
 	// passes the same SQL/config arguments used by the broker scenario.
-	process, _ := startChurnWorker(t, t.Context(), "SELECT fixture", "fixture.toml", results)
+	process, _ := startChurnWorker(t.Context(), t, "SELECT fixture", "fixture.toml", results)
 	require.NoError(t, process.wait())
 	result := <-results
 	require.Zero(t, result.code)

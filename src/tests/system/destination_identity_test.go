@@ -40,7 +40,7 @@ func TestRecreatedDestinationRejectsResumeAndSupportsExplicitRecovery(t *testing
 				ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 				defer cancel()
 				args := append([]string{command, "-e", statement, "-c", config}, extra...)
-				process := startCLI(t, ctx, binary, "", args...)
+				process := startCLI(ctx, t, binary, "", args...)
 				err := process.wait()
 				code := 0
 				if err != nil {

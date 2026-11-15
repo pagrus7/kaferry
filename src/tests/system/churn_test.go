@@ -15,9 +15,9 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func startChurnWorker(t *testing.T, ctx context.Context, statement, path string, results chan<- workerResult) (*cliProcess, func()) {
+func startChurnWorker(ctx context.Context, t *testing.T, statement, path string, results chan<- workerResult) (*cliProcess, func()) {
 	t.Helper()
-	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", path)
+	process := startCLI(ctx, t, testBinary(t), "", "run", "-e", statement, "-c", path)
 	go func() {
 		code := 0
 		if process.wait() != nil {
@@ -46,7 +46,7 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	results := make(chan workerResult, 8)
-	workerA, stopA := startChurnWorker(t, ctx, statement, path, results)
+	workerA, stopA := startChurnWorker(ctx, t, statement, path, results)
 	oracle.writer(workerA)
 	defer stopA()
 	waitMembers(t, a, group, 1, 2, results)
@@ -66,7 +66,7 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 		window := oracle.begin(t, "ownership-change", map[string]any{"group": group, "joining_worker": fmt.Sprint(cycle)}, false,
 			oracle.timeouts,
 			"one worker owns both source partitions")
-		peer, stopB := startChurnWorker(t, ctx, statement, path, results)
+		peer, stopB := startChurnWorker(ctx, t, statement, path, results)
 		oracle.writer(peer)
 		defer stopB()
 		waitMembers(t, a, group, 2, 2, results)

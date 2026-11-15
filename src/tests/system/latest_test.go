@@ -31,7 +31,7 @@ func TestLatestEndRemainsPinnedAfterCompletion(t *testing.T) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
-		result := binaryWorker(t, ctx, query, config)
+		result := binaryWorker(ctx, t, query, config)
 		require.Zero(t, result.code, result.detail)
 		waitMembers(t, a, group, 0, 0, nil)
 		return summaryFrom(t, result.detail)
@@ -65,7 +65,7 @@ func TestLatestEndRemainsPinnedAfterCompletion(t *testing.T) {
 	// When inspecting the saved job through the CLI.
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	status := startCLI(t, ctx, testBinary(t), "", "status", "-e", query, "-c", config, "--json")
+	status := startCLI(ctx, t, testBinary(t), "", "status", "-e", query, "-c", config, "--json")
 	require.NoError(t, status.wait(), status.logs())
 	require.NoError(t, ctx.Err(), status.logs())
 	// Then it is complete at the original end, even though the source now extends beyond it.

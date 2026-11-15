@@ -24,8 +24,8 @@ func soakTopic(t *testing.T, admin *kadm.Client, partitions int, replicated bool
 	for {
 		metadata, err := admin.ListTopics(ctx, name)
 		if err == nil && fullyReplicatedTopic(metadata[name], partitions) {
-			configs, err := admin.DescribeTopicConfigs(ctx, name)
-			if err == nil && len(configs) == 1 && configs[0].Err == nil {
+			configs, configErr := admin.DescribeTopicConfigs(ctx, name)
+			if configErr == nil && len(configs) == 1 && configs[0].Err == nil {
 				for _, config := range configs[0].Configs {
 					if config.Key == "min.insync.replicas" && config.Value != nil {
 						require.Equal(t, "2", *config.Value, "replicated endurance requires min ISR=2")

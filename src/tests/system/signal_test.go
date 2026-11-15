@@ -26,7 +26,7 @@ func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		t.Cleanup(cancel)
 		// When starting a copy with the saved group position.
-		process := startCLI(t, ctx, binary, statement, "run", "-f", "-")
+		process := startCLI(ctx, t, binary, statement, "run", "-f", "-")
 		waitMembers(t, a, group, 1, 1, nil)
 		// Then the source position is saved before records arrive for START=LATEST.
 		start := committedPartitions(t, a, group, src, 1)
@@ -39,9 +39,9 @@ func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 			require.NoError(t, signalErr)
 
 			// When both topics gain a partition while the resumed worker is stopped.
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			results, err := a.UpdatePartitions(ctx, 2, dst, src)
-			cancel()
+			expandCtx, expandCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			results, err := a.UpdatePartitions(expandCtx, 2, dst, src)
+			expandCancel()
 
 			// Then it joins the new assignment after continuing.
 			require.NoError(t, err, "partition expansion")

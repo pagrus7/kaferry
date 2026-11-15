@@ -94,13 +94,13 @@ func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
 	// Kafka may remove offsets on deletion. Restore the old identity metadata so
 	// the guard is exercised, with an offset inside the replacement topic's log.
 	for {
-		created, err := a.CreateTopic(ctx, 1, 1, nil, src)
-		if err == nil {
+		created, createErr := a.CreateTopic(ctx, 1, 1, nil, src)
+		if createErr == nil {
 			break
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatal("replacement topic not created", created, err)
+			t.Fatal("replacement topic not created", created, createErr)
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
@@ -340,7 +340,8 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 	data, err := child.CombinedOutput()
 
 	// Then
-	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 99 {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 99 {
 		t.Fatalf("crash helper: %v %s", err, data)
 	}
 	parts := committedPartitions(t, a, group, src, 1)
@@ -408,7 +409,7 @@ func TestRunningSourceOffsetOutOfRangeFailsWithoutSavingProgress(t *testing.T) {
 	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC 'output' SELECT * FROM TOPIC 'input' WITH (GROUP='running-retention', START=EARLIEST)", strings.Join(cluster.ListenAddrs(), ","))
 
 	// When the selected CLI receives that broker error after saving its initial position.
-	process := startCLI(t, ctx, binary, "", "run", "-e", statement)
+	process := startCLI(ctx, t, binary, "", "run", "-e", statement)
 	err = process.wait()
 
 	// Then it fails explicitly without resetting, delivering records or advancing saved progress.
@@ -437,7 +438,7 @@ func TestExpiredSourceProgressRestartReportsGapAndCopiesRetainedRecords(t *testi
 	binary := testBinary(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	process := startCLI(t, ctx, binary, "", "run", "-e", statement)
+	process := startCLI(ctx, t, binary, "", "run", "-e", statement)
 	committedPartitions(t, a, group, src, 1)
 	// When the CLI exits before any publication, all of its pending fetches are closed.
 	require.NoError(t, process.signal(os.Interrupt))
@@ -453,11 +454,11 @@ func TestExpiredSourceProgressRestartReportsGapAndCopiesRetainedRecords(t *testi
 		t.Fatal("delete unread records", deleted, err)
 	}
 	// When restarting the same query after retention has removed its saved position.
-	process = startCLI(t, ctx, binary, "", "run", "-e", statement)
+	process = startCLI(ctx, t, binary, "", "run", "-e", statement)
 	waitEnd(t, a, dst, 5)
 	require.NoError(t, process.signal(os.Interrupt))
-	if err := process.wait(); err != nil {
-		t.Fatalf("retention restart: %v %s", err, process.logs())
+	if waitErr := process.wait(); waitErr != nil {
+		t.Fatalf("retention restart: %v %s", waitErr, process.logs())
 	}
 
 	// Then exactly the retained records are copied, saved and reported as an explicit offset gap.

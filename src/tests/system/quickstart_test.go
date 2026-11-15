@@ -70,8 +70,8 @@ func TestKafkaQuickStart(t *testing.T) {
 		if t.Failed() {
 			t.Logf("playground broker: %s", logs)
 		}
-		out, err := exec.CommandContext(cleanup, "docker", "rm", "-fv", container).CombinedOutput()
-		require.NoError(t, err, "remove owned playground container: %s", out)
+		out, removeErr := exec.CommandContext(cleanup, "docker", "rm", "-fv", container).CombinedOutput()
+		require.NoError(t, removeErr, "remove owned playground container: %s", out)
 	})
 	require.NoError(t, err, "%s", setup)
 	require.NotEmpty(t, container, "docker run must identify the owned container: %s", setup)
@@ -81,8 +81,8 @@ func TestKafkaQuickStart(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, topics, "__consumer_offsets", "the example must exercise the first group lookup on a fresh broker")
 	run := func(block string) string {
-		out, err := command(block).CombinedOutput()
-		require.NoError(t, err, "playground %s: %s", block, out)
+		out, runErr := command(block).CombinedOutput()
+		require.NoError(t, runErr, "playground %s: %s", block, out)
 		return string(out)
 	}
 	// When the exact copy, destination-read and same-group rerun commands execute.

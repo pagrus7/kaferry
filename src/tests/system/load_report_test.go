@@ -36,7 +36,7 @@ func TestLoadReportIdentifiesExecutedBinary(t *testing.T) {
 		t.Setenv("KAFERRY_REPORT_DIR", directory)
 		t.Setenv("KAFERRY_TEST_BINARY", filepath.Join(directory, "unused-binary"))
 		report := newLoadReport(t, "identity")
-		report.cli = startCLI(t, t.Context(), binary, "", "--version")
+		report.cli = startCLI(t.Context(), t, binary, "", "--version")
 		require.NoError(t, report.cli.wait())
 		require.Contains(t, report.cli.logs(), "franz-go "+clientVersion+")")
 	})

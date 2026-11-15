@@ -5,6 +5,7 @@ package compat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -110,11 +111,12 @@ func runMigrationExpect(t *testing.T, binary, statement, config string, want int
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
-	process := startCLI(t, ctx, binary, "", "run", "-e", statement, "-c", config)
+	process := startCLI(ctx, t, binary, "", "run", "-e", statement, "-c", config)
 	err := process.wait()
 	code := 0
 	if err != nil {
-		if e, ok := err.(*exec.ExitError); ok {
+		var e *exec.ExitError
+		if errors.As(err, &e) {
 			code = e.ExitCode()
 		} else {
 			t.Fatal(err)
@@ -222,7 +224,7 @@ func TestPreviousBinaryDestinationProgressCompatibility(t *testing.T) {
 				fingerprint := func(binary string) string {
 					ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 					defer cancel()
-					process := startCLI(t, ctx, binary, "", "explain", "-e", query, "-c", config, "--json")
+					process := startCLI(ctx, t, binary, "", "explain", "-e", query, "-c", config, "--json")
 					require.NoError(t, process.wait(), process.logs())
 					var report struct {
 						Fingerprint string `json:"fingerprint"`

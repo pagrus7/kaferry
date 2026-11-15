@@ -10,10 +10,10 @@ import (
 
 //kaferry:guarantee security
 func TestSaslTlsOAuthTokenFile(t *testing.T) {
-	system.RunSaslTlsOAuthTokenFile(t)
+	system.RunSaslTLSOAuthTokenFile(t)
 }
 
 //kaferry:guarantee security
 func TestSaslTlsOAuthRenewalAndKeyRotation(t *testing.T) {
-	system.RunSaslTlsOAuthRenewalAndKeyRotation(t)
+	system.RunSaslTLSOAuthRenewalAndKeyRotation(t)
 }

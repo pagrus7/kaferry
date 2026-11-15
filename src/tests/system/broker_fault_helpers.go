@@ -46,8 +46,11 @@ func inspectBroker(name, project, service string, run func(...string) ([]byte, e
 		want += " " + service
 	}
 	data, err := run("inspect", "--format", format, name)
-	if err != nil || strings.TrimSpace(string(data)) != want {
-		return nil, fmt.Errorf("fault target %s must belong to disposable fixture %s: %v", name, want, err)
+	if err != nil {
+		return nil, fmt.Errorf("fault target %s must belong to disposable fixture %s: %w", name, want, err)
+	}
+	if strings.TrimSpace(string(data)) != want {
+		return nil, fmt.Errorf("fault target %s must belong to disposable fixture %s", name, want)
 	}
 	return &ownedBroker{name: name, run: run}, nil
 }

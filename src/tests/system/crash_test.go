@@ -39,7 +39,7 @@ func TestCrashResumeReconcilesRetainedRecords(t *testing.T) {
 	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='%d','heartbeat.interval.ms'='1000') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST)",
 		broker(t), oracle.timeouts["session.timeout.ms"].Milliseconds(), dst, src, group)
 	config := configuration(t, fmt.Sprintf("delivery_timeout=%q\nshutdown_timeout=%q\n", oracle.timeouts["delivery_timeout"], oracle.timeouts["shutdown_timeout"]))
-	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+	process := startCLI(ctx, t, testBinary(t), "", "run", "-e", statement, "-c", config)
 	oracle.writer(process)
 	waitEnd(t, a, dst, 1)
 	// When the process dies without a drain/save and a fresh process resumes.
@@ -51,7 +51,7 @@ func TestCrashResumeReconcilesRetainedRecords(t *testing.T) {
 	oracle.injected(t, window, "process-kill", map[string]int{"pid": process.pid()}, "original worker exited after kill")
 	publishRange(16, 64)
 	waitMembers(t, a, group, 0, 0, nil)
-	resumed := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+	resumed := startCLI(ctx, t, testBinary(t), "", "run", "-e", statement, "-c", config)
 	oracle.writer(resumed)
 	waitMembers(t, a, group, 1, 1, nil)
 	oracle.healed(t, window, "replacement owns the source partition")

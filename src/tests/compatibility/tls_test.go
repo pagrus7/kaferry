@@ -10,10 +10,10 @@ import (
 
 //kaferry:guarantee security
 func TestMutualTlsCopy(t *testing.T) {
-	system.RunMutualTlsCopy(t)
+	system.RunMutualTLSCopy(t)
 }
 
 //kaferry:guarantee security
 func TestServerTlsCopy(t *testing.T) {
-	system.RunServerTlsCopy(t)
+	system.RunServerTLSCopy(t)
 }

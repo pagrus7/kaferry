@@ -44,8 +44,8 @@ func TestKafkaArchiveConcurrentCapture(t *testing.T) {
 
 	// When both capture processes acquire partitions before the transaction makes records readable.
 	workers := []*cliProcess{
-		startCLI(t, ctx, binary, statement, "run", "--file", "-", "--config", config),
-		startCLI(t, ctx, binary, statement, "run", "--file", "-", "--config", config),
+		startCLI(ctx, t, binary, statement, "run", "--file", "-", "--config", config),
+		startCLI(ctx, t, binary, statement, "run", "--file", "-", "--config", config),
 	}
 	waitMembers(t, a, group, 2, partitions, nil)
 	groups, err := a.DescribeGroups(ctx, group)
@@ -79,7 +79,7 @@ func TestKafkaArchiveConcurrentCapture(t *testing.T) {
 	}
 	// When replaying their shared archive into a fresh topic.
 	replay := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='restore')", destination, archive)
-	result := binaryWorker(t, ctx, replay, config)
+	result := binaryWorker(ctx, t, replay, config)
 	require.Zero(t, result.code, result.detail)
 	require.Equal(t, count, summaryFrom(t, result.detail).Confirmed)
 
