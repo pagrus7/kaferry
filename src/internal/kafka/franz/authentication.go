@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/sasl"
 )
 
@@ -110,5 +111,22 @@ func authenticationError(mechanism string, cause error) error {
 			return fmt.Errorf("kafka %s authentication failed: %w", mechanism, err)
 		}
 	}
-	return fmt.Errorf("kafka %s authentication failed", mechanism)
+	return &authenticationFailure{mechanism: mechanism, cause: cause}
+}
+
+type authenticationFailure struct {
+	mechanism string
+	cause     error
+}
+
+func (e *authenticationFailure) Error() string {
+	return fmt.Sprintf("kafka %s authentication failed", e.mechanism)
+}
+func (e *authenticationFailure) Unwrap() error { return e.cause }
+func (e *authenticationFailure) Is(target error) bool {
+	return target == kerr.SaslAuthenticationFailed && brokerAuthenticationFailed(e.cause)
+}
+
+func brokerAuthenticationFailed(err error) bool {
+	return err != nil && (errors.Is(err, kerr.SaslAuthenticationFailed) || strings.HasPrefix(err.Error(), "OAUTHBEARER authentication failed: "))
 }
