@@ -7,3 +7,4 @@ Review behavior changes, tests and files used by tests or CI, including document
 - Keep domain expectations visible; use existing assertions and fixtures for routine setup, checks and cleanup. Prefer focused components with narrow handwritten mocks and fewer integration tests for real boundaries. Flag excessive setup or helpers that hide behavior.
 - Concurrency tests need observable synchronization, bounded waits and cleanup. Prefer fake clocks to sleeps; check leaks, races and nondeterministic assumptions.
 - Verify completed final-head CI and coverage under the shared process. Read changed missed and partial lines in the Codecov PR view rather than trusting percentages. For retained changed gaps, trace callers and invariants and justify testing, removal or retention. Do not invent calls solely to cover unreachable code.
+- When a PR changes or deletes a test that cites `//kaferry:guarantee`, confirm it still proves each cited guarantee or that another test does.

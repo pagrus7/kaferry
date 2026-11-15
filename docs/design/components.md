@@ -47,16 +47,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 
 ## Starting a component change
 
-Start with the affected contract and its focused tests below. Follow callers and adapters when changing ownership, ordering, errors or persisted identity. Review the full patch; these entry points guide investigation, not review exclusions.
-
-| Change | Contract and implementation | Focused evidence |
-| --- | --- | --- |
-| Source/sink behavior | [Core ports](../../src/internal/copy/ports.go), [record and event types](../../src/internal/copy/record.go) | [Rejection and asynchronous errors](../../src/internal/copy/policy_test.go), [draining and save failures](../../src/internal/copy/runner_boundary_test.go) |
-| Admission and held input | [Flow](../../src/internal/copy/flow.go); runner owns submission retries after tracking | [Capacity](../../src/internal/copy/flow_test.go), [revocation and queue deadlines](../../src/internal/copy/runner_regression_test.go), [input/EOF ordering](../../src/internal/copy/policy_test.go) |
-| Confirmed and saved positions | [Tracker contract](../../src/internal/copy/progress.go), [implementation](../../src/internal/copy/tracker.go) | [Gaps and stale deliveries](../../src/internal/copy/progress_test.go), [stop persistence](../../src/internal/copy/stop_test.go) |
-| Kafka commit ownership | [Committer](../../src/internal/kafka/franz/commit.go), [assignment sequence](../../src/internal/kafka/franz/source_lifecycle.go) | [Commit snapshots and errors](../../src/internal/kafka/franz/commit_test.go), [assignment and revocation](../../src/internal/kafka/franz/source_test.go) |
-| Plan inputs and identity | [Plan types](../../src/internal/plan/types.go), [identity contract](decisions.md#identity) | [Locations and redaction](../../src/internal/plan/diagnostic_test.go), [fingerprint compatibility](../../src/internal/plan/fingerprint_test.go) |
-| Replay resource limits | [Pool](../../src/internal/archive/replay/pool.go), [reader](../../src/internal/archive/replay/reader.go) | [Bounded resources and restart](../../src/internal/archive/replay/files_test.go), [ordering and cleanup](../../src/internal/archive/replay/order_test.go) |
+Run `go test ./src/tests/guarantees -v` to list each guarantee in the design references with the tests that prove it. Start from those tests and follow callers and adapters when changing ownership, ordering, errors or persisted identity. Review the full patch; these entry points guide investigation, not review exclusions.
 
 ## Ownership
 
