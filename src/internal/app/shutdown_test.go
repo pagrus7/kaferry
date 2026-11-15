@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee shutdown
 func TestShutdownBudgetUsesConfiguredTimeoutAndCurrentStage(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// Given a signal watcher with a long default and a short explicit configuration.
@@ -96,6 +97,7 @@ func TestCompletedShutdownBudgetCannotBeRearmed(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee shutdown
 func TestShutdownDeadlineStopsBlockedCleanup(t *testing.T) {
 	if os.Getenv("KAFERRY_SHUTDOWN_HELPER") == "cleanup" {
 		f := newEngineFixture()
@@ -192,6 +194,7 @@ func runShutdownHelper(t *testing.T, mode, stage string) {
 	require.Contains(t, string(output), "shutdown timed out while "+stage)
 }
 
+//kaferry:guarantee shutdown
 func TestForcedShutdownExitsWithAFullUndrainedStderrPipe(t *testing.T) {
 	if os.Getenv("KAFERRY_SHUTDOWN_HELPER") == "full-stderr" {
 		forceShutdown("writing blocked stderr")

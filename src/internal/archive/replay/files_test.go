@@ -53,6 +53,7 @@ func (h *measuredHandle) Close() error {
 	return h.owner.closeErr
 }
 
+//kaferry:guarantee replay
 func TestMergePreservesDuplicatesFullRecordsAndPhysicalTiesWithBoundedResources(t *testing.T) {
 	// Given overlapping files whose duplicate offsets must remain separate physical records.
 	root := t.TempDir()
@@ -137,6 +138,7 @@ func TestRestartUsesPhysicalCursorsAndIgnoresNewFiles(t *testing.T) {
 	require.EqualValues(t, 41, got[0].Offset)
 }
 
+//kaferry:guarantee replay
 func TestIncompleteRestartRejectsMissingResizedOrModifiedSelectedInput(t *testing.T) {
 	for _, damage := range []string{"missing", "shortened", "same length"} {
 		t.Run(damage, func(t *testing.T) {

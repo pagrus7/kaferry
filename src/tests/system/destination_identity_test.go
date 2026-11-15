@@ -17,6 +17,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee identity
 func TestRecreatedDestinationRejectsResumeAndSupportsExplicitRecovery(t *testing.T) {
 	broker(t)
 	binary := testBinary(t)

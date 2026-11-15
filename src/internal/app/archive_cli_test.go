@@ -83,6 +83,8 @@ func archiveRecords(t *testing.T, root string) []avro.Record {
 	}
 	return result
 }
+
+//kaferry:guarantee replay
 func TestArchiveCLIResumeUsesFixedSelectionAndSavesStopReason(t *testing.T) {
 	// Given a portable archive with duplicate offsets, nulls, empty bytes and binary headers.
 	root := t.TempDir()
@@ -219,6 +221,7 @@ func TestArchivePartitionCLIInspectsCopiesAndResumesOnlyItsSelectedFiles(t *test
 	}
 }
 
+//kaferry:guarantee window
 func TestBetweenCLICopiesInclusiveRangesAndResumesEquivalentSyntax(t *testing.T) {
 	// Given three archived partitions with records before, inside and after the range.
 	root := t.TempDir()
@@ -301,6 +304,7 @@ func TestArchivePartitionMissingIDsFailBeforeCheckpointOrOutput(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee inspect
 func TestArchiveCLIFreshPreviewDoesNotCreateRunState(t *testing.T) {
 	// Given a completed file, an unfinished file and a query with a relative time window.
 	root := t.TempDir()
@@ -374,6 +378,7 @@ func TestArchiveCLIInspectionRejectsChangedSavedInputs(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee groups
 func TestArchiveCLIOneOffDeletesOnlyCompletedProgress(t *testing.T) {
 	for _, capped := range []bool{false, true} {
 		t.Run(fmt.Sprintf("capped=%v", capped), func(t *testing.T) {

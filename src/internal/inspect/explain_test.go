@@ -180,6 +180,7 @@ func TestTopicPreviewUsesSavedPositionsAndOnlyRequiredStartLookups(t *testing.T)
 	require.Len(t, report.Warnings, 1)
 }
 
+//kaferry:guarantee start
 func TestLatestAndUnmatchedTimestampStartAtCommittedEnd(t *testing.T) {
 	for _, start := range []string{"LATEST", "unmatched time"} {
 		t.Run(start, func(t *testing.T) {
@@ -306,6 +307,7 @@ func TestInvalidSavedPositionsAndWindowOverflowFailBeforeLookup(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee start
 func TestUpperBoundOnlyDoesNotRequestTimestampLookups(t *testing.T) {
 	// Given an upper-bound-only filter with a pre-epoch stopping threshold.
 	service, p, factory, _ := fixture()

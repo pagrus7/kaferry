@@ -169,6 +169,7 @@ func (w *observedWriter) Replace(path string, data []byte) error {
 	return nil
 }
 
+//kaferry:guarantee archive.capture
 func TestCheckpointDurabilityOrderAndQuietFlush(t *testing.T) {
 	// Given one changed file and injected operation tracing around real storage.
 	root := filepath.Join(t.TempDir(), "archive")
@@ -230,6 +231,7 @@ func runLifecycle(t testing.TB, root string, fs *observedFiles, codec *avro.Code
 	return true, s.Publish(part.ID)
 }
 
+//kaferry:guarantee archive.capture
 func TestEveryCaptureIOCutPreservesAcknowledgedRecords(t *testing.T) {
 	// Given a complete reference lifecycle identifying each storage operation.
 	baseline := &observedFiles{Filesystem: NativeFiles{}}

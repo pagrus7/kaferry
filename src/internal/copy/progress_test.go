@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee completion.offset-end
 func TestConfirmedPrefixIncludesNumericGaps(t *testing.T) {
 	// Given
 	tk := NewTracker()
@@ -56,6 +57,7 @@ func TestConfirmedPrefixIncludesNumericGaps(t *testing.T) {
 	require.Zero(t, bytes)
 }
 
+//kaferry:guarantee rebalance
 func TestOldGenerationDeliveryCannotAdvanceNewOwner(t *testing.T) {
 	// Given a new assignment after the previous generation was revoked.
 	tk := NewTracker()

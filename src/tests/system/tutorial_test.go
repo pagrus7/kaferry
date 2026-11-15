@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee docs.examples
 func TestArchiveTutorial(t *testing.T) {
 	// Given a release bundle, or one generated from editable sources for a local run.
 	directory := t.TempDir()
@@ -104,6 +105,7 @@ func TestArchiveTutorial(t *testing.T) {
 	require.Equal(t, input, archiveRecords(t, filepath.Join(directory, "output")), "rerun must preserve exactly the three original records")
 }
 
+//kaferry:guarantee docs.examples
 func TestArchiveTutorialCancellation(t *testing.T) {
 	if pidFile := os.Getenv("KAFERRY_TUTORIAL_HANG_PID"); pidFile != "" {
 		// The child holds a lock and the inherited output pipes while it hangs.

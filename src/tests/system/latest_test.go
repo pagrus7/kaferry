@@ -14,6 +14,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee completion.offset-end
 func TestLatestEndRemainsPinnedAfterCompletion(t *testing.T) {
 	// Given a finite source and a named group with no saved progress.
 	a := admin(t)

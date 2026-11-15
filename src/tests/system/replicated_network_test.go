@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee errors
 func TestReplicatedNetworkFaults(t *testing.T) {
 	for _, name := range []string{"destination-outage", "destination-leaders-outage", "latency", "bandwidth", "slow-close"} {
 		t.Run(name, func(t *testing.T) { replicatedNetworkFault(t, name) })

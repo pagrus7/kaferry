@@ -22,6 +22,7 @@ func emptyState() State {
 	return State{Version: 1, Group: query().Group, Fingerprint: query().Fingerprint, Complete: true, Files: []Progress{}}
 }
 
+//kaferry:guarantee replay
 func TestGroupLockSurvivesCheckpointReplacementAndReleasesOnClose(t *testing.T) {
 	// Given an exclusively locked replay group and an empty pinned selection.
 	directory := t.TempDir()
@@ -53,6 +54,7 @@ func TestGroupLockSurvivesCheckpointReplacementAndReleasesOnClose(t *testing.T) 
 	require.Error(t, j.Save(emptyState()))
 }
 
+//kaferry:guarantee replay
 func TestCheckpointRejectsCorruptionAmbiguityAndInvalidState(t *testing.T) {
 	good, err := checkpoint.Encode(emptyState(), maxCheckpointBytes)
 	require.NoError(t, err)
@@ -188,6 +190,7 @@ func TestSpecialCheckpointFilesDoNotBlock(t *testing.T) {
 	require.NoError(t, ctx.Err())
 }
 
+//kaferry:guarantee replay
 func FuzzCheckpoint(f *testing.F) {
 	seed, err := checkpoint.Encode(emptyState(), maxCheckpointBytes)
 	require.NoError(f, err)
@@ -227,6 +230,7 @@ func TestCheckpointWireRoundTripIsCanonical(t *testing.T) {
 	require.Error(t, err)
 }
 
+//kaferry:guarantee replay
 func TestRejectedSavePreservesExistingCheckpoint(t *testing.T) {
 	// Given a valid checkpoint whose bytes must survive an invalid replacement request.
 	j, err := NewJournal(t.TempDir(), query().Group, NativeGroupFiles{}, checkpoint.DurableWriter{})

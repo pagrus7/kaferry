@@ -114,6 +114,7 @@ func mountedContainers(ctx context.Context, directory string) ([]string, error) 
 	return matched, nil
 }
 
+//kaferry:guarantee shutdown
 func TestContainerShutdownAndResume(t *testing.T) {
 	t.Run("command-contract", testContainerCommand)
 	// The contract subtest runs without Docker or an image when selected alone.

@@ -152,6 +152,7 @@ func TestExplainCLIReportsInputAndIdentityErrorsWithoutPartialOutput(t *testing.
 	}
 }
 
+//kaferry:guarantee inspect
 func TestExplainUsesOnlyReadOnlyKafkaRequests(t *testing.T) {
 	for _, output := range []string{"TOPIC", "ARCHIVE", "SELF-COPY", "OFFSET"} {
 		t.Run(output, func(t *testing.T) {

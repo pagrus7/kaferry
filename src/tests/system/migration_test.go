@@ -21,6 +21,8 @@ import (
 )
 
 // Supply binaries built from the previous and candidate revisions.
+//
+//kaferry:guarantee commit-metadata
 func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 	previous := os.Getenv("KAFERRY_PREVIOUS_BINARY")
 	require.NotEmpty(t, previous, "set KAFERRY_PREVIOUS_BINARY for migration checks")
@@ -142,6 +144,7 @@ func migrationCheckpoint(t *testing.T, configuration, group string) *replay.Stat
 	return state
 }
 
+//kaferry:guarantee commit-metadata
 func TestPreviousBinaryRejectsChangedCapturedEndQuery(t *testing.T) {
 	// Given a candidate bounded copy with a saved captured end.
 	previous := os.Getenv("KAFERRY_PREVIOUS_BINARY")
@@ -166,6 +169,7 @@ func TestPreviousBinaryRejectsChangedCapturedEndQuery(t *testing.T) {
 	require.Equal(t, before, archiveRecords(t, out))
 }
 
+//kaferry:guarantee commit-metadata
 func TestPreviousBinaryRejectsUnsupportedCaptureState(t *testing.T) {
 	if os.Getenv("KAFERRY_PREVIOUS_STATE") != "reject" {
 		t.Skip("select the explicit reject contract for an incompatible released binary")
@@ -188,6 +192,7 @@ func TestPreviousBinaryRejectsUnsupportedCaptureState(t *testing.T) {
 	require.Equal(t, before, archiveRecords(t, fresh))
 }
 
+//kaferry:guarantee commit-metadata
 func TestPreviousBinaryDestinationProgressCompatibility(t *testing.T) {
 	previous := os.Getenv("KAFERRY_PREVIOUS_BINARY")
 	require.NotEmpty(t, previous)

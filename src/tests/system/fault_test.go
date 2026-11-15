@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee errors
 func TestBlockingCommitAcrossBrokerOutage(t *testing.T) {
 	// Given an assigned production source with confirmed initial progress.
 	name := os.Getenv("KAFKA_FAULT_CONTAINER")

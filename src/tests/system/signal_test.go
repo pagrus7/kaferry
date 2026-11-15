@@ -14,6 +14,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee shutdown
 func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 	// Given
 	a, src, dst, p := pairedTopics(t, 1, 1)

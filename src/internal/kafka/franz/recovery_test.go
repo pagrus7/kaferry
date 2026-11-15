@@ -227,6 +227,7 @@ func TestProductionSinkDoesNotRetryPermanentRejection(t *testing.T) {
 	require.Zero(t, cluster.PartitionInfo("output", 0).HighWatermark)
 }
 
+//kaferry:guarantee delivery
 func TestAmbiguousDeliveryReplaysWithoutLosingProgress(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	// Given three source records and a broker whose second produce reply is lost.
@@ -284,6 +285,7 @@ func TestAmbiguousDeliveryReplaysWithoutLosingProgress(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee completion.offset-end
 func TestCompactedOffsetsReachTheBoundedEnd(t *testing.T) {
 	for _, scenario := range []struct {
 		retained []int32

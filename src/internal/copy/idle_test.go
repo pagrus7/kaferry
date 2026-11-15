@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee exit
 func TestUnassignedTimeoutHasDistinctOutcomeBeforeAndAfterIntake(t *testing.T) {
 	for _, afterIntake := range []bool{false, true} {
 		t.Run(map[bool]string{false: "before intake", true: "after intake"}[afterIntake], func(t *testing.T) {
@@ -55,6 +56,7 @@ func TestAssignmentBeforeIdleDeadlineCompletesNormally(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee exit
 func TestDelayedHandoffDistinguishesPartitionCompletionFromIdleExit(t *testing.T) {
 	// Given A owns completed P0 and unfinished P1, and B is joining the group.
 	a, _, _, _, _ := fixture(t)

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee errors
 func TestMissingTimestampSkipAndResumeWithDifferentPolicy(t *testing.T) {
 	// Given a file with a missing timestamp between two valid records.
 	dir := t.TempDir()

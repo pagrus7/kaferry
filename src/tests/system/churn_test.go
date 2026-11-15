@@ -32,6 +32,7 @@ func startChurnWorker(t *testing.T, ctx context.Context, statement, path string,
 	}
 }
 
+//kaferry:guarantee rebalance
 func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing.T) {
 	// Given a committing worker with small caps and an ongoing source stream.
 	a := admin(t)

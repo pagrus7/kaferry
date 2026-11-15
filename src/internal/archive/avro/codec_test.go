@@ -96,6 +96,7 @@ func native(record Record) map[string]any {
 	return map[string]any{"source": map[string]any{"cluster": record.Source.Cluster, "topic": record.Source.Topic, "topic_id": record.Source.TopicID[:], "partition": record.Source.Partition}, "offset": record.Offset, "timestamp_ms": ts, "timestamp_kind": record.TimestampKind, "key": nullable(record.Key), "value": nullable(record.Value), "headers": headers}
 }
 
+//kaferry:guarantee fidelity
 func TestFidelityAndIndependentReader(t *testing.T) {
 	// Given complete Kafka records, including duplicate offsets and binary header names.
 	c, want := codec(t, 4<<20), records()

@@ -15,6 +15,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee exit
 func TestDistributedWorkersFinishIndependently(t *testing.T) {
 	// Given
 	a := admin(t)
@@ -83,6 +84,7 @@ func TestDistributedWorkersFinishIndependently(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee worker-stop
 func TestWorkerRecordThresholdAcrossTenPartitionsAndThreeWorkers(t *testing.T) {
 	// Given three workers sharing ten source partitions, each with its own 100-record allowance.
 	a := admin(t)

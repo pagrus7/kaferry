@@ -23,6 +23,7 @@ func savedPrefix(t testing.TB, root string) (*Store, Boundary) {
 	return s, s.state.Files[part.ID]
 }
 
+//kaferry:guarantee archive.capture
 func TestRecoveryTruncatesOnlyUnacknowledgedTail(t *testing.T) {
 	// Given a saved prefix followed by a complete but never-acknowledged block.
 	root := t.TempDir()
@@ -45,6 +46,7 @@ func TestRecoveryTruncatesOnlyUnacknowledgedTail(t *testing.T) {
 	require.Equal(t, boundary.Extent, info.Size())
 }
 
+//kaferry:guarantee archive.capture
 func TestRecoveryRejectsDamagedAcknowledgedData(t *testing.T) {
 	for _, damage := range []string{"missing", "shortened", "checksum", "identity", "count", "inside block", "completed longer", "completed shorter", "both names", "missing state", "corrupt state", "wrong writer"} {
 		t.Run(damage, func(t *testing.T) {
@@ -120,6 +122,7 @@ func TestRecoveryHonorsRecordedCodecLimit(t *testing.T) {
 	require.Len(t, completeFiles(t, root), 1)
 }
 
+//kaferry:guarantee archive.ownership
 func TestWorkersSkipBusyNamespacesAndRecoverAllReleasedOwners(t *testing.T) {
 	// Given two concurrent workers, each with a durable private prefix.
 	root := t.TempDir()

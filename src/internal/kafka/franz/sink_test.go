@@ -315,6 +315,7 @@ func receiveDelivery(t *testing.T, sink core.Sink) core.Delivery {
 	}
 }
 
+//kaferry:guarantee output.routing
 func TestSinkPreservesOriginalPartitionRatherThanReplayCursor(t *testing.T) {
 	for _, key := range [][]byte{nil, {}, {0, 255}} {
 		// Given archive provenance from partition 5, but a replay cursor in virtual partition 0.

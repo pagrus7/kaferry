@@ -50,6 +50,7 @@ func (m *memorySegments) Publish(id string) error {
 	return nil
 }
 
+//kaferry:guarantee archive.capture
 func TestCaptureStopsAfterBackendFailure(t *testing.T) {
 	for _, op := range []string{"create", "append", "checkpoint", "publish"} {
 		t.Run(op, func(t *testing.T) {
@@ -71,6 +72,7 @@ func TestCaptureStopsAfterBackendFailure(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee errors
 func TestSkipCannotHideFailedEmptyFileCleanup(t *testing.T) {
 	// Given a rejected first record whose empty private file cannot be removed.
 	store := &memorySegments{files: make(map[string]Segment), errors: map[string]error{
@@ -85,6 +87,7 @@ func TestSkipCannotHideFailedEmptyFileCleanup(t *testing.T) {
 	require.ErrorIs(t, c.Flush(), errDisk)
 }
 
+//kaferry:guarantee archive.rotation
 func TestCaptureCapsOpenFilesAndPublishesLeastRecentlyUsed(t *testing.T) {
 	// Given two allowed open files and two original source partitions.
 	root := t.TempDir()
@@ -105,6 +108,7 @@ func TestCaptureCapsOpenFilesAndPublishesLeastRecentlyUsed(t *testing.T) {
 	require.Len(t, completeFiles(t, root), 3)
 }
 
+//kaferry:guarantee archive.rotation
 func TestActiveInputAlsoChecksElapsedAge(t *testing.T) {
 	// Given a still-active partition whose first file reaches its elapsed-age target.
 	root := t.TempDir()

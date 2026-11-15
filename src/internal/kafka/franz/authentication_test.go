@@ -79,6 +79,7 @@ func TestOAuthClientCredentialsReuseAndRenewTokens(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee security
 func TestOAuthIssuerFailuresAndCancellationStayRedacted(t *testing.T) {
 	for _, response := range []string{
 		`{"error":"invalid_client","error_description":"private-secret"}`,
@@ -160,6 +161,7 @@ func TestAWSIAMUsesDefaultCredentialsAndSignsBrokerSessions(t *testing.T) {
 	require.NoError(t, err, "reuse the discovered SDK credential provider for another broker")
 }
 
+//kaferry:guarantee security
 func TestAWSIAMRetrievesRotatingCredentialsAndRedactsProviderErrors(t *testing.T) {
 	// Given a credential provider that rotates keys between broker sessions.
 	call := 0
@@ -303,6 +305,7 @@ func TestOAuthTokenRequestHonorsCancellation(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee archive.capture
 func TestAuthenticationFilesAreCheckedBeforeOpeningOutput(t *testing.T) {
 	directory := t.TempDir()
 	invalid := writeFixture(t, directory, "private-file", []byte("private-file-contents"))

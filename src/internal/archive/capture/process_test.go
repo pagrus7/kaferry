@@ -31,6 +31,7 @@ func TestArchiveWriterProcess(t *testing.T) {
 	_, _ = bufio.NewReader(os.Stdin).ReadByte()
 }
 
+//kaferry:guarantee archive.capture
 func TestKilledWorkerReleasesLockAndRetainsOnlySavedPrefix(t *testing.T) {
 	// Given a live worker with a durable prefix and an unacknowledged complete tail block.
 	root := t.TempDir()
@@ -60,6 +61,7 @@ func TestKilledWorkerReleasesLockAndRetainsOnlySavedPrefix(t *testing.T) {
 	require.Equal(t, []avro.Record{testRecord(42)}, readFile(t, paths[0]))
 }
 
+//kaferry:guarantee archive.ownership
 func TestNamespaceIsLockedAndInitializedBeforePublication(t *testing.T) {
 	// Given an initialization observer at the exact directory-publication boundary.
 	root := t.TempDir()

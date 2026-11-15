@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee archive.capture
 func TestConsumerConfigurationFailureDoesNotCreateArchiveOrBlockRetry(t *testing.T) {
 	for _, setting := range []struct{ name, properties string }{
 		{"protected isolation", ",'isolation.level'='read_uncommitted'"},

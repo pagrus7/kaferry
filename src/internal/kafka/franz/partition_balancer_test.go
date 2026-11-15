@@ -81,6 +81,7 @@ func TestSparseGenerationClaimsCannotSkipRevocation(t *testing.T) {
 	require.Equal(t, []int32{8, 9}, second["b"])
 }
 
+//kaferry:guarantee partitions
 func TestSelectedProtocolCannotMatchAnOlderOrDifferentQuery(t *testing.T) {
 	// Given one old query and two distinct selected query identities.
 	p := plan.Plan{Partitions: &plan.PartitionFilter{IDs: []int32{0}}}

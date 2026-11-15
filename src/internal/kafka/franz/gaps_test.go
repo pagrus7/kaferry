@@ -35,6 +35,7 @@ func compactedBatch(retained ...int32) []byte {
 	return batch.AppendTo(nil)
 }
 
+//kaferry:guarantee completion.offset-end
 func TestGapProofPreservesRetainedRecords(t *testing.T) {
 	// Given a batch retaining records at 0 and 5, with the first already consumed.
 	p := kmsg.FetchResponseTopicPartition{Partition: 0, LastStableOffset: 10, RecordBatches: compactedBatch(0, 5)}

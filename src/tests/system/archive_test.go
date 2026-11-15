@@ -16,6 +16,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee fidelity
 func TestAvroCaptureAndReplayCLI(t *testing.T) {
 	// Given a Kafka source and a fresh archive directory with full record fidelity.
 	a := admin(t)

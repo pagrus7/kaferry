@@ -79,6 +79,7 @@ func TestStatusRejectsOneOffAndCorruptFileProgress(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee inspect
 func TestStatusKafkaRequestsAreReadOnly(t *testing.T) {
 	// Given a source topic, destination and a group without saved progress.
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"))

@@ -65,6 +65,7 @@ func TestRunnerRejectsNewInputWhileSubmissionIsPending(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee delivery
 func TestDrainFlushFailureCommitsOnlyConfirmedPrefix(t *testing.T) {
 	// Given one confirmed write followed by one unconfirmed write.
 	r, source, sink, store, _ := fixture(t)

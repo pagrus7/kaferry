@@ -76,6 +76,7 @@ func TestDiagnosticPreservesCauseAndSpecificLocation(t *testing.T) {
 	require.Equal(t, "invalid SQL", (&Diagnostic{}).Error())
 }
 
+//kaferry:guarantee security
 func TestParserDiagnosticsNeverEchoArbitraryInput(t *testing.T) {
 	const secret = "sensitive_SENTINEL_5c27"
 	const base = "WITH CONNECTION prod AS ('sasl.password'='" + secret + "') INSERT INTO ARCHIVE 'out' SELECT * FROM ARCHIVE 'in' WITH(GROUP='g') OPTIONS("

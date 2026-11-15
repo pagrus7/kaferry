@@ -16,6 +16,8 @@ func (p Plan) testFingerprint(sourceClusterID, destinationClusterID string) (str
 
 // These digests are persisted in commits and checkpoints; equivalence tests
 // alone cannot detect a change that rewrites every query's identity.
+//
+//kaferry:guarantee identity
 func TestPersistedFingerprintCompatibility(t *testing.T) {
 	for _, tc := range []struct{ statement, digest string }{
 		{"INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' WITH(GROUP='g',START=EARLIEST)", "98fdb91f8d8cd93a2fa7e0ed527e4d401adaca3aeb0013696a8c9949c3d93795"},

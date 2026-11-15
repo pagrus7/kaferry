@@ -16,6 +16,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee output.routing
 func TestPreservedPartitionsAndExplicitKeyRouting(t *testing.T) {
 	// Given source records spread over three partitions, including null and empty keys.
 	a := admin(t)

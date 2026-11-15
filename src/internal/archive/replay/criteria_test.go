@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee completion.timestamp
 func TestFileDisorderFinishesOnlyItsOriginalStreamAndResumes(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(map[bool]string{false: "default full snapshot", true: "explicit disorder"}[enabled], func(t *testing.T) {

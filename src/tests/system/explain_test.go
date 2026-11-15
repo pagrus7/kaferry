@@ -19,6 +19,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee inspect
 func TestExplainBinaryResumesWithoutChangingKafkaOrCreatingFiles(t *testing.T) {
 	// Given a completed copy and broker observations of its saved progress.
 	a := admin(t)

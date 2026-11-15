@@ -47,6 +47,7 @@ func (f checkpointFaultFS) SyncDirectory(path string) error {
 	return f.nativeReplacement.SyncDirectory(path)
 }
 
+//kaferry:guarantee replay
 func TestCheckpointReplacementFailuresPreserveAtomicPublication(t *testing.T) {
 	for _, stage := range []string{"create", "write", "sync", "rename", "directory sync"} {
 		t.Run(stage, func(t *testing.T) {

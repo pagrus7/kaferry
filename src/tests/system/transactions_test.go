@@ -32,6 +32,7 @@ func tipSamples(samples chan<- int64) func(slog.Record) {
 	}
 }
 
+//kaferry:guarantee start
 func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 	// Given
 	for _, abort := range []bool{false, true} {
@@ -124,6 +125,7 @@ func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee completion.offset-end
 func TestOpenTransactionReachesTipWaitInsteadOfSuccessfulCompletion(t *testing.T) {
 	// Given an in-window record in a transaction that stays open past tip_wait.
 	a := admin(t)

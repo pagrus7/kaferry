@@ -95,6 +95,7 @@ func TestMetadataRequestsRespectCallerDeadline(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee start
 func TestOffsetLookupRejectsIncompleteAndFailedPartitions(t *testing.T) {
 	for _, mode := range []string{"valid", "missing", "foreign topic", "partition error", "request error"} {
 		t.Run(mode, func(t *testing.T) {
@@ -196,6 +197,7 @@ func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee identity
 func TestFingerprintConflictCannotHideUnsafeSourceProgress(t *testing.T) {
 	for _, scenario := range []string{"mixed identities", "changed source", "corrupt metadata", "stop beyond position", "position beyond end", "matching query missing window"} {
 		t.Run(scenario, func(t *testing.T) {

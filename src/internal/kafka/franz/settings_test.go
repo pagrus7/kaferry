@@ -133,6 +133,7 @@ func TestProducerBatchLimitsReachClientWithoutOverflow(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee security
 func TestSettingsFormattingNeverRevealsCredentials(t *testing.T) {
 	// Given valid SASL credentials.
 	s, err := parseSettings(testPlan(t, map[string]string{"security.protocol": "SASL_SSL", "sasl.username": "private-user", "sasl.password": "private-password"}).Source.Properties)

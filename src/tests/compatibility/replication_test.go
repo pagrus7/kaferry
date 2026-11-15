@@ -8,6 +8,7 @@ import (
 	system "github.com/pagrus7/kaferry/src/tests/system"
 )
 
+//kaferry:guarantee errors
 func TestReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	system.RunReplicatedClusterLeaderFailurePreservesCopy(t)
 }

@@ -25,6 +25,8 @@ func (m *captureMock) Append(r avro.Record) error {
 func (m *captureMock) Flush() error  { m.flushes++; return m.flushErr }
 func (m *captureMock) Finish() error { m.finishes++; return m.finishErr }
 func (m *captureMock) Close() error  { m.closes++; return nil }
+
+//kaferry:guarantee archive.capture
 func TestSinkConfirmsBatchOnlyAfterDurabilityAndPreservesRecord(t *testing.T) {
 	// Given a full logical record, including nulls and binary duplicate header names.
 	m := &captureMock{}

@@ -122,6 +122,7 @@ func replicatedTopic(ctx context.Context, t *testing.T, admin *kadm.Client, name
 	})
 }
 
+//kaferry:guarantee rebalance
 func TestReplicatedZombieWorker(t *testing.T) {
 	// Given two selected CLI workers, independent observers and steady input on
 	// 24 replicated partitions. The case requires its owned dedicated fixture.

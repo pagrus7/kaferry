@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee completion.timestamp
 func TestRunnerThresholdEqualityDoesNotStopUntilWallTimePasses(t *testing.T) {
 	// Given a record and EOF exactly at the timestamp/wall-time threshold.
 	r, source, sink, store, clock := fixture(t)
