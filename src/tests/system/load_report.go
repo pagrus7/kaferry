@@ -62,6 +62,7 @@ type loadReport struct {
 	cli                              *cliProcess
 }
 
+//nolint:gocognit,nestif // Grandfathered harness complexity.
 func newLoadReport(t *testing.T, kind string) *loadReport {
 	t.Helper()
 	r := &loadReport{Test: t.Name(), Kind: kind, Platform: runtime.GOOS + "/" + runtime.GOARCH,

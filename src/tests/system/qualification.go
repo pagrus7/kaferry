@@ -162,6 +162,7 @@ func waitCopierPermissions(t *testing.T, src, dst string) {
 	}
 }
 
+//nolint:funlen,gocognit,nestif // Grandfathered harness complexity.
 func waitOneOffGroupPermissions(t *testing.T, a *kadm.Client, cfg map[string]string) {
 	t.Helper()
 	// A recovered broker can wait for the five-minute preferred-leader check.
@@ -280,6 +281,7 @@ func RunSaslTLSRestrictedACLCopyAndDeniedConfigPreflight(t *testing.T) {
 	}
 }
 
+//nolint:funlen // Grandfathered harness complexity.
 func RunSaslTLSRestrictedACLInspectionAndUnnamedCopy(t *testing.T) {
 	// Given a completed finite copy using only source/group READ and destination WRITE.
 	a, producer, src, dst, group := secureFixture(t)

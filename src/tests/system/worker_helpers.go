@@ -15,6 +15,7 @@ type workerResult struct {
 	detail string
 }
 
+//nolint:gocognit // Grandfathered harness complexity.
 func waitMembers(t *testing.T, a *kadm.Client, group string, members int, partitions int, results <-chan workerResult) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

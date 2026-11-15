@@ -11,6 +11,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 )
 
+//nolint:gocognit // Grandfathered harness complexity.
 func soakTopic(t *testing.T, admin *kadm.Client, partitions int, replicated bool) string {
 	t.Helper()
 	if !replicated {
@@ -42,6 +43,7 @@ func soakTopic(t *testing.T, admin *kadm.Client, partitions int, replicated bool
 	}
 }
 
+//nolint:gocognit // Grandfathered harness complexity.
 func fullyReplicatedTopic(topic kadm.TopicDetail, partitions int) bool {
 	if topic.Err != nil || len(topic.Partitions) != partitions {
 		return false

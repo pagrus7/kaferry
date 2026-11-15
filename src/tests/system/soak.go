@@ -27,6 +27,7 @@ func consumeOnlyStart(scheduledEnd, lastPublish time.Time) time.Time {
 	return scheduledEnd
 }
 
+//nolint:funlen,gocognit,nestif // Grandfathered harness complexity.
 func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	// Given
 	report := newLoadReport(t, "soak")
