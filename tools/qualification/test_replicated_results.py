@@ -31,7 +31,8 @@ class ReplicatedResultsTest(unittest.TestCase):
                         worker_measurements=[dict(exit_code=0)], exact_lifetime_work_caps_qualified=True,
                         safety_case=dict(observations=path.relative_to(root).as_posix(), sha256=checksum(path)))
         if precondition:
-            exposure['precondition'] = dict(status='inconclusive', healthy=dict(before={}, after={}))
+            exposure['precondition'] = dict(status='inconclusive', healthy=dict(before={}, after={}),
+                                           max_acknowledgement_gap_seconds=2.28)
         result = root/(family+'-'+name)/('replicated-'+family+'.json')
         result.parent.mkdir(parents=True, exist_ok=True)
         result.write_text(json.dumps(exposure))
@@ -105,8 +106,12 @@ class ReplicatedResultsTest(unittest.TestCase):
             # precondition as inconclusive, then only this typed outcome can retry.
             cases, validator = self.collect(root, [id])
             self.assertEqual('inconclusive', cases[0]['status'])
+            self.assertEqual(original['precondition'], cases[0]['precondition'])
             self.assertEqual(dict(require_fault=False), validator.call_args.kwargs)
             for change in (dict(precondition={}), dict(precondition=dict(status='passed', healthy={})),
+                           dict(precondition=dict(status='inconclusive', healthy=dict(before={}, after={}))),
+                           *(dict(precondition=dict(original['precondition'], max_acknowledgement_gap_seconds=gap))
+                             for gap in (None, '2.28', True, -1, float('inf'), float('nan'))),
                            dict(events=[{}]), dict(restarts=1), dict(worker_measurements=[]),
                            dict(worker_measurements=[dict(exit_code=1)]), dict(exact_lifetime_work_caps_qualified=False)):
                 result.write_text(json.dumps(dict(original, **change)))

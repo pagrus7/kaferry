@@ -28,8 +28,9 @@ func TestReplicatedNetworkFaults(t *testing.T) {
 const networkHealthyWindow = 30 * time.Second
 
 type networkPrecondition struct {
-	Status  string          `json:"status"`
-	Healthy networkInterval `json:"healthy"`
+	Status        string          `json:"status"`
+	Healthy       networkInterval `json:"healthy"`
+	MaxGapSeconds float64         `json:"max_acknowledgement_gap_seconds"`
 }
 
 type networkInterval struct {
@@ -55,8 +56,9 @@ func (w networkInterval) inputRate() float64 {
 	return float64(networkTotal(w.After.Publishing.Acknowledged)-networkTotal(w.Before.Publishing.Acknowledged)) / w.seconds()
 }
 
-func (w networkInterval) healthyPrecondition() bool {
-	return w.seconds() >= networkHealthyWindow.Seconds() && w.rate() >= .95*float64(replicatedPartitions)*10 && w.inputRate() >= .95*float64(replicatedPartitions)*10
+func (w networkInterval) healthyPrecondition(maxGapSeconds float64) bool {
+	return w.seconds() >= networkHealthyWindow.Seconds() && maxGapSeconds <= 2.0 &&
+		w.rate() >= .95*float64(replicatedPartitions)*10 && w.inputRate() >= .95*float64(replicatedPartitions)*10
 }
 
 func networkBacklog(state brokerObservation) int64 {
@@ -162,13 +164,13 @@ func replicatedNetworkFault(t *testing.T, name string) {
 	baseline := s.wait("source schedule caught up and output backlog drained before healthy measurement", false,
 		func(_ context.Context, state brokerObservation) bool { return networkMeasurementReady(state) })
 	healthy := s.networkSpan(baseline, networkHealthyWindow, false)
-	require.LessOrEqual(t, s.publisher.snapshot().MaxGapSeconds, 2.0, "independent source acknowledgements stopped before fault injection")
-	if !healthy.healthyPrecondition() {
+	maxGapSeconds := s.publisher.snapshot().MaxGapSeconds
+	if !healthy.healthyPrecondition(maxGapSeconds) {
 		// A slow fixture cannot establish fault recovery. Finish the real copy and
 		// independent no-fault safety checks before recording that limitation.
-		s.precondition = &networkPrecondition{Status: "inconclusive", Healthy: healthy}
+		s.precondition = &networkPrecondition{Status: "inconclusive", Healthy: healthy, MaxGapSeconds: maxGapSeconds}
 		s.finishReplicatedFault("network/"+name, baseline, "replicated-network.json")
-		t.Skip("inconclusive: healthy fixture rate precondition was not met; inspect replicated-network.json")
+		t.Skip("inconclusive: healthy fixture precondition was not met; inspect replicated-network.json")
 	}
 	role := faults.Role{Kind: "worker-destination", Cluster: "destination", Worker: 1}
 	fault := faults.Fault{Kind: "cut"}

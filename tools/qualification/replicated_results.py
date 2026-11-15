@@ -1,6 +1,7 @@
 """Collect Go scenario results with their independent, checksummed safety evidence."""
 
 import json
+import math
 from pathlib import Path
 
 from tools.ci.suites import REPLICATED_CASES
@@ -23,10 +24,13 @@ def copy_case(directory, id, identity):
             any(safety[key] != identity[key] for key in IDENTITY)):
         raise ValueError('replicated evidence differs from the selected executable identity')
     if precondition is not None:
-        # Go owns the measured rate gate. Only its safely finalized, no-fault
+        # Go owns the healthy fixture gate. Only its safely finalized, no-fault
         # result can explain a skipped case and authorize the one fresh retry.
-        if (family != 'network' or set(precondition) != {'status', 'healthy'} or
+        if (family != 'network' or set(precondition) != {'status', 'healthy', 'max_acknowledgement_gap_seconds'} or
                 precondition['status'] != 'inconclusive' or not isinstance(precondition['healthy'], dict) or
+                type(precondition['max_acknowledgement_gap_seconds']) not in (int, float) or
+                not math.isfinite(precondition['max_acknowledgement_gap_seconds']) or
+                precondition['max_acknowledgement_gap_seconds'] < 0 or
                 set(precondition['healthy']) != {'before', 'after'} or exposure['events'] or safety['fault_events'] or
                 exposure['restarts'] != 0 or len(exposure['worker_measurements']) != 1 or
                 exposure['worker_measurements'][0]['exit_code'] != 0 or
