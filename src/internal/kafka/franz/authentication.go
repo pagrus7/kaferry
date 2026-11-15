@@ -111,7 +111,10 @@ func authenticationError(mechanism string, cause error) error {
 			return fmt.Errorf("kafka %s authentication failed: %w", mechanism, err)
 		}
 	}
-	return &authenticationFailure{mechanism: mechanism, cause: cause}
+	if brokerAuthenticationFailed(cause) {
+		return &authenticationFailure{mechanism: mechanism, cause: cause}
+	}
+	return fmt.Errorf("kafka %s authentication failed", mechanism)
 }
 
 type authenticationFailure struct {
