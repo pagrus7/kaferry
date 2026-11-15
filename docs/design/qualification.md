@@ -144,7 +144,7 @@ Zombie fencing requires correlated broker request/response observations for ever
 
 The zombie peer’s accepted saves must cover every transferred partition and have broker receipt times after the completed transfer observation. A request received before transfer cannot open the heal gate merely because its response completes afterward.
 
-Replicated fault runs retain diagnostic evidence even without a completed audit. `replicated-audit.growth.jsonl` records captured bytes by client and request type every ten seconds and at capture, with elapsed time, unclassified bytes and explicit truncation/errors. The 16 MiB capture ceiling and qualification checks still apply. These bounded prefixes do not establish complete traffic beyond the ceiling.
+Broker request audit capture is limited to 64 MiB per broker. Exceeding the ceiling fails the case.
 
 Worker-kill and scale cases permit no restart. The coordinator case permits one restart per affected route after broker API/ISR recovery, using the same executable, SQL, group, configuration and route. Its eligible exit 1 must occur between physical kill and observed recovery. Worker 1 may carry only the recorded hold/resume signals; its peer may carry no driver stop intent. Lifecycle evidence binds PID, executable, raw log and sole OS wait; prior cancellation or unmatched signals fail.
 
@@ -167,7 +167,7 @@ Every lifetime requires sampled RSS at most 512 MiB and observed current work wi
 
 Hosted checks run the five broker faults, zombie fencing, worker kill, worker scaling and two destination outages: ten fault cases on separate runners. Four cases require local exact-candidate qualification alongside 24-hour endurance: `network/latency`, `network/bandwidth`, `network/slow-close` and `ownership/coordinator-kill-rebalance`. Run each with its `--case` and a fresh output directory. Missing local passes require explicit release-note exclusions. Selecting all fourteen cases gives 4,907s Go allowance plus 60s outer allowance; individual selection uses that case's budget. These local cases have no separate hosted scheduled tier. One-host clusters do not establish machine or zone-failure behavior.
 
-Every Monday at 07:23 UTC, `replicated-lab.yml` runs `ownership/worker-scale`, `ownership/zombie-worker` and `network/destination-leaders-outage` on main with fresh executions. Case evidence retains the audit-growth trace and remains available for 14 days. To run the same selection manually, use `gh workflow run replicated-lab.yml --ref main -f weekly=true`; ordinary dispatches retain the full hosted selection.
+Every Monday at 07:23 UTC, `replicated-lab.yml` runs `ownership/worker-scale`, `ownership/zombie-worker` and `network/destination-leaders-outage` on main with fresh executions. Case evidence remains available for 14 days. To run the same selection manually, use `gh workflow run replicated-lab.yml --ref main -f weekly=true`; ordinary dispatches retain the full hosted selection.
 
 ## Recovery and bounded load
 
