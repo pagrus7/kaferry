@@ -13,11 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type readinessReadResult struct {
-	data []byte
-	err  error
-}
-
 func readinessTargets() []faults.Target {
 	return []faults.Target{{Broker: 1, Container: "one"}, {Broker: 2, Container: "two"}, {Broker: 3, Container: "three"}}
 }
@@ -28,32 +23,6 @@ func readinessRows() [][]byte {
 		rows = append(rows, fmt.Appendf(nil, `Completed request:{"requestHeader":{"clientId":"worker","requestApiKeyName":"OFFSET_COMMIT"},"request":{"groupId":"group","memberId":"member","generationIdOrMemberEpoch":2,"topics":[{"partitions":[{"partitionIndex":%d,"committedOffset":6}]}]},"response":{"topics":[{"partitions":[{"partitionIndex":%d,"errorCode":0}]}]}}`+"\n", partition, partition))
 	}
 	return rows
-}
-
-func awaitReadinessStarts(ctx context.Context, t *testing.T, started <-chan string) {
-	t.Helper()
-	seen := make(map[string]bool)
-	for range readinessTargets() {
-		select {
-		case container := <-started:
-			require.False(t, seen[container], "one read per broker, without retries")
-			seen[container] = true
-		case <-ctx.Done():
-			t.Fatal("all broker reads must start before any is released: ", ctx.Err())
-		}
-	}
-	require.Len(t, seen, 3)
-}
-
-func awaitReadinessResult(ctx context.Context, t *testing.T, result <-chan readinessReadResult) readinessReadResult {
-	t.Helper()
-	select {
-	case got := <-result:
-		return got
-	case <-ctx.Done():
-		t.Fatal("broker reads did not join within the polling bound: ", ctx.Err())
-		return readinessReadResult{}
-	}
 }
 
 func timedReadinessRow(row []byte, completed time.Time, total string) []byte {

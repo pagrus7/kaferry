@@ -1,3 +1,5 @@
+//go:build integration && fault
+
 package compat
 
 import (

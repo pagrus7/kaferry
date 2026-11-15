@@ -183,6 +183,4 @@ func brokerEvidenceProof(side string) *brokerFailureProof {
 	return &brokerFailureProof{Window: 0, Role: faults.Role{Kind: "leader", Cluster: side}, Kind: "kill", Start: time.Unix(20, 0).UTC(), Heal: time.Unix(30, 0).UTC(), ObservedExit: time.Unix(25, 0).UTC(), Before: before}
 }
 
-const brokerWorkProgress = `{"msg":"progress","submitted":9,"confirmed":7,"pending_entries":2,"pending_estimated_bytes":4096}` + "\n"
-
 const brokerWorkSummary = `{"msg":"copy summary","submitted":9,"confirmed":7,"peak_uncommitted_records":3,"peak_uncommitted_bytes":8192}` + "\n"

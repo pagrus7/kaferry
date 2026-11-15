@@ -179,14 +179,6 @@ func (p *cliProcess) currentLogs() (string, error) {
 	}
 	return string(data), nil
 }
-func currentCopyProgress(process *cliProcess) (copySummary, bool, error) {
-	logs, err := process.currentLogs()
-	if err != nil {
-		return copySummary{}, false, err
-	}
-	return latestCopyProgress(logs)
-}
-
 func latestCopyProgress(logs string) (copySummary, bool, error) {
 	var result copySummary
 	found := false

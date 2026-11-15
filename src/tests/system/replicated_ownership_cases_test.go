@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -462,55 +461,6 @@ func (s *ownershipCase) acceptedGenerations(ctx context.Context, members map[int
 		generations[member.ClientID] = observed
 	}
 	return generations
-}
-
-func ownershipGenerationMembers() map[int]ownershipMember {
-	members := make(map[int]ownershipMember)
-	for route := 1; route <= 3; route++ {
-		member := ownershipMember{ClientID: fmt.Sprintf("worker%d", route), MemberID: fmt.Sprintf("member%d", route)}
-		for partition := (route - 1) * 8; partition < route*8; partition++ {
-			member.Partitions = append(member.Partitions, int32(partition))
-		}
-		members[route] = member
-	}
-	return members
-}
-
-func ownershipGenerationRows(members map[int]ownershipMember, missing int, generation int32) string {
-	var proof strings.Builder
-	rows := readinessRows()
-	for route, member := range members {
-		rewrite := strings.NewReplacer(`"worker"`, fmt.Sprintf(`"%s"`, member.ClientID), `"member"`, fmt.Sprintf(`"%s"`, member.MemberID),
-			`"generationId":2`, fmt.Sprintf(`"generationId":%d`, generation), `"generationIdOrMemberEpoch":2`, fmt.Sprintf(`"generationIdOrMemberEpoch":%d`, generation))
-		proof.WriteString(rewrite.Replace(string(rows[0])))
-		for index, partition := range member.Partitions {
-			if route != missing || index != 0 {
-				proof.WriteString(strings.ReplaceAll(rewrite.Replace(string(rows[1])), `"partitionIndex":0`, fmt.Sprintf(`"partitionIndex":%d`, partition)))
-			}
-		}
-	}
-	return proof.String()
-}
-
-func ownershipGenerationReader(query context.Context, proof string) (func(context.Context, ...string) ([]byte, error), map[string]int) {
-	var lock sync.Mutex
-	calls := make(map[string]int)
-	return func(ctx context.Context, args ...string) ([]byte, error) {
-		if ctx != query || len(args) != 5 || args[0] != "exec" {
-			return nil, fmt.Errorf("audit did not share its existing query context")
-		}
-		lock.Lock()
-		calls[args[1]]++
-		repeated := calls[args[1]] != 1
-		lock.Unlock()
-		if repeated {
-			return nil, fmt.Errorf("broker audit reread for another member")
-		}
-		if args[1] == "three" {
-			return []byte(proof), nil
-		}
-		return []byte("KAFERRY_AUDIT_FILE kafka-request.log\n"), nil
-	}, calls
 }
 
 func ownershipCaseMinimum(before []int64) []int64 {
