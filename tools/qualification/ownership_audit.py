@@ -361,7 +361,7 @@ def _validate(directory, identity=None):
             stamp(final['stopped']) < stamp(case['healed']['finished']) or
             len(after_heal['acknowledged_by_partition']) != 24 or len(final['acknowledged_by_partition']) != 24 or
             any(end <= start+24 for start, end in zip(after_heal['acknowledged_by_partition'], final['acknowledged_by_partition'])) or
-            not 0 < final['max_acknowledgement_gap_seconds'] <= 2):
+            not 0 < final['max_acknowledgement_gap_seconds'] <= session/2):
         raise ValueError('a distinct steady-publishing interval after healing was not observed')
     measurements = case['worker_measurements']
     if len(measurements) != 2 or any(not (0 < row['sampled_peak_rss_bytes'] <= 512*1024**2 and

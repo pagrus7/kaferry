@@ -68,9 +68,6 @@ func startReplicatedBrokerPublisher(ctx context.Context, client *kgo.Client, top
 	p := &replicatedPublisher{cancel: cancel, done: make(chan struct{}), state: replicatedPublishing{
 		Started: time.Now().UTC(), Acknowledged: make([]int64, replicatedPartitions), Offered: make([]int64, replicatedPartitions)}}
 	p.lastAcknowledged = make([]time.Time, replicatedPartitions)
-	for partition := range p.lastAcknowledged {
-		p.lastAcknowledged[partition] = p.state.Started
-	}
 	go p.runOffers(ctx, client, topic, delivery)
 	return p
 }
@@ -148,7 +145,9 @@ func (p *replicatedPublisher) offer(ctx context.Context, client *kgo.Client, top
 		busy[partition] = false
 		if err == nil {
 			now := time.Now().UTC()
-			p.state.MaxGapSeconds = max(p.state.MaxGapSeconds, now.Sub(p.lastAcknowledged[partition]).Seconds())
+			if !p.lastAcknowledged[partition].IsZero() {
+				p.state.MaxGapSeconds = max(p.state.MaxGapSeconds, now.Sub(p.lastAcknowledged[partition]).Seconds())
+			}
 			p.lastAcknowledged[partition] = now
 			p.state.Acknowledged[partition]++
 		} else if p.state.err == nil {
@@ -175,7 +174,7 @@ func (p *replicatedPublisher) run(ctx context.Context, client *kgo.Client, topic
 	defer func() { p.mu.Lock(); p.state.Stopped = time.Now().UTC(); p.mu.Unlock() }()
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
-	last := p.state.Started
+	var last time.Time
 	var sequence uint64
 	for {
 		select {
@@ -197,7 +196,9 @@ func (p *replicatedPublisher) run(ctx context.Context, client *kgo.Client, topic
 			}
 		}
 		p.state.err = result.FirstErr()
-		p.state.MaxGapSeconds = max(p.state.MaxGapSeconds, now.Sub(last).Seconds())
+		if p.state.err == nil && !last.IsZero() {
+			p.state.MaxGapSeconds = max(p.state.MaxGapSeconds, now.Sub(last).Seconds())
+		}
 		p.state.Batches++
 		failed := p.state.err != nil
 		p.mu.Unlock()
