@@ -20,7 +20,10 @@ import (
 	"github.com/pagrus7/kaferry/src/internal/config"
 	core "github.com/pagrus7/kaferry/src/internal/copy"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/oauth"
 )
@@ -122,6 +125,7 @@ func TestOAuthIssuerFailuresAndCancellationStayRedacted(t *testing.T) {
 	})
 }
 
+//kaferry:guarantee security
 func TestOAuthTokenFileReloadAndChallengeRedaction(t *testing.T) {
 	// Given a mounted bearer token file that an external credential agent can replace.
 	path := writeFixture(t, t.TempDir(), "private-token", []byte("first-token\n"))
@@ -132,8 +136,21 @@ func TestOAuthTokenFileReloadAndChallengeRedaction(t *testing.T) {
 		session, first, err := mechanism.Authenticate(t.Context(), "host:9093")
 		require.NoError(t, err)
 		require.Contains(t, string(first), "auth=Bearer "+token+"\x01")
-		_, _, err = session.Challenge([]byte("private-token-echo"))
+		// When the broker sends an error, then acknowledge it without accepting the login or echoing secrets.
+		challenge := []byte(fmt.Sprintf(`{"status":"invalid_token","detail":%q}`, token+" "+path))
+		done, reply, err := session.Challenge(challenge)
+		require.NoError(t, err)
+		require.False(t, done)
+		require.Equal(t, []byte{0x01}, reply)
+		require.NotContains(t, string(reply), string(challenge))
+		require.NotContains(t, string(reply), token)
+		require.NotContains(t, string(reply), path)
+		// A peer that continues instead of failing must still get a redacted failure.
+		done, reply, err = session.Challenge(nil)
 		require.EqualError(t, err, "kafka OAUTHBEARER authentication failed")
+		require.False(t, done)
+		require.Nil(t, reply)
+		requireOAuthBrokerRejectionRedacted(t, mechanism, challenge)
 	}
 	// When rotation leaves an empty, malformed or missing file, then fail without exposing paths or tokens.
 	for _, contents := range []string{"", "private-token\x01injected", "private token"} {
@@ -144,6 +161,40 @@ func TestOAuthTokenFileReloadAndChallengeRedaction(t *testing.T) {
 	require.NoError(t, os.Remove(path))
 	_, _, err := mechanism.Authenticate(t.Context(), "host:9093")
 	require.EqualError(t, err, "kafka OAUTHBEARER authentication failed")
+}
+
+func requireOAuthBrokerRejectionRedacted(t *testing.T, mechanism sasl.Mechanism, challenge []byte) {
+	t.Helper()
+	// Given a broker that sends a private OAuth challenge and then rejects the acknowledgment.
+	cluster := kfake.MustCluster(kfake.NumBrokers(1))
+	defer cluster.Close()
+	cluster.ControlKey(int16(kmsg.SASLHandshake), func(req kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
+		response := req.ResponseKind().(*kmsg.SASLHandshakeResponse)
+		response.SupportedMechanisms = []string{"OAUTHBEARER"}
+		return response, nil, true
+	})
+	var rejected atomic.Int32
+	cluster.ControlKey(int16(kmsg.SASLAuthenticate), func(req kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
+		response := req.ResponseKind().(*kmsg.SASLAuthenticateResponse)
+		if string(req.(*kmsg.SASLAuthenticateRequest).SASLAuthBytes) == "\x01" {
+			rejected.Add(1)
+			message := string(challenge)
+			response.ErrorCode, response.ErrorMessage = kerr.SaslAuthenticationFailed.Code, &message
+		} else {
+			response.SASLAuthBytes = challenge
+		}
+		return response, nil, true
+	})
+	client, err := NewClients().Metadata(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.SASL(mechanism))
+	require.NoError(t, err)
+	defer client.Close()
+	// When the broker rejects the login, then return only fixed text while preserving classification.
+	_, err = client.Request(componentContext(t), kmsg.NewPtrMetadataRequest())
+	require.EqualError(t, err, "kafka OAUTHBEARER authentication failed")
+	require.ErrorIs(t, err, kerr.SaslAuthenticationFailed)
+	require.Positive(t, rejected.Load(), "the broker must receive 0x01 and send its final rejection")
 }
 
 func TestAWSIAMUsesDefaultCredentialsAndSignsBrokerSessions(t *testing.T) {
