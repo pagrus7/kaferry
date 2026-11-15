@@ -11,12 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/jcmturner/gokrb5/v8/keytab"
 	"github.com/pagrus7/kaferry/src/internal/config"
+	core "github.com/pagrus7/kaferry/src/internal/copy"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl"
@@ -107,6 +109,17 @@ func TestOAuthIssuerFailuresAndCancellationStayRedacted(t *testing.T) {
 			require.ErrorIs(t, err, context.Canceled)
 		})
 	}
+	t.Run("provider connection refusal stays fatal", func(t *testing.T) {
+		// Given a credential provider whose private diagnostic wraps a refused connection.
+		mechanism := safeMechanism{Mechanism: oauth.Oauth(func(context.Context) (oauth.Auth, error) {
+			return oauth.Auth{}, fmt.Errorf("private-token /run/secrets/private-token: %w", syscall.ECONNREFUSED)
+		})}
+		// When authentication fails, then redact the cause without making the source retry it.
+		_, _, err := mechanism.Authenticate(t.Context(), "host:9093")
+		require.EqualError(t, err, "kafka OAUTHBEARER authentication failed")
+		require.NotErrorIs(t, err, syscall.ECONNREFUSED)
+		require.NotErrorIs(t, transientFailure(err), core.ErrRecoverable)
+	})
 }
 
 func TestOAuthTokenFileReloadAndChallengeRedaction(t *testing.T) {

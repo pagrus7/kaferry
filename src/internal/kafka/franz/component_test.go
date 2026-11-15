@@ -112,7 +112,7 @@ func TestConsumerConstructionDoesNotJoinBeforeStartAndCanClose(t *testing.T) {
 	require.NoError(t, err)
 	source := input.(*Source)
 	require.NotEqual(t, "", source.topicID, "source constructed without topic identity")
-	client := source.client.(*kgo.Client)
+	client := source.client.(protocolClient)
 	closed := false
 	defer func() {
 		if !closed {
@@ -254,7 +254,7 @@ func TestKafkaSinkPreservesPartitionsUsingTheRealProducer(t *testing.T) {
 	output, err := connection.Sink(t.Context(), config.Defaults("").Worker)
 	require.NoError(t, err)
 	defer output.Close()
-	actual := output.(*Sink).client.(*kgo.Client).OptValue(kgo.RecordPartitioner).(kgo.Partitioner).ForTopic("output")
+	actual := output.(*Sink).client.(protocolClient).OptValue(kgo.RecordPartitioner).(kgo.Partitioner).ForTopic("output")
 	require.True(t, actual.RequiresConsistency(&kgo.Record{}), "leaderless partitions must not renumber the layout")
 	// When submitting null, empty and binary keys, then all retain the original partition 2.
 	for _, key := range [][]byte{nil, {}, {0, 255}} {

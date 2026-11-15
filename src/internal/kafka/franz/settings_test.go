@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,11 @@ import (
 	"github.com/pagrus7/kaferry/src/internal/plan"
 	"github.com/pagrus7/kaferry/src/internal/sql"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/sasl/plain"
 )
 
 type noEnvironment struct{}
@@ -145,6 +150,56 @@ func TestSettingsFormattingNeverRevealsCredentials(t *testing.T) {
 			t.Fatal("credentials printed", text)
 		}
 	}
+	t.Run("broker rejections", testBrokerRejectionRedaction)
+}
+
+func testBrokerRejectionRedaction(t *testing.T) {
+	// Given a broker whose final authentication rejection contains a token and a file path.
+	message := "private-bearer-token /run/secrets/private-token"
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input"))
+	defer cluster.Close()
+	cluster.ControlKey(int16(kmsg.SASLHandshake), func(req kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
+		response := req.ResponseKind().(*kmsg.SASLHandshakeResponse)
+		response.SupportedMechanisms = []string{"PLAIN"}
+		return response, nil, true
+	})
+	cluster.ControlKey(int16(kmsg.SASLAuthenticate), func(req kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
+		response := req.ResponseKind().(*kmsg.SASLAuthenticateResponse)
+		response.ErrorCode, response.ErrorMessage = kerr.SaslAuthenticationFailed.Code, &message
+		return response, nil, true
+	})
+	for _, operation := range []string{"request", "request to broker", "commit"} {
+		t.Run(operation, func(t *testing.T) {
+			options := []kgo.Opt{kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.SASL(plain.Auth{User: "user", Pass: "password"}.AsMechanism()), kgo.ConsumerGroup("group")}
+			client, err := newProtocolClient(options...)
+			require.NoError(t, err)
+			defer client.Close()
+			ctx := componentContext(t)
+			// When the client reports the rejection, then preserve classification and print only the mechanism.
+			switch operation {
+			case "request":
+				_, err = client.Request(ctx, kmsg.NewPtrMetadataRequest())
+			case "request to broker":
+				_, err = client.RequestTo(ctx, math.MinInt32, kmsg.NewPtrMetadataRequest())
+			case "commit":
+				client.CommitOffsetsSync(ctx, map[string]map[int32]kgo.EpochOffset{"input": {0: {Epoch: -1, Offset: 1}}}, func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, failure error) {
+					err = failure
+				})
+			}
+			require.EqualError(t, err, "kafka PLAIN authentication failed")
+			require.ErrorIs(t, err, kerr.SaslAuthenticationFailed)
+			require.NotContains(t, err.Error(), "private-bearer-token")
+			require.NotContains(t, err.Error(), "/run/secrets/private-token")
+		})
+	}
+	// A peer that continues the OAuth error exchange must retain the same classification and redaction.
+	cause := fmt.Errorf("OAUTHBEARER authentication failed: %s", message)
+	err := authenticationError("OAUTHBEARER", cause)
+	require.EqualError(t, err, "kafka OAUTHBEARER authentication failed")
+	require.ErrorIs(t, err, cause)
+	require.ErrorIs(t, err, kerr.SaslAuthenticationFailed)
 }
 
 func TestValidationEnforcesExplicitMessageAndWorkerQueueBounds(t *testing.T) {
