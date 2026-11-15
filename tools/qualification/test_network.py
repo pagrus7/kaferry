@@ -1,6 +1,7 @@
 """Non-broker checks for replicated network isolation and startup failures."""
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -66,7 +67,7 @@ class NetworkTest(unittest.TestCase):
         # Given the selected project's running proxy, inspect its applied Docker settings.
         expected = dict(sysctls={network.RESERVATION: network.reserved_ports()}, network_mode='isolated_default')
         with patch.dict('os.environ', KAFERRY_FIXTURE_PROJECT='isolated'), \
-             patch.object(network.subprocess, 'check_output', side_effect=['owned-id\n', json.dumps(expected)]) as query:
+             patch('tools.qualification.network.subprocess.check_output', side_effect=['owned-id\n', json.dumps(expected)]) as query:
             observed = network.reservation()
         self.assertEqual('isolated', observed['project'])
         self.assertIn('label=com.docker.compose.project=isolated', query.call_args_list[0].args[0])
@@ -74,11 +75,11 @@ class NetworkTest(unittest.TestCase):
         # then fail before any route is populated or a reservation receipt is written.
         for bad in (dict(expected, sysctls=None), dict(expected, sysctls={network.RESERVATION: '8474'}),
                     dict(expected, network_mode='host'), dict(expected, network_mode='container:other')):
-            with self.subTest(bad=bad), patch.object(network.subprocess, 'check_output', side_effect=['owned-id\n', json.dumps(bad)]):
+            with self.subTest(bad=bad), patch('tools.qualification.network.subprocess.check_output', side_effect=['owned-id\n', json.dumps(bad)]):
                 with self.assertRaisesRegex(ValueError, 'reservation'):
                     network.reservation()
         for ids in ('', 'one\ntwo\n'):
-            with self.subTest(ids=ids), patch.object(network.subprocess, 'check_output', return_value=ids):
+            with self.subTest(ids=ids), patch('tools.qualification.network.subprocess.check_output', return_value=ids):
                 with self.assertRaisesRegex(ValueError, 'one running proxy'):
                     network.reservation()
         with tempfile.TemporaryDirectory() as temporary, patch.object(network, 'reservation', side_effect=ValueError('reservation')), \
@@ -86,6 +87,31 @@ class NetworkTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'reservation'):
                 network.populate(Path(temporary))
             request.assert_not_called()
+
+    def test_reservation_queries_retry_independently_and_report_exhaustion(self):
+        # Given a valid proxy reservation and transient failures in either Docker query.
+        settings = json.dumps(dict(sysctls={network.RESERVATION: network.reserved_ports()}, network_mode='isolated_default'))
+        for name in ('ps', 'inspect'):
+            for failure in (None, subprocess.TimeoutExpired(name, 60),
+                            subprocess.CalledProcessError(7, name, stderr='last daemon failure')):
+                failures = [OSError('first failure'), subprocess.TimeoutExpired(name, 60)]
+                results = ['owned-id\n', settings]
+                index = 0 if name == 'ps' else 1
+                results[index:index+1] = failures + [results[index] if failure is None else failure]
+                with self.subTest(command=name, failure=failure), patch(
+                        'tools.qualification.network.subprocess.check_output', side_effect=results) as query:
+                    # When retried, then preserve admission checks and stop after three failures.
+                    if failure is None:
+                        self.assertEqual('owned-id', network.reservation()['container'])
+                    else:
+                        detail = 'timed out after 60 seconds' if isinstance(failure, subprocess.TimeoutExpired) else 'exited with code 7: last daemon failure'
+                        with self.assertRaisesRegex(ValueError, f'docker {name} .*failed after 3 attempts: {detail}'):
+                            network.reservation()
+                    attempts = [call for call in query.call_args_list if call.args[0][1] == name]
+                    self.assertEqual(3, len(attempts))
+                    self.assertEqual(4 if name == 'inspect' or failure is None else 3, query.call_count)
+                    for call in query.call_args_list:
+                        self.assertEqual(60, call.kwargs['timeout'])
 
     def test_bound_listener_equivalence_still_requires_wildcard_and_exact_port(self):
         # Given a listener reported by the server, accept only equivalent wildcard binds.

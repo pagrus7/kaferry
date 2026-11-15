@@ -424,8 +424,7 @@ def resolve_run(args, receipt):
 
 
 def fixture_images(spec):
-    images = subprocess.check_output(spec.compose + ['images', '--format', 'json'],
-        env=spec.env, cwd=ROOT, text=True, timeout=10)
+    images = network.docker_query(spec.compose + ['images', '--format', 'json'], env=spec.env, cwd=ROOT)
     return validate_fixture_images(images)
 
 
@@ -454,8 +453,9 @@ def broker_fixture(args, spec, receipt, cancelled, *, lease_held=False):
                 replicated_storage(args.output, spec.compose, spec.env, receipt['capacity'], cancelled)
                 logged(spec.compose + ['up', '-d', '--wait', 'toxiproxy'], args.output,
                        'proxy-up', spec.env, timeout=90, cancelled=cancelled)
+                # Allow both Docker query retry budgets, then route configuration.
                 logged([sys.executable, '-m', 'tools.qualification.network', '--output', str(args.output)],
-                       args.output, 'proxy-configure', spec.env, timeout=60, cancelled=cancelled)
+                       args.output, 'proxy-configure', spec.env, timeout=420, cancelled=cancelled)
             if spec.compose and args.suite != 'auth':
                 owns_fixture = True
                 logged(spec.compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output,

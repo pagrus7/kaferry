@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 from urllib.request import Request, urlopen
 
@@ -33,6 +34,19 @@ def client_ports():
                  for listener in LISTENERS[2:] for node in range(1, 4))
 
 
+def docker_query(command, **kwargs):
+    for _ in range(3):
+        try:
+            return subprocess.check_output(command, text=True, stderr=subprocess.PIPE, timeout=60, **kwargs)
+        except subprocess.TimeoutExpired:
+            failure = 'timed out after 60 seconds'
+        except subprocess.CalledProcessError as error:
+            failure = f'exited with code {error.returncode}: ' + (error.stderr or '').strip()[:400]
+        except OSError as error:
+            failure = 'could not execute: ' + str(error)
+    raise ValueError(f'{shlex.join(command)} failed after 3 attempts: {failure}')
+
+
 def reserved_ports():
     ports = {8474}
     ports.update(int(row['listen'].rsplit(':', 1)[1]) for row in routes())
@@ -41,14 +55,13 @@ def reserved_ports():
 
 def reservation():
     project = os.environ.get('KAFERRY_FIXTURE_PROJECT', 'kaferry-replicated')
-    ids = subprocess.check_output(['docker', 'ps', '--quiet', '--no-trunc',
+    ids = docker_query(['docker', 'ps', '--quiet', '--no-trunc',
         '--filter', f'label=com.docker.compose.project={project}',
-        '--filter', 'label=com.docker.compose.service=toxiproxy'], text=True, timeout=10).split()
+        '--filter', 'label=com.docker.compose.service=toxiproxy']).split()
     if len(ids) != 1:
         raise ValueError('replicated reservation requires one running proxy container')
     template = '{"sysctls":{{json .HostConfig.Sysctls}},"network_mode":{{json .HostConfig.NetworkMode}}}'
-    observed = json.loads(subprocess.check_output(
-        ['docker', 'inspect', '--format', template, ids[0]], text=True, timeout=10))
+    observed = json.loads(docker_query(['docker', 'inspect', '--format', template, ids[0]]))
     mode = observed['network_mode']
     if mode == 'host' or mode.startswith('container:') or (observed['sysctls'] or {}).get(RESERVATION) != reserved_ports():
         raise ValueError('replicated proxy container lacks its exact private listener reservation')
