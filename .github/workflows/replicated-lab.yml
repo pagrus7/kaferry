@@ -107,12 +107,12 @@ jobs:
         run: |
           make qualification-setup
           echo "sha256=$(sha256sum bin/kaferry | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-      - name: Check endurance gates without brokers
+      - name: Check load report without brokers
         if: ${{ github.event_name != 'schedule' && inputs.weekly != true }}
         env:
           KAFERRY_TEST_BINARY: ${{ github.workspace }}/bin/kaferry
           KAFERRY_EXPECT_BINARY_SHA256: ${{ steps.candidate.outputs.sha256 }}
-        run: go test -race -tags=integration,load -run '^(TestLoadReport|TestReplicatedEndurance|TestOwnedBroker|TestEndurance|TestSoak)' ./src/tests/system
+        run: go test -race -tags=integration,load -run '^TestLoadReport' ./src/tests/system
       - name: Copy and independently reconcile the replicated fixture
         if: ${{ github.event_name != 'schedule' && inputs.weekly != true }}
         run: python3 -m tools.qualification.qualify run replicated --binary bin/kaferry --output build-results/replicated

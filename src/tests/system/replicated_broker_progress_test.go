@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBrokerRestartRechecksFailureAfterHealthObservation(t *testing.T) {
+func TestHarnessBrokerRestartRechecksFailureAfterHealthObservation(t *testing.T) {
 	for _, scenario := range []struct {
 		name, terminal        string
 		allow, scope, restart bool
@@ -53,7 +53,7 @@ func TestBrokerRestartRechecksFailureAfterHealthObservation(t *testing.T) {
 	}
 }
 
-func TestBrokerRestartRequiresCurrentLifetimeInsideRecoveryWindow(t *testing.T) {
+func TestHarnessBrokerRestartRequiresCurrentLifetimeInsideRecoveryWindow(t *testing.T) {
 	// Given an actual healthy child and recorded broker fault, when it exits,
 	// then restart belongs only to this lifetime and the configured recovery.
 	process := brokerLogChild(t, "save progress: transport unavailable")
@@ -76,7 +76,7 @@ func TestBrokerRestartRequiresCurrentLifetimeInsideRecoveryWindow(t *testing.T) 
 	require.Error(t, err, "configured recovery cannot be extended by a late exit")
 }
 
-func TestNetworkOutageRestartRequiresFirstWorkerRSSAndActiveCut(t *testing.T) {
+func TestHarnessNetworkOutageRestartRequiresFirstWorkerRSSAndActiveCut(t *testing.T) {
 	// Given the healthy first worker under a recorded destination route cut.
 	process := brokerLogChild(t, "save progress: changed connection diagnostic")
 	s := brokerFaultChildCopy(t, process)

@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions(t *testing.T) {
+func TestHarnessBrokerExitWitnessRetainsUnsupportedAndIntentionalExitsBeforeAssertions(t *testing.T) {
 	t.Run("original cancellation contract", brokerCancellationWitness)
 	for _, terminal := range []string{
 		"shutdown timed out while saving progress; exiting without further cleanup",

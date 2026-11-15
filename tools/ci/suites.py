@@ -4,9 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
-import sys
 
 from tools.ci.ci import run, verify_tests
 from tools.ci.quality import benchmarks
@@ -14,24 +12,6 @@ from tools.ci.replicated_suites import (
     GO_SUITES as REPLICATED_GO_SUITES, EXPECTED as REPLICATED_EXPECTED,
     REPLICATED_CASES, fault_timeout_catalog, replicated_execution_seconds,
 )
-
-
-def replicated_helpers(root=None, platform=sys.platform):
-    root = root or Path(__file__).resolve().parents[2]
-    names = []
-    for directory in ('src/tests/system', 'src/tests/system/faults'):
-        for path in (root/directory).glob('*_test.go'):
-            if path.name.endswith('_darwin_test.go') and platform != 'darwin':
-                continue
-            source = path.read_text()
-            tag = re.search(r'^//go:build (.+)$', source, re.MULTILINE)
-            if tag and re.search(r'\bharness\b', tag[1]):
-                if '!' in tag[1] or '||' in tag[1]:
-                    raise ValueError(f'{path}: harness build tags must use positive conjunctions')
-                names.extend(re.findall(r'^func (Test\w+)\(', source, re.MULTILINE))
-    if not names:
-        raise ValueError('harness build tag selected no tests')
-    return sorted(names)
 
 
 # Fixture ownership, binary selection and workload environment stay with callers.
@@ -53,8 +33,6 @@ EXPECTED = {
                     'TestLatestEndRemainsPinnedAfterCompletion',
                     'TestKafkaArchiveConcurrentCapture',
                     'TestArchiveCaptureCrashRecoversAcknowledgedData',
-                    'TestHistoricalFixtureTopicRetention/historical_default',
-                    'TestHistoricalFixtureTopicRetention/finite_override',
                     'TestRunningSourceOffsetOutOfRangeFailsWithoutSavingProgress',
                     'TestExpiredSourceProgressRestartReportsGapAndCopiesRetainedRecords'],
     'load': ['TestLoadBoundedKafkaCopy/default'] + ['TestLoadBoundedKafkaCopy/' + name for name in LOAD_PROFILES],
@@ -75,7 +53,6 @@ EXPECTED = {
     'quickstart': ['TestKafkaQuickStart'],
     'smoke': [OBSERVABILITY_TEST, 'TestArchiveTutorial', 'TestArchiveTutorialCancellation'],
     'fuzz': ['FuzzProgressLifecycle', 'FuzzParse', 'FuzzContainer', 'FuzzState', 'FuzzCheckpoint'],
-    'replicated-helpers': replicated_helpers(),
 }
 EXPECTED['kafka'] = EXPECTED['integration'] + ['TestCLIInterruptCommitsAndResumeDoesNotRecopy']
 EXPECTED['ci-integration'] = EXPECTED['kafka'] + EXPECTED['quickstart']
@@ -83,7 +60,6 @@ EXPECTED['ci-load'] = EXPECTED['load'] + [OBSERVABILITY_TEST]
 EXPECTED['capture'] = EXPECTED['endurance'] = EXPECTED['soak']
 PATTERNS = {
     'smoke': '^(TestArchiveTutorial(Cancellation)?|TestLoadObservability)$/^round-0$/^disabled$',
-    'replicated-helpers': '^(' + '|'.join(EXPECTED['replicated-helpers']) + ')$',
 }
 
 

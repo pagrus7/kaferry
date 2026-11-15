@@ -74,9 +74,9 @@ jobs:
       - name: Compile broker fixtures without CGO
         env:
           CGO_ENABLED: "0"
-        run: go test -run '^$' -tags=integration,load,fault,qualification,migration ./src/tests/system ./src/tests/compatibility
-      - name: Run broker-free replicated helper regressions
-        run: make replicated-helpers
+        run: go test -run '^$' -tags=integration,load,fault,qualification,migration,harness ./src/tests/system ./src/tests/compatibility
+      - name: Run broker-free harness regressions
+        run: make harness
       - run: make build
         env:
           CGO_ENABLED: "0"
@@ -91,7 +91,7 @@ jobs:
       - name: Publish Go coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
-          files: build-results/coverage.out,build-results/replicated-helpers.coverage.out
+          files: build-results/coverage.out
           disable_search: true
           flags: go
           use_oidc: true

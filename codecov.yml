@@ -1,3 +1,5 @@
+ignore:
+  - "src/tests"
 codecov:
   notify:
     after_n_builds: 3

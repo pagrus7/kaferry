@@ -59,7 +59,7 @@ class ReplicatedLabTests(unittest.TestCase):
         # When a weekly run starts, then smoke only prepares the binary, zombie
         # runs separately, and full fixture/endurance execution remains disabled.
         guard = "if: ${{ github.event_name != 'schedule' && inputs.weekly != true }}"
-        for name in ('Check endurance gates without brokers', 'Copy and independently reconcile the replicated fixture',
+        for name in ('Check load report without brokers', 'Copy and independently reconcile the replicated fixture',
                      'Verify fixture teardown'):
             self.assertIn(f'- name: {name}\n        {guard}', self.workflow)
         self.assertIn(f'  endurance:\n    {guard}', self.workflow)
