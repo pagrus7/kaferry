@@ -231,34 +231,30 @@ class OwnershipAuditTest(unittest.TestCase):
         # Given a live old owner through pre-heal peer progress, whose late save
         # receives a fenced-generation response and then exits as documented.
         self.case['processes_alive_after_heal'] = [False, True]
-        self.case['worker_measurements'][0].update(exit_code=1, stopped_at=when(22.5))
-        self.safety['writer_observations'][0]['exit_code'] = 1
         parts = [part for part in range(12) if part not in (5, 8)]
-        self.traffic = [commit(22, 'one', 'old', 2, parts, 30, 22, 2) if row['at'] == 22 else row
-                        for row in self.traffic if row['at'] not in (23, 24)]
+        traffic = [commit(22, 'one', 'old', 2, parts, 30, 22, 2) if row['at'] == 22 else row
+                   for row in self.traffic if row['at'] not in (23, 24)]
         self.case['healed']['members'] = [member('two', 'peer', list(range(24)))]
-        # When validated, then the independently observed rejection, rather than
-        # continued in-process recovery, is the positive fencing evidence.
-        proof = self.validate()['ownership_fencing']
-        self.assertEqual('stale-generation-rejected', proof['fencing_mode'])
-        self.assertEqual(1, proof['worker1_exit_code'])
-        self.assertEqual(parts, proof['stale_fenced_partitions'])
-        self.assertEqual([5, 8], proof['stale_unattempted_partitions'])
-        # A clean exit still needs full rejection coverage or a legitimate rejoin.
-        self.case['worker_measurements'][0]['exit_code'] = 0
-        self.safety['writer_observations'][0]['exit_code'] = 0
-        with self.assertRaisesRegex(ValueError, 'traffic absence alone'):
-            self.validate()
-        self.case['worker_measurements'][0]['exit_code'] = 1
-        self.safety['writer_observations'][0]['exit_code'] = 1
-        # An accepted stale save on a previously unattempted partition still fails.
-        self.traffic.append(commit(22.25, 'one', 'old', 2, [5], 30, 0, 99))
-        with self.assertRaisesRegex(ValueError, 'stale generation committed'):
-            self.validate()
-        self.traffic.pop()
-        self.case['worker_measurements'][0]['stopped_at'] = when(21.5)
-        with self.assertRaisesRegex(ValueError, 'rejection before exit'):
-            self.validate()
+        for label, exit_code, stopped_at, accepted_stale, error in (
+                ('partial rejection before fatal exit', 1, 22.5, False, None),
+                ('clean exit needs full rejection or rejoin', 0, 22.5, False, 'traffic absence alone'),
+                ('accepted stale save on unattempted partition', 1, 22.5, True, 'stale generation committed'),
+                ('rejection after exit', 1, 21.5, False, 'rejection before exit')):
+            with self.subTest(case=label):
+                self.case['worker_measurements'][0].update(exit_code=exit_code, stopped_at=when(stopped_at))
+                self.safety['writer_observations'][0]['exit_code'] = exit_code
+                self.traffic = traffic + ([commit(22.25, 'one', 'old', 2, [5], 30, 0, 99)] if accepted_stale else [])
+                # When validated, then only rejection before a fatal exit qualifies;
+                # an accepted stale save always fails, including on omitted partitions.
+                if error:
+                    with self.assertRaisesRegex(ValueError, error):
+                        self.validate()
+                else:
+                    proof = self.validate()['ownership_fencing']
+                    self.assertEqual('stale-generation-rejected', proof['fencing_mode'])
+                    self.assertEqual(1, proof['worker1_exit_code'])
+                    self.assertEqual(parts, proof['stale_fenced_partitions'])
+                    self.assertEqual([5, 8], proof['stale_unattempted_partitions'])
 
     def test_rejoin_without_new_generation_progress_cannot_replace_fencing(self):
         # Given a successful rejoin without advancing the pre-heal peer prefix.
