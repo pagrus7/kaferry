@@ -47,7 +47,7 @@ SQL syntax and validation errors share `sql.Diagnostic`, which carries a source 
 
 ## Starting a component change
 
-Run `go test ./src/tests/guarantees -v` to list each guarantee in the design references with the tests that prove it. Start from those tests and follow callers and adapters when changing ownership, ordering, errors or persisted identity. Review the full patch; these entry points guide investigation, not review exclusions.
+Run `go test ./src/tests/guarantees -v` to list each documented guarantee with the tests that prove it. Start from those tests and follow callers and adapters when changing ownership, ordering, errors or persisted identity. Review the full patch; these entry points guide investigation, not review exclusions.
 
 ## Ownership
 
