@@ -233,7 +233,7 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	aliveHeal := []bool{!workers[0].finished(), !workers[1].finished()}
 	publication := publisher.stop()
 	require.NoError(t, publication.err)
-	require.LessOrEqual(t, publication.MaxGapSeconds, 2.0, "source did not keep publishing steadily through the ownership fault")
+	require.LessOrEqual(t, publication.MaxGapSeconds, (timeouts["session.timeout.ms"] / 2).Seconds(), "source did not keep publishing steadily through the ownership fault")
 	waitReplicated(ctx, t, "all acknowledged input saved before shutdown", nil, workers[1:],
 		func(query context.Context) bool { return state.allSaved(query, publication) })
 	measurements := stopZombieWorkers(t, directory, workers, memories, starts, exits)

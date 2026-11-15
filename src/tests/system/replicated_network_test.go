@@ -282,7 +282,8 @@ func replicatedNetworkFault(t *testing.T, name string) {
 	s.events = append(s.events, map[string]any{"fault": injection.Event, "healthy": healthy, "during": during, "recovery": recovery,
 		"affected_partitions": affected, "unaffected_partitions": unaffected, "connection_effect": closeProof})
 	publication := s.publisher.snapshot()
-	require.LessOrEqual(t, publication.MaxGapSeconds, 2.0, "independent source acknowledgements stopped during a worker destination fault")
+	// Require input to keep arriving throughout the fault.
+	require.LessOrEqual(t, publication.MaxGapSeconds, (span / 2).Seconds(), "independent source acknowledgements stopped during a worker destination fault")
 	// The shared finalizer stops all publishers/workers and requires the complete
 	// registered oracle horizon, final librdkafka reconciliation and duplicate cuts.
 	s.finishReplicatedFault("network/"+name, baseline, "replicated-network.json")

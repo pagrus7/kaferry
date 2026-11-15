@@ -118,7 +118,7 @@ python3 -m tools.qualification.qualify run fault-replicated --case broker/source
 python3 -m tools.qualification.qualify run fault-replicated --case network/destination-outage --binary bin/kaferry --output build-results/destination-outage
 ```
 
-All cases use 24 RF=3 partitions with minimum ISR=2, independent publication and a continuous saved-prefix observer. Publication schedules one record per partition every 100 ms; source acknowledgement/scheduler gaps over two seconds fail. Each offered write must complete successfully before reconciliation. The broker publisher permits safe idempotent retries within its delivery deadline, bounds outstanding writes per partition and drains offered writes when stopping.
+All cases use 24 RF=3 partitions with minimum ISR=2, independent publication and a continuous saved-prefix observer. Publication schedules one record per partition every 100 ms. Gaps in source offers over two seconds fail broker and network cases. Network and zombie cases fail if source acknowledgement gaps exceed half their configured session timeout. Each offered write must complete successfully before reconciliation. The broker publisher permits safe idempotent retries within its delivery deadline, bounds outstanding writes per partition and drains offered writes when stopping.
 
 | Case | Required effect and recovery |
 | --- | --- |
