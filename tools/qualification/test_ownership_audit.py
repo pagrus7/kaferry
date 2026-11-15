@@ -233,14 +233,29 @@ class OwnershipAuditTest(unittest.TestCase):
         self.case['processes_alive_after_heal'] = [False, True]
         self.case['worker_measurements'][0].update(exit_code=1, stopped_at=when(22.5))
         self.safety['writer_observations'][0]['exit_code'] = 1
-        self.traffic = [row for row in self.traffic if row['at'] not in (23, 24)]
+        parts = [part for part in range(12) if part not in (5, 8)]
+        self.traffic = [commit(22, 'one', 'old', 2, parts, 30, 22, 2) if row['at'] == 22 else row
+                        for row in self.traffic if row['at'] not in (23, 24)]
         self.case['healed']['members'] = [member('two', 'peer', list(range(24)))]
         # When validated, then the independently observed rejection, rather than
         # continued in-process recovery, is the positive fencing evidence.
         proof = self.validate()['ownership_fencing']
         self.assertEqual('stale-generation-rejected', proof['fencing_mode'])
         self.assertEqual(1, proof['worker1_exit_code'])
-        self.assertEqual(list(range(12)), proof['stale_fenced_partitions'])
+        self.assertEqual(parts, proof['stale_fenced_partitions'])
+        self.assertEqual([5, 8], proof['stale_unattempted_partitions'])
+        # A clean exit still needs full rejection coverage or a legitimate rejoin.
+        self.case['worker_measurements'][0]['exit_code'] = 0
+        self.safety['writer_observations'][0]['exit_code'] = 0
+        with self.assertRaisesRegex(ValueError, 'traffic absence alone'):
+            self.validate()
+        self.case['worker_measurements'][0]['exit_code'] = 1
+        self.safety['writer_observations'][0]['exit_code'] = 1
+        # An accepted stale save on a previously unattempted partition still fails.
+        self.traffic.append(commit(22.25, 'one', 'old', 2, [5], 30, 0, 99))
+        with self.assertRaisesRegex(ValueError, 'stale generation committed'):
+            self.validate()
+        self.traffic.pop()
         self.case['worker_measurements'][0]['stopped_at'] = when(21.5)
         with self.assertRaisesRegex(ValueError, 'rejection before exit'):
             self.validate()

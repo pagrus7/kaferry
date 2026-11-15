@@ -384,7 +384,8 @@ def _validate(directory, identity=None):
     rejected = [row for row in stale if all(error in (22, 25, 82) for _, _, error in commits(row)) and
                 stamp(case['heal_started']) <= row['received_at'] <= row['completed_at'] <= stamp(measurements[0]['stopped_at'])]
     fenced_parts = {part for row in rejected for part, _, _ in commits(row)}
-    rejected_owner = old_parts.issubset(fenced_parts)
+    attempted_parts = {part for row in stale for part, _, _ in commits(row)}
+    rejected_owner = bool(rejected) if measurements[0]['exit_code'] == 1 else old_parts.issubset(fenced_parts)
     healed_worker = [member for member in case['healed']['members'] if member['client_id'] == worker1]
     current_parts = set(healed_worker[0]['partitions']) if len(healed_worker) == 1 else set()
     rejoin_parts = {part for row in rejoined if healed_worker and row['request']['memberId'] == healed_worker[0]['member_id'] and
@@ -403,6 +404,7 @@ def _validate(directory, identity=None):
                 stale_rejections=len(rejected), accepted_stale_commits=0,
                 fencing_mode='stale-generation-rejected' if rejected_owner else 'current-generation-rejoin',
                 stale_fenced_partitions=sorted(fenced_parts), worker1_exit_code=measurements[0]['exit_code'],
+                stale_unattempted_partitions=sorted(old_parts-attempted_parts),
                 accepted_peer_partitions=sorted(peer_progress), accepted_rejoin_commits=len(rejoined),
                 post_transfer_commits=len(post), source_partitions=24, audit_files=files,
                 scope='network receipts and correlated broker completions around both selected CLI lifetimes; no rejection is inferred when a stale request is absent')
