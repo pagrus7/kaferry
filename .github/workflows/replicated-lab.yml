@@ -21,12 +21,10 @@ on:
       - 'src/tests/qualification/fault-timeouts-ms.json'
       - 'tools/qualification/qualify.py'
       - 'tools/qualification/replicated_evidence.py'
-      - 'tools/qualification/test_replicated_evidence.py'
       - 'tools/qualification/broker_probe.py'
       - 'tools/qualification/test_qualify.py'
       - 'tools/qualification/network.py'
       - 'tools/qualification/test_network.py'
-      - 'tools/qualification/test_endurance_topology.py'
       - 'tools/qualification/fault_oracle.py'
       - 'tools/qualification/fault_results.py'
       - 'tools/qualification/ownership_audit.py'
@@ -37,7 +35,6 @@ on:
       - 'tools/qualification/replicated_results.py'
       - 'tools/qualification/test_replicated_results.py'
       - 'tools/ci/replicated_suites.py'
-      - 'tools/ci/test_replicated_lab.py'
       - '.github/workflows/replicated-lab.yml'
 permissions:
   contents: read
