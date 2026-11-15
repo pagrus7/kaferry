@@ -26,17 +26,37 @@ jobs:
       - uses: ./.github/actions/setup-go
         with:
           cache-name: quality-go
+      - name: Restore pinned analyzers
+        id: analyzer-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/quality-tools
+          key: quality-tools-linux-amd64-golangci-lint-2.15.0-9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea-jscpd-5.4.2-216bae5de2b30c57f893286585c7a348e8af7cd36810949831f569d29f495a3b
       - name: Install pinned analyzers
+        id: analyzers
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p .cache/quality-tools
+          if [[ '${{ steps.analyzer-cache.outputs.cache-hit }}' != 'true' ]]; then
+            download() {
+              for attempt in 1 2 3; do
+                if gh api -H 'Accept: application/octet-stream' "$1" > "$2"; then
+                  return 0
+                fi
+                if (( attempt < 3 )); then
+                  sleep "$((attempt * 5))"
+                fi
+              done
+              return 1
+            }
+            download repos/golangci/golangci-lint/releases/assets/647132535 .cache/quality-tools/golangci-lint.tar.gz
+            download repos/kucherenko/jscpd/releases/assets/659819461 .cache/quality-tools/jscpd.tar.gz
+          fi
           # golangci-lint v2.15.0, linux-amd64; verify the pinned bytes below.
-          gh api -H 'Accept: application/octet-stream' repos/golangci/golangci-lint/releases/assets/647132535 > .cache/quality-tools/golangci-lint.tar.gz
           echo '9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea  .cache/quality-tools/golangci-lint.tar.gz' | sha256sum --check
           tar -xzf .cache/quality-tools/golangci-lint.tar.gz -C .cache/quality-tools
           # jscpd v5.4.2, linux-x64-gnu; verify the pinned bytes below.
-          gh api -H 'Accept: application/octet-stream' repos/kucherenko/jscpd/releases/assets/659819461 > .cache/quality-tools/jscpd.tar.gz
           echo '216bae5de2b30c57f893286585c7a348e8af7cd36810949831f569d29f495a3b  .cache/quality-tools/jscpd.tar.gz' | sha256sum --check
           tar -xzf .cache/quality-tools/jscpd.tar.gz -C .cache/quality-tools
       - name: Script tests
@@ -47,7 +67,7 @@ jobs:
       - name: Go lint gate
         run: make lint GOLANGCI_LINT=.cache/quality-tools/golangci-lint-2.15.0-linux-amd64/golangci-lint
       - name: Duplication gate
-        if: success() || failure()
+        if: (success() || failure()) && steps.analyzers.outcome == 'success'
         run: make duplicates JSCPD=.cache/quality-tools/jscpd DUPLICATION_BASE="${QUALITY_BASE_SHA:-HEAD}"
       - name: Maintainability reports
         if: success() || failure()
