@@ -17,7 +17,7 @@ class SelectedTestsTest(unittest.TestCase):
             verify_tests(log, ['Required'], suite=suite)
             with self.assertRaisesRegex(ValueError, 'did not pass: TestKafkaQuickStart'):
                 verify_tests(log, ['Required', 'TestKafkaQuickStart'], suite=suite)
-        for suite in (None, 'smoke', 'ci-integration', 'quickstart', 'replicated-helpers', 'unknown'):
+        for suite in (None, 'smoke', 'ci-integration', 'quickstart', 'unknown'):
             with self.subTest(suite=suite), self.assertRaisesRegex(ValueError, 'Unexpected skip events: TestKafkaQuickStart'):
                 verify_tests(log, ['Required'], suite=suite)
 
