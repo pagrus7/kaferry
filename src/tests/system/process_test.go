@@ -19,7 +19,7 @@ func brokerLogChild(t *testing.T, terminal string, setup ...func(*cliProcess)) *
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	t.Cleanup(cancel)
-	process := &cliProcess{command: exec.CommandContext(ctx, os.Args[0], "-test.run=^TestBrokerCurrentLogChild$"), done: make(chan struct{})}
+	process := &cliProcess{command: exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHarnessBrokerCurrentLogChild$"), done: make(chan struct{})}
 	for _, configure := range setup {
 		configure(process)
 	}

@@ -19,7 +19,7 @@ qualification load soak smoke fault: export KAFERRY_TEST_BINARY = $(CURDIR)/bin/
 endif
 export KAFERRY_TEST_OUTPUT
 
-.PHONY: build test check fast wording fmt vet race vulnerabilities smoke integration fault load soak qualification fuzz benchmark metrics duplicates lint broker broker-down
+.PHONY: build test check fast wording fmt vet race vulnerabilities smoke harness integration fault load soak qualification fuzz benchmark metrics duplicates lint broker broker-down
 build:
 	mkdir -p bin
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags='-s -w -buildid= -X github.com/pagrus7/kaferry/src/internal/app.version=$(KAFERRY_VERSION) -X github.com/pagrus7/kaferry/src/internal/app.revision=$(KAFERRY_REVISION)' -o bin/kaferry ./src/cmd/kaferry
@@ -49,7 +49,8 @@ vulnerabilities:
 fast: wording fmt lint duplicates vulnerabilities race
 	$(PYTHON) -m unittest discover -s tools -t . -p 'test_*.py'
 	$(PYTHON) -m tools.docs.docs
-	$(GO) test -run '^$$' -tags=integration,load,fault,qualification,migration ./src/tests/system ./src/tests/compatibility
+	$(GO) test -run '^$$' -tags=integration,load,fault,qualification,migration,harness ./src/tests/system ./src/tests/compatibility
+	$(MAKE) harness
 	$(MAKE) build
 	$(PYTHON) -m tools.release.notices bin/kaferry bin/THIRD_PARTY_NOTICES.txt
 	$(PYTHON) -m tools.release.install_smoke
@@ -58,6 +59,8 @@ smoke: $(TEST_BINARY_PREREQUISITE)
 	pattern=$$($(PYTHON) -m tools.ci.suites pattern smoke) && \
 	$(PYTHON) -m tools.ci.ci smoke $(GO) test -count=1 -json -tags=integration,load -run "$$pattern" ./src/tests/system
 	$(PYTHON) -m tools.ci.suites verify smoke "$${KAFERRY_REPORT_DIR:-build-results}/smoke.log"
+harness:
+	CGO_ENABLED=1 $(GO) test -race -count=1 -tags=integration,fault,load,harness -run '^TestHarness' ./src/tests/system/...
 broker:
 	docker compose -f src/tests/compose.yaml -p kaferry-compat --profile cross-cluster up -d --wait --wait-timeout 60
 	# Listening sockets precede cold group-coordinator readiness.

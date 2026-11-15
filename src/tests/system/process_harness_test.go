@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBrokerCurrentLogChild(t *testing.T) {
+func TestHarnessBrokerCurrentLogChild(t *testing.T) {
 	if os.Getenv("KAFERRY_BROKER_LOG_CHILD") != "1" {
 		return
 	}

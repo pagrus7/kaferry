@@ -73,13 +73,14 @@ python3 -m unittest discover -s tools -t .
 | --- | --- |
 | `make check` | Vet and race-enabled component tests; no broker |
 | `make fast` | Full local checks; lint tools required, no broker |
+| `make harness` | Retained harness regressions under race; no broker |
 | `make integration` | CLI copying, fidelity, resume and rebalances |
 | `make fault` | Outages, process failures and ownership loss |
 | `make load`, `make soak` | Bounded load and sustained-copy checks |
 | `make qualification` | Authentication, ACLs and replicated failover; starts its own fixtures |
 | `make fuzz`, `make benchmark` | Parser/archive/lifecycle fuzzing and codec/replay benchmarks |
 
-Tests of the system-test harness use the `harness` build tag. Shared helpers remain available to broker tests. The real zombie-worker broker scenario runs separately in replicated qualification.
+Tests of the system-test harness use the `harness` build tag and run through `make harness`. Shared helpers remain available to broker tests. The real zombie-worker broker scenario runs separately in replicated qualification.
 
 For broker matrices, endurance runs and retained evidence, use the [qualification guide](docs/design/qualification.md). To request performance checks in CI, add `ci:performance` to the PR. To compare revisions locally, use the [comparison command](docs/design/qualification.md#paired-performance).
 

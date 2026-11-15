@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRebalanceChurnUsesSelectedBinary(t *testing.T) {
+func TestHarnessRebalanceChurnUsesSelectedBinary(t *testing.T) {
 	// Given a selected executable with a checked digest that needs no brokers.
 	selected := filepath.Join(t.TempDir(), "selected")
 	data := []byte("#!/bin/sh\nprintf 'selected executable: %s\\n' \"$*\"\n")

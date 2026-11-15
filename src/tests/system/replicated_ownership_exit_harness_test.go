@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOwnershipCoordinatorRestartRequiresRecordedScope(t *testing.T) {
+func TestHarnessOwnershipCoordinatorRestartRequiresRecordedScope(t *testing.T) {
 	for _, route := range []int{1, 2} {
 		t.Run(fmt.Sprint(route), func(t *testing.T) {
 			// Given an actual selected worker and the recorded coordinator kill.

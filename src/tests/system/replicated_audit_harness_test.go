@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestReplicatedAuditArmsOnlyAfterCurrentGenerationAcceptedProgress(t *testing.T) {
+func TestHarnessReplicatedAuditArmsOnlyAfterCurrentGenerationAcceptedProgress(t *testing.T) {
 	t.Run("post-transfer receipt", replicatedAuditRequiresPostTransferReceipt)
 	// Given a worker whose earlier generation committed, then rejoined.
 	rows := []string{

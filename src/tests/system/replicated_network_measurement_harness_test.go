@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNetworkDestinationLeadersRemainStableAcrossPhases(t *testing.T) {
+func TestHarnessNetworkDestinationLeadersRemainStableAcrossPhases(t *testing.T) {
 	// Given fully replicated destinations before and after a worker-only fault.
 	start := time.Unix(1, 0).UTC()
 	healthy := networkMeasurementState(start, time.Second, 10)

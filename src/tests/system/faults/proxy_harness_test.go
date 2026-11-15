@@ -30,7 +30,7 @@ func (m *mutationTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return response, err
 }
 
-func TestToxicMutationReceiptExcludesPreflightAndRequiresAcceptance(t *testing.T) {
+func TestHarnessToxicMutationReceiptExcludesPreflightAndRequiresAcceptance(t *testing.T) {
 	for _, rejected := range []bool{false, true} {
 		t.Run(fmt.Sprint(rejected), func(t *testing.T) {
 			// Given route inspection and an API that accepts or rejects the toxic.

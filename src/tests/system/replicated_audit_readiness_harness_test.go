@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReplicatedAuditReadinessRejectsIncompleteBrokerReads(t *testing.T) {
+func TestHarnessReplicatedAuditReadinessRejectsIncompleteBrokerReads(t *testing.T) {
 	// Given complete positive observations on one broker, another broker's
 	// missing, failed, oversized or malformed raw data must still prevent proof.
 	for _, mode := range []string{"failed", "empty", "oversized", "malformed"} {
