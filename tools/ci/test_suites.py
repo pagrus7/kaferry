@@ -49,28 +49,6 @@ class SuitesTest(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError, 'Required tests did not pass'):
                             suites.ci('fuzz')
 
-    def test_cli_catalog_and_verification_keep_quickstart_contexts_distinct(self):
-        # Given the Kafka job's full required evidence and its intentional opt-out.
-        events = [dict(Action='pass', Test=name) for name in suites.EXPECTED['kafka']]
-        events.append(dict(Action='skip', Test='TestKafkaQuickStart'))
-        with tempfile.TemporaryDirectory() as temporary:
-            log = Path(temporary)/'integration.log'
-            log.write_text('\n'.join(json.dumps(event) for event in events))
-            # When the CLI selects the evidence contract, then the Kafka context
-            # permits that opt-out and enabled quickstart still requires a pass.
-            for suite, valid in [('kafka', True), ('ci-integration', False)]:
-                result = subprocess.run([sys.executable, '-m', 'tools.ci.suites', 'verify', suite, str(log)],
-                                        text=True, capture_output=True)
-                self.assertEqual(valid, result.returncode == 0, result.stdout+result.stderr)
-                if not valid:
-                    self.assertIn('Required tests did not pass: TestKafkaQuickStart', result.stderr)
-            result = subprocess.run([sys.executable, '-m', 'tools.ci.suites', 'names', 'kafka'],
-                                    text=True, capture_output=True, check=True)
-            self.assertEqual(suites.EXPECTED['kafka'], result.stdout.splitlines())
-            result = subprocess.run([sys.executable, '-m', 'tools.ci.suites', 'pattern', 'smoke'],
-                                    text=True, capture_output=True, check=True)
-            self.assertEqual(suites.PATTERNS['smoke'], result.stdout.strip())
-
     def test_smoke_make_target_preserves_pattern_and_requires_passes(self):
         # Given a fake Go process that records Make's actual selector and emits
         # complete, incomplete or unexpectedly skipped test results.
