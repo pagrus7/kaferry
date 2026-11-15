@@ -30,7 +30,7 @@ type evidence struct {
 
 func TestGuaranteeMap(t *testing.T) {
 	// Given the registry and every test function in the repository,
-	// when directives are collected, then each guarantee has product evidence
+	// when directives are collected, then each guarantee has test evidence
 	// and every directive is well-formed and attached to a test.
 	root := repositoryRoot(t)
 	tests, problems := scan(t, root)
@@ -94,10 +94,13 @@ func report(t *testing.T, cited map[string][]evidence) {
 	}
 }
 
-// listUnmapped reports end-to-end tests that cite nothing: each should either
-// cite a guarantee, check a fixture under the harness tag, or be deleted.
+// listUnmapped reports end-to-end tests that cite nothing. Each needs a decision:
+// cite a guarantee, move it under the harness tag, or delete it; measurement-only load tests may stay unmapped.
 func listUnmapped(t *testing.T, tests []evidence) {
 	for _, e := range tests {
+		if requires(e.tags, "harness") {
+			continue
+		}
 		if len(e.cites) == 0 && strings.HasPrefix(e.file, "src/tests/") && !strings.HasPrefix(e.file, "src/tests/guarantees/") {
 			t.Logf("unmapped %-12s %s (%s)", suite(e.tags), e.name, e.file)
 		}

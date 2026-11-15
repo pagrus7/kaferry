@@ -1,5 +1,6 @@
-// Package guarantees indexes Kaferry's user-visible guarantees and the tests
-// that prove them. Each guarantee links to the design section that states it.
+// Package guarantees indexes Kaferry's user-visible guarantees, the broker and
+// client behavior it relies on, and the tests that verify them. Each entry links
+// to the design section that states it.
 //
 // Tests cite guarantees with a directive line directly above the test function:
 //
@@ -49,5 +50,6 @@ var Registry = []Guarantee{
 	{"archive.rotation", archive + "#rotation"},
 	{"replay", archive + "#replay-and-progress"},
 	{"security", "docs/design/client-compatibility.md#tested-configurations"},
+	{"kafka.behavior", "docs/design/client-compatibility.md#kafka-requests"},
 	{"docs.examples", "README.md#docker-quick-start"},
 }
