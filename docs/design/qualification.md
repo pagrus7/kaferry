@@ -36,7 +36,7 @@ An **operating condition** produces zero duplicates, requires no process restart
 | --- | --- |
 | `run broker --source 3.9.2 --destination 4.4.0` | Independent Kafka/archive compatibility checks |
 | `run auth --source 4.4.0` | Authentication, ACLs, TLS and replicated leader failure |
-| `run replicated` | Healthy RF=3 copying |
+| `run replicated` | Healthy RF=3 copying and worker proxy-path isolation |
 | `run fault-replicated --case broker/source-leader` | One selected replicated fault; omit `--case` for all fourteen |
 | `run integration` | CLI copying, fidelity, resume and source truncation |
 | `run fault` | Outages, process death, restart and ownership changes |
@@ -100,6 +100,8 @@ The fixture pins [Toxiproxy 2.13.0](https://github.com/Shopify/toxiproxy/release
 | Worker 3 | 46392–46394 | 47392–47394 |
 
 The API binds localhost 48074. Replication uses internal ports 26092–26094/27092–27094; controllers use 28092–28094/29092–29094. Health probes stay inside brokers and bypass proxies. The proxy namespace reserves route listeners/API from automatic outbound source-port allocation, including while listeners are disabled. The runner checks the reservation before configuring routes.
+
+Before smoke or replicated faults, the route check publishes through each worker to a leader discovered through metadata, cuts that leader's worker proxy and requires failure while the independent admin path still works. After healing, a fresh worker producer succeeds. Independent consumption rejects an uncertain blocked record and requires exactly the three acknowledged records. RF3 endurance configures enabled routes without this cut/heal check.
 
 The [fault helper](../../src/tests/system/faults) resolves leaders, coordinators, followers and worker paths at injection. It supports owned-container kill/start, restart, pause/unpause and network disconnect/reconnect, plus proxy disable, timeout, reset, latency, bandwidth and slow close. Time values are milliseconds; bandwidth is KB/s per connection. Empty listener selection covers all six paths for a broker; worker selection affects that worker only. Healing restores the frozen container IDs, proxies and original network aliases. Ownership labels and proxy addresses must match before mutation; partial injection unwinds prior mutations and failed healing fails the case.
 

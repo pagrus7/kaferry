@@ -461,6 +461,12 @@ def broker_fixture(args, spec, receipt, cancelled, *, lease_held=False):
                 logged(spec.compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output,
                        'brokers-up', spec.env, timeout=180, cancelled=cancelled)
                 receipt['broker_images'] = fixture_images(spec)
+            if args.suite in REPLICATED_SUITES:
+                logged([spec.env.get('GO', 'go'), 'test', '-count=1', '-json', '-tags=integration',
+                        '-timeout=3m', '-run', '^TestReplicatedProxyRoutes$', './src/tests/system/faults'],
+                       args.output, 'proxy-proof', spec.env, timeout=210, cancelled=cancelled)
+                verify_tests((args.output / 'proxy-proof.log').read_text(), ['TestReplicatedProxyRoutes'])
+                receipt['proxy_path_check'] = 'passed'
             if args.suite == 'endurance':
                 if not replicated_fixture(args):
                     receipt['capacity'] = endurance_capacity(args.duration, args.output, spec.compose, spec.env)
