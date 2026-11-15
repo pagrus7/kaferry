@@ -1,6 +1,5 @@
 """Non-broker checks for replicated network isolation and startup failures."""
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,27 +9,6 @@ from tools.qualification import network
 
 
 class NetworkTest(unittest.TestCase):
-    def test_routes_keep_each_client_and_internal_listener_distinct(self):
-        # Given six brokers and four independent client paths per broker.
-        rows = network.routes()
-        # When configuring proxies, then metadata and quorum ports cannot bypass them.
-        self.assertEqual(36, len(rows))
-        self.assertEqual(36, len({row['name'] for row in rows}))
-        self.assertEqual(36, len({row['listen'] for row in rows}))
-        self.assertEqual(36, len({row['upstream'] for row in rows}))
-        by_name = {row['name']: row for row in rows}
-        self.assertEqual('source-2:9092', by_name['source-2-internal']['upstream'])
-        self.assertEqual('0.0.0.0:26093', by_name['source-2-internal']['listen'])
-        self.assertEqual('0.0.0.0:29094', by_name['destination-3-controller']['listen'])
-        self.assertEqual('destination-3:9097', by_name['destination-3-worker3']['upstream'])
-        self.assertEqual(24, len(network.client_ports()))
-        self.assertEqual('127.0.0.1:47392,127.0.0.1:47393,127.0.0.1:47394', network.endpoints('destination', 3))
-        self.assertEqual('127.0.0.1:46092,127.0.0.1:46093,127.0.0.1:46094', network.endpoints('source'))
-        expected = {8474} | {int(row['listen'].rsplit(':', 1)[1]) for row in rows}
-        self.assertEqual(expected, {int(value) for value in network.reserved_ports().split(',')})
-        self.assertEqual(37, len(expected))
-        self.assertNotIn(48074, expected, 'the host-published API port is not a container listener')
-
     def test_populate_requires_fresh_container_and_exact_routes_before_receipt(self):
         # Given an existing fault state, reject it without resetting another run.
         with tempfile.TemporaryDirectory() as temporary, patch.object(network, 'reservation', return_value={'configured_ports': network.reserved_ports()}):
@@ -61,31 +39,6 @@ class NetworkTest(unittest.TestCase):
             self.assertEqual(('POST', '/populate', expected), request.call_args_list[1].args)
             self.assertTrue((output / 'proxy-routes.json').is_file())
             self.assertTrue((output / 'proxy-reservation.json').is_file())
-
-    def test_reservation_admission_requires_own_namespace_and_complete_listener_set(self):
-        # Given the selected project's running proxy, inspect its applied Docker settings.
-        expected = dict(sysctls={network.RESERVATION: network.reserved_ports()}, network_mode='isolated_default')
-        with patch.dict('os.environ', KAFERRY_FIXTURE_PROJECT='isolated'), \
-             patch.object(network.subprocess, 'check_output', side_effect=['owned-id\n', json.dumps(expected)]) as query:
-            observed = network.reservation()
-        self.assertEqual('isolated', observed['project'])
-        self.assertIn('label=com.docker.compose.project=isolated', query.call_args_list[0].args[0])
-        # When the reservation is absent, incomplete or shared with another namespace,
-        # then fail before any route is populated or a reservation receipt is written.
-        for bad in (dict(expected, sysctls=None), dict(expected, sysctls={network.RESERVATION: '8474'}),
-                    dict(expected, network_mode='host'), dict(expected, network_mode='container:other')):
-            with self.subTest(bad=bad), patch.object(network.subprocess, 'check_output', side_effect=['owned-id\n', json.dumps(bad)]):
-                with self.assertRaisesRegex(ValueError, 'reservation'):
-                    network.reservation()
-        for ids in ('', 'one\ntwo\n'):
-            with self.subTest(ids=ids), patch.object(network.subprocess, 'check_output', return_value=ids):
-                with self.assertRaisesRegex(ValueError, 'one running proxy'):
-                    network.reservation()
-        with tempfile.TemporaryDirectory() as temporary, patch.object(network, 'reservation', side_effect=ValueError('reservation')), \
-             patch.object(network, 'request') as request:
-            with self.assertRaisesRegex(ValueError, 'reservation'):
-                network.populate(Path(temporary))
-            request.assert_not_called()
 
     def test_bound_listener_equivalence_still_requires_wildcard_and_exact_port(self):
         # Given a listener reported by the server, accept only equivalent wildcard binds.

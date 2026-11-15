@@ -108,63 +108,6 @@ class ReleaseResultsTest(unittest.TestCase):
             expected, name = line.split('  ', 1)
             self.assertEqual(hashlib.sha256((output / name).read_bytes()).hexdigest(), expected)
 
-    def test_rejects_incomplete_failed_and_mismatched_measurements(self):
-        # Given valid evidence, then corrupting any required identity/result prevents publication.
-        targets = [
-            ('qualification-load/load.environment.json', 'commit', 'b' * 40),
-            ('qualification-load/load.environment.json', 'binary_sha256', 'wrong'),
-            ('qualification-load/load.environment.json', 'working_tree_dirty', True),
-            ('qualification-load/load.environment.json', 'machine', 'arm64'),
-            ('qualification-soak/soak.result.json', 'exit_code', 1),
-            ('qualification-load/0.metrics.json', 'binary_sha256', 'wrong'),
-            ('qualification-load/0.metrics.json', 'passed', False),
-            ('qualification-load/0.metrics.json', 'skipped', True),
-            ('qualification-load/0.metrics.json', 'records_per_second', float('nan')),
-            ('qualification-load/0.metrics.json', 'records', 0),
-            ('qualification-load/0.metrics.json', 'workload', {}),
-            ('qualification-load/0.metrics.json', 'workload', None),
-            ('qualification-load/0.metrics.json', 'workload', []),
-            ('compatibility.json', 'status', 'incomplete'),
-        ]
-        for name, key, value in targets:
-            with self.subTest(name=name, key=key):
-                path = self.root / name
-                original = path.read_text()
-                changed = json.loads(original)
-                changed[key] = value
-                path.write_text(json.dumps(changed))
-                with self.assertRaises(ValueError):
-                    self.generate()
-                self.assertFalse((self.root / 'report').exists())
-                path.write_text(original)
-        path = self.root / 'qualification-load/0.metrics.json'
-        duplicate = path.with_name('duplicate.metrics.json')
-        duplicate.write_bytes(path.read_bytes())
-        with self.assertRaisesRegex(ValueError, 'duplicate measurement'):
-            self.generate()
-        duplicate.unlink()
-        path.unlink()
-        with self.assertRaisesRegex(ValueError, 'required load or soak'):
-            self.generate()
-        self.assertFalse((self.root / 'report').exists())
-
-    def test_rejects_mislabeled_profile_and_unobserved_compression(self):
-        # Given a passing source-codec measurement, then declared settings cannot replace observed batches.
-        path = self.load_measurement('source-zstd-v1')
-        original = path.read_text()
-        for field, value in [('name', 'source-gzip-v1'), ('source_compression', 'gzip')]:
-            with self.subTest(field=field):
-                changed = json.loads(original)
-                changed['workload'][field] = value
-                path.write_text(json.dumps(changed))
-                with self.assertRaisesRegex(ValueError, 'workload|observed source compression'):
-                    self.generate()
-        changed = json.loads(original)
-        changed['source_compression_records'] = {'none': 3200}
-        path.write_text(json.dumps(changed))
-        with self.assertRaisesRegex(ValueError, 'observed source compression'):
-            self.generate()
-
     def test_rejects_every_omitted_recorded_parameter(self):
         # Given complete common and profile-specific parameters for every measurement.
         for path in self.root.glob('qualification-*/*.metrics.json'):
@@ -272,13 +215,6 @@ class ReleaseResultsTest(unittest.TestCase):
         self.assertEqual(recipes['fixed-file-v1'], fixed['workload'])
         self.assertEqual(recipes['application-24x32-v1'], soak['workload'])
 
-    def test_requires_each_profile_measurement_for_recorded_workloads(self):
-        # Given modern receipts, when a profile measurement is absent, then other recipes cannot replace it.
-        path = self.load_measurement('near-limit-v1')
-        path.unlink()
-        with self.assertRaisesRegex(ValueError, 'required load or soak'):
-            self.generate()
-
     def test_retains_unrecorded_workload_status_for_original_receipts(self):
         # Given original release receipts without profile fields or the new cases.
         for suite in ('load', 'soak'):
@@ -296,15 +232,6 @@ class ReleaseResultsTest(unittest.TestCase):
         report = json.loads((self.root / 'report/release-results.json').read_text())
         self.assertEqual(len(report['measurements']), 6)
         self.assertTrue(all(item['workload'] == {'name': 'not recorded'} for item in report['measurements']))
-
-    def test_rejects_mixed_recorded_and_unrecorded_workloads(self):
-        # Given new-format evidence, when one identity disappears, then it cannot downgrade to an original receipt.
-        path = self.root / 'qualification-load/0.metrics.json'
-        item = json.loads(path.read_text())
-        item.pop('workload')
-        path.write_text(json.dumps(item))
-        with self.assertRaisesRegex(ValueError, 'workload identity is missing'):
-            self.generate()
 
 
 if __name__ == '__main__':

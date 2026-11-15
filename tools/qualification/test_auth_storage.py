@@ -1,5 +1,6 @@
 """Authentication keeps its default lifecycle and private certificate paths."""
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,6 @@ from unittest.mock import patch
 
 from tools.ci.suites import EXPECTED
 from tools.qualification.qualify import IMAGES, run_suite
-from tools.qualification.test_broker_storage import suite_args
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -66,7 +66,10 @@ class AuthRunnerTest(unittest.TestCase):
                            IMAGE_OUTPUT=image_output, IMAGE_EXIT=str(image_exit), SUITE_EXIT=str(suite_exit),
                            CLEANUP_EXIT=str(cleanup_exit),
                            AUTH_TESTS=json.dumps(EXPECTED['qualification']), EXPECTED_AUTH_IMAGE=IMAGES['3.9.2'])
-                args = suite_args(root, 'auth')
+                binary = root / 'candidate'
+                binary.write_bytes(b'candidate')
+                args = argparse.Namespace(suite='auth', binary=str(binary), output=root / 'evidence',
+                                          source='3.9.2', destination='3.9.2', config=None, duration=60)
                 failed = image_exit or suite_exit or cleanup_exit or image_output != images
                 with patch.dict(os.environ, env, clear=True), patch('tools.qualification.qualify.ROOT', root), \
                      patch('tools.qualification.qualify.LAB_LOCK', root / 'lease'), \

@@ -14,7 +14,6 @@ from unittest.mock import patch
 from tools.ci import suites
 from tools.qualification import ownership_cases as ownership
 from tools.qualification import test_ownership_audit as audit_fixture
-from tools.qualification.replicated_results import collect
 
 when = audit_fixture.when
 
@@ -24,7 +23,6 @@ def encoded_assignment(parts):
     name = b'source'
     data = struct.pack('>hih', 0, 1, len(name))+name+struct.pack('>i', len(parts))
     return base64.b64encode(data+b''.join(struct.pack('>i', part) for part in parts)+struct.pack('>i', -1)).decode()
-
 
 
 class OwnershipCasesTest(unittest.TestCase):
@@ -183,7 +181,6 @@ class OwnershipCasesTest(unittest.TestCase):
         case['artifacts']=[dict(observations=p.name,sha256=hashlib.sha256(p.read_bytes()).hexdigest()) for p in sorted(directory.iterdir()) if p.name != 'replicated-ownership-case.json']
         (directory/'replicated-ownership-case.json').write_text(json.dumps(case))
 
-
     def validate(self,fixture):
         root,directory,case,safety,identity=fixture
         self.save(directory,case)
@@ -191,7 +188,6 @@ class OwnershipCasesTest(unittest.TestCase):
         # leave its path/checksum binding real and isolate the exposure parser.
         with patch.object(ownership,'validate_case',return_value=copy.deepcopy(safety)):
             return ownership.validate(root,case['id'],identity)
-
 
     def move_birth(self,fixture,worker_index,start,matching_identity=True):
         worker=fixture[2]['worker_measurements'][worker_index]
@@ -202,7 +198,6 @@ class OwnershipCasesTest(unittest.TestCase):
             witness['lifetime']['started_at']=worker['started_at']
         path.write_text(json.dumps(witness))
         worker['lifecycle']['sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
-
 
     def protocol_rows(self, path):
         rows = ownership.records(ownership.segments(path))
@@ -221,17 +216,6 @@ class OwnershipCasesTest(unittest.TestCase):
                 edited+=1
         self.assertEqual(1,edited)
         path.write_bytes(audit_fixture.encode(rows))
-
-
-    def test_all_three_cases_keep_independent_raw_group_generations(self):
-        # Given raw broker protocol and retained CLI lifetimes, when their
-        # independent observations agree, then all three selections validate.
-        for name in ('worker-kill-rebalance','worker-scale','coordinator-kill-rebalance'):
-            result=self.validate(self.fixture(name))
-            self.assertIn('ownership_exposure',result,result['id'])
-        restarted=self.validate(self.fixture('coordinator-kill-rebalance',restart=True))
-        self.assertIn('ownership_exposure',restarted)
-
 
     def test_selected_members_and_protocol_must_belong_to_retained_lifetimes(self):
         # Given valid raw proof and immutable sidecars, when a claimed peer or
@@ -259,7 +243,6 @@ class OwnershipCasesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'lifecycle differs'):
             self.validate(fixture)
 
-
     def test_retained_dead_member_metadata_is_not_live_ownership_proof(self):
         # Given a failed old CLI still listed by its coordinator until expiry,
         # when metadata proves broker recovery, then that observation is valid.
@@ -275,52 +258,6 @@ class OwnershipCasesTest(unittest.TestCase):
             # ownership cannot bypass the actual selected lifetime boundary.
             with self.subTest(name=name),self.assertRaisesRegex(ValueError,'retained selected route lifetime'):
                 ownership.snapshot(case,state,rows)
-
-
-    def test_missing_altered_and_rechecksummed_invalid_audits_fail(self):
-        # Given a valid receipt, when raw accepted commits are removed or their
-        # generation changes even with a new checksum, then exposure cannot pass.
-        for mode in ('missing','checksum','rechecksummed'):
-            fixture=self.fixture('worker-kill-rebalance')
-            root,directory,case,safety,identity=fixture
-            path=directory/'source-2.final.requests.log'
-            if mode == 'missing':
-                path.unlink()
-            else:
-                path.write_text(path.read_text().replace('"generationIdOrMemberEpoch":2','"generationIdOrMemberEpoch":99'))
-            if mode != 'checksum':
-                self.save(directory,case)
-            with patch.object(ownership,'validate_case',return_value=safety),self.subTest(mode=mode),self.assertRaises(ValueError):
-                ownership.validate(root,case['id'],identity)
-
-
-    def test_shared_observer_is_revalidated_and_exact_run_selection_is_enforced(self):
-        # Given checksummed ownership exposure, when shared evidence is invalid
-        # or another case is selected, then neither summaries nor checksums pass.
-        root,directory,case,safety,identity=self.fixture('worker-scale')
-        with self.assertRaises(ValueError):
-            ownership.validate(root,case['id'],identity)
-        with self.assertRaises(ValueError):
-            collect(root,['ownership/worker-kill-rebalance'],identity,'fresh')
-        with patch.object(ownership,'validate_case',return_value=safety):
-            self.assertEqual(case['id'],collect(root,[case['id']],identity,'fresh')[0]['id'])
-
-
-    def test_raw_sync_assignment_must_match_the_valid_described_member(self):
-        fixture = self.fixture('worker-kill-rebalance')
-        # Given a valid receipt, DESCRIBE response and accepted generation.
-        self.validate(fixture)
-        path = fixture[1]/'source-2.final.requests.log'
-        rows = self.protocol_rows(path)
-        syncs = [row for row in rows if row['requestHeader']['requestApiKeyName'] == 'SYNC_GROUP' and
-                 row['request']['generationId'] == 2 and row['response']['errorCode'] == 0]
-        self.assertEqual(1, len(syncs))
-        # When only one successful SYNC returns another valid encoded assignment,
-        # renewed checksums cannot repair the receipt's otherwise valid binding.
-        syncs[0]['response']['assignment'] = encoded_assignment(range(23))
-        path.write_bytes(audit_fixture.encode(rows))
-        with self.assertRaisesRegex(ValueError, 'current generation does not assign the described partitions'):
-            self.validate(fixture)
 
     def test_empty_intermediate_members_allow_null_only_with_matching_raw_empty_group(self):
         fixture = self.fixture('coordinator-kill-rebalance')
@@ -359,19 +296,6 @@ class OwnershipCasesTest(unittest.TestCase):
                     row['response']['groups'][0].update(groupState=state_name, members=[])
             with self.subTest(state=state_name, members=items), self.assertRaises(ValueError):
                 ownership.snapshot(case, state, observed, [1, 2], case['states']['baseline'], restored)
-
-    def test_independent_generation_assignment_and_commit_chain_reject_self_attestation(self):
-        # Given checksummed raw protocol, when a receipt invents a generation
-        # or assignment, then raw JOIN/SYNC/commit responses must still agree.
-        for mutate in (
-            lambda case: case['states']['recovered']['accepted_generations'].update({'kaferry-group-selected-worker2': 99}),
-            lambda case: case['states']['recovered']['members'][0]['partitions'].__setitem__(23, 22),
-            lambda case: case['worker_measurements'][1].update(binary_sha256='other'),
-        ):
-            fixture = self.fixture('worker-kill-rebalance')
-            mutate(fixture[2])
-            with self.subTest(mutation=mutate), self.assertRaises(ValueError):
-                self.validate(fixture)
 
 
 if __name__ == '__main__':

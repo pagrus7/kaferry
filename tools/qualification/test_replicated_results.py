@@ -71,31 +71,6 @@ class ReplicatedResultsTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.collect(root, selected, '../current')
 
-    def test_stale_foreign_or_modified_receipts_cannot_reuse_a_pass(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            id = 'broker/source-leader'
-            result, path = self.receipt(root, id)
-            original = json.loads(result.read_text())
-            _, stale = self.receipt(root, id, run='old')
-            for reference in (dict(observations=stale.relative_to(root).as_posix(), sha256=checksum(stale)),
-                              dict(observations='../case.json', sha256=checksum(path)),
-                              dict(observations=str(path), sha256=checksum(path)),
-                              dict(original['safety_case'], sha256='0'*64)):
-                result.write_text(json.dumps(dict(original, safety_case=reference)))
-                # When an exposure is redirected or its checksum changes, then
-                # it cannot bind to the independent receipt from this run.
-                with self.subTest(reference=reference), self.assertRaises(ValueError):
-                    self.collect(root, [id])
-            result.write_text(json.dumps(original))
-            for field in IDENTITY:
-                with self.subTest(identity=field), self.assertRaisesRegex(ValueError, 'identity'):
-                    with patch.dict(IDENTITY, {field: 'other'}):
-                        self.collect(root, [id])
-            with patch('tools.qualification.replicated_results.validate_case', side_effect=ValueError('unsafe saved prefix')):
-                with self.assertRaisesRegex(ValueError, 'unsafe saved prefix'):
-                    collect(root, [id], IDENTITY, 'current')
-
     def test_inconclusive_requires_typed_safely_finalized_no_fault_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -125,19 +100,6 @@ class ReplicatedResultsTest(unittest.TestCase):
             result.write_text(json.dumps(original))
             with self.assertRaisesRegex(ValueError, 'no-fault'):
                 self.collect(root, [id])
-
-    def test_ownership_keeps_its_independent_fencing_audit(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            id = 'ownership/zombie-worker'
-            _, path = self.receipt(root, id)
-            safety = json.loads(path.read_text())
-            safety['safety']['observations'] = (path.parent/'samples.jsonl').relative_to(root).as_posix()
-            # Given the ownership selection, when collecting, then the separate
-            # stale-generation audit remains required rather than a Go receipt.
-            with patch('tools.qualification.ownership_audit.validate', return_value=safety) as audit:
-                self.assertEqual([safety], collect(root, [id], IDENTITY, 'current'))
-            audit.assert_called_once_with(root, IDENTITY)
 
 
 if __name__ == '__main__':

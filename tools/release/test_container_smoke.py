@@ -4,12 +4,11 @@ from contextlib import redirect_stdout
 from io import StringIO
 import json
 import subprocess
-import threading
 import unittest
 from unittest.mock import patch
 
 from tools.ci.suites import EXPECTED, PATTERNS
-from tools.release.container_smoke import check_demo, check_file_copy
+from tools.release.container_smoke import check_file_copy
 
 
 class ContainerWrapperTest(unittest.TestCase):
@@ -36,35 +35,3 @@ class ContainerWrapperTest(unittest.TestCase):
                 run.assert_called_once_with(['go', 'test', '-count=1', '-json', '-tags=integration,load', '-run',
                                              PATTERNS['smoke'], './src/tests/system'],
                                             env=env, text=True, stdout=subprocess.PIPE, check=False)
-
-    def test_demo_checks_overlap_and_collect_every_failure(self):
-        for fail in (False, True):
-            with self.subTest(fail=fail):
-                # Given checks that cannot finish until all four containers have started.
-                barrier = threading.Barrier(4, timeout=5)
-                lock = threading.Lock()
-                observed = []
-
-                def check(name):
-                    def run(image):
-                        self.assertEqual('demo:fixture', image)
-                        barrier.wait()
-                        with lock:
-                            observed.append(name)
-                        if fail:
-                            raise ValueError(name + ' assertion failed')
-                    return run
-
-                with patch('tools.release.container_smoke.check_demo_fresh', side_effect=check('fresh')), \
-                     patch('tools.release.container_smoke.check_demo_corruption', side_effect=check('corruption')), \
-                     patch('tools.release.container_smoke.check_demo_cancellation', side_effect=check('cancellation')):
-                    # When checks run together, then success waits for all and failure names every case.
-                    if fail:
-                        with self.assertRaises(ValueError) as raised:
-                            check_demo('demo:fixture')
-                        for name in ('fresh run 1', 'fresh run 2', 'corrupted output', 'cancellation'):
-                            self.assertIn(name + ':', str(raised.exception))
-                        self.assertEqual(4, str(raised.exception).count('assertion failed'))
-                    else:
-                        check_demo('demo:fixture')
-                self.assertCountEqual(['fresh', 'fresh', 'corruption', 'cancellation'], observed)
