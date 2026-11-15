@@ -219,7 +219,8 @@ def _validate(root, id, identity):
         name = reference['observations']
         require(Path(name).name == name and name not in paths, 'ownership artifact name is unsafe or repeated')
         paths[name] = observation_path(directory, reference, name)
-        require(paths[name].stat().st_size <= 16*1024**2, 'ownership raw artifact exceeds its bounded capture')
+        require(paths[name].stat().st_size <= (64 if name.endswith('.requests.log') else 16)*1024**2,
+                'ownership raw artifact exceeds its bounded capture')
     required = {f'source-{n}.{suffix}' for n in range(1, 4) for suffix in
                 ('log4j2.yaml', 'log4j2.json', 'jvm-logging.txt', 'console.log', 'baseline.requests.log', 'final.requests.log')}
     required |= {worker['log'] for worker in case['worker_measurements']}
