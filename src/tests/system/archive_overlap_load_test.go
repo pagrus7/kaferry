@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee replay
 func TestLoadArchiveOverlap(t *testing.T) {
 	// Given sixteen files whose offset ranges fully overlap, exceeding the default block cache.
 	root := t.TempDir()

@@ -15,6 +15,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee inspect
 func TestSavedStopsDescribeEveryCurrentKafkaPartition(t *testing.T) {
 	// Given two partitions: one reaches the timestamp rule, the other stops at the tip.
 	a := admin(t)

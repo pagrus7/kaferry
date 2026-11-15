@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee commit-metadata
 func TestCodecContract(t *testing.T) {
 	zero, upper := int64(0), int64(math.MaxInt64)
 	for _, tc := range []struct {
@@ -50,6 +51,7 @@ func TestCodecAcceptsJSONWhitespaceAndFieldOrder(t *testing.T) {
 	require.Nil(t, p.Stop)
 }
 
+//kaferry:guarantee commit-metadata
 func TestCodecRejectsMalformedOrUnsupportedData(t *testing.T) {
 	for _, tc := range []struct{ name, text, kind string }{
 		{"foreign", "other;{}", "foreign"},
@@ -92,6 +94,7 @@ func TestCodecRejectsMalformedOrUnsupportedData(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee commit-metadata
 func TestCodecValidatesWritesAndSizeLimit(t *testing.T) {
 	for _, p := range []Progress{
 		{},
@@ -116,6 +119,7 @@ func TestCodecValidatesWritesAndSizeLimit(t *testing.T) {
 	require.NoError(t, err)
 }
 
+//kaferry:guarantee commit-metadata
 func TestCapturedEndWireContract(t *testing.T) {
 	// Given a captured empty end, distinct from no captured end.
 	p := Progress{Fingerprint: "fp", TopicID: "id", End: new(int64(0))}

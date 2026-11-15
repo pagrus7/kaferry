@@ -84,6 +84,7 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee identity
 func TestSourcePositionsDoNotChangePlansOrSavedIdentity(t *testing.T) {
 	// Given equivalent queries with different comments, whitespace and locations.
 	query := "INSERT INTO TOPIC 'b' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a' WITH (GROUP='g') WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR "
@@ -107,6 +108,7 @@ func TestSourcePositionsDoNotChangePlansOrSavedIdentity(t *testing.T) {
 	require.Equal(t, fb, fa)
 }
 
+//kaferry:guarantee security
 func TestPlannerDiagnosticsRedactLiteralAndResolvedSecrets(t *testing.T) {
 	const secret = "sensitive_SENTINEL_5c27"
 	const files = " INSERT INTO ARCHIVE 'out' SELECT * FROM ARCHIVE 'in' WITH(GROUP='g') "

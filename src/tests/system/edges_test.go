@@ -18,6 +18,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee window
 func TestTimeBoundariesOutOfOrderAndTriggerReplay(t *testing.T) {
 	// Given
 	a := admin(t)
@@ -51,6 +52,7 @@ func TestTimeBoundariesOutOfOrderAndTriggerReplay(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee identity
 func TestForeignProgressAndSelfCopyFailBeforeJoining(t *testing.T) {
 	// Given
 	a := admin(t)
@@ -82,6 +84,7 @@ func TestForeignProgressAndSelfCopyFailBeforeJoining(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee start
 func TestExpiredAndAboveEndCommits(t *testing.T) {
 	// Given
 	a := admin(t)

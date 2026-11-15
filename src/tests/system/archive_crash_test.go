@@ -22,6 +22,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee archive.capture
 func TestArchiveCaptureCrashRecoversAcknowledgedData(t *testing.T) {
 	// Given a following capture with rotated files and an acknowledged private tail.
 	a := admin(t)

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee completion.timestamp
 func TestPartitionTimestampThreshold(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

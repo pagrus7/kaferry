@@ -14,6 +14,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee delivery
 func TestCrashResumeReconcilesRetainedRecords(t *testing.T) {
 	// Given a following copy and deterministic records retained throughout recovery.
 	a := admin(t)

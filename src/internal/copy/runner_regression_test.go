@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee output.records
 func TestFatalDeliveryFailsDespiteSkipPolicies(t *testing.T) {
 	// Given confirmed work followed by a fatal report with no record token.
 	r, source, sink, store, clock := fixture(t)

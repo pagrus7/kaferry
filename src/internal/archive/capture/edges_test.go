@@ -144,6 +144,7 @@ func TestInvalidFirstSourceStopsWithoutAcknowledging(t *testing.T) {
 	require.Empty(t, completeFiles(t, root))
 }
 
+//kaferry:guarantee errors
 func TestAppendIOAndCallerErrorsCannotBeSkipped(t *testing.T) {
 	for _, mode := range []string{"write failure", "timestamp kind"} {
 		t.Run(mode, func(t *testing.T) {

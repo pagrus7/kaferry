@@ -37,6 +37,7 @@ func assertSavedWorkerStop(t *testing.T, statement, config string) {
 	}
 }
 
+//kaferry:guarantee worker-stop
 func TestWorkerStopAcrossEndpointDirections(t *testing.T) {
 	// Given a retained topic with seven full logical records in one partition.
 	a := admin(t)

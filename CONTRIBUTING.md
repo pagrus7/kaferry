@@ -55,9 +55,9 @@ Use placeholders without contacting example brokers; invalid SQL examples use in
 
 ## Tests
 
-Run targeted package tests while editing. Prefer focused component tests with handwritten mocks; use real Kafka for broker behavior. Follow Given/When/Then phases and use `testify/require` for routine assertions. Keep fatal assertions in the test goroutine. The [component guide](docs/design/components.md#starting-a-component-change) points to contracts and focused tests.
+Run targeted package tests while editing. Prefer focused component tests with handwritten mocks; use real Kafka for broker behavior. Follow Given/When/Then phases and use `testify/require` for routine assertions. Keep fatal assertions in the test goroutine. The [component guide](docs/design/components.md#starting-a-component-change) shows how to list the tests behind each guarantee.
 
-New harness or tooling code must include a test that would fail if that code produced a false green.
+Cite tested guarantees with `//kaferry:guarantee <id>` above the test, using IDs from `src/tests/guarantees`; do not use harness tests as guarantee evidence, and add a harness or tooling test only for a demonstrated false green.
 
 Run Python tools as modules; their tests live beside them:
 

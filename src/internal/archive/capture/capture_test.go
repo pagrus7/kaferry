@@ -76,6 +76,7 @@ func newCapture(t testing.TB, root string, policy Policy) (*Capture, *testClock)
 	return c, clock
 }
 
+//kaferry:guarantee fidelity
 func TestCapturePreservesPartitionsAndOrder(t *testing.T) {
 	// Given interleaved original partitions, duplicate offsets and raw nullable bytes.
 	root := t.TempDir()
@@ -108,6 +109,7 @@ func TestCapturePreservesPartitionsAndOrder(t *testing.T) {
 	require.Empty(t, privates)
 }
 
+//kaferry:guarantee archive.rotation
 func TestRotationOnSizeAgeAndRewind(t *testing.T) {
 	for _, mode := range []string{"size", "age", "rewind", "topic identity"} {
 		t.Run(mode, func(t *testing.T) {

@@ -61,6 +61,7 @@ func assertTopicRecords(t *testing.T, name string, partitions int, expected []co
 	require.ElementsMatch(t, wanted, actual, "copied records retain bytes, nulls, headers and timestamps")
 }
 
+//kaferry:guarantee fidelity
 func TestAllFileDirectionsAndResume(t *testing.T) {
 	// Given
 	a := admin(t)

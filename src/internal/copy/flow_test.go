@@ -24,6 +24,7 @@ func (m mockWorkCounts) Work(id int32) (int, int64) {
 	return p.records, p.bytes
 }
 
+//kaferry:guarantee caps
 func TestFlowAdmissionHonorsEveryCapAndAllowsOversizedAlone(t *testing.T) {
 	input := incoming(3, 0, 16)
 	input.Record.Key = []byte("k")
@@ -104,6 +105,7 @@ func TestFlowCommitCadenceAndPauseReasons(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee caps
 func TestPartitionCapsPauseOnlyTheFullPartitionUntilSaved(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

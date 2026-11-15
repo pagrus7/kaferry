@@ -119,6 +119,7 @@ func TestFetchReportsTerminalErrorsEvenBesideRetryableOnes(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee partitions
 func TestExcludedAssignmentCannotPositionOrCommit(t *testing.T) {
 	// Given a selected source and an invalid excluded assignment.
 	s, client := sourceFixture(t)
@@ -191,6 +192,7 @@ func TestSourceRevokesOnlyNamedPartitionsAndTreatsLostSeparately(t *testing.T) {
 	require.Equal(t, map[int32]int64{2: 8}, client.committed)
 }
 
+//kaferry:guarantee start
 func TestSourceCommitsResolvedStartBeforeExposingAssignment(t *testing.T) {
 	failure := errors.New("initial commit failed")
 	for _, tc := range []struct {
@@ -262,6 +264,7 @@ func (m *routingMock) ValidatePartitions(_ context.Context, ids []int32) error {
 	return m.err
 }
 
+//kaferry:guarantee assignment.added
 func TestAssignmentRejectsNewMissingPartitionBeforeInitialCommit(t *testing.T) {
 	// Given a rebalance adding a partition absent from the destination.
 	s, client := sourceFixture(t)

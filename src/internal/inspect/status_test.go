@@ -58,6 +58,7 @@ func TestStatusCompletionScopeAndPrecedence(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee inspect
 func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 	for _, tc := range []struct {
 		name, verdict string

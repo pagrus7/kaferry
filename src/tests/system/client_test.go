@@ -18,6 +18,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee window
 func TestTopicToTopicSlice(t *testing.T) {
 	// Given
 	a, source, destination, p := pairedTopics(t, 2, 3)

@@ -89,6 +89,7 @@ func TestWorkerStopPreservesSourceStopsAndMarksIdleOwnedPartitions(t *testing.T)
 	require.Equal(t, [][]Cursor{{{Partition: 0, Stop: &Stop{Reason: "tip", At: 0}}, workerStopCursor(1, 0), workerStopCursor(2, 1)}}, store.saves)
 }
 
+//kaferry:guarantee worker-stop
 func TestWorkerStopIgnoresFilteredSkippedAndBusyAttempts(t *testing.T) {
 	// Given filtered, missing-timestamp and synchronously rejected inputs before two writes.
 	r, source, sink, store, _ := fixture(t)
@@ -207,6 +208,7 @@ func TestWorkerStopFailuresSaveOnlyConfirmedProgress(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee worker-stop
 func TestWorkerStopDoesNotRefundAcceptedWritesAfterRevocation(t *testing.T) {
 	// Given an accepted write whose assignment is lost before its acknowledgement.
 	r, _, sink, store, _ := fixture(t)

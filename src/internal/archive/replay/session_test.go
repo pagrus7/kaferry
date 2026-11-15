@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee replay
 func TestSelectionIsSavedBeforeAnyRecordAndOnlyConfirmedCursorsAdvance(t *testing.T) {
 	// Given a new group, one file and a destination that confirms only the first input.
 	values := records(42, 42, 43)
@@ -109,6 +110,7 @@ func TestReadFailureStillAllowsSavingAnEarlierConfirmedPrefix(t *testing.T) {
 	require.Equal(t, before, blocks.reads)
 }
 
+//kaferry:guarantee replay
 func TestSavedSelectionIgnoresNewFilesAndACompletedGroupStaysCompleted(t *testing.T) {
 	// Given a group with one saved record and one remaining record.
 	values := records(42, 43)
@@ -147,6 +149,7 @@ func TestSavedSelectionIgnoresNewFilesAndACompletedGroupStaysCompleted(t *testin
 	require.Equal(t, records(42, 43, 44), drain(t, fresh))
 }
 
+//kaferry:guarantee window
 func TestResolvedWindowSurvivesRestartAndOutOfOrderTimestamps(t *testing.T) {
 	// Given NOW-based bounds and records whose timestamps are not in source-offset order.
 	q := query()

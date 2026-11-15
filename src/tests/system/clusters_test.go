@@ -16,6 +16,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee fidelity
 func TestCrossClusterOpaqueSchemaBytes(t *testing.T) {
 	// Given
 	dr := os.Getenv("KAFKA_TEST_DEST_BROKERS")

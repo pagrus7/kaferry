@@ -18,6 +18,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee docs.examples
 func TestKafkaQuickStart(t *testing.T) {
 	if os.Getenv("KAFERRY_QUICKSTART") != "1" {
 		t.Skip("set KAFERRY_QUICKSTART=1 to run the documented local Kafka playground")

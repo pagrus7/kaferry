@@ -14,6 +14,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee output.records
 func TestLogAppendTimeDestinationRestampsUnpreservableValues(t *testing.T) {
 	// Given
 	a := admin(t)
@@ -42,6 +43,7 @@ func TestLogAppendTimeDestinationRestampsUnpreservableValues(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee start
 func TestTimestampLookupAcrossSegmentsAndPreEpochBound(t *testing.T) {
 	// Given
 	a := admin(t)

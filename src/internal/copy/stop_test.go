@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee delivery
 func TestStopSavedOnlyAfterEarlierWritesResolve(t *testing.T) {
 	for _, release := range []string{"periodic", "revoke", "lost"} {
 		t.Run(release, func(t *testing.T) {

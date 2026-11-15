@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee errors
 func TestRecordPoliciesCommitSkippedInputsOnly(t *testing.T) {
 	for _, tc := range []struct {
 		name, class string
@@ -34,6 +35,7 @@ func TestRecordPoliciesCommitSkippedInputsOnly(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee output.records
 func TestAsynchronousDeliveryFailureCannotBeSkipped(t *testing.T) {
 	// Given ON_ERROR=SKIP and a batch failure reported after publication.
 	r, source, sink, store, _ := fixture(t)
@@ -65,6 +67,7 @@ func TestAsynchronousDeliveryFailureCannotBeSkipped(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee window
 func TestTimeFilterKeepsInclusiveStartAndExclusiveEnd(t *testing.T) {
 	// Given records on both sides of and exactly at each bound.
 	r, source, sink, store, _ := fixture(t)

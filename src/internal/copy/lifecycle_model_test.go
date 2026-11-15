@@ -152,6 +152,7 @@ func (m *lifecycleModel) check(t *testing.T, step int) {
 	require.Equal(t, inFlight, m.tracker.InFlight())
 }
 
+//kaferry:guarantee delivery
 func TestProgressLifecycleModel(t *testing.T) {
 	// Given reproducible interleavings of four owners and delayed outcomes.
 	for seed := range uint64(32) {
@@ -168,6 +169,7 @@ func TestProgressLifecycleModel(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee delivery
 func FuzzProgressLifecycle(f *testing.F) {
 	f.Add([]byte{0, 1, 3, 5, 6, 3, 64, 67, 69})
 	f.Add([]byte{7, 0, 2, 4, 6, 3, 5})

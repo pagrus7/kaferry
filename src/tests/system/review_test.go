@@ -24,6 +24,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee output.records
 func TestCopyDestinationAcceptableRecordAboveProducerDefault(t *testing.T) {
 	// Given a source record above the default producer limit but within Kafka's topic limit.
 	a := admin(t)
@@ -47,6 +48,7 @@ func TestCopyDestinationAcceptableRecordAboveProducerDefault(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee output.records
 func TestLegacyTimestampLimitSkipsOnlyRejectedRecord(t *testing.T) {
 	// Given Kafka 3.9 directional defaults and only the legacy acceptance limit set.
 	a := admin(t)
@@ -143,6 +145,7 @@ func pollOwnership(t *testing.T, sources []*adapter.Source, ready func() bool) {
 	}
 }
 
+//kaferry:guarantee assignment.added
 func TestCooperativeReassignmentResumesOnlyNewPartitions(t *testing.T) {
 	// Given worker A with both partitions paused before worker B joins.
 	a := admin(t)

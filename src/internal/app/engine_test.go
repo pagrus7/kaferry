@@ -401,6 +401,7 @@ func TestStartupCancellationClosesInputWithoutCreatingOutput(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee groups
 func TestOneOffUsesOneGroupAndDeletesOnlyOnSuccess(t *testing.T) {
 	// Given
 	for _, fail := range []string{"", "run", "delete-checkpoint"} {
@@ -456,6 +457,7 @@ func TestCleanupFailurePreservesTheFirstExitCode(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee output.routing
 func TestEngineRejectsPartitionMismatchBeforeProgressOrOutput(t *testing.T) {
 	// Given filtered Kafka input with a source partition absent from its destination.
 	f := newEngineFixture()

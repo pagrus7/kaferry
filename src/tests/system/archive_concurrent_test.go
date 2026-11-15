@@ -13,6 +13,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee archive.ownership
 func TestKafkaArchiveConcurrentCapture(t *testing.T) {
 	// Given an uncommitted four-partition source and two processes sharing a group and archive directory.
 	const partitions, count = 4, 400

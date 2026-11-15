@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee completion.timestamp
 func TestStalenessCapturesWhileBehindAndWaitsOnlyAtReadableTip(t *testing.T) {
 	// Given a reader with a backlog after the wall-clock threshold.
 	r, source, sink, store, clock := fixture(t)
@@ -81,6 +82,7 @@ func TestStalenessReadsBeforeDeadlineAndKeepsExplicitTimestampShortcutAfterCaptu
 	require.Equal(t, int64(1), store.saves[len(store.saves)-1][0].Position)
 }
 
+//kaferry:guarantee completion.timestamp
 func TestStalenessResumeKeepsEndAndCompletedStops(t *testing.T) {
 	ctx := t.Context()
 	for _, reason := range []string{"", "timestamp", "tip"} {
@@ -120,6 +122,7 @@ func TestStalenessResumeKeepsEndAndCompletedStops(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee completion.offset-end
 func TestStalenessRejectsTruncatedEndAndFailedCaptureSave(t *testing.T) {
 	for _, failSave := range []bool{false, true} {
 		t.Run(map[bool]string{false: "truncation", true: "save failure"}[failSave], func(t *testing.T) {

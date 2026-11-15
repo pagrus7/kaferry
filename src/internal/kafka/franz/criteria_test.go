@@ -16,6 +16,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+//kaferry:guarantee completion.offset-end
 func TestLatestFreezesReadableEndAndKeepsItAfterResume(t *testing.T) {
 	// Given committed records and an unresolved transactional tail.
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"))
@@ -53,6 +54,7 @@ func TestLatestFreezesReadableEndAndKeepsItAfterResume(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee window assignment.added
 func TestNewPartitionAssignmentInitializesFromQueryAndSavedWindow(t *testing.T) {
 	for _, windowed := range []bool{false, true} {
 		t.Run(fmt.Sprint(windowed), func(t *testing.T) {

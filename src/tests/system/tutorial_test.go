@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee docs.examples
 func TestArchiveTutorial(t *testing.T) {
 	// Given a release bundle, or one generated from editable sources for a local run.
 	directory := t.TempDir()

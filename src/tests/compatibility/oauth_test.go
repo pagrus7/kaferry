@@ -8,10 +8,12 @@ import (
 	system "github.com/pagrus7/kaferry/src/tests/system"
 )
 
+//kaferry:guarantee security
 func TestSaslTlsOAuthTokenFile(t *testing.T) {
 	system.RunSaslTlsOAuthTokenFile(t)
 }
 
+//kaferry:guarantee security
 func TestSaslTlsOAuthRenewalAndKeyRotation(t *testing.T) {
 	system.RunSaslTlsOAuthRenewalAndKeyRotation(t)
 }

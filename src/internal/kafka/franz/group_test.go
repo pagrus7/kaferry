@@ -16,6 +16,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+//kaferry:guarantee identity
 func TestGroupInspectionAllowsCompatibleWorkersAndRejectsConflicts(t *testing.T) {
 	assignment := func(topic string) []byte {
 		a := kmsg.NewConsumerMemberAssignment()
@@ -234,6 +235,7 @@ func TestMembershipObservesActivityAndCompatibility(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee partitions
 func TestGroupInspectionRejectsDifferentSelectionsEvenBeforeAssignment(t *testing.T) {
 	for _, actual := range []string{"cooperative-sticky", "kaferry-partitions-v1-other"} {
 		// Given a Kaferry worker waiting for assignment under another protocol.

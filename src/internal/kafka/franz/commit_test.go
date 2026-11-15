@@ -61,6 +61,7 @@ func TestCommitterPreservesPartitionErrorsAndRejectsUnownedPositions(t *testing.
 	}
 }
 
+//kaferry:guarantee rebalance
 func TestCommitterClassifiesUnreachableCoordinatorAndSecurityFailures(t *testing.T) {
 	for _, scenario := range []struct {
 		failure error

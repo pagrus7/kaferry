@@ -73,6 +73,7 @@ func loggedWorker(ctx context.Context, statement, cfg string, observers ...func(
 	return workerResult{code, output.String()}
 }
 
+//kaferry:guarantee identity
 func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
 	// Given
 	a := admin(t)
@@ -132,6 +133,7 @@ func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee exit
 func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 	// Given
 	a := admin(t)
@@ -198,6 +200,7 @@ func relativeWindows(t *testing.T, parts []kadm.Offset) map[int32]plan.Window {
 	return result
 }
 
+//kaferry:guarantee window
 func TestConcurrentNowWindowsPersistAcrossWorkersAndRestart(t *testing.T) {
 	// Given
 	a := admin(t)
@@ -257,6 +260,7 @@ func TestConcurrentNowWindowsPersistAcrossWorkersAndRestart(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee output.records
 func TestMissingTimestampWithoutFilterUsesProducerClockAndCountsIt(t *testing.T) {
 	// Given
 	a := admin(t)
@@ -304,6 +308,7 @@ func (p *crashingProducer) TryProduce(ctx context.Context, record *kgo.Record, c
 	})
 }
 
+//kaferry:guarantee delivery
 func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 	// Given
 	if os.Getenv("KAFERRY_KAFKA_CRASH_HELPER") == "1" {
@@ -364,6 +369,7 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee start
 func TestRunningSourceOffsetOutOfRangeFailsWithoutSavingProgress(t *testing.T) {
 	// Given a protocol fixture that rejects the first observed source fetch as out of range.
 	binary := testBinary(t)
@@ -421,6 +427,7 @@ func TestRunningSourceOffsetOutOfRangeFailsWithoutSavingProgress(t *testing.T) {
 	require.Zero(t, end.Offset)
 }
 
+//kaferry:guarantee start
 func TestExpiredSourceProgressRestartReportsGapAndCopiesRetainedRecords(t *testing.T) {
 	// Given
 	a := admin(t)

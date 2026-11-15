@@ -153,6 +153,7 @@ func incoming(id int32, position int64, size int) Input {
 	return Input{Cursor: Cursor{Partition: id, Position: position}, Next: position + 1, Record: Record{Value: make([]byte, size)}}
 }
 
+//kaferry:guarantee delivery
 func TestRunnerDoesNotCommitPastFailedWrite(t *testing.T) {
 	// Given
 	r, s, d, p, _ := fixture(t)
@@ -181,6 +182,7 @@ func TestRunnerDoesNotCommitPastFailedWrite(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee caps
 func TestRunnerCapsIncludeConfirmedWorkAndOversizedAlone(t *testing.T) {
 	// Given
 	r, _, d, p, _ := fixture(t)
@@ -219,6 +221,7 @@ func TestRunnerCapsIncludeConfirmedWorkAndOversizedAlone(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee output.routing
 func TestRunnerQueueFullPreservesSubmissionOrder(t *testing.T) {
 	// Given
 	r, s, d, _, _ := fixture(t)
@@ -244,6 +247,7 @@ func TestRunnerQueueFullPreservesSubmissionOrder(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee rebalance
 func TestRevokeFencesLateOutcomesAndLostOwnershipNeverCommits(t *testing.T) {
 	// Given
 	for _, lost := range []bool{false, true} {
@@ -315,6 +319,7 @@ func TestPartialCommitReleasesSuccessfulPartitionsOnly(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee shutdown
 func TestShutdownDrainDeadlineCommitsConfirmedPrefix(t *testing.T) {
 	// Given
 	r, _, d, p, c := fixture(t)
@@ -337,6 +342,7 @@ func TestShutdownDrainDeadlineCommitsConfirmedPrefix(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee completion.timestamp
 func TestTimestampTriggerReplaysTriggerOffset(t *testing.T) {
 	// Given
 	r, s, d, p, _ := fixture(t)
@@ -362,6 +368,7 @@ func TestTimestampTriggerReplaysTriggerOffset(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee completion.offset-end
 func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 	// Given
 	r, s, _, _, c := fixture(t)
@@ -391,6 +398,7 @@ func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee exit
 func TestIdleExitRequiresProcessedEmptyAssignment(t *testing.T) {
 	// Given a bounded worker that has never received an assignment.
 	r, _, _, _, c := fixture(t)
@@ -533,6 +541,7 @@ func TestCapturedTipFinishesWithoutAnotherEOF(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee rebalance
 func TestRevocationCommitFailures(t *testing.T) {
 	// Given
 	for _, tc := range []struct {

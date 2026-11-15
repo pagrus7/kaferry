@@ -23,6 +23,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+//kaferry:guarantee partitions
 func TestPartitionCLISelectsWithoutFetchingOrCommittingExcludedPartitions(t *testing.T) {
 	for _, predicate := range []string{"PARTITION IN (2,0,2)", "PARTITION NOT IN (1,3)"} {
 		t.Run(predicate, func(t *testing.T) {

@@ -30,6 +30,7 @@ func TestKafkaRecordSizeMatchesActualWireEncoding(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee output.records
 func TestProducerBoundaryRefusesOversizeBeforeAsyncSubmission(t *testing.T) {
 	// Given the actual production sink with a 1000-byte client batch ceiling.
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"))

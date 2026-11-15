@@ -36,6 +36,7 @@ func TestReplayRejectsOffsetsDecreasingBetweenBlocks(t *testing.T) {
 
 }
 
+//kaferry:guarantee replay
 func TestDifferentSourceIdentitiesDoNotMergeTheirOffsets(t *testing.T) {
 	// Given reused offsets in different clusters, topics, topic IDs and partitions.
 	root := t.TempDir()

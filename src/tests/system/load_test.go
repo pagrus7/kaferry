@@ -25,6 +25,7 @@ type kafkaLoadScenario struct {
 	profile        *workloadProfile
 }
 
+//kaferry:guarantee caps
 func TestLoadBoundedKafkaCopy(t *testing.T) {
 	// Given default caps, small caps and the measured payload/key/compression profiles.
 	scenarios := []kafkaLoadScenario{

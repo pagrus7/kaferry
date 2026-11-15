@@ -19,6 +19,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 )
 
+//kaferry:guarantee errors
 func TestReplicatedBrokerFaults(t *testing.T) {
 	for _, name := range []string{"source-leader", "destination-leader", "rolling-source", "rolling-destination", "destination-isr-loss"} {
 		t.Run(name, func(t *testing.T) { replicatedBrokerFault(t, name) })

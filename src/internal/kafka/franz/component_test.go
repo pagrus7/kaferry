@@ -140,6 +140,7 @@ func TestConsumerConstructionDoesNotJoinBeforeStartAndCanClose(t *testing.T) {
 	require.Zero(t, joins.Load(), "consumer joined before the output was ready")
 }
 
+//kaferry:guarantee start
 func TestCorePositioningPrecedesClientOffsetAdjustment(t *testing.T) {
 	// Given timestamped records and no saved group offset, including on a v10-capable broker.
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"))
@@ -186,6 +187,7 @@ func TestCorePositioningPrecedesClientOffsetAdjustment(t *testing.T) {
 	require.Equal(t, "fp", progress.Fingerprint)
 }
 
+//kaferry:guarantee fidelity
 func TestProductionAdaptersPreserveRawRecordsAndZeroNegativeTimestamps(t *testing.T) {
 	// Given raw records with duplicate and arbitrary byte header names.
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "input", "output"))
@@ -273,6 +275,7 @@ func TestKafkaSinkPreservesPartitionsUsingTheRealProducer(t *testing.T) {
 	}
 }
 
+//kaferry:guarantee output.routing
 func TestExplicitKeyRoutingMatchesKafkaHashVectors(t *testing.T) {
 	// Given Kafka's reference Murmur2 vectors mapped to five partitions.
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(5, "input", "output"))

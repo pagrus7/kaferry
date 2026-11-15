@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee completion.timestamp
 func TestIndependentDisorderAndWallClockRules(t *testing.T) {
 	for _, tc := range []struct {
 		name                   string

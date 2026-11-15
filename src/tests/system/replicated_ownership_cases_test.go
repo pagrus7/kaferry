@@ -25,6 +25,7 @@ import (
 
 const ownershipKilledWorkScope = "sampled progress only; SIGKILL omits final lifetime highwater"
 
+//kaferry:guarantee rebalance
 func TestReplicatedOwnershipCases(t *testing.T) {
 	for _, name := range []string{"worker-kill-rebalance", "coordinator-kill-rebalance", "worker-scale"} {
 		t.Run(name, func(t *testing.T) { replicatedOwnershipCase(t, name) })

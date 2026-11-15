@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//kaferry:guarantee partitions
 func TestPartitionSelectionNeverReadsExcludedPayloads(t *testing.T) {
 	for _, filter := range []*plan.PartitionFilter{{IDs: []int32{0}}, {Exclude: true, IDs: []int32{5}}} {
 		// Given two original partitions and unreadable payload bytes in the excluded file.

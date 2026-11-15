@@ -45,6 +45,7 @@ func pauseRecoveryBroker(t *testing.T, container string) func() {
 	return func() { require.NoError(t, broker.recover()) }
 }
 
+//kaferry:guarantee errors
 func TestRecoveryBlockedOutput(t *testing.T) {
 	if os.Getenv("KAFKA_FAULT_DEST_CONTAINER") == "" {
 		t.Skip("requires separate owned source/destination brokers")
