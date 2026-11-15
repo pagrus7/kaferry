@@ -56,7 +56,6 @@ func TestTopicToTopicSlice(t *testing.T) {
 	require.Equal(t, int64(40), topicRecordCount(t, a, destination, 3), "completed resume published extra records")
 }
 
-//kaferry:guarantee fidelity
 func TestRecordFidelityAndTopicID(t *testing.T) {
 	// Given
 	a := admin(t)
@@ -117,7 +116,6 @@ func TestHistoricalFixtureTopicRetention(t *testing.T) {
 	}
 }
 
-//kaferry:guarantee completion.offset-end
 func TestTransactionVisibilityAndCommittedProgress(t *testing.T) {
 	for _, abort := range []bool{false, true} {
 		t.Run(fmt.Sprintf("abort=%v", abort), func(t *testing.T) {
@@ -170,7 +168,6 @@ func TestTransactionVisibilityAndCommittedProgress(t *testing.T) {
 	}
 }
 
-//kaferry:guarantee start
 func TestTimestampLookupOutOfOrder(t *testing.T) {
 	// Given
 	a := admin(t)
@@ -197,7 +194,6 @@ func TestTimestampLookupOutOfOrder(t *testing.T) {
 	}
 }
 
-//kaferry:guarantee output.records
 func TestMixedTimestampBatchHasNoRecordAttribution(t *testing.T) {
 	// Given
 	a := admin(t)

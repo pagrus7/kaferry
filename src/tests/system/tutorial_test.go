@@ -105,7 +105,6 @@ func TestArchiveTutorial(t *testing.T) {
 	require.Equal(t, input, archiveRecords(t, filepath.Join(directory, "output")), "rerun must preserve exactly the three original records")
 }
 
-//kaferry:guarantee docs.examples
 func TestArchiveTutorialCancellation(t *testing.T) {
 	if pidFile := os.Getenv("KAFERRY_TUTORIAL_HANG_PID"); pidFile != "" {
 		// The child holds a lock and the inherited output pipes while it hangs.

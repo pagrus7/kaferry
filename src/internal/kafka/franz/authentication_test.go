@@ -305,7 +305,7 @@ func TestOAuthTokenRequestHonorsCancellation(t *testing.T) {
 	}
 }
 
-//kaferry:guarantee archive.capture
+//kaferry:guarantee security
 func TestAuthenticationFilesAreCheckedBeforeOpeningOutput(t *testing.T) {
 	directory := t.TempDir()
 	invalid := writeFixture(t, directory, "private-file", []byte("private-file-contents"))

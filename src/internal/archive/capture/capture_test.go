@@ -76,7 +76,7 @@ func newCapture(t testing.TB, root string, policy Policy) (*Capture, *testClock)
 	return c, clock
 }
 
-//kaferry:guarantee output.routing
+//kaferry:guarantee fidelity
 func TestCapturePreservesPartitionsAndOrder(t *testing.T) {
 	// Given interleaved original partitions, duplicate offsets and raw nullable bytes.
 	root := t.TempDir()

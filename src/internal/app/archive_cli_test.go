@@ -221,7 +221,7 @@ func TestArchivePartitionCLIInspectsCopiesAndResumesOnlyItsSelectedFiles(t *test
 	}
 }
 
-//kaferry:guarantee window
+//kaferry:guarantee partitions
 func TestBetweenCLICopiesInclusiveRangesAndResumesEquivalentSyntax(t *testing.T) {
 	// Given three archived partitions with records before, inside and after the range.
 	root := t.TempDir()
