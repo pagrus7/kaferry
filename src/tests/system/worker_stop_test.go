@@ -49,9 +49,10 @@ func TestWorkerStopAcrossEndpointDirections(t *testing.T) {
 	var expected []core.Record
 	for i := range 7 {
 		key, value := []byte{0, byte(i)}, []byte{255, byte(i)}
-		if i == 0 {
+		switch i {
+		case 0:
 			value = nil
-		} else if i == 1 {
+		case 1:
 			value = []byte{}
 		}
 		headers := []kgo.RecordHeader{{Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}

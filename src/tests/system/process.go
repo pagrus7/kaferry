@@ -39,7 +39,7 @@ type cliProcess struct {
 	exitIntent []cliSignalIntent
 }
 
-func startCLI(t *testing.T, ctx context.Context, binary, input string, args ...string) *cliProcess {
+func startCLI(ctx context.Context, t *testing.T, binary, input string, args ...string) *cliProcess {
 	t.Helper()
 	p := &cliProcess{command: exec.CommandContext(ctx, binary, args...), done: make(chan struct{})}
 	p.command.Stdin = strings.NewReader(input)
@@ -47,9 +47,9 @@ func startCLI(t *testing.T, ctx context.Context, binary, input string, args ...s
 	return p
 }
 
-func binaryWorker(t *testing.T, ctx context.Context, statement, config string) workerResult {
+func binaryWorker(ctx context.Context, t *testing.T, statement, config string) workerResult {
 	t.Helper()
-	process := startCLI(t, ctx, testBinary(t), statement, "run", "--file", "-", "--config", config)
+	process := startCLI(ctx, t, testBinary(t), statement, "run", "--file", "-", "--config", config)
 	err := process.wait()
 	require.NoError(t, ctx.Err(), "worker must exit before its deadline: %s", process.logs())
 	code := 0
@@ -61,7 +61,7 @@ func binaryWorker(t *testing.T, ctx context.Context, statement, config string) w
 	return workerResult{code, process.logs()}
 }
 
-func launchCLI(t *testing.T, ctx context.Context, binary string, args ...string) *cliProcess {
+func launchCLI(ctx context.Context, t *testing.T, binary string, args ...string) *cliProcess {
 	t.Helper()
 	p := &cliProcess{command: exec.CommandContext(ctx, binary, args...), done: make(chan struct{})}
 	var err error

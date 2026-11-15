@@ -95,7 +95,7 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 				records.keyRouting = kgo.StickyKeyPartitioner(nil).ForTopic(dst)
 				records.destinationPartitions = 5
 			}
-			records.publish(t, seedCtx, p, reports, count)
+			records.publish(seedCtx, t, p, reports, count)
 			for range count {
 				select {
 				case e := <-reports:
@@ -136,7 +136,7 @@ func TestLoadBoundedKafkaCopy(t *testing.T) {
 			// When executing the bounded copy and sampling its memory.
 			ctx, cancel := context.WithTimeout(t.Context(), copyTimeout)
 			defer cancel()
-			process := launchCLI(t, ctx, binaryPath, args...)
+			process := launchCLI(ctx, t, binaryPath, args...)
 			summary := measureCLI(t, report, process, statement)
 
 			// Then the CLI resolves every record within its work caps and preserves output.

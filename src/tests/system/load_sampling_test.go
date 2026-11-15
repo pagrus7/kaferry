@@ -15,7 +15,7 @@ func TestLoadSamplesMemoryBeforeReleasingInput(t *testing.T) {
 	// Given a CLI blocked on SQL input, which may finish before the next sample.
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	process := launchCLI(t, ctx, testBinary(t), "run", "-f", "-")
+	process := launchCLI(ctx, t, testBinary(t), "run", "-f", "-")
 
 	// When sampling finishes before SQL is released.
 	finish := watchRSS(t, process)

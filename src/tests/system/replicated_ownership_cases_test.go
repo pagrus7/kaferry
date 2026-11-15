@@ -199,7 +199,7 @@ func (s *ownershipCase) start(route int) {
 		require.NoError(s.t, os.WriteFile(path, []byte(statement), 0600))
 	}
 	worker := &ownershipCaseWorker{route: route, started: time.Now().UTC()}
-	worker.process = startCLI(s.t, s.ctx, testBinary(s.t), "", "run", "-e", statement, "-c", s.config)
+	worker.process = startCLI(s.ctx, s.t, testBinary(s.t), "", "run", "-e", statement, "-c", s.config)
 	worker.lifetime = brokerLifetime{Number: len(s.workers) + 1, PID: worker.process.pid(), Started: worker.started, Binary: os.Getenv("KAFERRY_EXPECT_BINARY_SHA256")}
 	worker.memory = watchReplicatedRSS(s.t, worker.process)
 	s.workers = append(s.workers, worker)

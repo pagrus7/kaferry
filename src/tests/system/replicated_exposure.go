@@ -55,6 +55,7 @@ func watchReplicatedRSS(t *testing.T, process *cliProcess) func() rssPeak {
 	return watchReplicatedSamples(t, process, func() (int64, error) { return rssSample(process.pid()) })
 }
 
+//nolint:gocognit // Grandfathered harness complexity.
 func watchReplicatedSamples(t *testing.T, process *cliProcess, sample func() (int64, error)) func() rssPeak {
 	t.Helper()
 	first, err := sample()

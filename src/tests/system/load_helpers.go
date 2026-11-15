@@ -104,7 +104,7 @@ func newFiniteStreamRecords(topic string, stamp time.Time, count int) *streamRec
 func newPartitionedStreamRecords(topic string, stamp time.Time, partitions int) *streamRecords {
 	return &streamRecords{topic: topic, stamp: stamp, headers: []kgo.RecordHeader{{Key: "trace", Value: []byte{0, 255}}, {Key: "dup", Value: nil}, {Key: "dup", Value: []byte{}}}, order: make(map[[2]int32]int), offsets: make(map[int32]int64), receipts: newReceiptLedger(partitions)}
 }
-func (s *streamRecords) publish(t *testing.T, ctx context.Context, producer *kgo.Client, reports chan kgo.ProduceResult, count int) {
+func (s *streamRecords) publish(ctx context.Context, t *testing.T, producer *kgo.Client, reports chan kgo.ProduceResult, count int) {
 	t.Helper()
 	for range count {
 		id := s.published

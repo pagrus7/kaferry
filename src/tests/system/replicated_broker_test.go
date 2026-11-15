@@ -214,7 +214,7 @@ func configValue(configs []kadm.Config, key string) string {
 }
 
 func (s *brokerCopy) start() {
-	process := startCLI(s.t, s.ctx, testBinary(s.t), "", "run", "-e", s.statement, "-c", s.config)
+	process := startCLI(s.ctx, s.t, testBinary(s.t), "", "run", "-e", s.statement, "-c", s.config)
 	s.workers = append(s.workers, process)
 	s.identities = append(s.identities, brokerLifetime{Number: len(s.workers), PID: process.pid(), Started: time.Now().UTC(), Binary: os.Getenv("KAFERRY_EXPECT_BINARY_SHA256")})
 	logPath := filepath.Join(s.directory, fmt.Sprintf("worker-%d.cli.log", len(s.workers)))

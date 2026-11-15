@@ -77,7 +77,7 @@ func oauthTokenEndpoint(t *testing.T, cfg map[string]string, expiresIn int, issu
 	cfg["sasl.oauthbearer.client.id"], cfg["sasl.oauthbearer.client.secret"] = "copier-client", "private-oauth-secret"
 }
 
-func RunSaslTlsOAuthTokenFile(t *testing.T) {
+func RunSaslTLSOAuthTokenFile(t *testing.T) {
 	// Given a broker that validates signatures, issuer, audience and expiration.
 	_, producer, src, dst, group := secureFixture(t)
 	key := fixtureOAuthKey(t, 1)
@@ -92,7 +92,7 @@ func RunSaslTlsOAuthTokenFile(t *testing.T) {
 		publish(t, producer, &kgo.Record{Topic: src, Value: []byte{byte(round)}, Timestamp: time.Now().Truncate(time.Millisecond)})
 		// When a fresh invocation reads the replaced token file and resumes.
 		ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
-		result := binaryWorker(t, ctx, statement, secureConfig(t, cfg))
+		result := binaryWorker(ctx, t, statement, secureConfig(t, cfg))
 		cancel()
 		// Then only the remaining record is copied and the token is redacted.
 		require.Zero(t, result.code, result.detail)
@@ -120,14 +120,14 @@ func RunSaslTlsOAuthTokenFile(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, []byte(token), 0600))
 			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 			defer cancel()
-			result := binaryWorker(t, ctx, statement, secureConfig(t, cfg))
+			result := binaryWorker(ctx, t, statement, secureConfig(t, cfg))
 			require.Equal(t, 1, result.code, result.detail)
 			require.NotContains(t, result.detail, token)
 		})
 	}
 }
 
-func RunSaslTlsOAuthRenewalAndKeyRotation(t *testing.T) {
+func RunSaslTLSOAuthRenewalAndKeyRotation(t *testing.T) {
 	// Given a live copy, short-lived signed tokens and a broker's HTTP JWKS cache.
 	a, producer, src, dst, group := secureFixture(t)
 	keys := [2]*rsa.PrivateKey{fixtureOAuthKey(t, 1), fixtureOAuthKey(t, 2)}
@@ -146,7 +146,7 @@ func RunSaslTlsOAuthRenewalAndKeyRotation(t *testing.T) {
 	defer cancel()
 	publish(t, producer, &kgo.Record{Topic: src, Value: []byte("before"), Timestamp: time.Now().Truncate(time.Millisecond)})
 	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s') OPTIONS(WORKER_STOP_AFTER_RECORDS=2)", dst, src, group)
-	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", secureConfig(t, cfg))
+	process := startCLI(ctx, t, testBinary(t), "", "run", "-e", statement, "-c", secureConfig(t, cfg))
 	waitEnd(t, a, dst, 1)
 	// When the issuer rotates keys while the same process reauthenticates.
 	root := os.Getenv("KAFERRY_QUAL_CERT_DIR")
@@ -164,8 +164,8 @@ func RunSaslTlsOAuthRenewalAndKeyRotation(t *testing.T) {
 	require.Equal(t, "after", string(read(t, reader).Value))
 }
 
-func RunMutualTlsCopy(t *testing.T) { testTLSCopy(t, true) }
-func RunServerTlsCopy(t *testing.T) { testTLSCopy(t, false) }
+func RunMutualTLSCopy(t *testing.T) { testTLSCopy(t, true) }
+func RunServerTLSCopy(t *testing.T) { testTLSCopy(t, false) }
 
 func testTLSCopy(t *testing.T, mutual bool) {
 	t.Helper()
@@ -186,13 +186,13 @@ func testTLSCopy(t *testing.T, mutual bool) {
 	// When copying through the CLI, then TLS authentication preserves the record.
 	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
 	defer cancel()
-	result := binaryWorker(t, ctx, statement, secureConfig(t, cfg))
+	result := binaryWorker(ctx, t, statement, secureConfig(t, cfg))
 	require.Zero(t, result.code, result.detail)
 	require.Equal(t, "tls", string(read(t, secureReader(t, dst)).Value))
 	if mutual {
 		delete(cfg, "ssl.certificate.location")
 		delete(cfg, "ssl.key.location")
-		result = binaryWorker(t, ctx, statement, secureConfig(t, cfg))
+		result = binaryWorker(ctx, t, statement, secureConfig(t, cfg))
 		require.Equal(t, 1, result.code, "missing client certificate must fail: %s", result.detail)
 	}
 }

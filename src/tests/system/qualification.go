@@ -81,9 +81,9 @@ func secureFixture(t *testing.T) (*kadm.Client, *kgo.Client, string, string, str
 	require.Len(t, created, 2)
 	require.NoError(t, created.Error())
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_, _ = a.DeleteTopics(ctx, src, dst)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = a.DeleteTopics(cleanupCtx, src, dst)
 	})
 	for _, acl := range []*kadm.ACLBuilder{
 		kadm.NewACLs().Topics(src).Operations(kadm.OpRead),
@@ -162,6 +162,7 @@ func waitCopierPermissions(t *testing.T, src, dst string) {
 	}
 }
 
+//nolint:funlen,gocognit,nestif // Grandfathered harness complexity.
 func waitOneOffGroupPermissions(t *testing.T, a *kadm.Client, cfg map[string]string) {
 	t.Helper()
 	// A recovered broker can wait for the five-minute preferred-leader check.
@@ -233,7 +234,7 @@ func secureReader(t *testing.T, topic string) *kgo.Client {
 	return client
 }
 
-func RunSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
+func RunSaslTLSRestrictedACLCopyAndDeniedConfigPreflight(t *testing.T) {
 	// Given
 	_, p, src, dst, group := secureFixture(t)
 	stamp := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
@@ -243,7 +244,7 @@ func RunSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 	defer cancel()
 
 	// When
-	result := binaryWorker(t, ctx, statement, secureConfig(t, secureProperties(t, "copier", "fixture-copy-secret")))
+	result := binaryWorker(ctx, t, statement, secureConfig(t, secureProperties(t, "copier", "fixture-copy-secret")))
 
 	// Then
 	if result.code != 0 || !strings.Contains(result.detail, "topic configuration unreadable; dependent preflight checks disabled") || strings.Contains(result.detail, "fixture-copy-secret") {
@@ -271,7 +272,7 @@ func RunSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			start := time.Now()
-			result := binaryWorker(t, ctx, statement+" OPTIONS(ON_ERROR=SKIP)", secureConfig(t, cfg))
+			result := binaryWorker(ctx, t, statement+" OPTIONS(ON_ERROR=SKIP)", secureConfig(t, cfg))
 			require.Equal(t, failure.code, result.code, "security failure must reach the broker/client: %s", result.detail)
 			require.Contains(t, strings.ToLower(result.detail), failure.message)
 			require.Less(t, time.Since(start), 14*time.Second, "security failures must stop promptly")
@@ -280,7 +281,8 @@ func RunSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
 	}
 }
 
-func RunSaslTlsRestrictedAclInspectionAndUnnamedCopy(t *testing.T) {
+//nolint:funlen // Grandfathered harness complexity.
+func RunSaslTLSRestrictedACLInspectionAndUnnamedCopy(t *testing.T) {
 	// Given a completed finite copy using only source/group READ and destination WRITE.
 	a, producer, src, dst, group := secureFixture(t)
 	publish(t, producer, &kgo.Record{Topic: src, Partition: 0, Value: []byte("restricted-acl")})
@@ -288,7 +290,7 @@ func RunSaslTlsRestrictedAclInspectionAndUnnamedCopy(t *testing.T) {
 	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s') WHERE RECORD_OFFSET < LATEST", dst, src, group)
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	result := binaryWorker(t, ctx, statement, config)
+	result := binaryWorker(ctx, t, statement, config)
 	require.Zero(t, result.code, result.detail)
 	require.Equal(t, 1, summaryFrom(t, result.detail).Confirmed)
 	waitMembers(t, a, group, 0, 0, nil)
@@ -351,7 +353,7 @@ func RunSaslTlsRestrictedAclInspectionAndUnnamedCopy(t *testing.T) {
 		statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WHERE RECORD_OFFSET < LATEST", dst, src)
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
-		result := binaryWorker(t, ctx, statement, secureConfig(t, cfg))
+		result := binaryWorker(ctx, t, statement, secureConfig(t, cfg))
 		require.Zero(t, result.code, result.detail)
 		require.Equal(t, 1, summaryFrom(t, result.detail).Confirmed)
 		var generatedGroup string
@@ -374,7 +376,7 @@ func RunSaslTlsRestrictedAclInspectionAndUnnamedCopy(t *testing.T) {
 	})
 }
 
-func RunSaslTlsScramMechanisms(t *testing.T) {
+func RunSaslTLSScramMechanisms(t *testing.T) {
 	for _, mechanism := range []string{"SCRAM-SHA-256", "SCRAM-SHA-512"} {
 		t.Run(mechanism, func(t *testing.T) {
 			// Given a record and a restricted SCRAM identity over TLS.
@@ -389,7 +391,7 @@ func RunSaslTlsScramMechanisms(t *testing.T) {
 			defer cancel()
 
 			// When the CLI copies with that mechanism.
-			result := binaryWorker(t, ctx, statement, secureConfig(t, cfg))
+			result := binaryWorker(ctx, t, statement, secureConfig(t, cfg))
 
 			// Then the destination contains the original bytes and timestamp.
 			if result.code != 0 || strings.Contains(result.detail, "fixture-copy-secret") {
@@ -404,7 +406,7 @@ func RunSaslTlsScramMechanisms(t *testing.T) {
 			cfg["sasl.password"] = "unique-wrong-scram-secret"
 			failureCtx, failureCancel := context.WithTimeout(t.Context(), 15*time.Second)
 			defer failureCancel()
-			result = binaryWorker(t, failureCtx, statement+" OPTIONS(ON_ERROR=SKIP)", secureConfig(t, cfg))
+			result = binaryWorker(failureCtx, t, statement+" OPTIONS(ON_ERROR=SKIP)", secureConfig(t, cfg))
 			require.Equal(t, 1, result.code, "wrong SCRAM password must fail: %s", result.detail)
 			require.NotContains(t, result.detail, "unique-wrong-scram-secret", "credentials must stay redacted")
 		})
@@ -435,7 +437,7 @@ func RunReplicatedClusterLeaderFailurePreservesCopy(t *testing.T) {
 	properties["socket.timeout.ms"] = "5000"
 	properties["session.timeout.ms"] = "6000"
 	config := secureConfig(t, properties)
-	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+	process := startCLI(ctx, t, testBinary(t), "", "run", "-e", statement, "-c", config)
 	committedPartitions(t, a, group, src, 1)
 	stamp := time.Now().Truncate(time.Millisecond)
 	for i := range 16 {

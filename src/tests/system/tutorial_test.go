@@ -37,10 +37,10 @@ func TestArchiveTutorial(t *testing.T) {
 	require.NoError(t, err, "%s", output)
 	directory = filepath.Join(directory, "archive-demo")
 	for _, name := range []string{"copy.sql", "tutorial.toml"} {
-		expected, err := os.ReadFile(filepath.Join("../../../examples/archive-demo", name))
-		require.NoError(t, err)
-		actual, err := os.ReadFile(filepath.Join(directory, name))
-		require.NoError(t, err)
+		expected, readErr := os.ReadFile(filepath.Join("../../../examples/archive-demo", name))
+		require.NoError(t, readErr)
+		actual, actualErr := os.ReadFile(filepath.Join(directory, name))
+		require.NoError(t, actualErr)
 		require.Equal(t, expected, actual, "download bundle must match example source: %s", name)
 	}
 	binary, err := filepath.Abs(testBinary(t))

@@ -44,13 +44,13 @@ func TestExplainBinaryResumesWithoutChangingKafkaOrCreatingFiles(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	// When the actual executable explains a resume against the real broker.
-	if err := command.Run(); err != nil {
-		t.Fatal(err, stderr.String())
+	if runErr := command.Run(); runErr != nil {
+		t.Fatal(runErr, stderr.String())
 	}
 	// Then it reports the saved offsets and leaves positions and metadata unchanged.
 	var report inspect.Report
-	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || len(report.Partitions) != 2 {
-		t.Fatal(err, stdout.String())
+	if decodeErr := json.Unmarshal(stdout.Bytes(), &report); decodeErr != nil || len(report.Partitions) != 2 {
+		t.Fatal(decodeErr, stdout.String())
 	}
 	for n, part := range report.Partitions {
 		if part.ID != int32(n) || !part.Saved || part.Start != before[source][int32(n)].At {

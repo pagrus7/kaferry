@@ -24,7 +24,7 @@ func execute(t *testing.T, statement, config string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if os.Getenv("KAFERRY_TEST_BINARY") != "" {
-		result := binaryWorker(t, ctx, statement, config)
+		result := binaryWorker(ctx, t, statement, config)
 		require.Zero(t, result.code, result.detail)
 		return
 	}

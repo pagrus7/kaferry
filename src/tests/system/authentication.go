@@ -13,7 +13,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func RunSaslTlsExternalAuthentication(t *testing.T) {
+func RunSaslTLSExternalAuthentication(t *testing.T) {
 	mechanisms := [...]string{"OAUTHBEARER", "GSSAPI"}
 	for _, mechanism := range mechanisms {
 		t.Run(mechanism, func(t *testing.T) {
@@ -43,7 +43,7 @@ func RunSaslTlsExternalAuthentication(t *testing.T) {
 					publish(t, producer, &kgo.Record{Topic: src, Value: []byte("resumed"), Timestamp: stamp})
 				}
 				ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-				result := binaryWorker(t, ctx, statement, secureConfig(t, cfg))
+				result := binaryWorker(ctx, t, statement, secureConfig(t, cfg))
 				cancel()
 				// Then authentication succeeds, credentials stay private, and each run adds exactly one record.
 				require.Equal(t, 0, result.code, "%s", result.detail)

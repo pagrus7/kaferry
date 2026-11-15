@@ -170,7 +170,7 @@ func TestReplicatedZombieWorker(t *testing.T) {
 		worker := index + 1
 		statement := zombieWorkerSQL(timeouts, worker, marker, src, dst, group)
 		starts = append(starts, time.Now().UTC())
-		process := launchCLI(t, ctx, binary, "run", "--file", "-", "--config", config)
+		process := launchCLI(ctx, t, binary, "run", "--file", "-", "--config", config)
 		workers = append(workers, process)
 		oracle.writer(process)
 		memories = append(memories, watchReplicatedRSS(t, process))

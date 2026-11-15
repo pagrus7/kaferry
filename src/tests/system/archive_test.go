@@ -31,7 +31,7 @@ func TestAvroCaptureAndReplayCLI(t *testing.T) {
 			cfg = filepath.Join(t.TempDir(), "config.toml")
 			require.NoError(t, os.WriteFile(cfg, []byte(settings), 0600))
 		}
-		return binaryWorker(t, ctx, statement, cfg)
+		return binaryWorker(ctx, t, statement, cfg)
 	}
 	for id := range 32 {
 		r := archiveLoadRecord(id)

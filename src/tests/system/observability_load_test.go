@@ -67,7 +67,7 @@ func TestLoadObservability(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), timeout)
 				defer cancel()
 				// When the CLI copies, with CPU and resident memory sampled independently.
-				process := launchCLI(t, ctx, binary, "run", "-f", "-", "-c", config)
+				process := launchCLI(ctx, t, binary, "run", "-f", "-", "-c", config)
 				summary := measureCLI(t, report, process, statement)
 				// Then telemetry availability changes neither counts, caps nor archive record bytes.
 				require.Equal(t, count, summary.Confirmed)

@@ -27,6 +27,7 @@ func consumeOnlyStart(scheduledEnd, lastPublish time.Time) time.Time {
 	return scheduledEnd
 }
 
+//nolint:funlen,gocognit,nestif // Grandfathered harness complexity.
 func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	// Given
 	report := newLoadReport(t, "soak")
@@ -133,7 +134,7 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	require.NoError(t, os.WriteFile(configPath, []byte("[worker]\nrecord_cap=1024\npartition_record_cap=256\nprogress_interval='0'\n"), 0600))
 	ctx, cancel := context.WithTimeout(context.Background(), duration+soakDrainDuration+4*time.Minute)
 	defer cancel()
-	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", configPath)
+	process := startCLI(ctx, t, testBinary(t), "", "run", "-e", statement, "-c", configPath)
 	report.cli = process
 	waitMembers(t, a, group, 1, sourcePartitions, nil)
 	committedPartitions(t, a, group, src, sourcePartitions)
@@ -231,7 +232,7 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 				8192-(records.published-records.receipts.contiguous()), 8192-(records.published-records.acknowledged))
 			if count > 0 {
 				publishStart := time.Now()
-				records.publish(t, ctx, p, reports, count)
+				records.publish(ctx, t, p, reports, count)
 				lastPublish = time.Now()
 				monitor.idleSamples = 0
 				published = true
@@ -246,7 +247,7 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 				bursts++
 				nextBurst = now.Add(time.Minute)
 			}
-			records.publish(t, ctx, p, reports, count)
+			records.publish(ctx, t, p, reports, count)
 			lastPublish = time.Now()
 			monitor.idleSamples = 0
 			published = true

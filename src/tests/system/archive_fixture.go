@@ -5,6 +5,7 @@ package compat
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -111,7 +112,7 @@ func scanArchive(t *testing.T, path string, visit func(core.Record)) {
 	require.NoError(t, err)
 	for {
 		entry, err := reader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return
 		}
 		require.NoError(t, err)

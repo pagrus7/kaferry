@@ -10,20 +10,20 @@ import (
 
 //kaferry:guarantee security
 func TestSaslTlsExternalAuthentication(t *testing.T) {
-	system.RunSaslTlsExternalAuthentication(t)
+	system.RunSaslTLSExternalAuthentication(t)
 }
 
 //kaferry:guarantee security
 func TestSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t *testing.T) {
-	system.RunSaslTlsRestrictedAclCopyAndDeniedConfigPreflight(t)
+	system.RunSaslTLSRestrictedACLCopyAndDeniedConfigPreflight(t)
 }
 
 //kaferry:guarantee security
 func TestSaslTlsRestrictedAclInspectionAndUnnamedCopy(t *testing.T) {
-	system.RunSaslTlsRestrictedAclInspectionAndUnnamedCopy(t)
+	system.RunSaslTLSRestrictedACLInspectionAndUnnamedCopy(t)
 }
 
 //kaferry:guarantee security
 func TestSaslTlsScramMechanisms(t *testing.T) {
-	system.RunSaslTlsScramMechanisms(t)
+	system.RunSaslTLSScramMechanisms(t)
 }

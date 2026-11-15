@@ -93,7 +93,7 @@ duplicates:
 	$(JSCPD) --config .jscpd.json --baseline-from-ref "$(DUPLICATION_BASE)" --fail-on-new-clones --no-tips
 lint:
 	$(GOLANGCI_LINT) config verify
-	$(GOLANGCI_LINT) run --build-tags=harness ./...
+	$(GOLANGCI_LINT) run --build-tags=integration,load,fault,qualification,migration,container,harness ./...
 
 # Standalone qualification: Python 3.11+, Go, Docker and Compose; no agent required.
 .PHONY: qualification-setup qualification-pr qualification-full model

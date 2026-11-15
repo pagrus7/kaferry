@@ -58,7 +58,7 @@ func TestArchiveCaptureCrashRecoversAcknowledgedData(t *testing.T) {
 		"INSERT INTO ARCHIVE '%s' WITH (ROTATE_AFTER_SIZE = 16k) SELECT * FROM TOPIC '%s' WITH (GROUP = '%s', START = EARLIEST)", broker(t), root, src, group)
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
-	process := startCLI(t, ctx, binaryPath, "", "run", "-e", query, "-c", config)
+	process := startCLI(ctx, t, binaryPath, "", "run", "-e", query, "-c", config)
 	waitMembers(t, a, group, 1, 2, nil)
 	waitSaved := func(want int64) {
 		t.Helper()
@@ -106,7 +106,7 @@ func TestArchiveCaptureCrashRecoversAcknowledgedData(t *testing.T) {
 	require.Equal(t, syscall.SIGKILL, waitStatus.Signal())
 	publishRange(10, 26)
 	waitMembers(t, a, group, 0, 0, nil)
-	process = startCLI(t, ctx, binaryPath, "", "run", "-e", query, "-c", config)
+	process = startCLI(ctx, t, binaryPath, "", "run", "-e", query, "-c", config)
 	waitMembers(t, a, group, 1, 2, nil)
 	waitSaved(13)
 	require.NoError(t, process.signal(os.Interrupt))
@@ -157,7 +157,7 @@ func TestArchiveCaptureCrashRecoversAcknowledgedData(t *testing.T) {
 	// Replay into a fresh archive/group so reconciliation also retains original routing and offsets.
 	clone := filepath.Join(t.TempDir(), "replayed")
 	replayQuery := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP = 'crash-reconcile')", clone, root)
-	replay := startCLI(t, ctx, binaryPath, "", "run", "-e", replayQuery, "-c", config)
+	replay := startCLI(ctx, t, binaryPath, "", "run", "-e", replayQuery, "-c", config)
 	require.NoError(t, replay.wait(), replay.logs())
 	counts, duplicates := make(map[int]int), 0
 	for _, record := range archiveRecords(t, clone) {
@@ -175,7 +175,7 @@ func TestArchiveCaptureCrashRecoversAcknowledgedData(t *testing.T) {
 	}
 	t.Logf("unique_records=%d replay_duplicates=%d missing=0 corrupted=0", len(counts), duplicates)
 
-	status := startCLI(t, ctx, binaryPath, "", "status", "-e", query, "-c", config, "--json")
+	status := startCLI(ctx, t, binaryPath, "", "status", "-e", query, "-c", config, "--json")
 	require.Error(t, status.wait())
 	require.Equal(t, 4, status.command.ProcessState.ExitCode(), status.logs())
 	var report inspect.StatusReport

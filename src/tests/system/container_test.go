@@ -71,9 +71,9 @@ func testContainerCommand(t *testing.T) {
 		t.Run(removed, func(t *testing.T) {
 			require.Contains(t, document, removed)
 			// When the extracted example loses a required flag or its marker.
-			_, err := readmeContainerCommand(strings.Replace(document, removed, "", 1))
+			_, extractErr := readmeContainerCommand(strings.Replace(document, removed, "", 1))
 			// Then extraction fails instead of silently testing a weaker command.
-			require.Error(t, err)
+			require.Error(t, extractErr)
 		})
 	}
 	_, err = readmeContainerCommand(document + document)
@@ -140,8 +140,8 @@ func TestContainerShutdownAndResume(t *testing.T) {
 			if brokerID != "" {
 				cleanup, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer cancel()
-				out, err := exec.CommandContext(cleanup, "docker", "rm", "-fv", brokerID).CombinedOutput()
-				require.NoError(t, err, "%s", out)
+				out, removeErr := exec.CommandContext(cleanup, "docker", "rm", "-fv", brokerID).CombinedOutput()
+				require.NoError(t, removeErr, "%s", out)
 			}
 		})
 		require.NoError(t, setupErr, "%s", data)

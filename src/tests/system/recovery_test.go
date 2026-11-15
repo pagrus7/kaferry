@@ -117,7 +117,7 @@ func recoveryBlockedOutput(t *testing.T, failure string) bool {
 		byteCap, recordCap = 134217728, 1024
 	}
 	config := configuration(t, settings)
-	process := startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+	process := startCLI(ctx, t, testBinary(t), "", "run", "-e", statement, "-c", config)
 	oracle.writer(process)
 	waitMembers(t, a, group, 1, 2, nil)
 	p := producer(t)
@@ -150,7 +150,7 @@ func recoveryBlockedOutput(t *testing.T, failure string) bool {
 		oracle.timeouts,
 		"both source partitions have saved prefix 1 and destination has two records")
 	if failure == "ownership-loss" {
-		replacement = startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+		replacement = startCLI(ctx, t, testBinary(t), "", "run", "-e", statement, "-c", config)
 		oracle.writer(replacement)
 		waitMembers(t, a, group, 2, 2, nil)
 		oracle.injected(t, window, "member-join", map[string]int{"pid": replacement.pid()}, "peer joined; two workers own the two source partitions")
@@ -244,7 +244,7 @@ func recoveryBlockedOutput(t *testing.T, failure string) bool {
 	restoreDestination()
 	if replacement == nil {
 		waitMembers(t, a, group, 0, 0, nil)
-		replacement = startCLI(t, ctx, testBinary(t), "", "run", "-e", statement, "-c", config)
+		replacement = startCLI(ctx, t, testBinary(t), "", "run", "-e", statement, "-c", config)
 		oracle.writer(replacement)
 	}
 	waitMembers(t, a, group, 1, 2, nil)

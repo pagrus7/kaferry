@@ -52,6 +52,11 @@ linters:
         linters:
           - funlen
           - dupl
+      - path: 'src/tests/.*_test\.go$'
+        linters:
+          - gocognit
+          - nestif
+          - unparam
 
 issues:
   max-issues-per-linter: 0
