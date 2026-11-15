@@ -32,7 +32,7 @@ make lint GOLANGCI_LINT=./bin/golangci-lint
 make fast GOLANGCI_LINT=./bin/golangci-lint
 ```
 
-[.golangci.yml](.golangci.yml) defines the checks. Existing and new findings fail lint; function-length and Go-duplication checks exclude test files.
+[.golangci.yml](.golangci.yml) defines the checks. All build tags are linted; findings fail unless explicitly excluded.
 
 ## Duplication checks
 
