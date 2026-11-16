@@ -4,6 +4,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '37 8 * * 1'
 permissions:
   contents: read
 env:
@@ -12,6 +14,72 @@ concurrency:
   group: checks-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.paths.outputs.code }}
+      compat: ${{ steps.paths.outputs.compat }}
+      containers: ${{ steps.paths.outputs.containers }}
+      replicated: ${{ steps.paths.outputs.replicated }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: paths
+        with:
+          filters: |
+            code:
+              - '!{README.md,docs/**/*.md}'
+              - 'docs/design/grammar.md'
+            compat:
+              - '!{README.md,CONTRIBUTING.md,AGENTS.md,CLAUDE.md,docs/**/*.md,.claude/agents/**/*.md,.claude/skills/**/SKILL.md,.codex/agents/**/*.toml,src/cmd/**/*_test.go,src/internal/**/*_test.go,src/tests/system/**/*_test.go,tools/**/test_*.py}'
+              - '.github/workflows/ci.yml'
+              - '.github/actions/**'
+            containers:
+              - '.github/workflows/containers.yml'
+              - '.github/workflows/release.yml'
+              - 'README.md'
+              - 'docs/usage.md'
+              - 'tools/release/**'
+              - 'src/tests/system/container_test.go'
+              - 'examples/archive-demo/**'
+              - 'src/cmd/package-examples/**'
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+              - '.github/actions/**'
+            replicated:
+              - 'src/tests/replicated/**'
+              - 'src/tests/system/faults/**'
+              - 'src/tests/system/replicated_*.go'
+              - 'src/tests/system/fault_oracle.go'
+              - 'src/tests/qualification/matrix.json'
+              - 'src/tests/system/soak*'
+              - 'src/tests/system/endurance*'
+              - 'src/tests/system/fixtures.go'
+              - 'src/tests/qualification/fault-timeouts-ms.json'
+              - 'tools/qualification/qualify.py'
+              - 'tools/qualification/replicated_evidence.py'
+              - 'tools/qualification/broker_probe.py'
+              - 'tools/qualification/test_qualify.py'
+              - 'tools/qualification/network.py'
+              - 'tools/qualification/test_network.py'
+              - 'tools/qualification/fault_oracle.py'
+              - 'tools/qualification/fault_results.py'
+              - 'tools/qualification/ownership_audit.py'
+              - 'tools/qualification/test_fault_oracle.py'
+              - 'tools/qualification/test_ownership_audit.py'
+              - 'tools/qualification/ownership_cases.py'
+              - 'tools/qualification/test_ownership_cases.py'
+              - 'tools/qualification/replicated_results.py'
+              - 'tools/qualification/test_replicated_results.py'
+              - 'tools/ci/replicated_suites.py'
+              - '.github/workflows/replicated-lab.yml'
+              - '.github/workflows/ci.yml'
+              - '.github/actions/**'
   warm-broker-cache:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
@@ -47,21 +115,84 @@ jobs:
           cache-name: container-inputs
       - name: Compile both Linux container inputs
         run: python3 -m tools.release.container_artifacts candidate .cache/container-context
-  fast:
+  static:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: read
+      security-events: write
       id-token: write
+    env:
+      QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-name: checks-fast
+      - name: Restore pinned analyzers
+        id: analyzer-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/quality-tools
+          key: quality-tools-linux-amd64-golangci-lint-2.15.0-9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea-jscpd-5.4.2-216bae5de2b30c57f893286585c7a348e8af7cd36810949831f569d29f495a3b
+      - name: Install pinned analyzers
+        id: analyzers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .cache/quality-tools
+          if [[ '${{ steps.analyzer-cache.outputs.cache-hit }}' != 'true' ]]; then
+            download() {
+              for attempt in 1 2 3; do
+                if gh api -H 'Accept: application/octet-stream' "$1" > "$2"; then
+                  return 0
+                fi
+                if (( attempt < 3 )); then
+                  sleep "$((attempt * 5))"
+                fi
+              done
+              return 1
+            }
+            download repos/golangci/golangci-lint/releases/assets/647132535 .cache/quality-tools/golangci-lint.tar.gz
+            download repos/kucherenko/jscpd/releases/assets/659819461 .cache/quality-tools/jscpd.tar.gz
+          fi
+          # golangci-lint v2.15.0, linux-amd64; verify the pinned bytes below.
+          echo '9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea  .cache/quality-tools/golangci-lint.tar.gz' | sha256sum --check
+          tar -xzf .cache/quality-tools/golangci-lint.tar.gz -C .cache/quality-tools
+          # jscpd v5.4.2, linux-x64-gnu; verify the pinned bytes below.
+          echo '216bae5de2b30c57f893286585c7a348e8af7cd36810949831f569d29f495a3b  .cache/quality-tools/jscpd.tar.gz' | sha256sum --check
+          tar -xzf .cache/quality-tools/jscpd.tar.gz -C .cache/quality-tools
+      - name: Script tests
+        env:
+          JSCPD: ${{ github.workspace }}/.cache/quality-tools/jscpd
+          GOLANGCI_LINT: ${{ github.workspace }}/.cache/quality-tools/golangci-lint-2.15.0-linux-amd64/golangci-lint
+        run: python3 -m unittest discover -s tools -t . -p 'test_*.py'
+      - name: Go lint gate
+        run: make lint GOLANGCI_LINT=.cache/quality-tools/golangci-lint-2.15.0-linux-amd64/golangci-lint
+      - name: Duplication gate
+        if: (success() || failure()) && steps.analyzers.outcome == 'success'
+        run: make duplicates JSCPD=.cache/quality-tools/jscpd DUPLICATION_BASE="${QUALITY_BASE_SHA:-HEAD}"
+      - name: Maintainability reports
+        if: (success() || failure()) && steps.analyzers.outcome == 'success'
+        run: python3 -m tools.ci.quality maintainability
+      - name: Go vulnerability gate
+        id: vulnerabilities
+        if: success() || failure()
+        run: make vulnerabilities
+      - name: Upload Go findings
+        if: (success() || failure()) && steps.vulnerabilities.outcome != 'skipped'
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: build-results/govulncheck.sarif
+          category: govulncheck-go
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        if: github.event_name == 'pull_request'
       - name: Check current-behavior wording
         run: make wording
       - name: Documentation links and shell examples
         run: python3 -m tools.docs.docs
-      - uses: ./.github/actions/setup-go
-        with:
-          cache-name: checks-fast
       - run: make fmt
       - run: python3 -m tools.ci.ci unit go test -vet=off -count=1 -json -race -coverpkg=./... -coverprofile=build-results/coverage.out ./...
         env:
@@ -102,12 +233,13 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: checks-fast
+          name: checks-static
           path: build-results/
           retention-days: 30
   kafka:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
@@ -158,34 +290,6 @@ jobs:
           use_oidc: true
           version: v11.3.1
           fail_ci_if_error: true
-      - if: always()
-        run: |
-          mkdir -p build-results
-          docker compose -f src/tests/compose.yaml -p kaferry-compat --profile cross-cluster logs --no-color > build-results/brokers.log
-          make broker-down
-      - if: always()
-        run: python3 -m tools.ci.ci summary
-      - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: checks-kafka
-          path: build-results/
-          retention-days: 30
-  load:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      KAFKA_TEST_BROKERS: 127.0.0.1:39092
-      KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/setup-go
-        with:
-          cache-name: checks-load
-      - run: python3 -m tools.ci.ci broker make broker
       - name: Capture bounded load measurements
         run: python3 -m tools.ci.ci load make load
       - name: Check the fresh-broker quick start
@@ -214,6 +318,146 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: checks-load
+          name: checks-kafka
           path: build-results/
           retention-days: 30
+  suites:
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/suites.yml
+    with:
+      suites: '["fault","qualification"]'
+  compatibility:
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.compat == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-name: pr-brokers
+      - run: make build
+      - run: python3 -m tools.qualification.qualify setup
+      - name: Run every PR compatibility case sequentially
+        run: |
+          python3 - <<'PYTHON'
+          import json, subprocess
+          plan = json.loads(subprocess.check_output(['python3', '-m', 'tools.qualification.qualify', 'plan', '--tier', 'pr']))
+          failed = False
+          for case in plan['include']:
+              command = ['python3', '-m', 'tools.qualification.qualify', 'run', case['suite'],
+                         '--source', case['source'], '--destination', case['destination'],
+                         '--output', 'build-results/'+case['id']]
+              if 'duration' in case:
+                  command += ['--duration', str(case['duration'])+'s']
+              failed |= subprocess.run(command).returncode != 0
+              for project in ('kaferry-compat', 'kaferry-qualification'):
+                  for resource, selector in [('ps', '-aq'), ('network', 'ls'), ('volume', 'ls')]:
+                      command = ['docker', resource, selector] if resource == 'ps' else ['docker', resource, selector, '-q']
+                      remaining = subprocess.check_output(command+['--filter', 'label=com.docker.compose.project='+project])
+                      if remaining.strip():
+                          raise RuntimeError(project+' left '+resource+' resources between cases')
+          if failed:
+              raise SystemExit(1)
+          PYTHON
+      - name: Require complete matching evidence
+        if: always()
+        run: python3 -m tools.qualification.qualify report build-results --tier pr
+      - name: Show matrix
+        if: always()
+        run: cat build-results/qualification.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: compatibility-matrix
+          path: build-results/
+          retention-days: 30
+  containers:
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.containers == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/container-build
+        with:
+          candidate: 'true'
+      - uses: ./.github/actions/container-test
+        with:
+          arch: amd64
+  replicated:
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.replicated == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/replicated-setup
+      - uses: ./.github/actions/replicated-run
+        with:
+          suite: replicated
+          output: build-results/replicated
+          artifact: replicated-fixture-evidence
+      - uses: ./.github/actions/replicated-run
+        with:
+          case: ownership/zombie-worker
+          output: build-results/replicated-zombie
+          artifact: replicated-zombie-evidence
+      - uses: ./.github/actions/replicated-run
+        with:
+          suite: endurance
+          output: build-results/replicated-endurance
+          artifact: replicated-endurance-evidence
+      - name: Select the reduced replicated fault set
+        id: cases
+        env:
+          WEEKLY: 'true'
+        run: python3 -m tools.ci.replicated_suites >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/replicated-run
+        with:
+          case: ${{ fromJSON(steps.cases.outputs.fault_matrix).include[0].case }}
+          output: build-results/replicated-worker-scale
+          artifact: replicated-worker-scale-evidence
+      - uses: ./.github/actions/replicated-run
+        with:
+          case: ${{ fromJSON(steps.cases.outputs.fault_matrix).include[1].case }}
+          output: build-results/replicated-destination-leaders-outage
+          artifact: replicated-network-destination-leaders-outage-evidence
+  gate:
+    needs: [changes, static, kafka, suites, compatibility, containers, replicated]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every selected job to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          needs = json.loads(os.environ['NEEDS'])
+          event = os.environ['EVENT']
+          for name, job in needs.items():
+              if job['result'] in ('failure', 'cancelled'):
+                  raise SystemExit(name+': '+job['result'])
+          expected = {'static'}
+          if event != 'schedule':
+              expected.add('kafka')
+          if event == 'pull_request':
+              expected.add('changes')
+              filters = needs['changes']['outputs']
+              for name, scope in [('suites', 'code'), ('compatibility', 'compat'),
+                                  ('containers', 'containers'), ('replicated', 'replicated')]:
+                  if filters.get(scope) not in ('true', 'false'):
+                      raise SystemExit('missing filter: '+scope)
+                  if filters[scope] == 'true':
+                      expected.add(name)
+          for name in expected:
+              if needs[name]['result'] != 'success':
+                  raise SystemExit(name+': expected success, got '+needs[name]['result'])
+          PYTHON
