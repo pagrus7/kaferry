@@ -82,7 +82,7 @@ python3 -m unittest discover -s tools -t .
 
 Tests of the system-test harness use the `harness` build tag and run through `make harness`. Shared helpers remain available to broker tests. The real zombie-worker broker scenario runs separately in replicated qualification.
 
-For broker matrices, endurance runs and retained evidence, use the [qualification guide](docs/design/qualification.md). To request performance checks in CI, add `ci:performance` to the PR. To compare revisions locally, use the [comparison command](docs/design/qualification.md#paired-performance).
+For broker matrices, endurance runs and retained evidence, use the [qualification guide](docs/design/qualification.md). Add `ci:performance` for PR performance checks; re-add it to rerun. To compare revisions locally, use the [comparison command](docs/design/qualification.md#paired-performance).
 
 ## Submit a change
 

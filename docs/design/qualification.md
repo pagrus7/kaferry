@@ -66,7 +66,7 @@ python3 -m tools.qualification.qualify matrix --tier pr
 python3 -m tools.qualification.qualify matrix --tier full --output build-results/full-matrix
 ```
 
-Local matrices run sequentially. CI distributes up to six cases across separate hosted runners. Every tier includes archive capture: one minute for PR, two minutes for nightly/full/release, followed by ten seconds without new input.
+Local and PR matrices run sequentially; scheduled and release CI distribute up to six cases across hosted runners. Every tier includes archive capture: one minute for PR, two minutes for nightly/full/release, followed by ten seconds without new input.
 
 The independent checker uses librdkafka; Kaferry uses franz-go. It seeds 96 records through all five compression codecs and checks preserved/key Kafka routing plus capture→clone→replay. Each route checks seven records after partial completion, all 96 after resume and unchanged output after a completed rerun. Python fastavro reads archives independently. Reconciliation checks consumed record identities, complete bytes, null versus empty, ordered duplicate headers, timestamps and preserved partitions.
 
@@ -163,9 +163,9 @@ A healthy measurement below the required rate, or a source acknowledgement gap o
 
 Every lifetime requires sampled RSS at most 512 MiB and observed current work within 1,024 records/128 MiB. Normal completion requires a final summary supplying exact lifetime peaks. A permitted broker/network fault exit may omit it; missing peaks remain null and that lifetime has no exact-cap claim. The three ownership-transition cases require final summaries for successful/fail-fast exits and permit missing peaks only after their explicit SIGKILL. Current samples cannot supply exact peaks. Independent full-record reconciliation, saved-prefix safety, duplicate attribution and complete recovery remain mandatory.
 
-Hosted checks run the five broker faults, zombie fencing, worker kill, worker scaling and two destination outages: ten fault cases on separate runners. Four cases require local exact-candidate qualification alongside 24-hour endurance: `network/latency`, `network/bandwidth`, `network/slow-close` and `ownership/coordinator-kill-rebalance`. Run each with its `--case` and a fresh output directory. Missing local passes require explicit release-note exclusions. Selecting all fourteen cases gives 4,907s Go allowance plus 60s outer allowance; individual selection uses that case's budget. These local cases have no separate hosted scheduled tier. One-host clusters do not establish machine or zone-failure behavior.
+Relevant PRs run zombie fencing, worker scaling and destination-leaders-outage sequentially; main pushes run all ten hosted fault cases on separate runners. Four cases require local exact-candidate qualification alongside 24-hour endurance: `network/latency`, `network/bandwidth`, `network/slow-close` and `ownership/coordinator-kill-rebalance`. Run each with its `--case` and a fresh output directory. Missing local passes require explicit release-note exclusions. Selecting all fourteen cases gives 4,907s Go allowance plus 60s outer allowance; individual selection uses that case's budget. These local cases have no separate hosted scheduled tier. One-host clusters do not establish machine or zone-failure behavior.
 
-Every Monday at 07:23 UTC, `replicated-lab.yml` runs `ownership/worker-scale`, `ownership/zombie-worker` and `network/destination-leaders-outage` on main with fresh executions. Case evidence remains available for 14 days. To run the same selection manually, use `gh workflow run replicated-lab.yml --ref main -f weekly=true`; ordinary dispatches retain the full hosted selection.
+Every Monday at 07:23 UTC, `replicated-lab.yml` runs all ten hosted fault cases on main with fresh executions. Evidence remains available for 14 days. Use `gh workflow run replicated-lab.yml --ref main -f subset=true` for the three PR fault cases; ordinary dispatches retain the full hosted selection.
 
 ## Recovery and bounded load
 
