@@ -304,6 +304,11 @@ def replicated_admission(output, endurance_seconds=None):
                 # Closed fixture connections may still be in TIME_WAIT.
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 listener.bind(('127.0.0.1', port))
+            # On macOS, SO_REUSEADDR lets a 127.0.0.1 bind succeed beside a wildcard listener.
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.settimeout(0.2)
+                if probe.connect_ex(('127.0.0.1', port)) == 0:
+                    raise ValueError(f'replicated fixture port {port} is unavailable')
         except OSError as error:
             raise ValueError(f'replicated fixture port {port} is unavailable') from error
     return capacity
