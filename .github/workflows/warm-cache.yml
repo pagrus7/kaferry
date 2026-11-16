@@ -1,0 +1,48 @@
+name: warm caches
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CGO_ENABLED: "0"
+concurrency:
+  group: warm-caches-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  warm-broker-cache:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-name: pr-brokers
+      - run: make build
+      - name: Compile fault fixtures
+        run: go test -run '^$' -tags=integration,fault ./src/tests/system
+      - name: Compile standalone fault fixtures
+        env:
+          CGO_ENABLED: "1"
+        run: go test -run '^$' -tags=integration,fault ./src/tests/system
+      - name: Compile capture and streaming fixtures
+        env:
+          CGO_ENABLED: "1"
+        run: go test -run '^$' -tags=integration,load ./src/tests/compatibility
+      - name: Compile security and failover fixtures
+        env:
+          CGO_ENABLED: "1"
+        run: go test -run '^$' -race -tags=integration,qualification ./src/tests/compatibility
+  warm-container-cache:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-name: container-inputs
+      - name: Compile both Linux container inputs
+        run: python3 -m tools.release.container_artifacts candidate .cache/container-context
