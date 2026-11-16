@@ -26,7 +26,6 @@ jobs:
       - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: go, python, actions
-          build-mode: manual
       - run: make build
       - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
@@ -48,11 +47,14 @@ jobs:
         with:
           sarif_file: build-results/codeql/go.sarif
           category: codeql-go
+          matrix: '{"language":"go"}'
       - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: build-results/codeql/python.sarif
           category: codeql-python
+          matrix: '{"language":"python"}'
       - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: build-results/codeql/actions.sarif
           category: codeql-actions
+          matrix: '{"language":"actions"}'
