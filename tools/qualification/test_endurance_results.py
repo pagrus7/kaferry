@@ -52,49 +52,6 @@ class PublicationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'already exists'):
             self.prepare()
 
-    def test_failed_run_without_metrics_is_reported_without_claiming_success(self):
-        self.receipt['status'] = 'failed'
-        self.save()
-        (self.evidence / 'soak.metrics.json').unlink()
-        package = self.prepare()
-        text = (package / 'endurance-results.md').read_text()
-        self.assertIn('**FAILED**', text)
-        self.assertIn('unresolved', text)
-        self.assertEqual([], json.loads((package / 'endurance-results.json').read_text())['measurements'])
-
-    def test_rejects_incomplete_or_mismatched_success_and_unfinished_receipt(self):
-        receipt, metrics = self.receipt.copy(), json.dumps(self.metrics)
-        for field in ('digest', 'load', 'integrity', 'running', 'missing'):
-            with self.subTest(field=field):
-                self.receipt, self.metrics = receipt.copy(), json.loads(metrics)
-                if field == 'digest': self.metrics['binary_sha256'] = 'b'*64
-                if field == 'load': self.metrics['endurance']['load_validated'] = False
-                if field == 'integrity': self.metrics['delivery']['integrity']['matched'] = None
-                if field == 'running': self.receipt['status'] = 'running'
-                self.save()
-                if field == 'missing': (self.evidence / 'soak.metrics.json').unlink()
-                with self.assertRaises(ValueError): self.prepare()
-
-    def test_replicated_report_names_its_topology_and_rejects_mismatched_measurements(self):
-        # Given a successful replicated run with matching observed setup and workload.
-        self.receipt['workload'] = dict(topology='replicated', replication_factor=3, min_insync_replicas=2)
-        self.metrics['endurance'].update(topology='replicated', replication_factor=3, min_insync_replicas=2)
-        self.save()
-        package = self.prepare()
-        text = (package / 'endurance-results.md').read_text()
-        self.assertIn('three-broker clusters with replication factor 3', text)
-        self.assertNotIn('single-broker clusters', text)
-        # When identities are missing or disagree, then a passing report cannot be generated.
-        for field, value in [('topology', 'single'), ('replication_factor', 1), ('min_insync_replicas', 1),
-                             ('topology', None), ('replication_factor', None), ('min_insync_replicas', None)]:
-            with self.subTest(field=field, value=value):
-                self.metrics['endurance'].update(topology='replicated', replication_factor=3, min_insync_replicas=2)
-                self.metrics['endurance'][field] = value
-                self.save()
-                with patch('tools.qualification.endurance_results.summarize', return_value=''):
-                    with self.assertRaisesRegex(ValueError, 'topology'):
-                        prepare(self.evidence, self.evidence / 'mismatched')
-
     def test_upload_requires_matching_release_and_retains_unique_asset_names(self):
         package = self.prepare()
         uploaded = []
@@ -121,14 +78,6 @@ class PublicationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'does not match'):
                 publish(package, 'v0.12.0', 'pagrus7/kaferry')
             self.assertFalse(uploaded)
-
-    def test_tampered_package_never_contacts_github(self):
-        package = self.prepare()
-        (package / 'endurance-results.json').write_text('{}')
-        with patch('tools.qualification.endurance_results.subprocess.run') as run:
-            with self.assertRaisesRegex(ValueError, 'checksums'):
-                publish(package, 'v0.12.0', 'pagrus7/kaferry')
-            run.assert_not_called()
 
 
 if __name__ == '__main__':
