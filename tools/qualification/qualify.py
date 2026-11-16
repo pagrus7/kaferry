@@ -301,6 +301,8 @@ def replicated_admission(output, endurance_seconds=None):
     for port in (*network.client_ports(), 48074):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+                # Closed fixture connections may still be in TIME_WAIT.
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 listener.bind(('127.0.0.1', port))
         except OSError as error:
             raise ValueError(f'replicated fixture port {port} is unavailable') from error
