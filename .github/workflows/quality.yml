@@ -31,6 +31,8 @@ jobs:
         with:
           output: build-results/codeql
           upload: never
+      # One CodeQL job uploads each language under its former category and matrix environment, so code scanning
+      # keeps comparing against the configurations main already tracks, which the CodeQL merge rule relies on.
       - name: Preserve the per-language analysis categories
         run: |
           python3 - <<'PYTHON'

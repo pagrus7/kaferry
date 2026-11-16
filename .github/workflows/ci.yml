@@ -308,38 +308,15 @@ jobs:
       - run: make build
       - run: python3 -m tools.qualification.qualify setup
       - name: Run every PR compatibility case sequentially
-        run: |
-          python3 - <<'PYTHON'
-          import json, subprocess
-          plan = json.loads(subprocess.check_output(['python3', '-m', 'tools.qualification.qualify', 'plan', '--tier', 'pr']))
-          failed = False
-          for case in plan['include']:
-              command = ['python3', '-m', 'tools.qualification.qualify', 'run', case['suite'],
-                         '--source', case['source'], '--destination', case['destination'],
-                         '--output', 'build-results/'+case['id']]
-              if 'duration' in case:
-                  command += ['--duration', str(case['duration'])+'s']
-              failed |= subprocess.run(command).returncode != 0
-              for project in ('kaferry-compat', 'kaferry-qualification'):
-                  for resource, selector in [('ps', '-aq'), ('network', 'ls'), ('volume', 'ls')]:
-                      command = ['docker', resource, selector] if resource == 'ps' else ['docker', resource, selector, '-q']
-                      remaining = subprocess.check_output(command+['--filter', 'label=com.docker.compose.project='+project])
-                      if remaining.strip():
-                          raise RuntimeError(project+' left '+resource+' resources between cases')
-          if failed:
-              raise SystemExit(1)
-          PYTHON
-      - name: Require complete matching evidence
-        if: always()
-        run: python3 -m tools.qualification.qualify report build-results --tier pr
+        run: python3 -m tools.qualification.qualify matrix --tier pr --output build-results/compatibility
       - name: Show matrix
         if: always()
-        run: cat build-results/qualification.md >> "$GITHUB_STEP_SUMMARY"
+        run: cat build-results/compatibility/qualification.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: compatibility-matrix
-          path: build-results/
+          path: build-results/compatibility/
           retention-days: 30
   containers:
     needs: changes
@@ -385,13 +362,13 @@ jobs:
       - uses: ./.github/actions/replicated-run
         with:
           case: ${{ fromJSON(steps.cases.outputs.fault_matrix).include[0].case }}
-          output: build-results/replicated-worker-scale
-          artifact: replicated-worker-scale-evidence
+          output: build-results/replicated-${{ fromJSON(steps.cases.outputs.fault_matrix).include[0].name }}
+          artifact: replicated-${{ fromJSON(steps.cases.outputs.fault_matrix).include[0].name }}-evidence
       - uses: ./.github/actions/replicated-run
         with:
           case: ${{ fromJSON(steps.cases.outputs.fault_matrix).include[1].case }}
-          output: build-results/replicated-destination-leaders-outage
-          artifact: replicated-network-destination-leaders-outage-evidence
+          output: build-results/replicated-${{ fromJSON(steps.cases.outputs.fault_matrix).include[1].name }}
+          artifact: replicated-${{ fromJSON(steps.cases.outputs.fault_matrix).include[1].name }}-evidence
   gate:
     needs: [changes, static, kafka, suites, compatibility, containers, replicated]
     if: always()
