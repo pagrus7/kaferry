@@ -7,7 +7,8 @@ inputs:
 runs:
   using: composite
   steps:
-    - run: sudo apt-get update && sudo apt-get install --yes skopeo
+    - shell: bash
+      run: sudo apt-get update && sudo apt-get install --yes skopeo
     - name: Load the native platform without rebuilding
       env:
         ARCH: ${{ inputs.arch }}
@@ -39,7 +40,8 @@ runs:
         latest=$(python3 -m tools.release.container_publish .cache/kaferry.oci.tar localhost:5000/kaferry:latest)
         test "$latest" = "$first"
         printf '%s\n' "$first" | grep -Eq '^sha256:[a-f0-9]{64}$'
-    - run: make broker
+    - shell: bash
+      run: make broker
     - name: Verify SIGTERM checkpointing and container resume
       env:
         KAFERRY_TEST_IMAGE: kaferry:ci
