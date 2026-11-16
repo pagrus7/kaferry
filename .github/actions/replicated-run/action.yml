@@ -1,0 +1,42 @@
+name: replicated-run
+description: Run one replicated scenario and verify fixture cleanup
+inputs:
+  suite:
+    description: Qualification suite
+    default: fault-replicated
+  case:
+    description: Selected fault case
+    default: ''
+  output:
+    description: Fresh evidence directory
+    required: true
+  artifact:
+    description: Evidence artifact name
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Qualify replicated scenario
+      env:
+        SUITE: ${{ inputs.suite }}
+        CASE: ${{ inputs.case }}
+        OUTPUT: ${{ inputs.output }}
+      shell: bash
+      run: |
+        set -- "$SUITE" --binary bin/kaferry --output "$OUTPUT"
+        if [ -n "$CASE" ]; then set -- "$@" --case "$CASE"; fi
+        if [ "$SUITE" = endurance ]; then set -- "$@" --topology replicated --duration 1m; fi
+        python3 -m tools.qualification.qualify run "$@"
+    - name: Verify replicated fixture teardown
+      if: always()
+      shell: bash
+      run: |
+        test -z "$(docker ps -aq --filter label=com.docker.compose.project=kaferry-replicated)"
+        test -z "$(docker volume ls -q --filter label=com.docker.compose.project=kaferry-replicated)"
+        test -z "$(docker network ls -q --filter label=com.docker.compose.project=kaferry-replicated)"
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      if: always()
+      with:
+        name: ${{ inputs.artifact }}
+        path: ${{ inputs.output }}
+        retention-days: 14

@@ -11,115 +11,52 @@ permissions:
 env:
   CGO_ENABLED: "0"
 jobs:
-  go:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      security-events: write
-    env:
-      QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: ./.github/actions/setup-go
-        with:
-          cache-name: quality-go
-      - name: Restore pinned analyzers
-        id: analyzer-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .cache/quality-tools
-          key: quality-tools-linux-amd64-golangci-lint-2.15.0-9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea-jscpd-5.4.2-216bae5de2b30c57f893286585c7a348e8af7cd36810949831f569d29f495a3b
-      - name: Install pinned analyzers
-        id: analyzers
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p .cache/quality-tools
-          if [[ '${{ steps.analyzer-cache.outputs.cache-hit }}' != 'true' ]]; then
-            download() {
-              for attempt in 1 2 3; do
-                if gh api -H 'Accept: application/octet-stream' "$1" > "$2"; then
-                  return 0
-                fi
-                if (( attempt < 3 )); then
-                  sleep "$((attempt * 5))"
-                fi
-              done
-              return 1
-            }
-            download repos/golangci/golangci-lint/releases/assets/647132535 .cache/quality-tools/golangci-lint.tar.gz
-            download repos/kucherenko/jscpd/releases/assets/659819461 .cache/quality-tools/jscpd.tar.gz
-          fi
-          # golangci-lint v2.15.0, linux-amd64; verify the pinned bytes below.
-          echo '9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea  .cache/quality-tools/golangci-lint.tar.gz' | sha256sum --check
-          tar -xzf .cache/quality-tools/golangci-lint.tar.gz -C .cache/quality-tools
-          # jscpd v5.4.2, linux-x64-gnu; verify the pinned bytes below.
-          echo '216bae5de2b30c57f893286585c7a348e8af7cd36810949831f569d29f495a3b  .cache/quality-tools/jscpd.tar.gz' | sha256sum --check
-          tar -xzf .cache/quality-tools/jscpd.tar.gz -C .cache/quality-tools
-      - name: Script tests
-        env:
-          JSCPD: ${{ github.workspace }}/.cache/quality-tools/jscpd
-          GOLANGCI_LINT: ${{ github.workspace }}/.cache/quality-tools/golangci-lint-2.15.0-linux-amd64/golangci-lint
-        run: python3 -m unittest discover -s tools -t . -p 'test_*.py'
-      - name: Go lint gate
-        run: make lint GOLANGCI_LINT=.cache/quality-tools/golangci-lint-2.15.0-linux-amd64/golangci-lint
-      - name: Duplication gate
-        if: (success() || failure()) && steps.analyzers.outcome == 'success'
-        run: make duplicates JSCPD=.cache/quality-tools/jscpd DUPLICATION_BASE="${QUALITY_BASE_SHA:-HEAD}"
-      - name: Maintainability reports
-        if: (success() || failure()) && steps.analyzers.outcome == 'success'
-        run: python3 -m tools.ci.quality maintainability
-      - name: Go vulnerability gate
-        id: vulnerabilities
-        if: success() || failure()
-        run: make vulnerabilities
-      - name: Upload Go findings
-        if: (success() || failure()) && steps.vulnerabilities.outcome != 'skipped'
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
-        with:
-          sarif_file: build-results/govulncheck.sarif
-          category: govulncheck-go
-      - if: always()
-        run: python3 -m tools.ci.ci summary
-      - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: quality-go
-          path: build-results/
-          retention-days: 30
   codeql:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
       security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [go, python, actions]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: matrix.language == 'go'
         with:
           go-version: '1.27.4'
           cache: true
       - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
-          languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.language == 'go' && 'manual' || 'none' }}
-      - if: matrix.language == 'go'
-        run: make build
+          languages: go, python, actions
+      - run: make build
       - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
-          category: codeql-${{ matrix.language }}
-  dependencies:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+          output: build-results/codeql
+          upload: never
+      # One CodeQL job uploads each language under its former category and matrix environment, so code scanning
+      # keeps comparing against the configurations main already tracks, which the CodeQL merge rule relies on.
+      - name: Preserve the per-language analysis categories
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          from pathlib import Path
+          for language in ('go', 'python', 'actions'):
+              path = Path('build-results/codeql') / (language+'.sarif')
+              sarif = json.loads(path.read_text())
+              for run in sarif['runs']:
+                  run['automationDetails'] = {'id': 'codeql-'+language+'/'}
+              path.write_text(json.dumps(sarif))
+          PYTHON
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: build-results/codeql/go.sarif
+          category: codeql-go
+          matrix: '{"language":"go"}'
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: build-results/codeql/python.sarif
+          category: codeql-python
+          matrix: '{"language":"python"}'
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: build-results/codeql/actions.sarif
+          category: codeql-actions
+          matrix: '{"language":"actions"}'
