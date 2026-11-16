@@ -4,11 +4,12 @@ on:
     - cron: '23 7 * * 1'
   workflow_dispatch:
     inputs:
-      weekly:
-        description: Run only the three weekly regression cases
+      subset:
+        description: Run only worker-scale, destination-leaders-outage and zombie
         type: boolean
         default: false
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - 'src/tests/replicated/**'
       - 'src/tests/system/faults/**'
@@ -36,6 +37,8 @@ on:
       - 'tools/qualification/test_replicated_results.py'
       - 'tools/ci/replicated_suites.py'
       - '.github/workflows/replicated-lab.yml'
+      - '.github/workflows/ci.yml'
+      - '.github/actions/**'
 permissions:
   contents: read
 concurrency:
@@ -55,19 +58,19 @@ jobs:
       - name: Select replicated fault cases
         id: cases
         env:
-          WEEKLY: ${{ github.event_name == 'schedule' || inputs.weekly == true }}
+          SUBSET: ${{ inputs.subset == true }}
         run: python3 -m tools.ci.replicated_suites >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/replicated-setup
         id: candidate
         with:
-          smoke: ${{ github.event_name != 'schedule' && inputs.weekly != true }}
+          smoke: ${{ github.event_name != 'schedule' && inputs.subset != true }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: replicated-fixture-candidate
           path: bin/kaferry
           retention-days: 14
       - uses: ./.github/actions/replicated-run
-        if: ${{ github.event_name != 'schedule' && inputs.weekly != true }}
+        if: ${{ github.event_name != 'schedule' && inputs.subset != true }}
         with:
           suite: replicated
           output: build-results/replicated
@@ -134,7 +137,7 @@ jobs:
           output: build-results/replicated-fault
           artifact: replicated-${{ matrix.name }}-evidence
   endurance:
-    if: ${{ github.event_name != 'schedule' && inputs.weekly != true }}
+    if: ${{ github.event_name != 'schedule' && inputs.subset != true }}
     needs: smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 15

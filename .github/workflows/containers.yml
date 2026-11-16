@@ -1,7 +1,10 @@
 name: containers
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
+      - '.github/workflows/ci.yml'
+      - '.github/actions/**'
       - '.github/workflows/containers.yml'
       - '.github/workflows/release.yml'
       - 'README.md'
@@ -49,7 +52,7 @@ jobs:
         id: inputs
         with:
           tag: ${{ inputs.tag }}
-          candidate: ${{ github.event_name == 'pull_request' }}
+          candidate: ${{ github.event_name == 'push' && inputs.tag == '' }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: container-inputs

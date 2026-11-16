@@ -415,7 +415,7 @@ jobs:
       - name: Select the reduced replicated fault set
         id: cases
         env:
-          WEEKLY: 'true'
+          SUBSET: 'true'
         run: python3 -m tools.ci.replicated_suites >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/replicated-run
         with:

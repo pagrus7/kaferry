@@ -22,8 +22,8 @@ EXPECTED = {
 }
 
 
-def lab_matrix(weekly):
-    cases = ('ownership/worker-scale', 'network/destination-leaders-outage') if weekly else (
+def lab_matrix(subset):
+    cases = ('ownership/worker-scale', 'network/destination-leaders-outage') if subset else (
         'ownership/worker-kill-rebalance', 'ownership/worker-scale', 'broker/source-leader',
         'broker/destination-leader', 'broker/rolling-source', 'broker/rolling-destination',
         'broker/destination-isr-loss', 'network/destination-outage', 'network/destination-leaders-outage')
@@ -61,9 +61,9 @@ def replicated_execution_seconds(selected):
 
 
 if __name__ == '__main__':
-    weekly = os.environ['WEEKLY']
-    if weekly not in ('true', 'false'):
-        raise ValueError('weekly lab selection must be true or false')
-    print('fault_matrix='+json.dumps(lab_matrix(weekly == 'true')))
+    subset = os.environ['SUBSET']
+    if subset not in ('true', 'false'):
+        raise ValueError('subset lab selection must be true or false')
+    print('fault_matrix='+json.dumps(lab_matrix(subset == 'true')))
 
 
