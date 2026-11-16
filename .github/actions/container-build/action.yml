@@ -1,0 +1,62 @@
+name: container-build
+description: Build both OCI archives from validated binary and license inputs
+inputs:
+  tag:
+    description: Existing published release tag
+    default: ''
+  candidate:
+    description: Build checkout source instead of a published release
+    default: 'false'
+outputs:
+  version:
+    description: Validated version
+    value: ${{ steps.inputs.outputs.version }}
+  revision:
+    description: Validated revision
+    value: ${{ steps.inputs.outputs.revision }}
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-go
+      with:
+        cache-name: container-inputs
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+    - name: Prepare exact binary and license inputs
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ inputs.tag }}
+        PR: ${{ inputs.candidate }}
+      shell: bash
+      run: |
+        if [ "$PR" = true ]; then
+          python3 -m tools.release.container_artifacts candidate .cache/container-context
+        else
+          python3 -m tools.release.container_artifacts release .cache/container-context --tag "$TAG"
+        fi
+    - id: inputs
+      name: Read validated release identity
+      shell: bash
+      run: |
+        python3 - <<'PY'
+        import json, os
+        from pathlib import Path
+        record = json.loads(Path('.cache/container-context/release.json').read_text())
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write(f"version={record['version']}\nrevision={record['revision']}\n")
+        PY
+    - name: Build OCI archive with SBOM and provenance
+      env:
+        VERSION: ${{ steps.inputs.outputs.version }}
+        REVISION: ${{ steps.inputs.outputs.revision }}
+      shell: bash
+      run: |
+        docker buildx build --platform linux/amd64,linux/arm64 \
+          --file tools/release/container/Dockerfile \
+          --build-arg "VERSION=$VERSION" --build-arg "REVISION=$REVISION" \
+          --sbom=true --provenance=mode=max \
+          --output type=oci,dest=.cache/kaferry.oci.tar .cache/container-context
+        docker buildx build --platform linux/amd64,linux/arm64 \
+          --file tools/release/demo/Dockerfile \
+          --build-arg "VERSION=$VERSION" --build-arg "REVISION=$REVISION" \
+          --sbom=true --provenance=mode=max \
+          --output type=oci,dest=.cache/kaferry-demo.oci.tar .cache/container-context
