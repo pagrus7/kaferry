@@ -33,6 +33,8 @@ type ownershipSnapshot struct {
 	Members  []ownershipMember `json:"members"`
 }
 
+const replicatedReadinessTimeout = 30 * time.Second
+
 func observeOwnership(ctx context.Context, admin *kadm.Client, group, source string) (ownershipSnapshot, error) {
 	result := ownershipSnapshot{Started: time.Now().UTC()}
 	described, err := admin.DescribeGroups(ctx, group)
@@ -64,7 +66,7 @@ func observeOwnership(ctx context.Context, admin *kadm.Client, group, source str
 
 func waitReplicated(ctx context.Context, t *testing.T, label string, publisher *replicatedPublisher, workers []*cliProcess, condition func(context.Context) bool) {
 	t.Helper()
-	deadline, cancel := context.WithTimeout(ctx, 30*time.Second)
+	deadline, cancel := context.WithTimeout(ctx, replicatedReadinessTimeout)
 	defer cancel()
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
@@ -88,6 +90,19 @@ func waitReplicated(ctx context.Context, t *testing.T, label string, publisher *
 			t.Fatal("observed-state deadline expired: ", label)
 		case <-tick.C:
 		}
+	}
+}
+
+func prepareReplicatedProducers(ctx context.Context, t *testing.T, metadata faults.KafkaMetadata) {
+	t.Helper()
+	deadline, cancel := context.WithTimeout(ctx, replicatedReadinessTimeout)
+	defer cancel()
+	// Each broker must have a producer-ID block before CLI delivery deadlines
+	// apply. One client's cached producer ID does not prepare the other brokers.
+	for broker := int32(1); broker <= 3; broker++ {
+		t.Logf("producer setup: initialize producer ID on destination broker %d", broker)
+		require.NoError(t, initializeProducerID(deadline, metadata["destination"], broker),
+			"fixture readiness: initialize producer ID on destination broker %d", broker)
 	}
 }
 
@@ -148,6 +163,7 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	src, dst, group := prefix+"-source", prefix+"-destination", prefix+"-group"
 	replicatedTopic(ctx, t, source, src)
 	replicatedTopic(ctx, t, destination, dst)
+	prepareReplicatedProducers(ctx, t, metadata)
 	timeouts := faultTimeouts(t, "ownership/zombie-worker")
 	fault, err := zombieCoordinatorFault(timeouts)
 	require.NoError(t, err)

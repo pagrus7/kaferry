@@ -121,6 +121,7 @@ func replicatedOwnershipCase(t *testing.T, name string) {
 	s.src, s.dst, s.group = s.prefix+"-source", s.prefix+"-destination", s.prefix+"-group"
 	replicatedTopic(ctx, t, metadata["source"].Client, s.src)
 	replicatedTopic(ctx, t, metadata["destination"].Client, s.dst)
+	prepareReplicatedProducers(ctx, t, metadata)
 	source, err := metadata["source"].Metadata(ctx, s.src)
 	require.NoError(t, err)
 	s.sourceID = source.Topics[s.src].ID
