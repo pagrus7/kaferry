@@ -111,6 +111,7 @@ func startReplicatedFaultCopy(t *testing.T, id string) (*brokerCopy, brokerObser
 	s.src, s.dst, s.group = prefix+"-source", prefix+"-destination", prefix+"-group"
 	replicatedTopic(ctx, t, metadata["source"].Client, s.src)
 	replicatedTopic(ctx, t, metadata["destination"].Client, s.dst)
+	prepareReplicatedProducers(ctx, t, metadata)
 	s.verifySettings()
 	s.oracle = startFaultOracle(t, id, strings.Join(faults.Endpoints("source", 0), ","),
 		strings.Join(faults.Endpoints("destination", 0), ","), s.src, s.dst, s.group, replicatedPartitions, false)
