@@ -63,6 +63,9 @@ func failReplicatedPrecondition(ctx context.Context, t *testing.T, stage string,
 		// Surface pending errors and take a fresh safety sample before skipping.
 		gate.oracle.command(t, map[string]any{"command": "sample"})
 	}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("%s: %v", stage, err)
+	}
 	gate.stage, gate.detail = stage, fmt.Sprint(detail)
 	t.Skipf("inconclusive: no fault attempted; %s: %v", stage, detail)
 }

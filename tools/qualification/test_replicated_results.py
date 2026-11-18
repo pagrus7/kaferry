@@ -83,7 +83,8 @@ class ReplicatedResultsTest(unittest.TestCase):
             self.assertEqual('inconclusive', cases[0]['status'])
             self.assertEqual(original['precondition'], cases[0]['precondition'])
             self.assertEqual(dict(require_fault=False), validator.call_args.kwargs)
-            for change in (dict(oracle_run='old'), dict(binary_sha256='c'*64), dict(precondition={}),
+            for change in (dict(precondition={key: value for key, value in original['precondition'].items() if key != 'healthy'}),
+                           dict(oracle_run='old'), dict(binary_sha256='c'*64), dict(precondition={}),
                            *(dict(precondition=dict(original['precondition'], **change)) for change in
                              (dict(fault_attempted=True), dict(fault_attempted=0), dict(stage=''), dict(detail=''))), dict(precondition=dict(status='passed', healthy={})),
                            dict(precondition=dict(status='inconclusive', healthy=dict(before={}, after={}))),
@@ -109,6 +110,7 @@ class ReplicatedResultsTest(unittest.TestCase):
                 directory = root/id.replace('/', '_')
                 result, _ = self.receipt(directory, id, precondition=True)
                 exposure = json.loads(result.read_text())
+                exposure['precondition']['stage'] = 'initial saved prefixes'
                 exposure['precondition'].pop('healthy')
                 exposure['precondition'].pop('max_acknowledgement_gap_seconds')
                 if id == 'ownership/zombie-worker':

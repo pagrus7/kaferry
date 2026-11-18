@@ -68,7 +68,7 @@ def collect(directory, selected, identity, run):
                         not isinstance(precondition['detail'], str) or not precondition['detail'].strip() or
                         exposure.get('events') or exposure.get('fault')):
                     raise ValueError('inconclusive precondition requires an exact no-fault stage proof')
-                if 'healthy' in precondition:
+                if precondition['stage'] == 'healthy fixture measurement' or 'healthy' in precondition:
                     # Measured network preconditions still require their completed
                     # no-fault reconciliation and resource checks.
                     case = copy_case(directory, id, identity)
