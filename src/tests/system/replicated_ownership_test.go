@@ -176,6 +176,7 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	require.NoError(t, err)
 	oracle := startFaultOracle(t, "ownership/zombie-worker", strings.Join(faults.Endpoints("source", 0), ","),
 		strings.Join(faults.Endpoints("destination", 0), ","), src, dst, group, replicatedPartitions, false)
+	observeReplicatedPrecondition(ctx, oracle)
 	audit := startReplicatedAudit(ctx, t, lab, directory)
 	audit.capture(ctx, t, "baseline")
 	producer := fixtureClient(t, strings.Join(faults.Endpoints("source", 0), ","), kgo.RecordPartitioner(kgo.ManualPartitioner()),

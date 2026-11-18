@@ -73,7 +73,12 @@ def collect(directory, selected, identity, run):
                     # no-fault reconciliation and resource checks.
                     case = copy_case(directory, id, identity)
                 else:
-                    case = dict(identity, id=id, status='inconclusive', precondition=precondition)
+                    for samples in (directory/'fault-oracle'/run).glob(id.replace('/', '-')+'*/observations/samples.jsonl'):
+                        for line in samples.read_text().splitlines():
+                            if json.loads(line)['kind'] == 'failure':
+                                raise ValueError('independent safety observer failed before the precondition skip')
+                    case = dict({key: identity[key] for key in IDENTITY}, id=id,
+                                status='inconclusive', precondition=precondition)
             elif id == 'ownership/zombie-worker':
                 from tools.qualification.ownership_audit import validate
                 case = validate(directory, identity)

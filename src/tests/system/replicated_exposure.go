@@ -24,6 +24,7 @@ import (
 type replicatedPrecondition struct {
 	id             string
 	faultAttempted bool
+	oracle         *faultOracle
 	stage, detail  string
 }
 
@@ -40,6 +41,12 @@ func withReplicatedPrecondition(ctx context.Context, t *testing.T, id string) co
 	return context.WithValue(ctx, replicatedPreconditionKey{}, gate)
 }
 
+func observeReplicatedPrecondition(ctx context.Context, oracle *faultOracle) {
+	if gate, ok := ctx.Value(replicatedPreconditionKey{}).(*replicatedPrecondition); ok {
+		gate.oracle = oracle
+	}
+}
+
 func attemptedReplicatedFault(ctx context.Context) {
 	if gate, ok := ctx.Value(replicatedPreconditionKey{}).(*replicatedPrecondition); ok {
 		gate.faultAttempted = true
@@ -51,6 +58,10 @@ func failReplicatedPrecondition(ctx context.Context, t *testing.T, stage string,
 	gate, ok := ctx.Value(replicatedPreconditionKey{}).(*replicatedPrecondition)
 	if !ok || gate.faultAttempted || ctx.Err() != nil || t.Failed() {
 		t.Fatalf("%s: %v", stage, detail)
+	}
+	if gate.oracle != nil && !gate.oracle.finished {
+		// Surface pending errors and take a fresh safety sample before skipping.
+		gate.oracle.command(t, map[string]any{"command": "sample"})
 	}
 	gate.stage, gate.detail = stage, fmt.Sprint(detail)
 	t.Skipf("inconclusive: no fault attempted; %s: %v", stage, detail)

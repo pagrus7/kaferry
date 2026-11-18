@@ -116,6 +116,7 @@ func startReplicatedFaultCopy(t *testing.T, id string) (*brokerCopy, brokerObser
 	s.verifySettings()
 	s.oracle = startFaultOracle(t, id, strings.Join(faults.Endpoints("source", 0), ","),
 		strings.Join(faults.Endpoints("destination", 0), ","), s.src, s.dst, s.group, replicatedPartitions, false)
+	observeReplicatedPrecondition(ctx, s.oracle)
 	s.config = configuration(t, zombieWorkerSettings(timeouts))
 	s.statement = zombieWorkerSQL(timeouts, 1, prefix+"-worker", s.src, s.dst, s.group)
 	s.start()
@@ -411,6 +412,9 @@ func (s *brokerCopy) wait(label string, allowFailure bool, condition func(contex
 		}
 		select {
 		case <-deadline.Done():
+			if s.precondition != nil {
+				s.t.Fatal("no-fault finalization deadline expired: ", label)
+			}
 			failReplicatedPrecondition(s.ctx, s.t, label, "observed-state deadline expired")
 		case <-tick.C:
 		}

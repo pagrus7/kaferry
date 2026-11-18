@@ -19,7 +19,7 @@ class ReplicatedResultsTest(unittest.TestCase):
         observer = root/'fault-oracle'/run/id.replace('/', '-')/'observations'
         observer.mkdir(parents=True)
         for name in ('samples.jsonl', 'bootstrap.jsonl'):
-            (observer/name).write_text('{}\n')
+            (observer/name).write_text(json.dumps(dict(kind='sample'))+'\n')
         safety = dict(IDENTITY, id=id, status='passed', execution='candidate CLI',
                       parameters=dict(source_partitions=24, routing='PRESERVE'),
                       fault_events=[] if precondition else [dict(kind='cut')],
@@ -121,6 +121,11 @@ class ReplicatedResultsTest(unittest.TestCase):
                 self.assertEqual('inconclusive', cases[0]['status'])
                 self.assertNotIn('safety', cases[0])
                 validator.assert_not_called()
+                samples = next((directory/'fault-oracle/current').glob('*/observations/samples.jsonl'))
+                with samples.open('a') as lines:
+                    lines.write(json.dumps(dict(kind='failure', error='unsafe saved prefix'))+'\n')
+                with self.assertRaisesRegex(ValueError, 'safety observer failed'):
+                    self.collect(directory, [id])
 
 
 if __name__ == '__main__':

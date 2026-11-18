@@ -143,6 +143,7 @@ func replicatedOwnershipCase(t *testing.T, name string) {
 	}
 	s.oracle = startFaultOracle(t, id, strings.Join(faults.Endpoints("source", 0), ","),
 		strings.Join(faults.Endpoints("destination", 0), ","), s.src, s.dst, s.group, replicatedPartitions, false)
+	observeReplicatedPrecondition(ctx, s.oracle)
 	s.audit = startReplicatedAudit(ctx, t, s.lab, directory)
 	s.audit.capture(ctx, t, "baseline")
 	settings := zombieWorkerSettings(timeouts)
