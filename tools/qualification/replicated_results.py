@@ -26,7 +26,7 @@ def copy_case(directory, id, identity):
     if precondition is not None:
         # Go owns the healthy fixture gate. Only its safely finalized, no-fault
         # result can explain a skipped case and authorize the one fresh retry.
-        if (family != 'network' or set(precondition) != {'status', 'healthy', 'max_acknowledgement_gap_seconds'} or
+        if (family != 'network' or set(precondition) != {'status', 'healthy', 'max_acknowledgement_gap_seconds', 'fault_attempted', 'stage', 'detail'} or
                 precondition['status'] != 'inconclusive' or not isinstance(precondition['healthy'], dict) or
                 type(precondition['max_acknowledgement_gap_seconds']) not in (int, float) or
                 not math.isfinite(precondition['max_acknowledgement_gap_seconds']) or
@@ -50,12 +50,31 @@ def collect(directory, selected, identity, run):
     directory = Path(directory)
     paths = sorted((directory/'fault-oracle'/run).glob('*/observations/case.json'))
     observed = [json.loads(path.read_text())['id'] for path in paths]
-    if sorted(observed) != sorted(selected):
+    if len(observed) != len(set(observed)) or set(observed) - set(selected):
         raise ValueError('replicated evidence does not match the exact selected cases')
     cases = []
     for id in selected:
         try:
-            if id == 'ownership/zombie-worker':
+            family, name = id.split('/')
+            exposure_path = directory if id == 'ownership/zombie-worker' else directory/(family+'-'+name)
+            filename = 'replicated-ownership-case.json' if family == 'ownership' and id != 'ownership/zombie-worker' else 'replicated-'+family+'.json'
+            exposure = json.loads((exposure_path/filename).read_text())
+            precondition = exposure.get('precondition')
+            if precondition is not None:
+                if (exposure['id'] != id or exposure['oracle_run'] != run or
+                        exposure['binary_sha256'] != identity['binary_sha256'] or
+                        precondition['status'] != 'inconclusive' or precondition['fault_attempted'] is not False or
+                        not isinstance(precondition['stage'], str) or not precondition['stage'].strip() or
+                        not isinstance(precondition['detail'], str) or not precondition['detail'].strip() or
+                        exposure.get('events') or exposure.get('fault')):
+                    raise ValueError('inconclusive precondition requires an exact no-fault stage proof')
+                if 'healthy' in precondition:
+                    # Measured network preconditions still require their completed
+                    # no-fault reconciliation and resource checks.
+                    case = copy_case(directory, id, identity)
+                else:
+                    case = dict(identity, id=id, status='inconclusive', precondition=precondition)
+            elif id == 'ownership/zombie-worker':
                 from tools.qualification.ownership_audit import validate
                 case = validate(directory, identity)
             elif id.startswith('ownership/'):
@@ -63,9 +82,12 @@ def collect(directory, selected, identity, run):
                 case = validate(directory, id, identity)
             else:
                 case = copy_case(directory, id, identity)
-            observed_path = paths[observed.index(id)]
-            if (directory/case['safety']['observations']).resolve() != (observed_path.parent/'samples.jsonl').resolve():
-                raise ValueError('replicated evidence references another observer run')
+            if 'safety' in case:
+                if id not in observed:
+                    raise ValueError('replicated evidence does not match the exact selected cases')
+                observed_path = paths[observed.index(id)]
+                if (directory/case['safety']['observations']).resolve() != (observed_path.parent/'samples.jsonl').resolve():
+                    raise ValueError('replicated evidence references another observer run')
         except (KeyError, TypeError, IndexError) as error:
             raise ValueError('malformed replicated fault evidence') from error
         cases.append(case)

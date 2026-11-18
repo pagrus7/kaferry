@@ -102,6 +102,7 @@ func replicatedOwnershipCase(t *testing.T, name string) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute+recovery)
 	defer cancel()
+	ctx = withReplicatedPrecondition(ctx, t, id)
 	directory := os.Getenv("KAFERRY_REPORT_DIR")
 	if directory == "" {
 		directory = t.TempDir()
@@ -351,7 +352,7 @@ func (s *ownershipCase) poll(label string, allowFaultExit bool, condition func(c
 		}
 		select {
 		case <-deadline.Done():
-			s.t.Fatalf("required observed state never proved: %s; last=%+v", label, state)
+			failReplicatedPrecondition(s.ctx, s.t, label, fmt.Sprintf("required observed state never proved; last=%+v", state))
 		case <-tick.C:
 		}
 	}
@@ -499,6 +500,7 @@ func (s *ownershipCase) killDuringRebalance(coordinator bool) {
 	role := faults.Role{Kind: "coordinator", Cluster: "source", Group: s.group}
 	window := s.oracle.begin(s.t, "held-worker-rebalance", map[string]any{"held_worker": s.workers[0].process.pid(), "coordinator_role": role}, coordinator,
 		s.timeouts, "one current-generation worker has accepted nonempty saved progress on all 24 partitions; SIGSTOP precedes the peer join")
+	attemptedReplicatedFault(s.ctx)
 	s.audit.faultAttempted = true
 	old := s.workers[0]
 	s.signal(old, syscall.SIGSTOP, "hold old member while a selected-binary peer joins")
@@ -672,6 +674,7 @@ func (s *ownershipCase) brokerInspection(ctx context.Context, target faults.Targ
 func (s *ownershipCase) scale() {
 	baseline := s.states["baseline"]
 	window := s.oracle.begin(s.t, "scale-up", map[string]any{"from": 1, "to": 3}, false, s.timeouts, "one selected worker owns and saves all source partitions")
+	attemptedReplicatedFault(s.ctx)
 	s.audit.faultAttempted = true
 	s.start(2)
 	s.start(3)
