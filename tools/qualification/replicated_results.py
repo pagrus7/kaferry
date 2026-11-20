@@ -26,7 +26,7 @@ def copy_case(directory, id, identity):
     if precondition is not None:
         # Go owns the healthy fixture gate. Only its safely finalized, no-fault
         # result can explain a skipped case and authorize the one fresh retry.
-        if (family != 'network' or set(precondition) != {'status', 'healthy', 'max_acknowledgement_gap_seconds', 'fault_attempted', 'stage', 'detail'} or
+        if (family != 'network' or set(precondition) != {'status', 'healthy', 'max_acknowledgement_gap_seconds', 'fault_attempted', 'stage', 'detail', 'safety_sampled'} or
                 precondition['status'] != 'inconclusive' or not isinstance(precondition['healthy'], dict) or
                 type(precondition['max_acknowledgement_gap_seconds']) not in (int, float) or
                 not math.isfinite(precondition['max_acknowledgement_gap_seconds']) or
@@ -64,19 +64,25 @@ def collect(directory, selected, identity, run):
                 if (exposure['id'] != id or exposure['oracle_run'] != run or
                         exposure['binary_sha256'] != identity['binary_sha256'] or
                         precondition['status'] != 'inconclusive' or precondition['fault_attempted'] is not False or
+                        type(precondition['safety_sampled']) is not bool or
                         not isinstance(precondition['stage'], str) or not precondition['stage'].strip() or
                         not isinstance(precondition['detail'], str) or not precondition['detail'].strip() or
                         exposure.get('events') or exposure.get('fault')):
                     raise ValueError('inconclusive precondition requires an exact no-fault stage proof')
+                oracles = [path for path in (directory/'fault-oracle'/run).glob(id.replace('/', '-')+'*') if path.is_dir()]
+                if precondition['safety_sampled']:
+                    if len(oracles) != 1 or not (oracles[0]/'observations/samples.jsonl').is_file():
+                        raise ValueError('sampled precondition requires one retained oracle samples.jsonl')
+                    for line in (oracles[0]/'observations/samples.jsonl').read_text().splitlines():
+                        if json.loads(line)['kind'] == 'failure':
+                            raise ValueError('independent safety observer failed before the precondition skip')
+                elif oracles:
+                    raise ValueError('unsampled precondition requires no oracle directory for the case')
                 if precondition['stage'] == 'healthy fixture measurement' or 'healthy' in precondition:
                     # Measured network preconditions still require their completed
                     # no-fault reconciliation and resource checks.
                     case = copy_case(directory, id, identity)
                 else:
-                    for samples in (directory/'fault-oracle'/run).glob(id.replace('/', '-')+'*/observations/samples.jsonl'):
-                        for line in samples.read_text().splitlines():
-                            if json.loads(line)['kind'] == 'failure':
-                                raise ValueError('independent safety observer failed before the precondition skip')
                     case = dict({key: identity[key] for key in IDENTITY}, id=id,
                                 status='inconclusive', precondition=precondition)
             elif id == 'ownership/zombie-worker':

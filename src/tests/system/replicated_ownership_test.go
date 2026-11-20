@@ -73,7 +73,13 @@ func waitReplicated(ctx context.Context, t *testing.T, label string, publisher *
 	for {
 		for _, worker := range workers {
 			if worker.finished() {
-				failReplicatedPrecondition(ctx, t, label, fmt.Sprintf("selected CLI exited: %v %s", worker.wait(), worker.logs()))
+				waitErr := worker.wait()
+				exitCode := worker.command.ProcessState.ExitCode()
+				detail := fmt.Sprintf("selected CLI exited with code %d: %v %s", exitCode, waitErr, worker.logs())
+				if exitCode != 1 {
+					t.Fatalf("%s: %s", label, detail)
+				}
+				failReplicatedPrecondition(ctx, t, label, detail)
 			}
 		}
 		if publisher != nil {

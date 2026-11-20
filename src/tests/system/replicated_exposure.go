@@ -24,6 +24,7 @@ import (
 type replicatedPrecondition struct {
 	id             string
 	faultAttempted bool
+	safetySampled  bool
 	oracle         *faultOracle
 	stage, detail  string
 }
@@ -66,6 +67,7 @@ func failReplicatedPrecondition(ctx context.Context, t *testing.T, stage string,
 	if err := ctx.Err(); err != nil {
 		t.Fatalf("%s: %v", stage, err)
 	}
+	gate.safetySampled = gate.oracle != nil
 	gate.stage, gate.detail = stage, fmt.Sprint(detail)
 	t.Skipf("inconclusive: no fault attempted; %s: %v", stage, detail)
 }
@@ -98,6 +100,7 @@ func (gate *replicatedPrecondition) retain(t *testing.T) {
 	}
 	precondition["status"], precondition["fault_attempted"], precondition["stage"] = "inconclusive", false, gate.stage
 	precondition["detail"] = gate.detail
+	precondition["safety_sampled"] = gate.safetySampled
 	receipt["precondition"] = precondition
 	data, err := json.MarshalIndent(receipt, "", "  ")
 	require.NoError(t, err)
