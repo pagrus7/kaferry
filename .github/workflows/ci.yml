@@ -11,8 +11,8 @@ permissions:
 env:
   CGO_ENABLED: "0"
 concurrency:
-  group: checks-${{ github.ref }}
-  cancel-in-progress: true
+  group: checks-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   changes:
     if: github.event_name == 'pull_request'
@@ -186,13 +186,14 @@ jobs:
         run: python3 -m tools.ci.ci source-install python3 -m tools.release.install_smoke
       - name: Publish Go coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        continue-on-error: true # The OIDC token request can fail before the uploader runs.
         with:
           files: build-results/coverage.out
           disable_search: true
           flags: go
           use_oidc: true
           version: v11.3.1
-          fail_ci_if_error: true
+          fail_ci_if_error: false
       - if: always()
         run: python3 -m tools.ci.ci summary
       - if: always()
@@ -248,13 +249,14 @@ jobs:
           go tool cover -html=build-results/coverage.out -o=build-results/coverage.html
       - name: Publish Go coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        continue-on-error: true
         with:
           files: build-results/coverage.out
           disable_search: true
           flags: go
           use_oidc: true
           version: v11.3.1
-          fail_ci_if_error: true
+          fail_ci_if_error: false
       - name: Capture bounded load measurements
         run: python3 -m tools.ci.ci load make load
       - name: Check the fresh-broker quick start
@@ -266,13 +268,14 @@ jobs:
       - run: python3 -m tools.ci.suites verify quickstart build-results/quickstart.log
       - name: Publish quick-start Go coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        continue-on-error: true
         with:
           files: build-results/quickstart-coverage.out
           disable_search: true
           flags: go
           use_oidc: true
           version: v11.3.1
-          fail_ci_if_error: true
+          fail_ci_if_error: false
       - if: always()
         run: |
           mkdir -p build-results
@@ -345,26 +348,31 @@ jobs:
           output: build-results/replicated
           artifact: replicated-fixture-evidence
       - uses: ./.github/actions/replicated-run
+        if: ${{ !cancelled() }}
         with:
           case: ownership/zombie-worker
           output: build-results/replicated-zombie
           artifact: replicated-zombie-evidence
       - uses: ./.github/actions/replicated-run
+        if: ${{ !cancelled() }}
         with:
           suite: endurance
           output: build-results/replicated-endurance
           artifact: replicated-endurance-evidence
       - name: Select the reduced replicated fault set
         id: cases
+        if: ${{ !cancelled() }}
         env:
           SUBSET: 'true'
         run: python3 -m tools.ci.replicated_suites >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/replicated-run
+        if: ${{ !cancelled() }}
         with:
           case: ${{ fromJSON(steps.cases.outputs.fault_matrix).include[0].case }}
           output: build-results/replicated-${{ fromJSON(steps.cases.outputs.fault_matrix).include[0].name }}
           artifact: replicated-${{ fromJSON(steps.cases.outputs.fault_matrix).include[0].name }}-evidence
       - uses: ./.github/actions/replicated-run
+        if: ${{ !cancelled() }}
         with:
           case: ${{ fromJSON(steps.cases.outputs.fault_matrix).include[1].case }}
           output: build-results/replicated-${{ fromJSON(steps.cases.outputs.fault_matrix).include[1].name }}
