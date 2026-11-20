@@ -575,7 +575,7 @@ def verify_replicated_tests(log, expected, cases):
         raise ValueError('inconclusive precondition cannot pass its Go case')
     if inconclusive:
         # A proved precondition skip ends this attempt without passing it.
-        required = [name for name in expected if name not in inconclusive] + sorted({name.split('/')[0] for name in inconclusive})
+        required = [name for name in expected if name not in inconclusive] + sorted({name.split('/')[0] for name in inconclusive if '/' in name})
         passed = {event['Test'] for event in events if event.get('Action') == 'pass' and event.get('Test')}
         if missing := [name for name in required if name not in passed]:
             raise ValueError('Required tests did not pass: ' + ', '.join(missing))
@@ -585,8 +585,7 @@ def verify_replicated_tests(log, expected, cases):
 
 
 def run_suite(args, *, cancelled=None):
-    selected = getattr(args, 'case', None)
-    if args.suite != 'fault-replicated' or selected and not selected.startswith('network/'):
+    if args.suite != 'fault-replicated':
         return run_suite_attempt(args, cancelled=cancelled)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -673,7 +672,7 @@ def run_suite_attempt(args, *, cancelled=None, lease_held=False, identity=None):
                         receipt['image_error'] = str(error)
             verify_run(args, spec, receipt)
         if receipt.get('fault_results', {}).get('status') == 'inconclusive':
-            raise InconclusivePrecondition('healthy fixture rate precondition was not met')
+            raise InconclusivePrecondition('replicated fixture precondition was not met before any fault attempt')
         receipt['status'] = 'passed'
     except (Exception, KeyboardInterrupt) as error:
         receipt.update(failed_outcome(error))

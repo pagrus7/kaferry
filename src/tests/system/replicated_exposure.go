@@ -3,8 +3,12 @@
 package compat
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -14,6 +18,94 @@ import (
 	"github.com/pagrus7/kaferry/src/tests/system/faults"
 	"github.com/stretchr/testify/require"
 )
+
+// A readiness failure can skip only before the first attempted fault. The gate
+// travels with the case context so shared readiness helpers use the same boundary.
+type replicatedPrecondition struct {
+	id             string
+	faultAttempted bool
+	safetySampled  bool
+	oracle         *faultOracle
+	stage, detail  string
+}
+
+type replicatedPreconditionKey struct{}
+
+func withReplicatedPrecondition(ctx context.Context, t *testing.T, id string) context.Context {
+	gate := &replicatedPrecondition{id: id}
+	// Register first, so cleanup failures cannot leave a retry-authorizing proof.
+	t.Cleanup(func() {
+		if t.Skipped() && !t.Failed() && !gate.faultAttempted && gate.stage != "" {
+			gate.retain(t)
+		}
+	})
+	return context.WithValue(ctx, replicatedPreconditionKey{}, gate)
+}
+
+func observeReplicatedPrecondition(ctx context.Context, oracle *faultOracle) {
+	if gate, ok := ctx.Value(replicatedPreconditionKey{}).(*replicatedPrecondition); ok {
+		gate.oracle = oracle
+	}
+}
+
+func attemptedReplicatedFault(ctx context.Context) {
+	if gate, ok := ctx.Value(replicatedPreconditionKey{}).(*replicatedPrecondition); ok {
+		gate.faultAttempted = true
+	}
+}
+
+func failReplicatedPrecondition(ctx context.Context, t *testing.T, stage string, detail any) {
+	t.Helper()
+	gate, ok := ctx.Value(replicatedPreconditionKey{}).(*replicatedPrecondition)
+	if !ok || gate.faultAttempted || ctx.Err() != nil || t.Failed() {
+		t.Fatalf("%s: %v", stage, detail)
+	}
+	if gate.oracle != nil && !gate.oracle.finished {
+		// Surface pending errors and take a fresh safety sample before skipping.
+		gate.oracle.command(t, map[string]any{"command": "sample"})
+	}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("%s: %v", stage, err)
+	}
+	gate.safetySampled = gate.oracle != nil
+	gate.stage, gate.detail = stage, fmt.Sprint(detail)
+	t.Skipf("inconclusive: no fault attempted; %s: %v", stage, detail)
+}
+
+func (gate *replicatedPrecondition) retain(t *testing.T) {
+	directory := os.Getenv("KAFERRY_REPORT_DIR")
+	require.NotEmpty(t, directory, "inconclusive attempts require retained evidence")
+	family, _, _ := strings.Cut(gate.id, "/")
+	if gate.id != "ownership/zombie-worker" {
+		directory = filepath.Join(directory, strings.ReplaceAll(gate.id, "/", "-"))
+	}
+	require.NoError(t, os.MkdirAll(directory, 0700))
+	filename := "replicated-" + family + ".json"
+	if family == "ownership" && gate.id != "ownership/zombie-worker" {
+		filename = "replicated-ownership-case.json"
+	}
+	path := filepath.Join(directory, filename)
+	receipt := make(map[string]any)
+	if data, err := os.ReadFile(path); err == nil {
+		require.NoError(t, json.Unmarshal(data, &receipt))
+	} else {
+		require.True(t, os.IsNotExist(err), "read existing exposure: %v", err)
+	}
+	receipt["id"] = gate.id
+	receipt["binary_sha256"] = os.Getenv("KAFERRY_EXPECT_BINARY_SHA256")
+	receipt["oracle_run"] = os.Getenv("KAFERRY_ORACLE_RUN")
+	precondition, _ := receipt["precondition"].(map[string]any)
+	if precondition == nil {
+		precondition = make(map[string]any)
+	}
+	precondition["status"], precondition["fault_attempted"], precondition["stage"] = "inconclusive", false, gate.stage
+	precondition["detail"] = gate.detail
+	precondition["safety_sampled"] = gate.safetySampled
+	receipt["precondition"] = precondition
+	data, err := json.MarshalIndent(receipt, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, append(data, '\n'), 0600))
+}
 
 // The product's periodic save uses a fixed 10s context. The midpoint leaves a
 // pending RPC across the 6s broker session without extending that save bound.

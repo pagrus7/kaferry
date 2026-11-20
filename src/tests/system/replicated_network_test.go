@@ -128,6 +128,7 @@ func (s *brokerCopy) networkInject(role faults.Role, fault faults.Fault, before 
 	require.Equal(s.t, s.lifetime(process), before.Worker.Lifetime)
 	window := s.oracle.begin(s.t, fault.Kind, role, false, s.timeouts,
 		"healthy measured copying, saved prefixes on all 24 partitions and independently acknowledged steady input")
+	attemptedReplicatedFault(s.ctx)
 	injection, err := s.lab.Inject(s.ctx, role, fault)
 	s.retainNetworkInjection(injection, fmt.Sprintf("fault-%d", window))
 	require.NoError(s.t, err)
@@ -170,7 +171,7 @@ func replicatedNetworkFault(t *testing.T, name string) {
 		// independent no-fault safety checks before recording that limitation.
 		s.precondition = &networkPrecondition{Status: "inconclusive", Healthy: healthy, MaxGapSeconds: maxGapSeconds}
 		s.finishReplicatedFault("network/"+name, baseline, "replicated-network.json")
-		t.Skip("inconclusive: healthy fixture precondition was not met; inspect replicated-network.json")
+		failReplicatedPrecondition(s.ctx, t, "healthy fixture measurement", "required output/input rate or acknowledgement gap was not met")
 	}
 	role := faults.Role{Kind: "worker-destination", Cluster: "destination", Worker: 1}
 	fault := faults.Fault{Kind: "cut"}

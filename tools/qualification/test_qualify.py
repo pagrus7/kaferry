@@ -59,9 +59,9 @@ class MatrixTest(unittest.TestCase):
         rows[0].pop('working_tree_dirty')
         self.assertFalse(valid_receipts(rows, 'full', 'b'*40, 'a'*64))
 
-    def test_network_precondition_reruns_once_and_keeps_each_attempt_under_one_lease(self):
-        selected = 'network/destination-leaders-outage'
-        test = 'TestReplicatedNetworkFaults/destination-leaders-outage'
+    def test_replicated_precondition_reruns_once_and_keeps_each_attempt_under_one_lease(self):
+        selected = 'ownership/zombie-worker'
+        test = 'TestReplicatedZombieWorker'
         scenarios = [(['inconclusive', 'passed'], 'passed', None), (['passed-dirty'], 'passed', None),
                      (['inconclusive', 'inconclusive'], 'inconclusive', InconclusivePrecondition),
                      (['product'], 'failed', RuntimeError), (['cancel'], 'interrupted', InterruptedError),
@@ -116,7 +116,7 @@ class MatrixTest(unittest.TestCase):
                     runs.append((output, env.copy()))
                     outcome = outcomes[number]
                     action = 'pass' if outcome in ('passed', 'passed-dirty', 'passed-untracked') else 'skip'
-                    events = [dict(Action=action, Test=test), dict(Action='pass', Test='TestReplicatedNetworkFaults'), dict(Action='pass')]
+                    events = [dict(Action=action, Test=test), dict(Action='pass')]
                     if outcome == 'other-fail':
                         events.append(dict(Action='fail', Test='UnrelatedCleanup'))
                     (output/'suite.log').write_text(''.join(json.dumps(event)+'\n' for event in events))
@@ -134,7 +134,7 @@ class MatrixTest(unittest.TestCase):
                     if outcomes[len(runs)-1] == 'safety':
                         raise ValueError('unsafe saved prefix')
                     return [dict(id=selected, status='passed' if outcomes[len(runs)-1] in ('passed', 'passed-dirty', 'passed-untracked') else 'inconclusive')]
-                # Given a completed low-rate attempt or an independent failure,
+                # Given a proved pre-fault zombie attempt or an independent failure,
                 # when qualification finishes, then only the former can retry.
                 with patch('tools.qualification.qualify.LAB_LOCK', root/'host.lock'), \
                      patch('tools.qualification.qualify.capture', side_effect=capture), \

@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -19,7 +20,7 @@ class ReplicatedResultsTest(unittest.TestCase):
         observer = root/'fault-oracle'/run/id.replace('/', '-')/'observations'
         observer.mkdir(parents=True)
         for name in ('samples.jsonl', 'bootstrap.jsonl'):
-            (observer/name).write_text('{}\n')
+            (observer/name).write_text(json.dumps(dict(kind='sample'))+'\n')
         safety = dict(IDENTITY, id=id, status='passed', execution='candidate CLI',
                       parameters=dict(source_partitions=24, routing='PRESERVE'),
                       fault_events=[] if precondition else [dict(kind='cut')],
@@ -27,11 +28,11 @@ class ReplicatedResultsTest(unittest.TestCase):
         path = observer/'case.json'
         path.write_text(json.dumps(safety))
         family, name = id.split('/')
-        exposure = dict(id=id, events=[] if precondition else [dict(kind='cut')], restarts=0,
+        exposure = dict(id=id, oracle_run=run, binary_sha256=IDENTITY['binary_sha256'], events=[] if precondition else [dict(kind='cut')], restarts=0,
                         worker_measurements=[dict(exit_code=0)], exact_lifetime_work_caps_qualified=True,
                         safety_case=dict(observations=path.relative_to(root).as_posix(), sha256=checksum(path)))
         if precondition:
-            exposure['precondition'] = dict(status='inconclusive', healthy=dict(before={}, after={}),
+            exposure['precondition'] = dict(status='inconclusive', fault_attempted=False, safety_sampled=True, stage='healthy fixture measurement', detail='rate too low', healthy=dict(before={}, after={}),
                                            max_acknowledgement_gap_seconds=2.28)
         result = root/(family+'-'+name)/('replicated-'+family+'.json')
         result.parent.mkdir(parents=True, exist_ok=True)
@@ -83,7 +84,12 @@ class ReplicatedResultsTest(unittest.TestCase):
             self.assertEqual('inconclusive', cases[0]['status'])
             self.assertEqual(original['precondition'], cases[0]['precondition'])
             self.assertEqual(dict(require_fault=False), validator.call_args.kwargs)
-            for change in (dict(precondition={}), dict(precondition=dict(status='passed', healthy={})),
+            for change in (dict(precondition={key: value for key, value in original['precondition'].items() if key != 'healthy'}),
+                           dict(precondition={key: value for key, value in original['precondition'].items() if key != 'safety_sampled'}),
+                           dict(oracle_run='old'), dict(binary_sha256='c'*64), dict(precondition={}),
+                           *(dict(precondition=dict(original['precondition'], **change)) for change in
+                             (dict(fault_attempted=True), dict(fault_attempted=0), dict(stage=''), dict(detail=''),
+                              dict(safety_sampled=None), dict(safety_sampled=1), dict(safety_sampled=False))), dict(precondition=dict(status='passed', healthy={})),
                            dict(precondition=dict(status='inconclusive', healthy=dict(before={}, after={}))),
                            *(dict(precondition=dict(original['precondition'], max_acknowledgement_gap_seconds=gap))
                              for gap in (None, '2.28', True, -1, float('inf'), float('nan'))),
@@ -100,6 +106,43 @@ class ReplicatedResultsTest(unittest.TestCase):
             result.write_text(json.dumps(original))
             with self.assertRaisesRegex(ValueError, 'no-fault'):
                 self.collect(root, [id])
+
+            # Given an earlier readiness failure in any replicated family, when
+            # its exact no-fault stage is retained, then no final safety pass is claimed.
+            for id in ('ownership/zombie-worker', 'ownership/worker-scale', 'broker/source-leader', 'network/latency'):
+                directory = root/id.replace('/', '_')
+                result, _ = self.receipt(directory, id, precondition=True)
+                exposure = json.loads(result.read_text())
+                exposure['precondition']['stage'] = 'initial saved prefixes'
+                exposure['precondition'].pop('healthy')
+                exposure['precondition'].pop('max_acknowledgement_gap_seconds')
+                if id == 'ownership/zombie-worker':
+                    result.unlink()
+                    result = directory/'replicated-ownership.json'
+                elif id.startswith('ownership/'):
+                    result = result.rename(result.with_name('replicated-ownership-case.json'))
+                result.write_text(json.dumps(exposure))
+                cases, validator = self.collect(directory, [id])
+                self.assertEqual('inconclusive', cases[0]['status'])
+                self.assertNotIn('safety', cases[0])
+                validator.assert_not_called()
+                samples = next((directory/'fault-oracle/current').glob('*/observations/samples.jsonl'))
+                with samples.open('a') as lines:
+                    lines.write(json.dumps(dict(kind='failure', error='unsafe saved prefix'))+'\n')
+                with self.assertRaisesRegex(ValueError, 'safety observer failed'):
+                    self.collect(directory, [id])
+                samples.unlink()
+                with self.assertRaisesRegex(ValueError, 'requires one retained oracle samples'):
+                    self.collect(directory, [id])
+                exposure['precondition']['safety_sampled'] = False
+                result.write_text(json.dumps(exposure))
+                with self.assertRaisesRegex(ValueError, 'requires no oracle directory'):
+                    self.collect(directory, [id])
+                shutil.rmtree(samples.parent.parent)
+                cases, validator = self.collect(directory, [id])
+                self.assertEqual('inconclusive', cases[0]['status'])
+                self.assertIs(False, cases[0]['precondition']['safety_sampled'])
+                validator.assert_not_called()
 
 
 if __name__ == '__main__':

@@ -95,6 +95,7 @@ func startReplicatedFaultCopy(t *testing.T, id string) (*brokerCopy, brokerObser
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), allowance)
 	t.Cleanup(cancel)
+	ctx = withReplicatedPrecondition(ctx, t, id)
 	directory := os.Getenv("KAFERRY_REPORT_DIR")
 	if directory == "" {
 		directory = t.TempDir()
@@ -115,6 +116,7 @@ func startReplicatedFaultCopy(t *testing.T, id string) (*brokerCopy, brokerObser
 	s.verifySettings()
 	s.oracle = startFaultOracle(t, id, strings.Join(faults.Endpoints("source", 0), ","),
 		strings.Join(faults.Endpoints("destination", 0), ","), s.src, s.dst, s.group, replicatedPartitions, false)
+	observeReplicatedPrecondition(ctx, s.oracle)
 	s.config = configuration(t, zombieWorkerSettings(timeouts))
 	s.statement = zombieWorkerSQL(timeouts, 1, prefix+"-worker", s.src, s.dst, s.group)
 	s.start()
@@ -410,7 +412,10 @@ func (s *brokerCopy) wait(label string, allowFailure bool, condition func(contex
 		}
 		select {
 		case <-deadline.Done():
-			s.t.Fatal("observed-state deadline expired: ", label)
+			if s.precondition != nil {
+				s.t.Fatal("no-fault finalization deadline expired: ", label)
+			}
+			failReplicatedPrecondition(s.ctx, s.t, label, "observed-state deadline expired")
 		case <-tick.C:
 		}
 	}
@@ -447,6 +452,7 @@ func (s *brokerCopy) inject(role faults.Role, kind string, before brokerObservat
 	require.NotNil(s.t, before.Worker)
 	require.Equal(s.t, s.lifetime(process), before.Worker.Lifetime, "fault baseline must belong to this worker lifetime")
 	window := s.oracle.begin(s.t, kind, role, kind != "cut", s.timeouts, "nonempty saved prefix on every source partition; steady acknowledged source input")
+	attemptedReplicatedFault(s.ctx)
 	injection, err := s.lab.Inject(s.ctx, role, faults.Fault{Kind: kind})
 	if injection != nil {
 		s.t.Cleanup(func() {

@@ -73,11 +73,19 @@ func waitReplicated(ctx context.Context, t *testing.T, label string, publisher *
 	for {
 		for _, worker := range workers {
 			if worker.finished() {
-				t.Fatalf("selected CLI exited while waiting for %s: %v %s", label, worker.wait(), worker.logs())
+				waitErr := worker.wait()
+				exitCode := worker.command.ProcessState.ExitCode()
+				detail := fmt.Sprintf("selected CLI exited with code %d: %v %s", exitCode, waitErr, worker.logs())
+				if exitCode != 1 {
+					t.Fatalf("%s: %s", label, detail)
+				}
+				failReplicatedPrecondition(ctx, t, label, detail)
 			}
 		}
 		if publisher != nil {
-			require.NoError(t, publisher.snapshot().err, "steady publisher failed")
+			if err := publisher.snapshot().err; err != nil {
+				failReplicatedPrecondition(ctx, t, label, err)
+			}
 		}
 		query, done := context.WithTimeout(deadline, 2*time.Second)
 		ready := condition(query)
@@ -87,7 +95,7 @@ func waitReplicated(ctx context.Context, t *testing.T, label string, publisher *
 		}
 		select {
 		case <-deadline.Done():
-			t.Fatal("observed-state deadline expired: ", label)
+			failReplicatedPrecondition(ctx, t, label, "observed-state deadline expired")
 		case <-tick.C:
 		}
 	}
@@ -101,8 +109,9 @@ func prepareReplicatedProducers(ctx context.Context, t *testing.T, metadata faul
 	// apply. One client's cached producer ID does not prepare the other brokers.
 	for broker := int32(1); broker <= 3; broker++ {
 		t.Logf("producer setup: initialize producer ID on destination broker %d", broker)
-		require.NoError(t, initializeProducerID(deadline, metadata["destination"], broker),
-			"fixture readiness: initialize producer ID on destination broker %d", broker)
+		if err := initializeProducerID(deadline, metadata["destination"], broker); err != nil {
+			failReplicatedPrecondition(ctx, t, fmt.Sprintf("initialize destination broker %d producer ID", broker), err)
+		}
 	}
 }
 
@@ -110,8 +119,12 @@ func replicatedTopic(ctx context.Context, t *testing.T, admin *kadm.Client, name
 	t.Helper()
 	created, err := admin.CreateTopic(ctx, replicatedPartitions, 3,
 		map[string]*string{"min.insync.replicas": kadm.StringPtr("2"), "retention.ms": kadm.StringPtr("-1")}, name)
-	require.NoError(t, err)
-	require.NoError(t, created.Err)
+	if err != nil {
+		failReplicatedPrecondition(ctx, t, "create replicated topic", err)
+	}
+	if created.Err != nil {
+		failReplicatedPrecondition(ctx, t, "create replicated topic", created.Err)
+	}
 	t.Cleanup(func() {
 		cleanup, done := context.WithTimeout(context.Background(), 15*time.Second)
 		defer done()
@@ -122,7 +135,6 @@ func replicatedTopic(ctx context.Context, t *testing.T, admin *kadm.Client, name
 			t.Error("delete replicated fixture topic:", err)
 		}
 	})
-	waitTopicReady(t, admin, name, replicatedPartitions)
 	waitReplicated(ctx, t, "all replicated topic replicas in sync", nil, nil, func(query context.Context) bool {
 		metadata, err := admin.Metadata(query, name)
 		if err != nil || len(metadata.Topics[name].Partitions) != replicatedPartitions {
@@ -147,6 +159,7 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	require.NotEmpty(t, os.Getenv("KAFERRY_EXPECT_BINARY_SHA256"), "bind both workers to the selected executable digest")
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
+	ctx = withReplicatedPrecondition(ctx, t, "ownership/zombie-worker")
 	directory := os.Getenv("KAFERRY_REPORT_DIR")
 	if directory == "" {
 		directory = t.TempDir()
@@ -169,6 +182,7 @@ func TestReplicatedZombieWorker(t *testing.T) {
 	require.NoError(t, err)
 	oracle := startFaultOracle(t, "ownership/zombie-worker", strings.Join(faults.Endpoints("source", 0), ","),
 		strings.Join(faults.Endpoints("destination", 0), ","), src, dst, group, replicatedPartitions, false)
+	observeReplicatedPrecondition(ctx, oracle)
 	audit := startReplicatedAudit(ctx, t, lab, directory)
 	audit.capture(ctx, t, "baseline")
 	producer := fixtureClient(t, strings.Join(faults.Endpoints("source", 0), ","), kgo.RecordPartitioner(kgo.ManualPartitioner()),
@@ -192,7 +206,17 @@ func TestReplicatedZombieWorker(t *testing.T) {
 		memories = append(memories, watchReplicatedRSS(t, process))
 		exits = append(exits, observeReplicatedExit(process))
 		require.NoError(t, process.send(statement))
-		waitMembers(t, source, group, worker, replicatedPartitions, nil)
+		waitReplicated(ctx, t, "initial worker assignments", nil, workers, func(query context.Context) bool {
+			observed, queryErr := observeOwnership(query, source, group, src)
+			if queryErr != nil || len(observed.Members) != worker {
+				return false
+			}
+			assigned := 0
+			for _, member := range observed.Members {
+				assigned += len(member.Partitions)
+			}
+			return assigned == replicatedPartitions
+		})
 		waitReplicated(ctx, t, "broker-observed worker client identity", nil, workers, func(query context.Context) bool {
 			observed, queryErr := observeOwnership(query, source, group, src)
 			if queryErr != nil {
@@ -223,9 +247,10 @@ func TestReplicatedZombieWorker(t *testing.T) {
 
 	// When worker1's coordinator upstream drops packets, keep the live pending
 	// owner exposed until the broker expires it and the peer actually saves.
+	attemptedReplicatedFault(ctx)
+	audit.faultAttempted = true
 	injection, err := lab.Inject(ctx, role, fault)
 	if injection != nil {
-		audit.faultAttempted = true
 		retainZombieFault(t, injection, directory, oracle.recovery)
 	}
 	require.NoError(t, err)
