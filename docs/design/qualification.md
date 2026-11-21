@@ -284,7 +284,8 @@ For a stopped replicated run, restore its project and UUID from the manifest. St
 This comparison runs one revision after the other on the same quiet host:
 
 ```sh
-sh tools/qualification/performance_run.sh origin/main HEAD --pairs 6 --archives
+KAFKA_TEST_BROKERS=127.0.0.1:19092 \
+  sh tools/qualification/performance_run.sh origin/main HEAD --pairs 6 --archives
 ```
 
 The wrapper cleans up on success, failure or interruption. [Performance CI](../../.github/workflows/performance.yml) uses warm-ups and six interleaved sequential pairs, alternating first revision. Kafka input is capped at 160,000 records; file/archive input at 200,000. Both revisions must accept the current workload SQL; archive comparisons require Avro support. A baseline that cannot complete the current workloads makes the comparison unavailable. Summaries retain median throughput and ranges, with raw metrics/identities/images for 30 days; runs use the maintainer's self-hosted Mac mini runner and have no merge gate.
