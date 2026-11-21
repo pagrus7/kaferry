@@ -203,11 +203,11 @@ func (m KafkaMetadata) Coordinator(ctx context.Context, cluster, group string) (
 }
 
 func routePort(cluster, listener string, broker int32) int {
-	base := 46092
+	base := 26092
 	if cluster == "destination" {
-		base = 47092
+		base = 27092
 	}
-	shifts := map[string]int{"internal": -20000, "controller": -18000, "admin": 0, "worker1": 100, "worker2": 200, "worker3": 300}
+	shifts := map[string]int{"internal": 400, "controller": 2000, "admin": 0, "worker1": 100, "worker2": 200, "worker3": 300}
 	return base + shifts[listener] + int(broker) - 1
 }
 

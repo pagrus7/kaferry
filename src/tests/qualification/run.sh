@@ -44,7 +44,7 @@ validate_fixture_images(Path(sys.argv[1]).read_text())
 PY
   mv "$image_receipt.tmp" "$image_receipt"
 fi
-export KAFERRY_QUAL_BROKERS=127.0.0.1:41092,127.0.0.1:42092,127.0.0.1:43092
+export KAFERRY_QUAL_BROKERS=127.0.0.1:21092,127.0.0.1:22092,127.0.0.1:23092
 export KAFERRY_QUAL_CA="$cert_dir/ca.pem"
 export KAFERRY_QUAL_WRONG_CA="$cert_dir/wrong-ca.pem"
 export KAFERRY_QUAL_KRB_CONFIG="$cert_dir/client-krb5.conf"

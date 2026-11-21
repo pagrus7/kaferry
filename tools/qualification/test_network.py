@@ -43,9 +43,9 @@ class NetworkTest(unittest.TestCase):
     def test_bound_listener_equivalence_still_requires_wildcard_and_exact_port(self):
         # Given a listener reported by the server, accept only equivalent wildcard binds.
         expected = network.routes()[0]
-        for listener, accepted in [('0.0.0.0:26092', True), ('[::]:26092', True),
-                                   ('127.0.0.1:26092', False), ('[::1]:26092', False),
-                                   ('[::]:26093', False), ('::26092', False), ('', False), (None, False)]:
+        for listener, accepted in [('0.0.0.0:26492', True), ('[::]:26492', True),
+                                   ('127.0.0.1:26492', False), ('[::1]:26492', False),
+                                   ('[::]:26493', False), ('::26492', False), ('', False), (None, False)]:
             with self.subTest(listener=listener):
                 self.assertEqual(accepted, network.matching_route(dict(expected, listen=listener), expected))
         self.assertFalse(network.matching_route(dict(expected, enabled=1), expected))

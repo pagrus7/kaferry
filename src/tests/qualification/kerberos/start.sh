@@ -11,7 +11,7 @@ cat > /etc/krb5.conf <<'EOF'
  }
 EOF
 cp /etc/krb5.conf /mnt/certs/broker-krb5.conf
-sed 's/kdc:88/127.0.0.1:44088/' /etc/krb5.conf > /mnt/certs/client-krb5.conf
+sed 's/kdc:88/127.0.0.1:24088/' /etc/krb5.conf > /mnt/certs/client-krb5.conf
 kdb5_util create -s -P fixture-master-secret
 kadmin.local -q 'addprinc -randkey copier@KAFERRY.TEST'
 kadmin.local -q 'addprinc -randkey kafka/127.0.0.1@KAFERRY.TEST'
