@@ -19,8 +19,8 @@ Run one coordinator per host across all checkouts. Commands run sequentially und
 
 | Fixture | Compose project | Localhost ports |
 | --- | --- | --- |
-| Default two-broker source/destination | `kaferry-compat` | 39092, 40092 |
-| Default endurance source/destination | `kaferry-endurance` | 39192, 40192 |
+| Default two-broker source/destination | `kaferry-compat` | 19092, 20092 |
+| Default endurance source/destination | `kaferry-endurance` | 19192, 20192 |
 | Authentication, TLS and Kerberos | `kaferry-qualification` | 21092–21094, 22092–22094, 23092–23094, 24088 (Kerberos) |
 | Two three-broker clusters and proxy | `kaferry-replicated` | 26092–27394 as listed below; API 28074 |
 

@@ -58,7 +58,7 @@ jobs:
           PERF_BASE: ${{ steps.plan.outputs.base }}
           PERF_HEAD: ${{ steps.plan.outputs.head }}
           PERF_PAIRS: ${{ inputs.pairs || 6 }}
-          KAFKA_TEST_BROKERS: 127.0.0.1:39092
+          KAFKA_TEST_BROKERS: 127.0.0.1:19092
           PERF_ARCHIVES: ${{ github.event_name != 'workflow_dispatch' || inputs.archives }}
         run: |
           if [ "$PERF_ARCHIVES" = true ]; then

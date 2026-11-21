@@ -45,7 +45,7 @@ runs:
     - name: Verify SIGTERM checkpointing and container resume
       env:
         KAFERRY_TEST_IMAGE: kaferry:ci
-        KAFKA_TEST_BROKERS: 127.0.0.1:39092
+        KAFKA_TEST_BROKERS: 127.0.0.1:19092
       shell: bash
       run: |
         python3 -m tools.ci.ci container-resume go test -count=1 -json -timeout=3m -tags=integration,container -run '^TestContainerShutdownAndResume$' ./src/tests/system

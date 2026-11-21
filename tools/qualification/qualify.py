@@ -360,7 +360,7 @@ def resolve_run(args, receipt):
     if topology is not None and (args.suite != 'endurance' or topology not in ('single', 'replicated')):
         raise ValueError('--topology is only accepted by run endurance: single or replicated')
     project = 'kaferry-endurance' if args.suite == 'endurance' else 'kaferry-compat'
-    source_port, destination_port = (39192, 40192) if args.suite == 'endurance' else (39092, 40092)
+    source_port, destination_port = (19192, 20192) if args.suite == 'endurance' else (19092, 20092)
     env = dict(os.environ, KAFERRY_SOURCE_PORT=str(source_port), KAFERRY_DESTINATION_PORT=str(destination_port), KAFERRY_REPORT_DIR=str(args.output), KAFERRY_TEST_OUTPUT='-json',
                KAFKA_TEST_BROKERS=f'127.0.0.1:{source_port}', KAFKA_TEST_DEST_BROKERS=f'127.0.0.1:{destination_port}',
                KAFKA_FAULT_CONTAINER=project+'-kafka-1', KAFKA_FAULT_DEST_CONTAINER=project+'-kafka-dr-1', KAFERRY_FIXTURE_PROJECT=project, CGO_ENABLED='1')

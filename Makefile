@@ -8,8 +8,8 @@ export CGO_ENABLED := 0
 KAFERRY_VERSION ?= dev
 KAFERRY_REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || printf unknown)$(if $(shell git status --porcelain --untracked-files=no 2>/dev/null),-dirty)
 FUZZ_ITERATIONS ?= 100000
-KAFKA_TEST_BROKERS ?= 127.0.0.1:39092
-KAFKA_TEST_DEST_BROKERS ?= 127.0.0.1:40092
+KAFKA_TEST_BROKERS ?= 127.0.0.1:19092
+KAFKA_TEST_DEST_BROKERS ?= 127.0.0.1:20092
 KAFERRY_TEST_OUTPUT ?= -v
 SOAK_TEST_TIMEOUT ?= 1h
 ifeq ($(KAFERRY_TEST_BINARY),)

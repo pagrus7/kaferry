@@ -29,8 +29,8 @@ jobs:
       matrix:
         suite: ${{ fromJSON(inputs.suites) }}
     env:
-      KAFKA_TEST_BROKERS: 127.0.0.1:39092
-      KAFKA_TEST_DEST_BROKERS: 127.0.0.1:40092
+      KAFKA_TEST_BROKERS: 127.0.0.1:19092
+      KAFKA_TEST_DEST_BROKERS: 127.0.0.1:20092
       KAFKA_FAULT_CONTAINER: kaferry-compat-kafka-1
       KAFERRY_SOAK_DURATION: ${{ inputs.soak_duration }}
       KAFERRY_SOAK_DEST_STALL_CONTAINER: kaferry-compat-kafka-dr-1
