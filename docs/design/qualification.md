@@ -19,10 +19,10 @@ Run one coordinator per host across all checkouts. Commands run sequentially und
 
 | Fixture | Compose project | Localhost ports |
 | --- | --- | --- |
-| Default two-broker source/destination | `kaferry-compat` | 39092, 40092 |
-| Default endurance source/destination | `kaferry-endurance` | 39192, 40192 |
-| Authentication, TLS and Kerberos | `kaferry-qualification` | 41092–43094, 44088 |
-| Two three-broker clusters and proxy | `kaferry-replicated` | 46092–47394 as listed below; API 48074 |
+| Default two-broker source/destination | `kaferry-compat` | 19092, 20092 |
+| Default endurance source/destination | `kaferry-endurance` | 19192, 20192 |
+| Authentication, TLS and Kerberos | `kaferry-qualification` | 21092–21094, 22092–22094, 23092–23094, 24088 (Kerberos) |
+| Two three-broker clusters and proxy | `kaferry-replicated` | 26092–27394 as listed below; API 28074 |
 
 Start with one workload, eight available CPUs, 16–20 GiB available RAM and 100 GiB free test storage; long endurance needs substantially more disk as described below. These are starting allocations, not capacity guarantees. Broker heaps are capped at 512 MiB, with four internal offset/transaction partitions.
 
@@ -94,12 +94,12 @@ The fixture pins [Toxiproxy 2.13.0](https://github.com/Shopify/toxiproxy/release
 
 | Path | Source ports | Destination ports |
 | --- | --- | --- |
-| Independent publisher, checker and admin | 46092–46094 | 47092–47094 |
-| Worker 1 | 46192–46194 | 47192–47194 |
-| Worker 2 | 46292–46294 | 47292–47294 |
-| Worker 3 | 46392–46394 | 47392–47394 |
+| Independent publisher, checker and admin | 26092–26094 | 27092–27094 |
+| Worker 1 | 26192–26194 | 27192–27194 |
+| Worker 2 | 26292–26294 | 27292–27294 |
+| Worker 3 | 26392–26394 | 27392–27394 |
 
-The API binds localhost 48074. Replication uses internal ports 26092–26094/27092–27094; controllers use 28092–28094/29092–29094. Health probes stay inside brokers and bypass proxies. The proxy namespace reserves route listeners/API from automatic outbound source-port allocation, including while listeners are disabled. The runner checks the reservation before configuring routes.
+The API binds localhost 28074. Replication uses internal ports 26492–26494/27492–27494; controllers use 28092–28094/29092–29094. Health probes stay inside brokers and bypass proxies. The proxy namespace reserves route listeners/API from automatic outbound source-port allocation, including while listeners are disabled. The runner checks the reservation before configuring routes.
 
 The [fault helper](../../src/tests/system/faults) resolves leaders, coordinators, followers and worker paths at injection. It supports owned-container kill/start, restart, pause/unpause and network disconnect/reconnect, plus proxy disable, timeout, reset, latency, bandwidth and slow close. Time values are milliseconds; bandwidth is KB/s per connection. Empty listener selection covers all six paths for a broker; worker selection affects that worker only. Healing restores the frozen container IDs, proxies and original network aliases. Ownership labels and proxy addresses must match before mutation; partial injection unwinds prior mutations and failed healing fails the case.
 
@@ -284,7 +284,8 @@ For a stopped replicated run, restore its project and UUID from the manifest. St
 This comparison runs one revision after the other on the same quiet host:
 
 ```sh
-sh tools/qualification/performance_run.sh origin/main HEAD --pairs 6 --archives
+KAFKA_TEST_BROKERS=127.0.0.1:19092 \
+  sh tools/qualification/performance_run.sh origin/main HEAD --pairs 6 --archives
 ```
 
 The wrapper cleans up on success, failure or interruption. [Performance CI](../../.github/workflows/performance.yml) uses warm-ups and six interleaved sequential pairs, alternating first revision. Kafka input is capped at 160,000 records; file/archive input at 200,000. Both revisions must accept the current workload SQL; archive comparisons require Avro support. A baseline that cannot complete the current workloads makes the comparison unavailable. Summaries retain median throughput and ranges, with raw metrics/identities/images for 30 days; runs use the maintainer's self-hosted Mac mini runner and have no merge gate.

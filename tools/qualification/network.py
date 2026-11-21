@@ -9,14 +9,15 @@ import subprocess
 from urllib.request import Request, urlopen
 
 IMAGE = 'ghcr.io/shopify/toxiproxy:2.13.0@sha256:5d3dae09bc185dcc5ff6cf43abf6062a4a720aff0c4306a471e773acdcd107aa'
-API = 'http://127.0.0.1:48074'
+API_PORT = 28074
+API = f'http://127.0.0.1:{API_PORT}'
 LISTENERS = ('internal', 'controller', 'admin', 'worker1', 'worker2', 'worker3')
 RESERVATION = 'net.ipv4.ip_local_reserved_ports'
 
 
 def route_port(side, node, listener):
-    base = 46092 if side == 'source' else 47092
-    shifts = dict(internal=-20000, controller=-18000, admin=0, worker1=100, worker2=200, worker3=300)
+    base = 26092 if side == 'source' else 27092
+    shifts = dict(internal=400, controller=2000, admin=0, worker1=100, worker2=200, worker3=300)
     return base + shifts[listener] + node - 1
 
 

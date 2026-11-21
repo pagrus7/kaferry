@@ -38,8 +38,6 @@ STREAMING_SUITES = ('soak', 'capture', 'endurance')
 TWO_BROKER_SUITES = ('broker', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration')
 LAB_LOCK = Path('/tmp/kaferry-qualification.lock')
 VENV = ROOT / ('.cache/qualification/venv-' + str(sys.version_info.major) + '.' + str(sys.version_info.minor))
-REPLICATED_SOURCE_PORTS = (46092, 46093, 46094)
-REPLICATED_DESTINATION_PORTS = (47092, 47093, 47094)
 REPLICATED_SUITES = ('replicated', 'fault-replicated')
 
 
@@ -298,7 +296,7 @@ def replicated_admission(output, endurance_seconds=None):
     if endurance_seconds is not None:
         required.update(endurance_allowance(endurance_seconds, replicas=3))
     capacity = fixture_capacity(output, required)
-    for port in (*network.client_ports(), 48074):
+    for port in (*network.client_ports(), network.API_PORT):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
                 # Closed fixture connections may still be in TIME_WAIT.
@@ -362,7 +360,7 @@ def resolve_run(args, receipt):
     if topology is not None and (args.suite != 'endurance' or topology not in ('single', 'replicated')):
         raise ValueError('--topology is only accepted by run endurance: single or replicated')
     project = 'kaferry-endurance' if args.suite == 'endurance' else 'kaferry-compat'
-    source_port, destination_port = (39192, 40192) if args.suite == 'endurance' else (39092, 40092)
+    source_port, destination_port = (19192, 20192) if args.suite == 'endurance' else (19092, 20092)
     env = dict(os.environ, KAFERRY_SOURCE_PORT=str(source_port), KAFERRY_DESTINATION_PORT=str(destination_port), KAFERRY_REPORT_DIR=str(args.output), KAFERRY_TEST_OUTPUT='-json',
                KAFKA_TEST_BROKERS=f'127.0.0.1:{source_port}', KAFKA_TEST_DEST_BROKERS=f'127.0.0.1:{destination_port}',
                KAFKA_FAULT_CONTAINER=project+'-kafka-1', KAFKA_FAULT_DEST_CONTAINER=project+'-kafka-dr-1', KAFERRY_FIXTURE_PROJECT=project, CGO_ENABLED='1')
@@ -380,8 +378,8 @@ def resolve_run(args, receipt):
         if args.source != VERSIONS[-1] or args.destination != VERSIONS[-1]:
             raise ValueError('replicated uses the newest catalog image and its dedicated fixture')
         project = 'kaferry-replicated'
-        env.update(KAFKA_TEST_BROKERS=','.join(f'127.0.0.1:{port}' for port in REPLICATED_SOURCE_PORTS),
-                   KAFKA_TEST_DEST_BROKERS=','.join(f'127.0.0.1:{port}' for port in REPLICATED_DESTINATION_PORTS),
+        env.update(KAFKA_TEST_BROKERS=network.endpoints('source'),
+                   KAFKA_TEST_DEST_BROKERS=network.endpoints('destination'),
                    KAFKA_FAULT_CONTAINER=project+'-source-1-1', KAFKA_FAULT_DEST_CONTAINER=project+'-destination-1-1',
                    KAFERRY_FIXTURE_PROJECT=project, KAFERRY_REPLICATED_IMAGE=IMAGES[VERSIONS[-1]],
                    KAFERRY_REPLICATED_RUN_ID=uuid.uuid4().hex)

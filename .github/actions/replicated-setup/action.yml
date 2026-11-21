@@ -36,7 +36,7 @@ runs:
         assert not services['toxiproxy'].get('privileged')
         assert not services['toxiproxy'].get('network_mode')
         assert not services['toxiproxy'].get('cap_add')
-        assert {port['published'] for port in services['toxiproxy']['ports']} == {str(port) for port in (*network.client_ports(), 48074)}
+        assert {port['published'] for port in services['toxiproxy']['ports']} == {str(port) for port in (*network.client_ports(), network.API_PORT)}
         for name in brokers:
             service = services[name]
             assert service['image'] == image

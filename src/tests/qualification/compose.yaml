@@ -70,7 +70,7 @@ x-environment: &environment
 services:
   kdc:
     build: kerberos
-    ports: ["127.0.0.1:44088:88"]
+    ports: ["127.0.0.1:24088:88"]
     volumes:
       - ${KAFERRY_QUAL_CERT_DIR:?generate fixture certificates}:/mnt/certs
     healthcheck:
@@ -82,22 +82,22 @@ services:
       retries: 15
   kafka-secure-1:
     <<: *broker
-    ports: ["127.0.0.1:41092:9095", "127.0.0.1:41093:9096", "127.0.0.1:41094:9097"]
+    ports: ["127.0.0.1:21092:9095", "127.0.0.1:21093:9096", "127.0.0.1:21094:9097"]
     environment:
       <<: *environment
       KAFKA_NODE_ID: 1
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-secure-1:9092,SECURE://127.0.0.1:41092,MTLS://127.0.0.1:41093,TLS://127.0.0.1:41094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-secure-1:9092,SECURE://127.0.0.1:21092,MTLS://127.0.0.1:21093,TLS://127.0.0.1:21094
   kafka-secure-2:
     <<: *broker
-    ports: ["127.0.0.1:42092:9095", "127.0.0.1:42093:9096", "127.0.0.1:42094:9097"]
+    ports: ["127.0.0.1:22092:9095", "127.0.0.1:22093:9096", "127.0.0.1:22094:9097"]
     environment:
       <<: *environment
       KAFKA_NODE_ID: 2
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-secure-2:9092,SECURE://127.0.0.1:42092,MTLS://127.0.0.1:42093,TLS://127.0.0.1:42094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-secure-2:9092,SECURE://127.0.0.1:22092,MTLS://127.0.0.1:22093,TLS://127.0.0.1:22094
   kafka-secure-3:
     <<: *broker
-    ports: ["127.0.0.1:43092:9095", "127.0.0.1:43093:9096", "127.0.0.1:43094:9097"]
+    ports: ["127.0.0.1:23092:9095", "127.0.0.1:23093:9096", "127.0.0.1:23094:9097"]
     environment:
       <<: *environment
       KAFKA_NODE_ID: 3
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-secure-3:9092,SECURE://127.0.0.1:43092,MTLS://127.0.0.1:43093,TLS://127.0.0.1:43094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-secure-3:9092,SECURE://127.0.0.1:23092,MTLS://127.0.0.1:23093,TLS://127.0.0.1:23094
