@@ -175,7 +175,7 @@ func testTLSCopy(t *testing.T, mutual bool) {
 	if mutual {
 		port = 93
 	}
-	cfg := map[string]string{"bootstrap.servers": fmt.Sprintf("127.0.0.1:410%d,127.0.0.1:420%d,127.0.0.1:430%d", port, port, port),
+	cfg := map[string]string{"bootstrap.servers": fmt.Sprintf("127.0.0.1:210%d,127.0.0.1:220%d,127.0.0.1:230%d", port, port, port),
 		"security.protocol": "SSL", "ssl.ca.location": os.Getenv("KAFERRY_QUAL_CA")}
 	if mutual {
 		cfg["ssl.certificate.location"] = filepath.Join(os.Getenv("KAFERRY_QUAL_CERT_DIR"), "client.pem")

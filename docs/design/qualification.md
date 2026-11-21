@@ -21,7 +21,7 @@ Run one coordinator per host across all checkouts. Commands run sequentially und
 | --- | --- | --- |
 | Default two-broker source/destination | `kaferry-compat` | 39092, 40092 |
 | Default endurance source/destination | `kaferry-endurance` | 39192, 40192 |
-| Authentication, TLS and Kerberos | `kaferry-qualification` | 21092–23094, 24088 |
+| Authentication, TLS and Kerberos | `kaferry-qualification` | 21092–21094, 22092–22094, 23092–23094, 24088 (Kerberos) |
 | Two three-broker clusters and proxy | `kaferry-replicated` | 26092–27394 as listed below; API 28074 |
 
 Start with one workload, eight available CPUs, 16–20 GiB available RAM and 100 GiB free test storage; long endurance needs substantially more disk as described below. These are starting allocations, not capacity guarantees. Broker heaps are capped at 512 MiB, with four internal offset/transaction partitions.
