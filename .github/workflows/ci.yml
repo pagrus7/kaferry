@@ -342,37 +342,38 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/replicated-setup
+        id: setup
       - uses: ./.github/actions/replicated-run
         with:
           suite: replicated
           output: build-results/replicated
           artifact: replicated-fixture-evidence
       - uses: ./.github/actions/replicated-run
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         with:
           case: ownership/zombie-worker
           output: build-results/replicated-zombie
           artifact: replicated-zombie-evidence
       - uses: ./.github/actions/replicated-run
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         with:
           suite: endurance
           output: build-results/replicated-endurance
           artifact: replicated-endurance-evidence
       - name: Select the reduced replicated fault set
         id: cases
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         env:
           SUBSET: 'true'
         run: python3 -m tools.ci.replicated_suites >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/replicated-run
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.cases.outcome == 'success' }}
         with:
           case: ${{ fromJSON(steps.cases.outputs.fault_matrix).include[0].case }}
           output: build-results/replicated-${{ fromJSON(steps.cases.outputs.fault_matrix).include[0].name }}
           artifact: replicated-${{ fromJSON(steps.cases.outputs.fault_matrix).include[0].name }}-evidence
       - uses: ./.github/actions/replicated-run
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.cases.outcome == 'success' }}
         with:
           case: ${{ fromJSON(steps.cases.outputs.fault_matrix).include[1].case }}
           output: build-results/replicated-${{ fromJSON(steps.cases.outputs.fault_matrix).include[1].name }}
