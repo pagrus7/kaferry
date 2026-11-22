@@ -255,12 +255,14 @@ kaferry run -c tutorial.toml -f copy.sql 2> rerun.log
 cat rerun.log
 ```
 
-The first `copy summary` reports `submitted: 3` and `confirmed: 3`. The status includes these fields (other fields are omitted here):
+The first `copy summary` reports `submitted: 3` and `confirmed: 3`. This status JSON excerpt shows the verdict and saved progress.
 
 ```json
 {
+  "version": 2,
   "verdict": "complete",
   "reason": "file selection completed",
+  "meaning": "Source processing finished for the selected finite scope: explicit offset bounds or the saved archive selection.",
   "partitions": [{"id": 0, "position": 3, "stop": {"reason": "eof", "at": 3}}]
 }
 ```

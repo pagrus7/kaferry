@@ -85,9 +85,12 @@ func TestArchiveTutorial(t *testing.T) {
 	require.NoError(t, err)
 	var status inspect.StatusReport
 	require.NoError(t, json.Unmarshal(data, &status))
+	require.Equal(t, expected.Version, status.Version)
 	require.Equal(t, expected.Verdict, status.Verdict)
 	require.Equal(t, expected.Reason, status.Reason)
+	require.Equal(t, expected.Meaning, status.Meaning)
 	require.Len(t, status.Partitions, 1)
+	require.Equal(t, expected.Partitions[0].ID, status.Partitions[0].ID)
 	require.Equal(t, expected.Partitions[0].Position, status.Partitions[0].Position)
 	require.Equal(t, expected.Partitions[0].Stop, status.Partitions[0].Stop)
 	input := archiveRecords(t, filepath.Join(directory, "input"))
