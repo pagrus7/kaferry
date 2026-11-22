@@ -80,6 +80,51 @@ func TestCLIHelpOutputFailure(t *testing.T) {
 	require.Contains(t, stderr.String(), "output closed")
 }
 
+//kaferry:guarantee cli.help
+func TestCLICommandHelp(t *testing.T) {
+	for _, command := range []string{"run", "explain", "status"} {
+		t.Run(command, func(t *testing.T) {
+			// Given a command and a request for its options.
+			var stdout, stderr bytes.Buffer
+
+			// When requesting command help.
+			code := Execute(t.Context(), []string{command, "--help"}, forbiddenInput{}, &stdout, &stderr)
+
+			// Then one usage line, one entry per option and one example go to stdout.
+			require.Zero(t, code)
+			require.Empty(t, stderr.String())
+			help := stdout.String()
+			require.True(t, strings.HasPrefix(help, "Usage: kaferry "+command+" [options]\n"))
+			require.Equal(t, 1, strings.Count(help, "Usage: "))
+			require.Equal(t, 1, strings.Count(help, "\nExample: kaferry "+command+" -f copy.sql"))
+
+			flags := []string{"-f, --file PATH", "-e, --sql SQL", "-c, --config PATH", "-h, --help"}
+			if command != "run" {
+				flags = append(flags, "--json")
+			}
+			require.Equal(t, len(flags), strings.Count(help, "\n  -"))
+			for _, name := range flags {
+				require.Equal(t, 1, strings.Count(help, "\n  "+name+" "), "%s", name)
+			}
+		})
+	}
+}
+
+func TestCLICommandFlagErrorUsesStderr(t *testing.T) {
+	// Given an unsupported flag.
+	var stdout, stderr bytes.Buffer
+
+	// When parsing the command options.
+	code := Execute(t.Context(), []string{"run", "--unknown"}, forbiddenInput{}, &stdout, &stderr)
+
+	// Then the error and the compact usage go to stderr.
+	require.Equal(t, 2, code)
+	require.Empty(t, stdout.String())
+	require.Contains(t, stderr.String(), "flag provided but not defined")
+	require.Contains(t, stderr.String(), "Usage: kaferry run [options]")
+	require.Contains(t, stderr.String(), "-f, --file PATH")
+}
+
 func TestHelpTopicFormat(t *testing.T) {
 	for name, topic := range map[string]string{"overview": overviewHelp, "sql": sqlHelp, "status": statusHelp} {
 		t.Run(name, func(t *testing.T) {

@@ -29,8 +29,6 @@ func TestCLIInputsAndExitCodes(t *testing.T) {
 		// Then
 		require.EqualValues(t, 2, executeCode)
 	}
-	var out bytes.Buffer
-	require.Zero(t, Execute(context.Background(), []string{"run", "--help"}, nil, io.Discard, &out))
 }
 
 func TestCLIVersionWithoutConfigurationOrInput(t *testing.T) {
