@@ -71,23 +71,38 @@ const (
 	verdictLimitReached      = "limit_reached"
 )
 
-var statusExitCodes = map[string]int{
-	verdictComplete:          0,
-	verdictTimestampComplete: 0,
-	verdictIncomplete:        4,
-	verdictUnknown:           5,
-	verdictRunning:           6,
-	verdictLimitReached:      7,
+// StatusVerdict describes a saved status verdict.
+type StatusVerdict struct {
+	ExitCode int
+	Meaning  string
 }
 
+var statusVerdicts = map[string]StatusVerdict{
+	verdictComplete:          {0, "Source processing finished for the selected finite scope: explicit offset bounds or the saved archive selection."},
+	verdictTimestampComplete: {0, "Source processing finished under the configured timestamp assumptions."},
+	verdictIncomplete:        {4, "Part of the selection has no saved stop."},
+	verdictUnknown:           {5, "Saved progress is absent, invalid or incompatible, or the group has an incompatible active member."},
+	verdictRunning:           {6, "Kafka group activity, unsettled state or a membership change was observed."},
+	verdictLimitReached:      {7, "All selected partitions have saved stops and at least one stopped at a worker record cap."},
+}
+
+// StatusVerdicts returns the descriptions of the saved status verdicts.
+func StatusVerdicts() map[string]StatusVerdict { return maps.Clone(statusVerdicts) }
+
 // StatusExitCodes returns the exit code for each saved status verdict.
-func StatusExitCodes() map[string]int { return maps.Clone(statusExitCodes) }
+func StatusExitCodes() map[string]int {
+	codes := make(map[string]int, len(statusVerdicts))
+	for verdict, info := range statusVerdicts {
+		codes[verdict] = info.ExitCode
+	}
+	return codes
+}
 
 func (r StatusReport) ExitCode() int {
-	if code, ok := statusExitCodes[r.Verdict]; ok {
-		return code
+	if info, ok := statusVerdicts[r.Verdict]; ok {
+		return info.ExitCode
 	}
-	return statusExitCodes[verdictUnknown]
+	return statusVerdicts[verdictUnknown].ExitCode
 }
 
 func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker, stop core.StopObserver) (report StatusReport, result error) {

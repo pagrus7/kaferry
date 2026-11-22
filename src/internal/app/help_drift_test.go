@@ -89,8 +89,8 @@ func TestHelpSQLExamplesParseAndPlan(t *testing.T) {
 }
 
 func TestHelpStatusVerdictsMatchInspection(t *testing.T) {
-	// Given the verdict codes used by status and both user-facing legends.
-	want := inspect.StatusExitCodes()
+	// Given the verdicts and exit codes used by status.
+	verdicts := inspect.StatusVerdicts()
 
 	// When extracting the verdict names and codes from the embedded topic.
 	rows := helpTableRows(t, statusHelp, `(?m)^([a-z_]+) +([0-9]+)  +`)
@@ -100,11 +100,9 @@ func TestHelpStatusVerdictsMatchInspection(t *testing.T) {
 		require.NoError(t, err)
 		codes[verdict] = code
 	}
-	legend := helpTableRows(t, inspect.StatusMeaning, `(?m)^([a-z_]+) +\| ([^\n]+)`)
-
-	// Then both legends cover the exact verdict set and help lists each exit code.
-	require.Equal(t, want, codes)
-	require.Equal(t, slices.Sorted(maps.Keys(want)), slices.Sorted(maps.Keys(legend)))
+	// Then help lists each verdict and its exit code.
+	require.Equal(t, inspect.StatusExitCodes(), codes)
+	require.Equal(t, slices.Sorted(maps.Keys(verdicts)), slices.Sorted(maps.Keys(codes)))
 }
 
 func readHelpDoc(t *testing.T, name string) string {
