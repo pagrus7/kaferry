@@ -35,7 +35,7 @@ func TestCLIHelpTopics(t *testing.T) {
 
 			// Then the requested topic is printed to stdout.
 			require.Zero(t, code)
-			require.Equal(t, string(topic), stdout.String())
+			require.Equal(t, helpTopic(string(topic)), stdout.String())
 			require.Empty(t, stderr.String())
 		})
 	}
@@ -48,7 +48,7 @@ func TestCLIHelpUsageErrors(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"no args", nil, overviewHelp},
+		{"no args", nil, helpTopic(overviewHelp)},
 		{"unknown topic", []string{"help", "nope"}, topics},
 		{"extra topic argument", []string{"help", "sql", "status"}, topics},
 		{"extra alias argument", []string{"--help", "sql"}, topics},
