@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -13,19 +14,21 @@ import (
 func TestCLIHelpTopics(t *testing.T) {
 	for _, tc := range []struct {
 		args []string
-		want string
+		file string
 	}{
-		{[]string{"help"}, overviewHelp},
-		{[]string{"--help"}, overviewHelp},
-		{[]string{"-h"}, overviewHelp},
-		{[]string{"help", "--help"}, overviewHelp},
-		{[]string{"help", "-h"}, overviewHelp},
-		{[]string{"help", "sql"}, sqlHelp},
-		{[]string{"help", "status"}, statusHelp},
+		{[]string{"help"}, "overview.txt"},
+		{[]string{"--help"}, "overview.txt"},
+		{[]string{"-h"}, "overview.txt"},
+		{[]string{"help", "--help"}, "overview.txt"},
+		{[]string{"help", "-h"}, "overview.txt"},
+		{[]string{"help", "sql"}, "sql.txt"},
+		{[]string{"help", "status"}, "status.txt"},
 	} {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			// Given a help invocation without SQL or configuration.
 			t.Setenv("HOME", "")
+			topic, err := os.ReadFile("help/" + tc.file)
+			require.NoError(t, err)
 			var stdout, stderr bytes.Buffer
 
 			// When requesting help.
@@ -33,7 +36,7 @@ func TestCLIHelpTopics(t *testing.T) {
 
 			// Then the requested topic is printed to stdout.
 			require.Zero(t, code)
-			require.Equal(t, tc.want, stdout.String())
+			require.Equal(t, string(topic), stdout.String())
 			require.Empty(t, stderr.String())
 		})
 	}
