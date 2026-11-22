@@ -11,15 +11,18 @@ Choose one SQL input for run, explain, or status
   -f file     Read SQL from a file.
   -f -        Read SQL from stdin.
   -e "SQL"    Read SQL from the command line.
-  -c config.toml  Optionally load connections and worker settings from TOML.
+
+Optional configuration
+  -c config.toml  Load connections and worker settings from TOML.
+
+Start a Kafka broker on localhost:9092, create the topics used below, and add
+a few recent sample records to orders before the first run.
+Each Kafka destination needs the partition IDs copied from the source.
 
 Save one statement below as copy.sql. Use the same SQL and config throughout.
   kaferry explain -f copy.sql
   kaferry run -f copy.sql
   kaferry status --json -f copy.sql
-
-Start a Kafka broker on localhost:9092 and create the topics used below.
-Each Kafka destination needs the partition IDs copied from the source.
 
 Copy the current readable topic backlog
   WITH CONNECTION default AS ('bootstrap.servers' = 'localhost:9092')
