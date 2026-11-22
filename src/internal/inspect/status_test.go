@@ -64,7 +64,7 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 		name, verdict string
 		code          int
 	}{
-		{"no progress", "unknown", 5}, {"partial progress", "incomplete", 4}, {"no stop", "incomplete", 4}, {"stopped", "complete_within_staleness", 0},
+		{"no progress", "unknown", 5}, {"partial progress", "incomplete", 4}, {"no stop", "incomplete", 4}, {"stopped", "complete_within_staleness", 0}, {"offset end", "complete", 0},
 		{"worker threshold", "limit_reached", 7}, {"mixed stops", "limit_reached", 7}, {"partial worker stops", "incomplete", 4}, {"active after worker stop", "running", 6},
 		{"active", "running", 6}, {"changed empty group state", "running", 6}, {"rebalance without members", "running", 6},
 		{"foreign member", "unknown", 5}, {"identity conflict while active", "unknown", 5},
@@ -130,6 +130,44 @@ func TestStatusExposesIncompatibleArchiveCursor(t *testing.T) {
 	require.Equal(t, new(int64(7)), report.Partitions[0].Position)
 	require.Equal(t, "old", report.Partitions[0].Fingerprint)
 	require.Equal(t, archives.source.Stop, report.Partitions[0].Stop)
+	requireStatusGuidance(t, report, true)
+}
+
+func TestArchiveStatusGuidance(t *testing.T) {
+	for _, tc := range []struct {
+		name, verdict, stop string
+		saved, corrupt      bool
+		disorder            *int64
+	}{
+		{name: "fresh selection", verdict: "unknown"},
+		{name: "corrupt checkpoint", verdict: "unknown", corrupt: true},
+		{name: "unfinished selection", verdict: "incomplete", saved: true},
+		{name: "record cap", verdict: "limit_reached", saved: true, stop: "worker_record_cap"},
+		{name: "completed selection", verdict: "complete", saved: true, stop: "eof"},
+		{name: "completed under timestamp assumptions", verdict: "complete_within_staleness", saved: true, stop: "eof", disorder: new(int64(0))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given an archive inspection with or without a validated saved selection.
+			service, p, _, archives := fixture()
+			p.Source.Kind, p.Source.Format = "ARCHIVE", "avro"
+			p.MaxOutOfOrderMS = tc.disorder
+			archives.source.Saved = tc.saved
+			if tc.stop != "" {
+				archives.source.Stop = &core.Stop{Reason: tc.stop}
+			}
+			if tc.corrupt {
+				archives.failSource = &archiveio.Conflict{Err: errors.New("corrupt checkpoint")}
+			}
+
+			// When checking saved archive status.
+			report, err := service.Status(t.Context(), p, config.Defaults("").Worker, core.NoopStopObserver{})
+
+			// Then guidance reflects the verdict and any validated saved selection.
+			require.NoError(t, err)
+			require.Equal(t, tc.verdict, report.Verdict)
+			requireStatusGuidance(t, report, tc.saved)
+		})
+	}
 }
 
 func TestStatusPreservesOperationalFailuresAndRejectsOneOff(t *testing.T) {
@@ -238,6 +276,9 @@ func kafkaStatusVerdict(t *testing.T, name, verdict string, code int) {
 		source.fail = "saved"
 		source.failure = &kafka.Conflict{Err: errors.New("different query")}
 		source.memberships = []kafka.Membership{{Idle: false}}
+	case "offset end":
+		p.Window = plan.WindowSpec{}
+		p.Offsets = &plan.OffsetRange{Upper: new(int64(1))}
 	}
 	// When observing without joining, consuming, positioning or committing.
 	r, err := s.Status(t.Context(), p, config.Defaults("home").Worker, core.NoopStopObserver{})
@@ -245,6 +286,7 @@ func kafkaStatusVerdict(t *testing.T, name, verdict string, code int) {
 	require.NoError(t, err)
 	require.Equal(t, verdict, r.Verdict)
 	require.Equal(t, code, r.ExitCode())
+	requireStatusGuidance(t, r, false)
 	switch name {
 	case "worker threshold":
 		require.Equal(t, "worker record threshold reached", r.Reason)
@@ -264,4 +306,48 @@ func kafkaStatusVerdict(t *testing.T, name, verdict string, code int) {
 		require.Equal(t, int64(1), *r.Partitions[1].Position)
 		require.Equal(t, new(int64(1)), r.Partitions[1].End)
 	}
+}
+
+func requireStatusGuidance(t *testing.T, report StatusReport, savedArchiveSelection bool) {
+	t.Helper()
+	const completionNote = "Completion permits filtered or skipped records, does not guarantee exactly-once writes and does not verify destination data."
+	want := map[string]struct {
+		meaning, next string
+		notes         []string
+	}{
+		"unknown": {
+			meaning: "Saved progress is absent, invalid or incompatible, or the group has an incompatible active member.",
+			next:    "Check the reason, then confirm the original group, query, and endpoints.",
+		},
+		"running": {
+			meaning: "Kafka group activity, unsettled state or a membership change was observed.",
+			next:    "Wait briefly, then check status again.",
+		},
+		"incomplete": {
+			meaning: "Part of the selection has no saved stop.",
+			next:    "To resume, rerun with the same query, group, and configuration.",
+		},
+		"limit_reached": {
+			meaning: "All selected partitions have saved stops and at least one stopped at a worker record cap.",
+			next:    "Rerun the same job for another allowance.",
+		},
+		"complete_within_staleness": {
+			meaning: "Source processing finished under the configured timestamp assumptions.",
+			notes: []string{
+				"Timestamp completion depends on the enabled MAX_STALENESS (arrival delay and consumer clock lead) or MAX_OUT_OF_ORDER (timestamp disorder) assumptions.",
+				completionNote,
+			},
+		},
+		"complete": {
+			meaning: "Source processing finished for the selected finite scope: explicit offset bounds or the saved archive selection.",
+			notes:   []string{completionNote},
+		},
+	}[report.Verdict]
+	if savedArchiveSelection {
+		want.notes = append(want.notes, "This group's saved archive checkpoint fixes the file selection.")
+	}
+	require.Equal(t, 2, report.Version)
+	require.Equal(t, want.meaning, report.Meaning)
+	require.Equal(t, want.next, report.Next)
+	require.Equal(t, want.notes, report.Notes)
 }

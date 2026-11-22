@@ -50,7 +50,18 @@ func renderStatus(output io.Writer, r inspect.StatusReport, asJSON bool) error {
 	if r.Source.File != nil {
 		fmt.Fprintf(&b, "  Snapshot: %d completed files, %d encoded bytes.\n", r.Source.File.FileCount, r.Source.File.SizeBytes)
 	}
-	fmt.Fprintf(&b, "\n%s\nActivity: %s.\n", r.Meaning, r.Activity)
+	renderStatusGuidance(&b, r)
 	_, err := b.WriteTo(output)
 	return err
+}
+
+func renderStatusGuidance(output io.Writer, r inspect.StatusReport) {
+	fmt.Fprintf(output, "\nMeaning: %s\n", r.Meaning)
+	for _, note := range r.Notes {
+		fmt.Fprintln(output, note)
+	}
+	if r.Next != "" {
+		fmt.Fprintf(output, "Next: %s\n", r.Next)
+	}
+	fmt.Fprintf(output, "Activity: %s.\nAll statuses: kaferry help status\n", r.Activity)
 }
