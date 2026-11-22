@@ -11,7 +11,7 @@ insert      = "INSERT" "INTO" endpoint
 select      = "SELECT" "*" "FROM" endpoint
               [ "WITH" "(" source_option { "," source_option } ")" ] ;
 endpoint    = "TOPIC" string                 (* 'topic' or 'topic@alias' *)
-            | "ARCHIVE" string ;                   (* archive directory *)
+            | "ARCHIVE" string ;             (* archive directory *)
 source_option = "GROUP" "=" ( string | "ONE_OFF" )
             | "START" "=" ( "EARLIEST" | "LATEST" )
             | ( "MAX_STALENESS" | "MAX_OUT_OF_ORDER" ) "="
@@ -46,23 +46,34 @@ copy_option = "WORKER_STOP_AFTER_RECORDS" "=" integer
 
 Defaults
 Source WITH (after FROM)
-  GROUP                     | ONE_OFF
-  START                     | EARLIEST             | Topic without time bounds
-  MAX_STALENESS             | INTERVAL '5' MINUTE with a timestamp upper bound
-  MAX_OUT_OF_ORDER          | OFF
+Kafka source
+  GROUP                      ONE_OFF
+  START                      EARLIEST
+  MAX_STALENESS              INTERVAL '5' MINUTE with a timestamp upper bound
+  MAX_OUT_OF_ORDER           OFF
 
-MAX_STALENESS applies to topic sources without an explicit offset end.
-Saved positions take precedence over the initial START.
+START applies without timestamp bounds. Saved positions take precedence.
+MAX_STALENESS applies when there is no explicit offset end.
+
+Archive source
+  GROUP                      ONE_OFF
+  MAX_OUT_OF_ORDER           OFF
 
 Sink WITH (after INSERT INTO)
-  PARTITIONING              | PRESERVE             | Topic
-  ROTATE_AFTER_SIZE         | 1g                   | Archive
-  ROTATE_AFTER_AGE          | INTERVAL '1' HOUR     | Archive
+Kafka sink
+  PARTITIONING               PRESERVE
+
+Archive sink
+  ROTATE_AFTER_SIZE          1g
+  ROTATE_AFTER_AGE           INTERVAL '1' HOUR
 
 Final OPTIONS
-  WORKER_STOP_AFTER_RECORDS | No record limit
-  ON_ERROR                  | FAIL
-  ON_MISSING_TIMESTAMP      | FAIL                 | With timestamp bounds
-  ON_REJECTED_TIMESTAMP     | FAIL                 | Topic sink
+  WORKER_STOP_AFTER_RECORDS  No record limit
+  ON_ERROR                   FAIL
+  ON_MISSING_TIMESTAMP       FAIL
+  ON_REJECTED_TIMESTAMP      FAIL
+
+ON_MISSING_TIMESTAMP requires timestamp bounds in WHERE.
+ON_REJECTED_TIMESTAMP requires a Kafka sink.
 
 https://github.com/pagrus7/kaferry/blob/main/docs/reference.md#sql-statements

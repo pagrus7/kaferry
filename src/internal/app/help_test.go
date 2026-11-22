@@ -42,7 +42,7 @@ func TestCLIHelpTopics(t *testing.T) {
 }
 
 func TestCLIHelpUsageErrors(t *testing.T) {
-	const topics = "Valid help topics: sql, status. Run kaferry help for the overview.\n"
+	const topics = "Valid help topics: sql, status, run, explain. Run kaferry help for an overview.\n"
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -123,6 +123,49 @@ func TestCLICommandFlagErrorUsesStderr(t *testing.T) {
 	require.Contains(t, stderr.String(), "flag provided but not defined")
 	require.Contains(t, stderr.String(), "Usage: kaferry run [options]")
 	require.Contains(t, stderr.String(), "-f, --file PATH")
+}
+
+func TestCLIHelpCommandAliases(t *testing.T) {
+	for _, command := range []string{"run", "explain"} {
+		t.Run(command, func(t *testing.T) {
+			// Given a statement command with its usual flag help.
+			var canonical, alias, stderr bytes.Buffer
+			require.Zero(t, Execute(t.Context(), []string{command, "--help"}, forbiddenInput{}, &canonical, &stderr))
+
+			// When asking for help using the command name as a topic.
+			code := Execute(t.Context(), []string{"help", command}, forbiddenInput{}, &alias, &stderr)
+
+			// Then both paths print the same command usage to stdout.
+			require.Zero(t, code)
+			require.Empty(t, stderr.String())
+			require.Equal(t, canonical.String(), alias.String())
+		})
+	}
+}
+
+func TestHelpLinksUseReleaseTagWithinWidth(t *testing.T) {
+	for _, tc := range []struct {
+		name, version, topic, link string
+	}{
+		{"release", "v0.14.0", overviewHelp, "/blob/v0.14.0/docs/reference.md#exit-codes"},
+		{"docs index", "v0.14.0", overviewHelp, "/tree/v0.14.0/docs"},
+		{"prerelease", "v0.14.0-rc.1", sqlHelp, "/blob/v0.14.0-rc.1/docs/reference.md\n"},
+		{"long tag", "v0.14.0-" + strings.Repeat("1", 60), overviewHelp, "/blob/main/docs/reference.md#exit-codes"},
+		{"development", "(devel)", overviewHelp, "/blob/main/docs/reference.md#exit-codes"},
+		{"pseudo-version", "v0.14.1-0.20261122052201-cf8f1aa3528f", statusHelp, "/blob/main/docs/reference.md#saved-status"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given an embedded topic and the module version stamped by Go.
+			// When rendering the topic.
+			rendered := versionHelpLinks(tc.topic, tc.version)
+
+			// Then the documentation link uses the expected destination and fits.
+			require.Contains(t, rendered, "https://github.com/pagrus7/kaferry"+tc.link)
+			for _, line := range strings.Split(rendered, "\n") {
+				require.LessOrEqual(t, utf8.RuneCountInString(line), 80, "%q", line)
+			}
+		})
+	}
 }
 
 func TestHelpTopicFormat(t *testing.T) {

@@ -18,7 +18,7 @@ insert      = "INSERT" "INTO" endpoint
 select      = "SELECT" "*" "FROM" endpoint
               [ "WITH" "(" source_option { "," source_option } ")" ] ;
 endpoint    = "TOPIC" string                 (* 'topic' or 'topic@alias' *)
-            | "ARCHIVE" string ;                   (* archive directory *)
+            | "ARCHIVE" string ;             (* archive directory *)
 source_option = "GROUP" "=" ( string | "ONE_OFF" )
             | "START" "=" ( "EARLIEST" | "LATEST" )
             | ( "MAX_STALENESS" | "MAX_OUT_OF_ORDER" ) "="

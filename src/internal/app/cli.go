@@ -21,7 +21,7 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 }
 func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, budget Shutdown) int {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, overviewHelp)
+		fmt.Fprint(stderr, helpTopic(overviewHelp))
 		return 2
 	}
 	switch args[0] {

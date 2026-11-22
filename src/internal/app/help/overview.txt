@@ -15,8 +15,9 @@ Choose one SQL input for run, explain, or status
 Optional configuration
   -c config.toml  Load connections and worker settings from TOML.
 
-Start a Kafka broker on localhost:9092, create the topics used below, and add
-a few recent sample records to orders before the first run.
+Start a Kafka broker on localhost:9092.
+Create topics orders, orders-copy, orders-hour and orders-restored.
+Add a few recent sample records to orders before the first run.
 Each Kafka destination needs the partition IDs copied from the source.
 
 Save one statement below as copy.sql. Use the same SQL and config throughout.
@@ -63,4 +64,7 @@ https://github.com/pagrus7/kaferry/blob/main/docs/reference.md#exit-codes
 More help
   kaferry help sql       Statement grammar and setting defaults
   kaferry help status    Saved progress verdicts
+  kaferry help run       Run flags and example
+  kaferry help explain   Explain flags and example
+  kaferry status --help  Status flags and example
 https://github.com/pagrus7/kaferry/tree/main/docs

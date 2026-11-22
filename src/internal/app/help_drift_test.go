@@ -29,28 +29,28 @@ func TestHelpSQLMatchesDocumentation(t *testing.T) {
 	})
 
 	t.Run("defaults", func(t *testing.T) {
-		// Given the reference tables and the three scopes in the embedded topic.
+		// Given the reference tables and their matching help sections.
 		reference := strings.ReplaceAll(readHelpDoc(t, "reference.md"), "`", "")
-		const docRow = `(?m)^\| ([A-Z_]+) \| ([^|\n]+) \|`
-		const topicRow = `(?m)^  ([A-Z_]+) +\| ([^|\n]+)`
+		const docRow = `(?m)^\| ([A-Z0-9_]+) \| ([^|\n]+) \|`
+		const topicRow = `(?m)^  ([A-Z0-9_]+) {2,}([^\n]+)`
+		for _, scope := range []struct {
+			title, docStart, docEnd, topicEnd string
+		}{
+			{"Kafka source", "#### Kafka source", "#### Archive source", "Archive source"},
+			{"Archive source", "#### Archive source", "#### Kafka sink", "Sink WITH"},
+			{"Kafka sink", "#### Kafka sink", "#### Archive sink", "Archive sink"},
+			{"Archive sink", "#### Archive sink", "### Record-error policies", "Final OPTIONS"},
+			{"Final OPTIONS", "### Final OPTIONS", "### SQL errors", "https://"},
+		} {
+			t.Run(scope.title, func(t *testing.T) {
+				// When extracting the keys and defaults for this scope.
+				documented := helpSection(t, reference, scope.docStart+"\n", "\n"+scope.docEnd)
+				embedded := helpSection(t, sqlHelp, scope.title+"\n", "\n"+scope.topicEnd)
 
-		// When reading the keys and defaults for each scope.
-		source := helpTableRows(t, helpSection(t, reference, "#### Kafka source\n", "\n#### Archive source\n"), docRow)
-		archive := helpTableRows(t, helpSection(t, reference, "#### Archive source\n", "\n#### Kafka sink\n"), docRow)
-		for key, value := range archive {
-			if previous, shared := source[key]; shared {
-				require.Equal(t, previous, value, "%s has different source defaults", key)
-			}
-			source[key] = value
+				// Then the options and defaults match for this endpoint or clause.
+				require.Equal(t, helpTableRows(t, documented, docRow), helpTableRows(t, embedded, topicRow))
+			})
 		}
-		sink := helpTableRows(t, helpSection(t, reference, "#### Kafka sink\n", "\n#### Archive sink\n"), docRow)
-		maps.Copy(sink, helpTableRows(t, helpSection(t, reference, "#### Archive sink\n", "\n### Record-error policies\n"), docRow))
-		final := helpTableRows(t, helpSection(t, reference, "### Final OPTIONS\n", "\n### SQL errors\n"), docRow)
-
-		// Then each scope lists exactly the reference's keys and defaults.
-		require.Equal(t, source, helpTableRows(t, helpSection(t, sqlHelp, "Source WITH (after FROM)\n", "\nSink WITH"), topicRow))
-		require.Equal(t, sink, helpTableRows(t, helpSection(t, sqlHelp, "Sink WITH (after INSERT INTO)\n", "\nFinal OPTIONS"), topicRow))
-		require.Equal(t, final, helpTableRows(t, helpSection(t, sqlHelp, "Final OPTIONS\n", "\nhttps://"), topicRow))
 	})
 }
 

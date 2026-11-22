@@ -3,6 +3,7 @@
 ## Changes
 
 - `kaferry help` introduces the copy workflow with runnable examples and exit codes. Use `help sql` for the grammar and defaults and `help status` for saved-status verdicts.
+- Use `kaferry help run` or `kaferry help explain` for command flags and an example.
 
 ## Upgrade
 

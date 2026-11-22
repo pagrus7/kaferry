@@ -1,5 +1,6 @@
 Use the same statement and configuration as run, with a named GROUP.
 Use status --json to read the verdict and saved progress as JSON.
+Run kaferry status --help for the command's flags.
 
 Verdict                   Exit  Meaning
 unknown                      5  Saved progress is absent or invalid, or the
