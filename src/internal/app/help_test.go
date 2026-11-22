@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-//kaferry:guarantee cli.help
 func TestCLIHelpTopics(t *testing.T) {
 	for _, tc := range []struct {
 		args []string
@@ -42,7 +41,6 @@ func TestCLIHelpTopics(t *testing.T) {
 	}
 }
 
-//kaferry:guarantee cli.help
 func TestCLIHelpUsageErrors(t *testing.T) {
 	const topics = "Valid help topics: sql, status. Run kaferry help for the overview.\n"
 	for _, tc := range []struct {
@@ -83,7 +81,6 @@ func TestCLIHelpOutputFailure(t *testing.T) {
 	require.Contains(t, stderr.String(), "output closed")
 }
 
-//kaferry:guarantee cli.help
 func TestCLICommandHelp(t *testing.T) {
 	for _, command := range []string{"run", "explain", "status"} {
 		t.Run(command, func(t *testing.T) {

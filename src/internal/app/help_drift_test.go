@@ -5,9 +5,11 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/pagrus7/kaferry/src/internal/inspect"
 	"github.com/pagrus7/kaferry/src/internal/plan"
 	"github.com/pagrus7/kaferry/src/internal/sql"
 	"github.com/stretchr/testify/require"
@@ -84,6 +86,25 @@ func TestHelpSQLExamplesParseAndPlan(t *testing.T) {
 		// Then the statement is valid and supplies its own connection.
 		require.NoError(t, err, "example %d", index+1)
 	}
+}
+
+func TestHelpStatusVerdictsMatchInspection(t *testing.T) {
+	// Given the verdict codes used by status and both user-facing legends.
+	want := inspect.StatusExitCodes()
+
+	// When extracting the verdict names and codes from the embedded topic.
+	rows := helpTableRows(t, statusHelp, `(?m)^([a-z_]+) +([0-9]+)  +`)
+	codes := make(map[string]int, len(rows))
+	for verdict, value := range rows {
+		code, err := strconv.Atoi(value)
+		require.NoError(t, err)
+		codes[verdict] = code
+	}
+	legend := helpTableRows(t, inspect.StatusMeaning, `(?m)^([a-z_]+) +\| ([^\n]+)`)
+
+	// Then both legends cover the exact verdict set and help lists each exit code.
+	require.Equal(t, want, codes)
+	require.Equal(t, slices.Sorted(maps.Keys(want)), slices.Sorted(maps.Keys(legend)))
 }
 
 func readHelpDoc(t *testing.T, name string) string {
