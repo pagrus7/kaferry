@@ -38,6 +38,7 @@ var Registry = []Guarantee{
 	{"inspect", "docs/reference.md#inspection"},
 	{"worker-stop", decisions + "#worker-record-stop"},
 	{"exit", decisions + "#when-a-worker-exits"},
+	{"cli.help", "docs/reference.md#cli-and-exit-codes"},
 	{"groups", decisions + "#group-names"},
 	{"rebalance", decisions + "#rebalances"},
 	{"identity", decisions + "#identity"},

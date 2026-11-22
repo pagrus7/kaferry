@@ -1,0 +1,63 @@
+Copy records from a Kafka topic or Kaferry archive to another topic or archive.
+
+Commands
+  run         Copy records.
+  explain     Preview the copy and inspect endpoints without writing.
+  status      Read saved progress for a named group.
+  help        Show this guide or a help topic.
+  --version   Show the installed build version.
+
+Choose one SQL input for run, explain, or status
+  -f file     Read SQL from a file.
+  -f -        Read SQL from stdin.
+  -e "SQL"    Read SQL from the command line.
+  -c config.toml  Optionally load connections and worker settings from TOML.
+
+Save one statement below as copy.sql. Use the same SQL and config throughout.
+  kaferry explain -f copy.sql
+  kaferry run -f copy.sql
+  kaferry status --json -f copy.sql
+
+Start a Kafka broker on localhost:9092 and create the topics used below.
+Each Kafka destination needs the partition IDs copied from the source.
+
+Copy the current readable topic backlog
+  WITH CONNECTION default AS ('bootstrap.servers' = 'localhost:9092')
+  INSERT INTO TOPIC 'orders-copy'
+  SELECT * FROM TOPIC 'orders' WITH (GROUP = 'demo-backlog')
+  WHERE RECORD_OFFSET < LATEST;
+
+Copy the last hour from the current readable backlog
+  WITH CONNECTION default AS ('bootstrap.servers' = 'localhost:9092')
+  INSERT INTO TOPIC 'orders-hour'
+  SELECT * FROM TOPIC 'orders' WITH (GROUP = 'demo-hour')
+  WHERE RECORD_OFFSET < LATEST
+    AND RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR
+    AND RECORD_TIMESTAMP < NOW();
+
+Save the current readable backlog to a local archive
+  WITH CONNECTION default AS ('bootstrap.servers' = 'localhost:9092')
+  INSERT INTO ARCHIVE 'orders-archive'
+  SELECT * FROM TOPIC 'orders' WITH (GROUP = 'demo-capture')
+  WHERE RECORD_OFFSET < LATEST;
+
+Replay completed files from the archive created above
+  WITH CONNECTION default AS ('bootstrap.servers' = 'localhost:9092')
+  INSERT INTO TOPIC 'orders-restored'
+  SELECT * FROM ARCHIVE 'orders-archive' WITH (GROUP = 'demo-replay');
+
+Normal exit codes
+  0  Success or clean stop
+  1  Operational failure
+  2  Invalid input or startup validation failure
+  3  Timed out waiting for a partition assignment
+  4  Status incomplete
+  5  Status unknown
+  6  Status running
+  7  Status worker record cap reached
+https://github.com/pagrus7/kaferry/blob/main/docs/reference.md#exit-codes
+
+More help
+  kaferry help sql       Statement grammar and setting defaults
+  kaferry help status    Saved progress verdicts
+https://github.com/pagrus7/kaferry/tree/main/docs

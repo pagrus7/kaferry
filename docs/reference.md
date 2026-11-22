@@ -274,6 +274,8 @@ Queue/fetch overrides must be positive. Byte queue settings use KiB. Large or co
 
 `run`, `explain` and `status` accept exactly one input: `--file/-f path`, `--sql/-e statement`, or `--file -`. `--config/-c path` loads TOML. `explain` and `status` write text or `--json` to stdout; `run` keeps stdout empty. Events are JSON on stderr; errors also print a plain-text message after cleanup. Status verdicts use stdout, including nonzero verdicts. Shutdown timeout diagnostics name the operation still running.
 
+<a name="exit-codes"></a>
+
 | Normal exit | Meaning |
 | --- | --- |
 | 0 | Status is `complete` or `complete_within_staleness`, or the preview printed, or this worker finished its file input or remaining Kafka partitions, or reached its worker record threshold. A signal cleanly stopped a Kafka copy without an enabled completion rule or worker record threshold. SKIP counts do not change the code |

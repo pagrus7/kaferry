@@ -1,0 +1,14 @@
+Use the same statement and configuration as run, with a named GROUP.
+Use status --json to read the verdict and saved progress as JSON.
+
+Verdict                   Exit  Meaning
+unknown                      5  Saved progress is absent or invalid, or the
+                                progress or group membership is incompatible.
+running                      6  Kafka group activity or a change was observed.
+incomplete                   4  A selected partition has no saved stop.
+limit_reached                7  All selected partitions have stops. At least
+                                one is a worker record cap.
+complete_within_staleness    0  Done under the configured timestamp allowances.
+complete                     0  Done for the selected finite source scope.
+
+https://github.com/pagrus7/kaferry/blob/main/docs/reference.md#saved-status

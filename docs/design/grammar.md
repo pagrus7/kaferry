@@ -13,20 +13,25 @@ connection  = "CONNECTION" alias "AS" "(" property { "," property } ")" ;
 property    = string "=" ( string | env ) ;
 env         = "ENV" "(" string ")" ;
 
-insert      = "INSERT" "INTO" endpoint [ "WITH" "(" sink_option { "," sink_option } ")" ] ;
-select      = "SELECT" "*" "FROM" endpoint [ "WITH" "(" source_option { "," source_option } ")" ] ;
-endpoint    = "TOPIC" string                       (* 'topic' or 'topic@alias' *)
+insert      = "INSERT" "INTO" endpoint
+              [ "WITH" "(" sink_option { "," sink_option } ")" ] ;
+select      = "SELECT" "*" "FROM" endpoint
+              [ "WITH" "(" source_option { "," source_option } ")" ] ;
+endpoint    = "TOPIC" string                 (* 'topic' or 'topic@alias' *)
             | "ARCHIVE" string ;                   (* archive directory *)
 source_option = "GROUP" "=" ( string | "ONE_OFF" )
             | "START" "=" ( "EARLIEST" | "LATEST" )
-            | ( "MAX_STALENESS" | "MAX_OUT_OF_ORDER" ) "=" ( interval | "OFF" ) ;
+            | ( "MAX_STALENESS" | "MAX_OUT_OF_ORDER" ) "="
+              ( interval | "OFF" ) ;
 sink_option = "PARTITIONING" "=" ( "PRESERVE" | "KEY" )
             | "ROTATE_AFTER_SIZE" "=" integer [ "k" | "m" | "g" ]
             | "ROTATE_AFTER_AGE" "=" interval ;
 
-where       = "WHERE" ( predicates | branch { "OR" branch } [ "AND" predicates ] ) ;
+where       = "WHERE"
+              ( predicates | branch { "OR" branch } [ "AND" predicates ] ) ;
 predicates  = predicate { "AND" predicate } ;
-branch      = "(" predicates ")" ;  (* disjoint PARTITION IN/BETWEEN plus offset bounds only *)
+branch      = "(" predicates ")" ;
+              (* disjoint PARTITION IN/BETWEEN plus offset bounds only *)
 predicate   = between | bound | partition | offset ;
 offset      = "RECORD_OFFSET" ( compare integer | "<" "LATEST"
             | "BETWEEN" integer "AND" integer ) ;

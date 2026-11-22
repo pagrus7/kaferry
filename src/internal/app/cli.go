@@ -20,6 +20,15 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	return executeWithShutdown(ctx, args, stdin, stdout, stderr, budget)
 }
 func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, budget Shutdown) int {
+	if len(args) == 0 {
+		fmt.Fprint(stderr, overviewHelp)
+		return 2
+	}
+	switch args[0] {
+	case "help", "--help", "-h":
+		budget.Stage("printing help")
+		return executeHelp(args, stdout, stderr)
+	}
 	if len(args) == 1 && args[0] == "--version" {
 		budget.Stage("printing version")
 		if _, err := fmt.Fprintln(stdout, versionString()); err != nil {
@@ -112,8 +121,8 @@ type commandOptions struct {
 
 func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 	var options commandOptions
-	if len(args) == 0 || (args[0] != "run" && args[0] != "explain" && args[0] != "status") {
-		err := fmt.Errorf("usage: kaferry --version | run|explain|status (--sql statement | --file path | --file -) [--config path]; explain and status accept --json")
+	if args[0] != "run" && args[0] != "explain" && args[0] != "status" {
+		err := errors.New("unknown command. Run kaferry help")
 		fmt.Fprintln(stderr, err)
 		return options, err
 	}
