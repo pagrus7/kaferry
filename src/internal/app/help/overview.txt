@@ -59,6 +59,8 @@ Normal exit codes
   5  Status unknown
   6  Status running
   7  Status worker record cap reached
+
+See Exit codes in the full reference.
 https://github.com/pagrus7/kaferry/blob/main/docs/reference.md#exit-codes
 
 More help
