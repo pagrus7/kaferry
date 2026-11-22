@@ -1,6 +1,7 @@
 package inspect
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -194,6 +195,30 @@ func TestStatusPreservesOperationalFailuresAndRejectsOneOff(t *testing.T) {
 		})
 	}
 }
+
+func TestStatusCancelsAfterReadingSavedProgress(t *testing.T) {
+	// Given stopped Kafka progress and cancellation during the saved-progress read.
+	service, p, factory, _ := fixture()
+	source, destination := factory.connections["input"], factory.connections["output"]
+	for _, id := range source.info.Partitions {
+		source.saved[id] = kafka.SavedProgress{Position: 10, Progress: kafka.Progress{Stop: &core.Stop{Reason: "tip", At: 10}}}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	source.afterSaved = cancel
+
+	// When the inspection finishes processing the saved stops.
+	report, err := service.Status(ctx, p, config.Worker{}, core.NoopStopObserver{})
+
+	// Then cancellation suppresses guidance and releases both connections.
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, report.Meaning)
+	require.Empty(t, report.Notes)
+	require.Empty(t, report.Next)
+	require.Equal(t, 1, source.closed)
+	require.Equal(t, 1, destination.closed)
+}
+
 func TestStatusRejectsStaleStopsAfterFinalObservationFailure(t *testing.T) {
 	for _, failure := range []string{"second membership", "final description", "changed topic identity"} {
 		t.Run(failure, func(t *testing.T) {
@@ -317,7 +342,7 @@ func requireStatusGuidance(t *testing.T, report StatusReport, savedArchiveSelect
 	}{
 		"unknown": {
 			meaning: "Saved progress is absent, invalid or incompatible, or the group has an incompatible active member.",
-			next:    "Check the reason, then confirm the original group, query, and endpoints.",
+			next:    "Check the reason, then verify the group, query, and endpoints.",
 		},
 		"running": {
 			meaning: "Kafka group activity, unsettled state or a membership change was observed.",

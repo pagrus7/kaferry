@@ -150,7 +150,7 @@ func (r *StatusReport) addGuidance(savedArchiveSelection bool) {
 	r.Meaning = statusVerdicts[r.Verdict].Meaning
 	switch r.Verdict {
 	case verdictUnknown:
-		r.Next = "Check the reason, then confirm the original group, query, and endpoints."
+		r.Next = "Check the reason, then verify the group, query, and endpoints."
 	case verdictRunning:
 		r.Next = "Wait briefly, then check status again."
 	case verdictIncomplete:
