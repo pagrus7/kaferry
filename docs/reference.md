@@ -272,7 +272,9 @@ Queue/fetch overrides must be positive. Byte queue settings use KiB. Large or co
 
 ### CLI and exit codes
 
-`run`, `explain` and `status` accept exactly one input: `--file/-f path`, `--sql/-e statement`, or `--file -`. `--config/-c path` loads TOML. `explain` and `status` write text or `--json` to stdout; `run` keeps stdout empty. Events are JSON on stderr; errors also print a plain-text message after cleanup. Status verdicts use stdout, including nonzero verdicts. Shutdown timeout diagnostics name the operation still running.
+`kaferry help` prints the overview, `kaferry help sql` prints grammar and defaults, and `kaferry help status` prints saved verdicts, all to stdout with exit code 0.
+
+`run`, `explain` and `status` accept exactly one input: `--file/-f path`, `--sql/-e statement`, or `--file -`. `--config/-c path` loads TOML. `explain` and `status` write text or `--json` to stdout; `run` keeps stdout empty during copies. Events are JSON on stderr; errors also print a plain-text message after cleanup. Status verdicts use stdout, including nonzero verdicts. Shutdown timeout diagnostics name the operation still running.
 
 <a name="exit-codes"></a>
 

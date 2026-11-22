@@ -82,6 +82,8 @@ Homebrew:
 brew install pagrus7/tap/kaferry
 ```
 
+Run `kaferry help` for syntax, examples and exit codes.
+
 [Installation details](docs/install.md).
 
 ## Docker quick start
