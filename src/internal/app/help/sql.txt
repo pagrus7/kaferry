@@ -48,11 +48,11 @@ Defaults
 Source WITH (after FROM)
   GROUP                     | ONE_OFF
   START                     | EARLIEST             | Topic without time bounds
-  MAX_STALENESS             | INTERVAL '5' MINUTE  | Topic (see below)
+  MAX_STALENESS             | INTERVAL '5' MINUTE with a timestamp upper bound
   MAX_OUT_OF_ORDER          | OFF
 
-MAX_STALENESS defaults to 5 minutes with an upper timestamp bound and no
-explicit offset end. Saved positions take precedence over the initial START.
+MAX_STALENESS applies to topic sources without an explicit offset end.
+Saved positions take precedence over the initial START.
 
 Sink WITH (after INSERT INTO)
   PARTITIONING              | PRESERVE             | Topic

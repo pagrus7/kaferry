@@ -2,6 +2,11 @@ package inspect
 
 import (
 	"errors"
+	"maps"
+	"os"
+	"regexp"
+	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/pagrus7/kaferry/src/internal/archive/io"
@@ -12,7 +17,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStatusCompletionScopeAndPrecedence(t *testing.T) {
+//kaferry:guarantee inspect
+func TestStatusVerdictsAndHelp(t *testing.T) {
+	// Given the help topic and the verdict legend shipped with status.
+	help, err := os.ReadFile("../app/help/status.txt")
+	require.NoError(t, err)
+	documented := make(map[string]int)
+	helpRows := regexp.MustCompile(`(?m)^([a-z_]+) +([0-9]+)  +`)
+	for _, row := range helpRows.FindAllSubmatch(help, -1) {
+		verdict := string(row[1])
+		code, err := strconv.Atoi(string(row[2]))
+		require.NoError(t, err)
+		require.NotContains(t, documented, verdict, "duplicate verdict %q", verdict)
+		documented[verdict] = code
+	}
+
+	// When observing real verdicts and exit codes from the status fixtures.
+	observed := make(map[string]int)
+	t.Run("completion scope and precedence", func(t *testing.T) {
+		checkStatusCompletionScopeAndPrecedence(t, observed)
+	})
+	t.Run("Kafka verdicts and read order", func(t *testing.T) {
+		checkKafkaStatusVerdictsAndReadOrder(t, observed)
+	})
+
+	// Then help and the status legend cover exactly the observed verdicts.
+	require.Equal(t, observed, documented)
+	legendRows := regexp.MustCompile(`(?m)^([a-z_]+) +\|`)
+	var legend []string
+	for _, row := range legendRows.FindAllStringSubmatch(StatusMeaning, -1) {
+		legend = append(legend, row[1])
+	}
+	require.ElementsMatch(t, slices.Sorted(maps.Keys(observed)), legend)
+}
+
+func checkStatusCompletionScopeAndPrecedence(t *testing.T, observed map[string]int) {
 	for _, tc := range []struct {
 		name      string
 		reasons   []string
@@ -54,12 +93,12 @@ func TestStatusCompletionScopeAndPrecedence(t *testing.T) {
 			// Then the least complete outcome determines the verdict and shell result.
 			require.Equal(t, tc.want, r.Verdict)
 			require.Equal(t, tc.code, r.ExitCode())
+			observed[r.Verdict] = r.ExitCode()
 		})
 	}
 }
 
-//kaferry:guarantee inspect
-func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
+func checkKafkaStatusVerdictsAndReadOrder(t *testing.T, observed map[string]int) {
 	for _, tc := range []struct {
 		name, verdict string
 		code          int
@@ -70,7 +109,8 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 		{"foreign member", "unknown", 5}, {"identity conflict while active", "unknown", 5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			kafkaStatusVerdict(t, tc.name, tc.verdict, tc.code)
+			report := kafkaStatusVerdict(t, tc.name, tc.verdict, tc.code)
+			observed[report.Verdict] = report.ExitCode()
 		})
 	}
 }
@@ -199,7 +239,7 @@ func TestStatusRejectsStaleStopsAfterFinalObservationFailure(t *testing.T) {
 	}
 }
 
-func kafkaStatusVerdict(t *testing.T, name, verdict string, code int) {
+func kafkaStatusVerdict(t *testing.T, name, verdict string, code int) StatusReport {
 	// Given two current partitions and independently observed membership/progress.
 	s, p, f, _ := fixture()
 	source := f.connections["input"]
@@ -264,4 +304,5 @@ func kafkaStatusVerdict(t *testing.T, name, verdict string, code int) {
 		require.Equal(t, int64(1), *r.Partitions[1].Position)
 		require.Equal(t, new(int64(1)), r.Partitions[1].End)
 	}
+	return r
 }
