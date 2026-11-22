@@ -89,22 +89,34 @@ func TestHelpSQLExamplesParseAndPlan(t *testing.T) {
 }
 
 func TestHelpStatusVerdictsMatchInspection(t *testing.T) {
-	// Given the verdict codes used by status and both user-facing legends.
-	want := inspect.StatusExitCodes()
+	// Given the verdicts used by status and their descriptions in help and the reference.
+	verdicts := inspect.StatusVerdicts()
+	reference := strings.ReplaceAll(readHelpDoc(t, "reference.md"), "`", "")
+	docTable := helpSection(t, reference, "| Status | Meaning |\n", "\n\n")
+	helpTable := helpSection(t, statusHelp, "Verdict                   Exit  Meaning\n", "\n\n")
 
-	// When extracting the verdict names and codes from the embedded topic.
-	rows := helpTableRows(t, statusHelp, `(?m)^([a-z_]+) +([0-9]+)  +`)
-	codes := make(map[string]int, len(rows))
-	for verdict, value := range rows {
-		code, err := strconv.Atoi(value)
+	// When extracting meanings and exit codes, joining wrapped help lines.
+	documented := helpTableRows(t, docTable, `(?m)^\| ([a-z_]+) \| ([^|\n]+) \|$`)
+	rows := regexp.MustCompile(`(?m)^([a-z_]+) +([0-9]+) {2,}([^\n]+(?:\n +[^\n]+)*)$`)
+	embedded := make(map[string]string, len(verdicts))
+	codes := make(map[string]int, len(verdicts))
+	for _, match := range rows.FindAllStringSubmatch(helpTable, -1) {
+		verdict := match[1]
+		require.NotContains(t, embedded, verdict, "duplicate row %q", verdict)
+		code, err := strconv.Atoi(match[2])
 		require.NoError(t, err)
 		codes[verdict] = code
+		embedded[verdict] = strings.Join(strings.Fields(match[3]), " ")
 	}
-	legend := helpTableRows(t, inspect.StatusMeaning, `(?m)^([a-z_]+) +\| ([^\n]+)`)
 
-	// Then both legends cover the exact verdict set and help lists each exit code.
-	require.Equal(t, want, codes)
-	require.Equal(t, slices.Sorted(maps.Keys(want)), slices.Sorted(maps.Keys(legend)))
+	// Then both tables list the exact meanings and help lists the exit codes.
+	want := make(map[string]string, len(verdicts))
+	for verdict, info := range verdicts {
+		want[verdict] = info.Meaning
+	}
+	require.Equal(t, want, embedded)
+	require.Equal(t, want, documented)
+	require.Equal(t, inspect.StatusExitCodes(), codes)
 }
 
 func readHelpDoc(t *testing.T, name string) string {

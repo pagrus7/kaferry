@@ -127,16 +127,20 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 | --- | --- |
 | `unknown` | Saved progress is absent, invalid or incompatible, or the group has an incompatible active member. |
 | `running` | Kafka group activity, unsettled state or a membership change was observed. |
-| `incomplete` | At least one currently selected partition has no saved stop. |
+| `incomplete` | Part of the selection has no saved stop. |
 | `limit_reached` | All selected partitions have saved stops and at least one stopped at a worker record cap. |
-| `complete_within_staleness` | Source processing finished under the enabled `MAX_STALENESS` (arrival delay and consumer clock lead) or `MAX_OUT_OF_ORDER` (timestamp disorder) assumptions. |
+| `complete_within_staleness` | Source processing finished under the configured timestamp assumptions. |
 | `complete` | Source processing finished for the selected finite scope: explicit offset bounds or the saved archive selection. |
 
 Identity conflicts and incompatible active members take precedence over activity. Activity takes precedence over saved progress; missing stops take precedence over caps, and caps over completion. Added eligible partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. New archive files do not expand a saved replay selection. A checkpoint or saved selection that cannot be validated yields `unknown`; other operational read failures exit 1 without a verdict.
 
-Archive replay with disorder stopping enabled is conservatively conditional even when its saved stop is `eof`, because saved progress does not identify whether that shortcut fired. Completion permits filtered/skipped records, does not guarantee exactly-once writes and does not establish that destination data still exists. Workers remain independent: they never wait for other workers' stops.
+Timestamp completion depends on the enabled `MAX_STALENESS` (arrival delay and consumer clock lead) or `MAX_OUT_OF_ORDER` (timestamp disorder) assumptions. Archive replay with disorder stopping enabled is conservatively conditional even when its saved stop is `eof`, because saved progress does not identify whether that shortcut fired. Completion permits filtered/skipped records, does not guarantee exactly-once writes and does not establish that destination data still exists. Workers never wait for other workers' stops.
 
-Kafka text lists up to eight partitions; file text reports replay progress. `--json` includes all. JSON version `1` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, current query `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `fingerprint`, `stop`, `window`, `captured_end`). A Kafka `position` is the next offset to read; a file `position` counts confirmed examined input records. A fingerprint mismatch reports `unknown` but retains source-validated saved progress, including Kafka partitions outside the current selection. Kafka `activity` still reports observed membership. Invalid metadata or a changed source UUID withholds positions. [Recovery](usage.md#recover-after-destination-topic-recreation).
+Text output lists up to eight Kafka partitions or reports archive replay progress. It shows the current verdict's meaning, with applicable notes and a suggested action when available. Run `kaferry help status` for all verdicts.
+
+`--json` includes all partitions. JSON version `2` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, current query `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `fingerprint`, `stop`, `window`, `captured_end`). `meaning` is the sentence for the current verdict in the table above. `notes` is an array of applicable caveats and `next` is a suggested action string. Both fields are omitted when empty.
+
+A Kafka `position` is the next offset to read. A file `position` counts confirmed examined input records. A fingerprint mismatch reports `unknown` but retains source-validated saved progress, including Kafka partitions outside the current selection. Kafka `activity` still reports observed membership. Invalid metadata or a changed source UUID withholds positions. [Recovery](usage.md#recover-after-destination-topic-recreation).
 
 File `size_bytes` and `file_count` describe the saved selection, or current completed files before the first run. Inspection checks selected headers and sizes for incomplete groups, not payload checksums. Status does not scan records or verify destination writes.
 

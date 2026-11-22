@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,7 +15,7 @@ import (
 func TestStatusTextIsBoundedAndJSONRetainsAllPartitions(t *testing.T) {
 	// Given twelve partitions, including a missing offset, offset zero and different stops.
 	zero := int64(0)
-	r := inspect.StatusReport{Version: 1, Verdict: "incomplete", Reason: "partitions have no saved stop", Group: "group\nforged", Meaning: inspect.StatusMeaning, Source: inspect.Endpoint{Kind: "TOPIC", Name: "source"}, Destination: inspect.Endpoint{Kind: "TOPIC", Name: "dest"}}
+	r := inspect.StatusReport{Version: 2, Verdict: "incomplete", Reason: "partitions have no saved stop", Group: "group\nforged", Source: inspect.Endpoint{Kind: "TOPIC", Name: "source"}, Destination: inspect.Endpoint{Kind: "TOPIC", Name: "dest"}}
 	for n := range 12 {
 		row := inspect.SavedPartition{ID: int32(n)}
 		if n > 0 {
@@ -50,7 +51,7 @@ func TestStatusTextIsBoundedAndJSONRetainsAllPartitions(t *testing.T) {
 		} `json:"partitions"`
 	}
 	require.NoError(t, json.Unmarshal(data.Bytes(), &decoded))
-	require.EqualValues(t, 1, decoded.Version)
+	require.EqualValues(t, 2, decoded.Version)
 	require.Equal(t, "incomplete", decoded.Verdict)
 	require.Len(t, decoded.Partitions, 12)
 	require.Nil(t, decoded.Partitions[0].Position)
@@ -58,6 +59,69 @@ func TestStatusTextIsBoundedAndJSONRetainsAllPartitions(t *testing.T) {
 	require.Zero(t, *decoded.Partitions[1].Position)
 	require.Equal(t, &zero, decoded.Partitions[1].End)
 	require.Equal(t, "tip", decoded.Partitions[11].Stop.Reason)
+}
+
+func TestStatusRendersOnlyReportGuidance(t *testing.T) {
+	const timestampNote = "Timestamp assumptions apply."
+	const completionNote = "Destination data was not verified."
+	const archiveNote = "The saved file selection is fixed."
+	verdicts := inspect.StatusVerdicts()
+	for _, tc := range []struct {
+		verdict, next string
+		notes         []string
+		archive       bool
+	}{
+		{verdict: "unknown", next: "Check the reason."},
+		{verdict: "running", next: "Check again later."},
+		{verdict: "incomplete", next: "Resume the job."},
+		{verdict: "limit_reached", next: "Rerun the job.", notes: []string{archiveNote}, archive: true},
+		{verdict: "complete_within_staleness", notes: []string{timestampNote, completionNote}},
+		{verdict: "complete", notes: []string{completionNote, archiveNote}, archive: true},
+	} {
+		t.Run(tc.verdict, func(t *testing.T) {
+			// Given a report with only the guidance relevant to its verdict and source.
+			r := inspect.StatusReport{Version: 2, Verdict: tc.verdict, Meaning: verdicts[tc.verdict].Meaning, Notes: tc.notes, Next: tc.next, Activity: "group observed idle twice"}
+			r.Source.Kind = "TOPIC"
+			if tc.archive {
+				r.Source.Kind, r.Activity = "ARCHIVE", "not checked for files"
+			}
+			var output, data bytes.Buffer
+
+			// When rendering the report in both formats.
+			require.NoError(t, renderStatus(&output, r, false))
+			require.NoError(t, renderStatus(&data, r, true))
+
+			// Then the text contains one meaning and exactly the supplied notes and action.
+			want := append([]string{"Meaning: " + r.Meaning}, tc.notes...)
+			if tc.next != "" {
+				want = append(want, "Next: "+tc.next)
+			}
+			want = append(want, "Activity: "+r.Activity+".", "All statuses: kaferry help status", "")
+			_, guidance, found := strings.Cut(output.String(), "\n\nMeaning: ")
+			require.True(t, found, "%s", output.String())
+			require.Equal(t, strings.Join(want, "\n"), "Meaning: "+guidance)
+			require.NotRegexp(t, `(?m)^Status +\| Meaning`, output.String())
+
+			// Then JSON carries the same guidance and omits empty optional fields.
+			var decoded map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(data.Bytes(), &decoded))
+			require.JSONEq(t, "2", string(decoded["version"]))
+			require.JSONEq(t, strconv.Quote(tc.verdict), string(decoded["verdict"]))
+			require.JSONEq(t, strconv.Quote(r.Meaning), string(decoded["meaning"]))
+			if tc.notes == nil {
+				require.NotContains(t, decoded, "notes")
+			} else {
+				var notes []string
+				require.NoError(t, json.Unmarshal(decoded["notes"], &notes))
+				require.Equal(t, tc.notes, notes)
+			}
+			if tc.next == "" {
+				require.NotContains(t, decoded, "next")
+			} else {
+				require.JSONEq(t, strconv.Quote(tc.next), string(decoded["next"]))
+			}
+		})
+	}
 }
 
 func TestArchiveStatusTextReportsSavedSnapshot(t *testing.T) {

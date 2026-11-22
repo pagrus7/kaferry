@@ -15,18 +15,6 @@ import (
 	"github.com/pagrus7/kaferry/src/internal/plan"
 )
 
-const StatusMeaning = `Status                    | Meaning
---------------------------|--------
-unknown                   | No saved progress, or incompatible progress or group membership.
-running                   | Kafka group activity or a membership change was observed.
-incomplete                | At least one selected partition has no saved stop.
-limit_reached             | All selected partitions stopped; at least one reached a worker record cap.
-complete_within_staleness | Source processing finished under the configured timestamp assumptions.
-complete                  | Source processing finished for the selected finite scope.
-
-Timestamp completion depends on enabled MAX_STALENESS (arrival delay and clock lead) and MAX_OUT_OF_ORDER (timestamp disorder) assumptions.
-Completion permits filtered or skipped records, does not guarantee exactly-once writes and does not establish that destination data still exists.`
-
 var stopDescriptions = map[string]string{
 	"timestamp":         "timestamp disorder threshold reached",
 	"tip":               "saved partition end reached",
@@ -46,6 +34,8 @@ type StatusReport struct {
 	Verdict     string           `json:"verdict"`
 	Reason      string           `json:"reason,omitempty"`
 	Meaning     string           `json:"meaning"`
+	Notes       []string         `json:"notes,omitempty"`
+	Next        string           `json:"next,omitempty"`
 	Group       string           `json:"group"`
 	Fingerprint string           `json:"fingerprint"`
 	Source      Endpoint         `json:"source"`
@@ -71,27 +61,42 @@ const (
 	verdictLimitReached      = "limit_reached"
 )
 
-var statusExitCodes = map[string]int{
-	verdictComplete:          0,
-	verdictTimestampComplete: 0,
-	verdictIncomplete:        4,
-	verdictUnknown:           5,
-	verdictRunning:           6,
-	verdictLimitReached:      7,
+// StatusVerdict describes a saved status verdict.
+type StatusVerdict struct {
+	ExitCode int
+	Meaning  string
 }
 
+var statusVerdicts = map[string]StatusVerdict{
+	verdictComplete:          {0, "Source processing finished for the selected finite scope: explicit offset bounds or the saved archive selection."},
+	verdictTimestampComplete: {0, "Source processing finished under the configured timestamp assumptions."},
+	verdictIncomplete:        {4, "Part of the selection has no saved stop."},
+	verdictUnknown:           {5, "Saved progress is absent, invalid or incompatible, or the group has an incompatible active member."},
+	verdictRunning:           {6, "Kafka group activity, unsettled state or a membership change was observed."},
+	verdictLimitReached:      {7, "All selected partitions have saved stops and at least one stopped at a worker record cap."},
+}
+
+// StatusVerdicts returns the descriptions of the saved status verdicts.
+func StatusVerdicts() map[string]StatusVerdict { return maps.Clone(statusVerdicts) }
+
 // StatusExitCodes returns the exit code for each saved status verdict.
-func StatusExitCodes() map[string]int { return maps.Clone(statusExitCodes) }
+func StatusExitCodes() map[string]int {
+	codes := make(map[string]int, len(statusVerdicts))
+	for verdict, info := range statusVerdicts {
+		codes[verdict] = info.ExitCode
+	}
+	return codes
+}
 
 func (r StatusReport) ExitCode() int {
-	if code, ok := statusExitCodes[r.Verdict]; ok {
-		return code
+	if info, ok := statusVerdicts[r.Verdict]; ok {
+		return info.ExitCode
 	}
-	return statusExitCodes[verdictUnknown]
+	return statusVerdicts[verdictUnknown].ExitCode
 }
 
 func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker, stop core.StopObserver) (report StatusReport, result error) {
-	report = StatusReport{Version: 1, Group: p.Group, Meaning: StatusMeaning, Partitions: []SavedPartition{}, Activity: "not checked for files"}
+	report = StatusReport{Version: 2, Group: p.Group, Partitions: []SavedPartition{}, Activity: "not checked for files"}
 	if p.Source.Kind == "TOPIC" {
 		report.Activity = "group check did not finish"
 	}
@@ -118,10 +123,11 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 		return report, &kafka.Conflict{Err: err}
 	}
 	stop.Stage("reading saved status")
+	var savedArchiveSelection bool
 	if source != nil {
 		err = s.topicStatus(ctx, p, source, &report)
 	} else {
-		err = s.archiveStatus(p, limits, &report)
+		savedArchiveSelection, err = s.archiveStatus(p, limits, &report)
 	}
 	var kafkaConflict *kafka.Conflict
 	var archiveConflict *archiveio.Conflict
@@ -130,12 +136,36 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 		if report.Reason == "" {
 			report.Reason = "saved progress does not match this query or endpoints"
 		}
-		return report, nil
-	}
-	if err == nil {
+		err = nil
+	} else if err == nil {
 		err = ctx.Err()
 	}
+	if err == nil {
+		report.addGuidance(savedArchiveSelection)
+	}
 	return report, err
+}
+
+func (r *StatusReport) addGuidance(savedArchiveSelection bool) {
+	r.Meaning = statusVerdicts[r.Verdict].Meaning
+	switch r.Verdict {
+	case verdictUnknown:
+		r.Next = "Check the reason, then verify the group, query, and endpoints."
+	case verdictRunning:
+		r.Next = "Wait briefly, then check status again."
+	case verdictIncomplete:
+		r.Next = "To resume, rerun with the same query, group, and configuration."
+	case verdictLimitReached:
+		r.Next = "Rerun the same job for another allowance."
+	case verdictTimestampComplete:
+		r.Notes = append(r.Notes, "Timestamp completion depends on the enabled MAX_STALENESS (arrival delay and consumer clock lead) or MAX_OUT_OF_ORDER (timestamp disorder) assumptions.")
+		fallthrough
+	case verdictComplete:
+		r.Notes = append(r.Notes, "Completion permits filtered or skipped records, does not guarantee exactly-once writes and does not verify destination data.")
+	}
+	if savedArchiveSelection {
+		r.Notes = append(r.Notes, "This group's saved archive checkpoint fixes the file selection.")
+	}
 }
 
 func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafka.InspectionConnection, r *StatusReport) error {
@@ -215,25 +245,23 @@ func (r *StatusReport) observed(before, after kafka.Membership, p plan.Plan) {
 	}
 }
 
-func (s *Service) archiveStatus(p plan.Plan, limits config.Worker, r *StatusReport) error {
+func (s *Service) archiveStatus(p plan.Plan, limits config.Worker, r *StatusReport) (savedSelection bool, err error) {
 	info, err := s.archives.Source(p, r.Fingerprint, limits)
 	if err != nil && !errors.Is(err, plan.ErrFingerprintMismatch) {
-		return err
+		return false, err
 	}
 	r.Source.File = archiveSummary(info.ArchiveInspection)
 	r.Source.File.PositionRecords = &info.Position
-	r.Meaning = StatusMeaning + "\nArchive completion applies to this group’s fixed file selection. A new group selects current completed files."
 	row := SavedPartition{ID: 0}
 	if info.Saved {
 		row.Position, row.Stop, row.Window = &info.Position, info.Stop, &info.Window
 		row.Fingerprint = info.Fingerprint
 	}
 	r.Partitions = append(r.Partitions, row)
-	if err != nil {
-		return err
+	if err == nil {
+		r.classify(p)
 	}
-	r.classify(p)
-	return nil
+	return info.Saved, err
 }
 
 func (r *StatusReport) classify(p plan.Plan) {
