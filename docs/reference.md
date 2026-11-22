@@ -272,11 +272,15 @@ Queue/fetch overrides must be positive. Byte queue settings use KiB. Large or co
 
 ### CLI and exit codes
 
-`run`, `explain` and `status` accept exactly one input: `--file/-f path`, `--sql/-e statement`, or `--file -`. `--config/-c path` loads TOML. `explain` and `status` write text or `--json` to stdout; `run` keeps stdout empty. Events are JSON on stderr; errors also print a plain-text message after cleanup. Status verdicts use stdout, including nonzero verdicts. Shutdown timeout diagnostics name the operation still running.
+`kaferry help` prints the overview, `kaferry help sql` prints grammar and defaults, and `kaferry help status` prints saved verdicts, all to stdout with exit code 0.
+
+`run`, `explain` and `status` accept exactly one input: `--file/-f path`, `--sql/-e statement`, or `--file -`. `--config/-c path` loads TOML. `explain` and `status` write text or `--json` to stdout; `run` keeps stdout empty during copies. Events are JSON on stderr; errors also print a plain-text message after cleanup. Status verdicts use stdout, including nonzero verdicts. Shutdown timeout diagnostics name the operation still running.
+
+#### Exit codes
 
 | Normal exit | Meaning |
 | --- | --- |
-| 0 | Status is `complete` or `complete_within_staleness`, or the preview printed, or this worker finished its file input or remaining Kafka partitions, or reached its worker record threshold. A signal cleanly stopped a Kafka copy without an enabled completion rule or worker record threshold. SKIP counts do not change the code |
+| 0 | Status is `complete` or `complete_within_staleness`, help or a preview printed, or this worker finished its file input or remaining Kafka partitions, or reached its worker record threshold. A signal cleanly stopped a Kafka copy without an enabled completion rule or worker record threshold. SKIP counts do not change the code |
 | 1 | Copy, inspection, output, cleanup or the shutdown deadline failed, or a signal arrived before completion of startup, a file copy, or a Kafka copy with an enabled completion rule or worker record threshold. Conflicts after the first consumed record also exit 1 |
 | 2 | Usage/parse/plan/configuration error, or a validation conflict before the first consumed record (Kafka topic validation, query/source identity, replay checkpoint/lock or self-copy) |
 | 3 | For a Kafka copy with an enabled completion rule or worker record threshold, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |

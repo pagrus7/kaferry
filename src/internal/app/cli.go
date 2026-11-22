@@ -20,19 +20,25 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	return executeWithShutdown(ctx, args, stdin, stdout, stderr, budget)
 }
 func executeWithShutdown(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, budget Shutdown) int {
+	if len(args) == 0 {
+		fmt.Fprint(stderr, helpTopic(overviewHelp))
+		return 2
+	}
+	switch args[0] {
+	case "help", "--help", "-h":
+		budget.Stage("printing help")
+		return executeHelp(args, stdout, stderr)
+	}
 	if len(args) == 1 && args[0] == "--version" {
 		budget.Stage("printing version")
-		if _, err := fmt.Fprintln(stdout, versionString()); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		return 0
+		return printCLIText(stdout, stderr, versionString()+"\n")
 	}
 	budget.Stage("parsing command options")
 	options, err := parseArgs(args, stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return 0
+			budget.Stage("printing help")
+			return printCLIText(stdout, stderr, commandHelp(options.command))
 		}
 		return 2
 	}
@@ -112,14 +118,16 @@ type commandOptions struct {
 
 func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 	var options commandOptions
-	if len(args) == 0 || (args[0] != "run" && args[0] != "explain" && args[0] != "status") {
-		err := fmt.Errorf("usage: kaferry --version | run|explain|status (--sql statement | --file path | --file -) [--config path]; explain and status accept --json")
+	if args[0] != "run" && args[0] != "explain" && args[0] != "status" {
+		err := errors.New("unknown command. Run kaferry help")
 		fmt.Fprintln(stderr, err)
 		return options, err
 	}
 	options.command = args[0]
 	flags := flag.NewFlagSet(options.command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	// Print help after Parse tells us whether it belongs on stdout or stderr.
+	flags.Usage = func() {}
 	flags.StringVar(&options.statement, "sql", "", "copy statement")
 	flags.StringVar(&options.statement, "e", "", "copy statement")
 	flags.StringVar(&options.file, "file", "", "statement file; - reads stdin")
@@ -130,6 +138,9 @@ func parseArgs(args []string, stderr io.Writer) (commandOptions, error) {
 		flags.BoolVar(&options.json, "json", false, "print JSON")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
+		if !errors.Is(err, flag.ErrHelp) {
+			fmt.Fprint(stderr, commandHelp(options.command))
+		}
 		return options, err
 	}
 	inputs := 0

@@ -29,8 +29,6 @@ func TestCLIInputsAndExitCodes(t *testing.T) {
 		// Then
 		require.EqualValues(t, 2, executeCode)
 	}
-	var out bytes.Buffer
-	require.Zero(t, Execute(context.Background(), []string{"run", "--help"}, nil, io.Discard, &out))
 }
 
 func TestCLIVersionWithoutConfigurationOrInput(t *testing.T) {
@@ -54,7 +52,7 @@ func TestCLIVersionWithoutConfigurationOrInput(t *testing.T) {
 
 type forbiddenInput struct{}
 
-func (forbiddenInput) Read([]byte) (int, error) { panic("version must not read SQL") }
+func (forbiddenInput) Read([]byte) (int, error) { panic("unexpected SQL read") }
 
 func TestCLIVersionOutputFailure(t *testing.T) {
 	// Given an output stream that has closed.

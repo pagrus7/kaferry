@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -61,19 +62,32 @@ type SavedPartition struct {
 	Window      *plan.Window `json:"window,omitempty"`
 }
 
+const (
+	verdictComplete          = "complete"
+	verdictTimestampComplete = "complete_within_staleness"
+	verdictIncomplete        = "incomplete"
+	verdictUnknown           = "unknown"
+	verdictRunning           = "running"
+	verdictLimitReached      = "limit_reached"
+)
+
+var statusExitCodes = map[string]int{
+	verdictComplete:          0,
+	verdictTimestampComplete: 0,
+	verdictIncomplete:        4,
+	verdictUnknown:           5,
+	verdictRunning:           6,
+	verdictLimitReached:      7,
+}
+
+// StatusExitCodes returns the exit code for each saved status verdict.
+func StatusExitCodes() map[string]int { return maps.Clone(statusExitCodes) }
+
 func (r StatusReport) ExitCode() int {
-	switch r.Verdict {
-	case "complete", "complete_within_staleness":
-		return 0
-	case "limit_reached":
-		return 7
-	case "incomplete":
-		return 4
-	case "running":
-		return 6
-	default:
-		return 5
+	if code, ok := statusExitCodes[r.Verdict]; ok {
+		return code
 	}
+	return statusExitCodes[verdictUnknown]
 }
 
 func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker, stop core.StopObserver) (report StatusReport, result error) {
@@ -112,7 +126,7 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 	var kafkaConflict *kafka.Conflict
 	var archiveConflict *archiveio.Conflict
 	if errors.As(err, &kafkaConflict) || errors.As(err, &archiveConflict) {
-		report.Verdict = "unknown"
+		report.Verdict = verdictUnknown
 		if report.Reason == "" {
 			report.Reason = "saved progress does not match this query or endpoints"
 		}
@@ -193,9 +207,9 @@ func membershipChanged(before, after kafka.Membership) bool {
 func (r *StatusReport) observed(before, after kafka.Membership, p plan.Plan) {
 	switch {
 	case before.Foreign || after.Foreign:
-		r.Verdict, r.Reason = "unknown", "group has an incompatible active member"
+		r.Verdict, r.Reason = verdictUnknown, "group has an incompatible active member"
 	case membershipChanged(before, after):
-		r.Verdict = "running"
+		r.Verdict = verdictRunning
 	default:
 		r.classify(p)
 	}
@@ -236,16 +250,16 @@ func (r *StatusReport) classify(p plan.Plan) {
 	}
 	switch {
 	case !anySaved:
-		r.Verdict, r.Reason = "unknown", "no saved progress"
+		r.Verdict, r.Reason = verdictUnknown, "no saved progress"
 	case !allStopped:
-		r.Verdict, r.Reason = "incomplete", "partitions have no saved stop"
+		r.Verdict, r.Reason = verdictIncomplete, "partitions have no saved stop"
 	default:
-		r.Verdict = "complete"
+		r.Verdict = verdictComplete
 		switch {
 		case reasons["worker_record_cap"]:
-			r.Verdict = "limit_reached"
+			r.Verdict = verdictLimitReached
 		case usesTime:
-			r.Verdict = "complete_within_staleness"
+			r.Verdict = verdictTimestampComplete
 		}
 		var descriptions []string
 		for reason := range reasons {

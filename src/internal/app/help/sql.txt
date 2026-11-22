@@ -1,0 +1,79 @@
+SQL statement grammar
+
+statement   = [ connections ] insert select [ where ] [ options ] [ ";" ] ;
+connections = "WITH" connection { "," connection } ;
+connection  = "CONNECTION" alias "AS" "(" property { "," property } ")" ;
+property    = string "=" ( string | env ) ;
+env         = "ENV" "(" string ")" ;
+
+insert      = "INSERT" "INTO" endpoint
+              [ "WITH" "(" sink_option { "," sink_option } ")" ] ;
+select      = "SELECT" "*" "FROM" endpoint
+              [ "WITH" "(" source_option { "," source_option } ")" ] ;
+endpoint    = "TOPIC" string                 (* 'topic' or 'topic@alias' *)
+            | "ARCHIVE" string ;             (* archive directory *)
+source_option = "GROUP" "=" ( string | "ONE_OFF" )
+            | "START" "=" ( "EARLIEST" | "LATEST" )
+            | ( "MAX_STALENESS" | "MAX_OUT_OF_ORDER" ) "="
+              ( interval | "OFF" ) ;
+sink_option = "PARTITIONING" "=" ( "PRESERVE" | "KEY" )
+            | "ROTATE_AFTER_SIZE" "=" integer [ "k" | "m" | "g" ]
+            | "ROTATE_AFTER_AGE" "=" interval ;
+
+where       = "WHERE"
+              ( predicates | branch { "OR" branch } [ "AND" predicates ] ) ;
+predicates  = predicate { "AND" predicate } ;
+branch      = "(" predicates ")" ;
+              (* disjoint PARTITION IN/BETWEEN plus offset bounds only *)
+predicate   = between | bound | partition | offset ;
+offset      = "RECORD_OFFSET" ( compare integer | "<" "LATEST"
+            | "BETWEEN" integer "AND" integer ) ;
+partition   = "PARTITION" [ "NOT" ] ( "IN" "(" integer { "," integer } ")"
+            | "BETWEEN" integer "AND" integer ) ;
+between     = "RECORD_TIMESTAMP" "BETWEEN" time "AND" time ;
+bound       = "RECORD_TIMESTAMP" compare time ;
+compare     = ">=" | ">" | "<" | "<=" ;
+time        = instant { ( "+" | "-" ) interval } ;
+instant     = "TIMESTAMP" string | "NOW" "(" ")" ;
+interval    = "INTERVAL" string unit ;
+unit        = "SECOND" | "MINUTE" | "HOUR" | "DAY" ;
+
+options     = "OPTIONS" "(" copy_option { "," copy_option } ")" ;
+copy_option = "WORKER_STOP_AFTER_RECORDS" "=" integer
+            | "ON_ERROR" "=" ( "FAIL" | "SKIP" )
+            | "ON_MISSING_TIMESTAMP" "=" ( "FAIL" | "SKIP" )
+            | "ON_REJECTED_TIMESTAMP" "=" ( "FAIL" | "SKIP" ) ;
+
+Defaults
+Source WITH (after FROM)
+Kafka source
+  GROUP                      ONE_OFF
+  START                      EARLIEST
+  MAX_STALENESS              INTERVAL '5' MINUTE with a timestamp upper bound
+  MAX_OUT_OF_ORDER           OFF
+
+START applies without timestamp bounds. Saved positions take precedence.
+MAX_STALENESS applies when there is no explicit offset end.
+
+Archive source
+  GROUP                      ONE_OFF
+  MAX_OUT_OF_ORDER           OFF
+
+Sink WITH (after INSERT INTO)
+Kafka sink
+  PARTITIONING               PRESERVE
+
+Archive sink
+  ROTATE_AFTER_SIZE          1g
+  ROTATE_AFTER_AGE           INTERVAL '1' HOUR
+
+Final OPTIONS
+  WORKER_STOP_AFTER_RECORDS  No record limit
+  ON_ERROR                   FAIL
+  ON_MISSING_TIMESTAMP       FAIL
+  ON_REJECTED_TIMESTAMP      FAIL
+
+ON_MISSING_TIMESTAMP requires timestamp bounds in WHERE.
+ON_REJECTED_TIMESTAMP requires a Kafka sink.
+
+https://github.com/pagrus7/kaferry/blob/main/docs/reference.md#sql-statements
