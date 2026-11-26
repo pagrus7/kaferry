@@ -121,58 +121,18 @@ func formatBound(value *int64) string {
 
 // Inspection validates completion arithmetic before rendering the report.
 func renderCompletion(output io.Writer, report inspect.Report, window plan.Window) {
-	if report.Offsets != nil && report.Offsets.HasEnd() || len(report.PartitionOffsets) > 0 {
-		if report.Source.Kind == "ARCHIVE" {
-			fmt.Fprintln(output, "  Stop: selected archive EOF or the original source offset ends; timestamps filter records.")
-		} else {
-			fmt.Fprintln(output, "  Stop: fixed exclusive offset end per partition; timestamps filter records. LATEST previews can change before execution.")
-		}
-		return
+	switch report.EndRule {
+	case "FOLLOW":
+		fmt.Fprintln(output, "  Stop: no source end (FOLLOW = ON).")
+	case "EOF":
+		fmt.Fprintln(output, "  Stop: end of this group's fixed selection of completed archive files.")
+	case "OFFSET":
+		fmt.Fprintln(output, "  Stop: saved exclusive offset end for each partition.")
+	default:
+		fmt.Fprintln(output, "  Stop: saved readable end per partition (default). Use FOLLOW = ON to keep copying new records.")
 	}
-	renderWindowStop(output, report, window)
-	renderTimestampCompletion(output, report, window)
-}
-func renderWindowStop(output io.Writer, report inspect.Report, window plan.Window) {
-	if report.Source.Kind == "ARCHIVE" {
-		rule := "end of this group's fixed selection of completed archive files"
-		if report.WorkerStopAfterRecords > 0 {
-			rule = "worker record threshold or " + rule + ", whichever comes first"
-		}
-		fmt.Fprintf(output, "  Stop: %s; the window filters records.\n", rule)
-		return
+	if report.MaxOutOfOrderMS != nil && window.Upper != nil {
+		threshold := *window.Upper + *report.MaxOutOfOrderMS
+		fmt.Fprintf(output, "    Stop earlier before the first visible record with timestamp after %s (MAX_OUT_OF_ORDER).\n", formatBound(&threshold))
 	}
-	if window.Upper == nil {
-		if report.WorkerStopAfterRecords > 0 {
-			fmt.Fprintln(output, "  Stop: follow new records until the worker record threshold is reached or interrupted.")
-		} else {
-			fmt.Fprintln(output, "  Stop: no end time; follow new records until stopped.")
-		}
-		return
-	}
-	if report.WorkerStopAfterRecords > 0 {
-		fmt.Fprintln(output, "  Stop: worker record threshold or all assigned partitions stopping, whichever comes first.")
-	}
-}
-func renderTimestampCompletion(output io.Writer, report inspect.Report, window plan.Window) {
-
-	if window.Upper == nil {
-		return
-	}
-	if d := report.MaxOutOfOrderMS; d == nil {
-		fmt.Fprintln(output, "  Timestamp stopping: OFF.")
-	} else {
-		threshold := *window.Upper + *d
-		fmt.Fprintf(output, "  Timestamp stop threshold: %s (window end + %d ms MAX_OUT_OF_ORDER), per original source partition.\n", formatBound(&threshold), *d)
-	}
-	if report.Source.Kind == "ARCHIVE" {
-		return
-	}
-	if report.MaxStalenessMS < 0 {
-		fmt.Fprintln(output, "  Wall-clock end capture: OFF; partitions without timestamp evidence keep following.")
-		return
-	}
-	threshold := *window.Upper + report.MaxStalenessMS
-	fmt.Fprintf(output, "  Clock capture threshold: %s (window end + %d ms MAX_STALENESS).\n", formatBound(&threshold), report.MaxStalenessMS)
-	fmt.Fprintln(output, "    Per assigned partition: reuse a saved captured end. Otherwise, once the clock passes the threshold, save the current replicated end. Drain the fixed end unless timestamp evidence stops the partition first.")
-	fmt.Fprintln(output, "    Open transactions can delay reading that end; worker.tip_wait bounds a stalled readable tip, not ordinary backlog processing. This is not a runtime deadline.")
 }

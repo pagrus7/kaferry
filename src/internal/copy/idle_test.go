@@ -26,6 +26,7 @@ func TestAssignmentBeforeIdleDeadlineCompletesNormally(t *testing.T) {
 	upper, stamp := int64(1000), int64(1001)
 	source.high = 1
 	r.plan.Source.Kind = "TOPIC"
+	r.plan.Offsets = &plan.OffsetRange{Latest: true}
 	r.plan.MaxOutOfOrderMS = new(int64(0))
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
 	r.limits.IdleExit = 1 * time.Second
@@ -64,6 +65,7 @@ func TestDelayedHandoffDistinguishesPartitionCompletionFromIdleExit(t *testing.T
 	upper, stamp := int64(1000), int64(1001)
 	for _, runner := range []*Runner{a, b} {
 		runner.plan.Source.Kind = "TOPIC"
+		runner.plan.Offsets = &plan.OffsetRange{Latest: true}
 		runner.plan.MaxOutOfOrderMS = new(int64(0))
 		runner.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
 		runner.limits.IdleExit = 1 * time.Second
@@ -97,6 +99,7 @@ func unassignedTimeout(t *testing.T, afterIntake bool) {
 	r, source, sink, store, clock := fixture(t)
 	upper, stamp := clock.Now().Add(time.Hour).UnixMilli(), clock.Now().UnixMilli()
 	r.plan.Source.Kind = "TOPIC"
+	r.plan.Offsets = &plan.OffsetRange{Latest: true}
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
 	r.limits.IdleExit = 1 * time.Second
 	var logs bytes.Buffer

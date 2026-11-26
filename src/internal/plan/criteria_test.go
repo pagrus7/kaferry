@@ -8,36 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCriteriaDefaultsAndIndependentAllowances(t *testing.T) {
-	for _, tc := range []struct {
-		kind, options string
-		s, d          int64
-	}{
-		{"TOPIC 'a'", "", 300000, -1},
-		{"TOPIC 'a'", "MAX_STALENESS=INTERVAL '10' MINUTE", 600000, -1},
-		{"TOPIC 'a'", "MAX_OUT_OF_ORDER=INTERVAL '10' SECOND,MAX_STALENESS=INTERVAL '10' MINUTE", 600000, 10000},
-		{"TOPIC 'a'", "MAX_STALENESS=OFF", -1, -1},
-		{"TOPIC 'a'", "MAX_STALENESS=OFF,MAX_OUT_OF_ORDER=INTERVAL '0' SECOND", -1, 0},
-		{"TOPIC 'a'", "MAX_OUT_OF_ORDER=OFF", 300000, -1},
-		{"ARCHIVE 'a'", "", 0, -1},
-		{"ARCHIVE 'a'", "MAX_OUT_OF_ORDER=INTERVAL '0' SECOND", 0, 0},
-		{"ARCHIVE 'a'", "MAX_OUT_OF_ORDER=OFF", 0, -1},
-	} {
-		t.Run(tc.kind+tc.options, func(t *testing.T) {
-			// Given an upper timestamp bound and source-specific settings in any order.
-			q := "INSERT INTO TOPIC 'b' SELECT * FROM " + tc.kind
-			if tc.options != "" {
-				q += " WITH(" + tc.options + ")"
-			}
-			// When planning, then resolve the independent allowances without changing the filter.
-			p := build(t, q+" WHERE RECORD_TIMESTAMP < TIMESTAMP '2026-10-22T10:00:00Z'")
-			require.Equal(t, tc.s, p.MaxStalenessMS)
-			require.Equal(t, tc.d, p.DisorderMS())
-			require.Equal(t, tc.kind == "ARCHIVE 'a'" || tc.s >= 0 || tc.d >= 0, p.Finite())
-		})
-	}
-}
-
 func TestOffsetRangesAndPartitionBranches(t *testing.T) {
 	// Given disjoint ranges and a shared timestamp filter.
 	q := "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' WHERE (PARTITION IN(2) AND RECORD_OFFSET>=900 AND RECORD_OFFSET<LATEST) OR (PARTITION IN(0,1) AND RECORD_OFFSET>99 AND RECORD_OFFSET<=499) AND RECORD_TIMESTAMP < NOW()"
@@ -63,12 +33,56 @@ func TestOffsetRangesAndPartitionBranches(t *testing.T) {
 	}
 }
 
+func TestKafkaStopRules(t *testing.T) {
+	const base = "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' "
+	for _, tc := range []struct {
+		tail                   string
+		follow, finite, latest bool
+		numeric                *int64
+		disorder               int64
+	}{
+		{"", false, true, true, nil, -1},
+		{"WITH(FOLLOW=OFF)", false, true, true, nil, -1},
+		{"WHERE RECORD_OFFSET<LATEST", false, true, true, nil, -1},
+		{"WHERE RECORD_OFFSET<8", false, true, false, new(int64(8)), -1},
+		{"WHERE PARTITION IN(2)", false, true, true, nil, -1},
+		{"WHERE RECORD_OFFSET>=2", false, true, true, nil, -1},
+		{"WHERE RECORD_TIMESTAMP<NOW()", false, true, true, nil, -1},
+		{"WITH(MAX_OUT_OF_ORDER=OFF) WHERE RECORD_TIMESTAMP<NOW()", false, true, true, nil, -1},
+		{"WITH(MAX_OUT_OF_ORDER=INTERVAL '2' SECOND) WHERE RECORD_TIMESTAMP<NOW() AND RECORD_OFFSET<LATEST", false, true, true, nil, 2000},
+		{"WITH(FOLLOW=ON)", true, false, false, nil, -1},
+		{"WITH(FOLLOW=ON, START=LATEST)", true, false, false, nil, -1},
+		{"WITH(FOLLOW=ON) WHERE PARTITION IN(2) AND RECORD_OFFSET>=4 AND RECORD_TIMESTAMP>=NOW()", true, false, false, nil, -1},
+		{"WITH(FOLLOW=ON) OPTIONS(WORKER_STOP_AFTER_RECORDS=1)", true, true, false, nil, -1},
+	} {
+		t.Run(tc.tail, func(t *testing.T) {
+			// Given a Kafka source, when planned, then its end and signal behavior agree.
+			p := build(t, base+tc.tail)
+			require.Equal(t, tc.follow, p.Follow)
+			require.Equal(t, tc.finite, p.Finite())
+			require.Equal(t, tc.disorder, p.DisorderMS())
+			if p.Offsets == nil {
+				require.True(t, tc.follow)
+				return
+			}
+			require.Equal(t, tc.latest, p.Offsets.Latest)
+			require.Equal(t, tc.numeric, p.Offsets.Upper)
+		})
+	}
+}
+
 func TestCriteriaDiagnosticsAreLocatedAndRedacted(t *testing.T) {
 	const base = "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' "
 	for _, tc := range []struct{ tail, marker, hint string }{
+		{"WITH(FOLLOW=ON) WHERE RECORD_OFFSET<LATEST", "FOLLOW", "remove FOLLOW or the upper bound"},
+		{"WITH(FOLLOW=ON) WHERE RECORD_OFFSET<55", "FOLLOW", "remove FOLLOW or the upper bound"},
+		{"WITH(FOLLOW=ON) WHERE RECORD_TIMESTAMP<NOW()", "FOLLOW", "remove FOLLOW or the upper bound"},
+		{"WITH(FOLLOW=ON) WHERE (PARTITION IN(0) AND RECORD_OFFSET<4) OR (PARTITION IN(1) AND RECORD_OFFSET<LATEST)", "FOLLOW", "remove FOLLOW or the upper bound"},
+		{"WITH(FOLLOW=ON, MAX_OUT_OF_ORDER=INTERVAL '1' SECOND) WHERE RECORD_TIMESTAMP<NOW()", "FOLLOW", "remove FOLLOW or the upper bound"},
+		{"WITH(START=LATEST) WHERE RECORD_OFFSET<LATEST", "START", "remove START"},
+		{"WITH(START=EARLIEST)", "START", "remove START"},
 		{"WITH(MAX_OUT_OF_ORDER=OFF)", "MAX_OUT_OF_ORDER", "requires an upper timestamp"},
-		{"WITH(MAX_STALENESS=OFF) WHERE RECORD_OFFSET<LATEST AND RECORD_TIMESTAMP<NOW()", "MAX_STALENESS", "explicit offset end"},
-		{"WITH(MAX_OUT_OF_ORDER=OFF) WHERE RECORD_OFFSET<LATEST AND RECORD_TIMESTAMP<NOW()", "MAX_OUT_OF_ORDER", "explicit offset end"},
+		{"WITH(MAX_OUT_OF_ORDER=OFF) WHERE RECORD_OFFSET<123 AND RECORD_TIMESTAMP<NOW()", "MAX_OUT_OF_ORDER", "numeric offset end"},
 		{"WHERE RECORD_OFFSET>=LATEST", ">=", "LATEST requires"},
 		{"WHERE RECORD_OFFSET>=5 AND RECORD_OFFSET<5", "<5", "range is empty"},
 		{"WHERE RECORD_OFFSET>=1 AND RECORD_OFFSET>2", ">2", "lower bound repeats"},
@@ -107,7 +121,7 @@ func TestCriteriaDiagnosticsAreLocatedAndRedacted(t *testing.T) {
 
 func TestCriteriaIdentityIncludesBehaviorAndExcludesPositions(t *testing.T) {
 	const base = "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' "
-	for _, suffix := range []string{"WHERE RECORD_TIMESTAMP<NOW()", "WHERE RECORD_OFFSET<LATEST", "WHERE RECORD_OFFSET>=10 AND RECORD_OFFSET<20", "WITH(MAX_STALENESS=OFF,MAX_OUT_OF_ORDER=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP<NOW()"} {
+	for _, suffix := range []string{"WHERE RECORD_TIMESTAMP<NOW()", "WHERE RECORD_OFFSET<LATEST", "WHERE RECORD_OFFSET>=10 AND RECORD_OFFSET<20", "WITH(MAX_OUT_OF_ORDER=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP<NOW()"} {
 		// Given equivalent whitespace and source positions, when fingerprinting, then preserve identity.
 		a := build(t, base+suffix)
 		b := build(t, "-- shifted positions\n"+base+suffix)
@@ -125,40 +139,4 @@ func TestCriteriaIdentityIncludesBehaviorAndExcludesPositions(t *testing.T) {
 	b = build(t, base+"WITH(MAX_OUT_OF_ORDER=OFF) WHERE RECORD_TIMESTAMP<NOW()")
 	y, _ = b.testFingerprint("s", "d")
 	require.Equal(t, x, y)
-}
-
-func TestCompletionPoliciesKeepIndependentStops(t *testing.T) {
-	for _, tc := range []struct {
-		name, source, options, where                       string
-		clock, timestamp, finite, tipUsesTime, eofUsesTime bool
-	}{
-		{"following", "TOPIC 'a'", "", "", true, false, false, true, false},
-		{"clock only", "TOPIC 'a'", "", "RECORD_TIMESTAMP<NOW()", true, false, true, true, false},
-		{"both off", "TOPIC 'a'", "MAX_STALENESS=OFF", "RECORD_TIMESTAMP<NOW()", false, false, false, true, false},
-		{"disorder only", "TOPIC 'a'", "MAX_STALENESS=OFF,MAX_OUT_OF_ORDER=INTERVAL '0' SECOND", "RECORD_TIMESTAMP<NOW()", false, true, true, true, true},
-		{"both enabled", "TOPIC 'a'", "MAX_OUT_OF_ORDER=INTERVAL '1' SECOND", "RECORD_TIMESTAMP<NOW()", true, true, true, true, true},
-		{"offset end", "TOPIC 'a'", "", "RECORD_OFFSET<LATEST AND RECORD_TIMESTAMP<NOW()", false, false, true, false, false},
-		{"archive EOF", "ARCHIVE 'a'", "", "RECORD_TIMESTAMP<NOW()", false, false, true, true, false},
-		{"archive disorder", "ARCHIVE 'a'", "MAX_OUT_OF_ORDER=INTERVAL '0' SECOND", "RECORD_TIMESTAMP<NOW()", false, true, true, true, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			// Given a valid query with independently selectable completion rules.
-			query := "INSERT INTO TOPIC 'b' SELECT * FROM " + tc.source
-			if tc.options != "" {
-				query += " WITH(" + tc.options + ")"
-			}
-			if tc.where != "" {
-				query += " WHERE " + tc.where
-			}
-			// When planning, then execution and saved-stop classification share the rules.
-			p := build(t, query)
-			require.Equal(t, tc.clock, p.ClockCaptureEnabled())
-			require.Equal(t, tc.timestamp, p.TimestampStopEnabled())
-			require.Equal(t, tc.finite, p.Finite())
-			require.Equal(t, tc.tipUsesTime, p.StopUsesTime("tip"))
-			require.Equal(t, tc.eofUsesTime, p.StopUsesTime("eof"))
-			require.True(t, p.StopUsesTime("timestamp"))
-			require.False(t, p.StopUsesTime("worker_record_cap"))
-		})
-	}
 }

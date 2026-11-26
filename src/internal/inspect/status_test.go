@@ -23,12 +23,11 @@ func TestStatusCompletionScopeAndPrecedence(t *testing.T) {
 		code      int
 	}{
 		{"offset end", []string{"tip"}, true, nil, "complete", 0},
-		{"captured end", []string{"tip"}, false, nil, "complete_within_staleness", 0},
+		{"captured end", []string{"tip"}, false, nil, "complete", 0},
 		{"timestamp stop", []string{"timestamp"}, false, new(int64(0)), "complete_within_staleness", 0},
 		{"mixed timestamp and end", []string{"timestamp", "tip"}, false, new(int64(0)), "complete_within_staleness", 0},
 		{"archive eof", []string{"eof"}, false, nil, "complete", 0},
 		{"archive disorder off", []string{"eof"}, false, new(int64(-1)), "complete", 0},
-		{"archive disorder enabled", []string{"eof"}, false, new(int64(0)), "complete_within_staleness", 0},
 		{"archive offset end", []string{"eof"}, true, nil, "complete", 0},
 		{"worker cap", []string{"worker_record_cap"}, false, nil, "limit_reached", 7},
 		{"cap before conditional completion", []string{"tip", "worker_record_cap"}, false, nil, "limit_reached", 7},
@@ -38,10 +37,6 @@ func TestStatusCompletionScopeAndPrecedence(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given validated saved stops and the query that defines their source scope.
-			p := plan.Plan{MaxOutOfOrderMS: tc.disorder}
-			if tc.offsetEnd {
-				p.Offsets = &plan.OffsetRange{Upper: new(int64(10))}
-			}
 			r := StatusReport{}
 			for id, reason := range tc.reasons {
 				row := SavedPartition{ID: int32(id), Position: new(int64(10))}
@@ -51,7 +46,7 @@ func TestStatusCompletionScopeAndPrecedence(t *testing.T) {
 				r.Partitions = append(r.Partitions, row)
 			}
 			// When aggregating the saved status.
-			r.classify(p)
+			r.classify()
 			// Then the least complete outcome determines the verdict and shell result.
 			require.Equal(t, tc.want, r.Verdict)
 			require.Equal(t, tc.code, r.ExitCode())
@@ -65,7 +60,7 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 		name, verdict string
 		code          int
 	}{
-		{"no progress", "unknown", 5}, {"partial progress", "incomplete", 4}, {"no stop", "incomplete", 4}, {"stopped", "complete_within_staleness", 0}, {"offset end", "complete", 0},
+		{"no progress", "unknown", 5}, {"partial progress", "incomplete", 4}, {"no stop", "incomplete", 4}, {"stopped", "complete", 0}, {"offset end", "complete", 0},
 		{"worker threshold", "limit_reached", 7}, {"mixed stops", "limit_reached", 7}, {"partial worker stops", "incomplete", 4}, {"active after worker stop", "running", 6},
 		{"active", "running", 6}, {"changed empty group state", "running", 6}, {"rebalance without members", "running", 6},
 		{"foreign member", "unknown", 5}, {"identity conflict while active", "unknown", 5},
@@ -145,13 +140,11 @@ func TestArchiveStatusGuidance(t *testing.T) {
 		{name: "unfinished selection", verdict: "incomplete", saved: true},
 		{name: "record cap", verdict: "limit_reached", saved: true, stop: "worker_record_cap"},
 		{name: "completed selection", verdict: "complete", saved: true, stop: "eof"},
-		{name: "completed under timestamp assumptions", verdict: "complete_within_staleness", saved: true, stop: "eof", disorder: new(int64(0))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given an archive inspection with or without a validated saved selection.
 			service, p, _, archives := fixture()
 			p.Source.Kind, p.Source.Format = "ARCHIVE", "avro"
-			p.MaxOutOfOrderMS = tc.disorder
 			archives.source.Saved = tc.saved
 			if tc.stop != "" {
 				archives.source.Stop = &core.Stop{Reason: tc.stop}
@@ -359,12 +352,12 @@ func requireStatusGuidance(t *testing.T, report StatusReport, savedArchiveSelect
 		"complete_within_staleness": {
 			meaning: "Source processing finished under the configured timestamp assumptions.",
 			notes: []string{
-				"Timestamp completion depends on the enabled MAX_STALENESS (arrival delay and consumer clock lead) or MAX_OUT_OF_ORDER (timestamp disorder) assumptions.",
+				"Timestamp completion depends on the configured MAX_OUT_OF_ORDER assumption.",
 				completionNote,
 			},
 		},
 		"complete": {
-			meaning: "Source processing finished for the selected finite scope: explicit offset bounds or the saved archive selection.",
+			meaning: "Source processing finished for the selected finite scope: saved offset ends or the saved archive selection.",
 			notes:   []string{completionNote},
 		},
 	}[report.Verdict]

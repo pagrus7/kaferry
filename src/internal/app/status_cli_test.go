@@ -102,7 +102,7 @@ func TestStatusKafkaRequestsAreReadOnly(t *testing.T) {
 			if selfCopy {
 				destination = "input"
 			}
-			query := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'input' WITH (GROUP='status', START=EARLIEST) ", strings.Join(cluster.ListenAddrs(), ","), destination)
+			query := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'input' WITH (GROUP='status', FOLLOW=ON) ", strings.Join(cluster.ListenAddrs(), ","), destination)
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			before := fileTree(t, home)

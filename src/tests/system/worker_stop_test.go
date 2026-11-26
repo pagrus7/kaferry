@@ -75,7 +75,7 @@ func TestWorkerStopAcrossEndpointDirections(t *testing.T) {
 	t.Run("topic to topic", func(t *testing.T) {
 		// Given a destination with a different partition count.
 		destination := topic(t, a, 3)
-		statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", destination, source, source+"-topic-limit")
+		statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON) ", destination, source, source+"-topic-limit")
 		// When resuming with a fresh cap.
 		executeWithWorkerStop(t, statement, config, 2)
 		// Then each invocation advances saved progress without copying the rest.

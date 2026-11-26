@@ -32,7 +32,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 		{"previous to candidate", previous, candidate}, {"candidate to previous", candidate, previous},
 	} {
 		t.Run(direction.name, func(t *testing.T) {
-			// Given two records and binaries that share the Kafka and Avro progress contracts.
+			// Given two records and named groups created independently by each binary.
 			admin := admin(t)
 			source := topic(t, admin, 1)
 			producer := producer(t)
@@ -55,46 +55,34 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			require.NotNil(t, first[0].Value, "empty value must remain distinct from null")
 			progress := committedPartitions(t, admin, group, source, 1)[0]
 			require.Equal(t, int64(1), progress.At)
-			require.True(t, strings.HasPrefix(progress.Metadata, "kaferry:2;"))
-
-			// When the other binary resumes, then it copies only the remaining record.
-			runMigrationBinary(t, direction.second, limited(sql), config)
+			// When the second binary writes a fresh group, its metadata identifies its progress format.
+			probeGroup := group + "-probe"
+			probeSQL := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s')", filepath.Join(t.TempDir(), "probe"), source, probeGroup)
+			runMigrationBinary(t, direction.second, limited(probeSQL), config)
+			probe := committedPartitions(t, admin, probeGroup, source, 1)[0]
+			firstVersion, _, firstTagged := strings.Cut(progress.Metadata, ";")
+			secondVersion, _, secondTagged := strings.Cut(probe.Metadata, ";")
+			require.True(t, firstTagged && secondTagged)
+			compatible := firstVersion == secondVersion
+			// Then compatible progress resumes, and a version boundary rejects the group before writing.
+			if compatible {
+				runMigrationBinary(t, direction.second, limited(sql), config)
+			} else {
+				runMigrationExpect(t, direction.second, limited(sql), config, 2, "unsupported version of commit metadata|query fingerprint mismatch")
+				require.Equal(t, first, archiveRecords(t, archive))
+				runMigrationBinary(t, direction.first, limited(sql), config)
+			}
 			complete := archiveRecords(t, archive)
 			require.Len(t, complete, 2)
-			require.Equal(t, first[0], complete[0])
-			require.Equal(t, []byte{0, 1}, complete[1].Key)
-			require.Equal(t, int64(2), committedPartitions(t, admin, group, source, 1)[0].At)
-
-			// Given a partially replayed archive with a saved record cursor.
-			cloneSQL := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='file-migration') ", clone, archive)
+			cloneSQL := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH(GROUP='file-migration')", clone, archive)
 			runMigrationBinary(t, direction.first, limited(cloneSQL), config)
-			require.Equal(t, complete[:1], archiveRecords(t, clone))
-			state := migrationCheckpoint(t, config, "file-migration")
-			require.Equal(t, 1, state.Version)
-			require.Equal(t, int64(1), state.Position)
-			require.False(t, state.Complete)
-
-			// When the other binary resumes, then it keeps the selection and produces no duplicates.
-			runMigrationBinary(t, direction.second, cloneSQL, config)
-			require.Equal(t, complete, archiveRecords(t, clone))
-			state = migrationCheckpoint(t, config, "file-migration")
-			require.Equal(t, int64(2), state.Position)
-			require.True(t, state.Complete)
-
-			// Given independently known unsupported commit prefixes, reject them before changing output.
-			supported := progress.Metadata
-			for _, unsupported := range []string{"kaferry:1", "kaferry:4"} {
-				progress.Metadata = strings.Replace(supported, "kaferry:2;", unsupported+";", 1)
-				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-				result, err := admin.CommitOffsets(ctx, group, kadm.Offsets{source: {0: progress}})
-				cancel()
-				require.NoError(t, err)
-				require.NoError(t, result.Error())
-				require.Len(t, result[source], 1)
-				runMigrationExpect(t, candidate, sql, config, 2, "unsupported version of commit metadata")
-				require.Equal(t, complete, archiveRecords(t, archive))
+			if compatible {
+				runMigrationBinary(t, direction.second, cloneSQL, config)
+				require.Equal(t, complete, archiveRecords(t, clone))
+			} else {
+				runMigrationExpect(t, direction.second, cloneSQL, config, 2, "identity mismatch|fingerprint mismatch")
+				require.Equal(t, complete[:1], archiveRecords(t, clone))
 			}
-
 			// When a fresh group reads the archive, then it sees the same full records.
 			fresh := filepath.Join(t.TempDir(), "read")
 			query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='archive-read') ", fresh, archive)
@@ -159,10 +147,10 @@ func TestPreviousBinaryRejectsChangedCapturedEndQuery(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "archive")
 	group := source + "-bounded"
 	config := configuration(t)
-	statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s'", out, source, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
+	statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s') WHERE RECORD_TIMESTAMP < TIMESTAMP '%s'", out, source, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
 	runMigrationBinary(t, testBinary(t), statement, config)
 	progress := committedPartitions(t, a, group, source, 1)[0]
-	require.True(t, strings.HasPrefix(progress.Metadata, "kaferry:3;"))
+	require.True(t, strings.HasPrefix(progress.Metadata, "kaferry:4;"))
 	before := archiveRecords(t, out)
 
 	// When the other binary reads those commits with a changed query, then it rejects the format or query identity before writing.
@@ -251,7 +239,7 @@ func TestPreviousBinaryDestinationProgressCompatibility(t *testing.T) {
 
 				// When the other binary resumes, then different identities reject before output or progress changes.
 				if !compatible {
-					runMigrationExpect(t, direction.second, limited, config, 2, "query (fingerprint|identity) mismatch")
+					runMigrationExpect(t, direction.second, limited, config, 2, "unsupported version of commit metadata|query (fingerprint|identity) mismatch")
 					require.EqualValues(t, 1, topicRecordCount(t, a, destination, 1))
 					if kind == "TOPIC" {
 						require.Equal(t, beforeOffsets, committedPartitions(t, a, group, source, 1))

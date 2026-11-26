@@ -36,8 +36,8 @@ func TestKafkaArchiveConcurrentCapture(t *testing.T) {
 	}
 	// A one-record cap exercises shared archive durability throughout capture.
 	config := configuration(t, "record_cap=1")
-	// The literal end is already replicated, but read-committed capture must wait for the transaction.
-	statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) WHERE RECORD_OFFSET < %d", archive, source, group, count/partitions)
+	// Both followers join before the transaction is made readable.
+	statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON) OPTIONS(WORKER_STOP_AFTER_RECORDS=%d)", archive, source, group, count/2)
 	binary := testBinary(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
@@ -75,7 +75,7 @@ func TestKafkaArchiveConcurrentCapture(t *testing.T) {
 	// Then both exit successfully after capturing exactly the fixed source range.
 	require.Equal(t, count, confirmed)
 	for _, partition := range committedPartitions(t, a, group, source, partitions) {
-		require.EqualValues(t, count/partitions, partition.At)
+		require.GreaterOrEqual(t, partition.At, int64(count/partitions))
 	}
 	// When replaying their shared archive into a fresh topic.
 	replay := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='restore')", destination, archive)

@@ -181,15 +181,6 @@ func (s *Source) Pause(id int32, paused bool) error {
 	}
 	return nil
 }
-func (s *Source) HighWatermark(ctx context.Context, id int32) (int64, error) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	ends, err := s.lookup.ReplicatedEnd(ctx, []int32{id})
-	if err != nil {
-		return 0, transientFailure(err)
-	}
-	return ends[id], nil
-}
 func (s *Source) transient(err error) bool {
 	if !errors.Is(transientFailure(err), core.ErrRecoverable) {
 		return false

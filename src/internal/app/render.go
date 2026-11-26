@@ -118,6 +118,7 @@ func renderTopicProgress(output io.Writer, report inspect.Report) {
 			fmt.Fprintf(output, "  Partition %d: start %d", partition.ID, partition.Start)
 			if partition.End != nil {
 				fmt.Fprintf(output, "; exclusive end %d (%s)", *partition.End, partition.EndOrigin)
+				fmt.Fprintf(output, "; offset span %d", *partition.End-partition.Start)
 			}
 			fmt.Fprintln(output)
 		} else if partition.End != nil {

@@ -20,7 +20,7 @@ func TestCLIInterruptCommitsAndResumeDoesNotRecopy(t *testing.T) {
 	a, src, dst, p := pairedTopics(t, 1, 1)
 	binary := testBinary(t)
 	group := src + "-signal"
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','topic.metadata.refresh.interval.ms'='500') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=LATEST) ", broker(t), dst, src, group)
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','topic.metadata.refresh.interval.ms'='500') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON, START=LATEST) ", broker(t), dst, src, group)
 	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte("before latest"), Timestamp: time.Now()})
 	for run := range 2 {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

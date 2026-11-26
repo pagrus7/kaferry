@@ -15,7 +15,7 @@ func TestMinimalStatementsMatchExplicitDefaults(t *testing.T) {
 				query := fmt.Sprintf("INSERT INTO %s SELECT * FROM %s", destination, source)
 				settings := "GROUP=ONE_OFF"
 				if source == "TOPIC 'a'" {
-					settings += ", START=EARLIEST"
+					settings += ", FOLLOW=OFF"
 				}
 				// When planning implicit and explicit defaults.
 				implicit := build(t, query)
@@ -39,8 +39,8 @@ func TestOptionalSourceSettingsOverrideOnlyTheirDefaults(t *testing.T) {
 		oneOff                 bool
 	}{
 		{"GROUP='resume'", "resume", "EARLIEST", false},
-		{"START=LATEST", "ONE_OFF", "LATEST", true},
-		{"GROUP='resume', START=LATEST", "resume", "LATEST", false},
+		{"FOLLOW=ON,START=LATEST", "ONE_OFF", "LATEST", true},
+		{"GROUP='resume', FOLLOW=ON,START=LATEST", "resume", "LATEST", false},
 	} {
 		t.Run(tc.settings, func(t *testing.T) {
 			// Given a source overriding its group, start, or both.
@@ -64,15 +64,6 @@ func TestTimeFiltersDoNotBecomeExplicitStartRules(t *testing.T) {
 		require.Empty(t, p.Start)
 		require.Nil(t, p.Window.Lower)
 		require.NotNil(t, p.Window.Upper)
-		if p.Source.Kind == "TOPIC" {
-			require.EqualValues(t, 300000, p.MaxStalenessMS)
-		} else {
-			require.Zero(t, p.MaxStalenessMS)
-		}
+		require.Equal(t, p.Source.Kind == "TOPIC", p.HasOffsetEnd())
 	}
-	// Given only an explicit staleness, when planned, then it overrides the staleness without requiring GROUP.
-	p := build(t, "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' WITH(MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < NOW() OPTIONS(ON_ERROR=SKIP)")
-	require.True(t, p.OneOff)
-	require.Zero(t, p.MaxStalenessMS)
-	require.Equal(t, (Policies{"SKIP", "SKIP", "SKIP"}), p.Policies)
 }

@@ -26,7 +26,6 @@ func (f *runnerFactory) New(source copy.Source, sink copy.Sink, store copy.Progr
 		ByteCap:            limits.ByteCap,
 		DeliveryTimeout:    limits.DeliveryTimeout.Duration,
 		IdleExit:           limits.IdleExit.Duration,
-		TipWait:            limits.TipWait.Duration,
 		ProgressInterval:   limits.ProgressInterval.Duration,
 	}
 	return copy.NewRunner(source, sink, store, f.clock, f.logger, p, settings, f.progress.New(), stop, observer)

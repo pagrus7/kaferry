@@ -1,10 +1,9 @@
 {
-  "version": 2,
+  "version": 3,
   "fingerprint": "query-id",
   "group": "backfill",
   "one_off": false,
   "max_out_of_order_ms": 1000,
-  "max_staleness_ms": 1000,
   "source": {
     "kind": "TOPIC",
     "name": "input",
@@ -37,6 +36,7 @@
     }
   ],
   "start_rule": "WINDOW",
+  "end_rule": "LATEST",
   "record_errors": {
     "missing_timestamp": "FAIL",
     "rejected_timestamp": "FAIL",

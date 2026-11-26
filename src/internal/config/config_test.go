@@ -106,14 +106,13 @@ func TestDeliveryTimeoutFitsNativeMillisecondRange(t *testing.T) {
 
 func TestWorkerDurationsDecodeBeforeUse(t *testing.T) {
 	// Given string durations in every worker setting, including a disabled progress log.
-	input := "[worker]\ndelivery_timeout='1.5s'\nshutdown_timeout='2m'\nidle_exit='250ms'\ntip_wait='1h'\nprogress_interval='0'\n"
+	input := "[worker]\ndelivery_timeout='1.5s'\nshutdown_timeout='2m'\nidle_exit='250ms'\nprogress_interval='0'\n"
 	// When loading configuration, then runtime settings are already typed.
 	cfg, err := NewLoader(&readerMock{data: []byte(input)}, "home").Load("config.toml")
 	require.NoError(t, err)
 	require.Equal(t, 1500*time.Millisecond, cfg.Worker.DeliveryTimeout.Duration)
 	require.Equal(t, 2*time.Minute, cfg.Worker.ShutdownTimeout.Duration)
 	require.Equal(t, 250*time.Millisecond, cfg.Worker.IdleExit.Duration)
-	require.Equal(t, time.Hour, cfg.Worker.TipWait.Duration)
 	require.Zero(t, cfg.Worker.ProgressInterval.Duration)
 	// Given malformed, overflowing or non-string values, when loading, then reject without echoing input.
 	for _, value := range []string{"'secret-duration'", "'999999999999999999h'", "123", "true", "{Duration=1}"} {

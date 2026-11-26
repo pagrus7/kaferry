@@ -28,22 +28,19 @@ Save one statement below as copy.sql. Use the same SQL and config throughout.
 Copy the current readable topic backlog
   WITH CONNECTION default AS ('bootstrap.servers' = 'localhost:9092')
   INSERT INTO TOPIC 'orders-copy'
-  SELECT * FROM TOPIC 'orders' WITH (GROUP = 'demo-backlog')
-  WHERE RECORD_OFFSET < LATEST;
+  SELECT * FROM TOPIC 'orders' WITH (GROUP = 'demo-backlog');
 
 Copy the last hour from the current readable backlog
   WITH CONNECTION default AS ('bootstrap.servers' = 'localhost:9092')
   INSERT INTO TOPIC 'orders-hour'
   SELECT * FROM TOPIC 'orders' WITH (GROUP = 'demo-hour')
-  WHERE RECORD_OFFSET < LATEST
-    AND RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR
+  WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR
     AND RECORD_TIMESTAMP < NOW();
 
 Save the current readable backlog to a local archive
   WITH CONNECTION default AS ('bootstrap.servers' = 'localhost:9092')
   INSERT INTO ARCHIVE 'orders-archive'
-  SELECT * FROM TOPIC 'orders' WITH (GROUP = 'demo-capture')
-  WHERE RECORD_OFFSET < LATEST;
+  SELECT * FROM TOPIC 'orders' WITH (GROUP = 'demo-capture');
 
 Replay completed files from the archive created above
   WITH CONNECTION default AS ('bootstrap.servers' = 'localhost:9092')

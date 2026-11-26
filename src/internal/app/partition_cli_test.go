@@ -98,7 +98,7 @@ func partitionCLISelection(t *testing.T, predicate string) {
 		}
 		return nil, nil, false
 	})
-	query := fmt.Sprintf("WITH CONNECTION p AS ('bootstrap.servers'='%s') INSERT INTO TOPIC 'output@p' SELECT * FROM TOPIC 'input@p' WITH(GROUP='selected-copy', MAX_STALENESS=INTERVAL '0' SECOND) WHERE %s AND RECORD_TIMESTAMP < TIMESTAMP '%s'", strings.Join(cluster.ListenAddrs(), ","), predicate, stamp.Add(time.Second).Format(time.RFC3339Nano))
+	query := fmt.Sprintf("WITH CONNECTION p AS ('bootstrap.servers'='%s') INSERT INTO TOPIC 'output@p' SELECT * FROM TOPIC 'input@p' WITH(GROUP='selected-copy') WHERE %s AND RECORD_TIMESTAMP < TIMESTAMP '%s'", strings.Join(cluster.ListenAddrs(), ","), predicate, stamp.Add(time.Second).Format(time.RFC3339Nano))
 	var stdout, stderr bytes.Buffer
 	// When the real CLI performs a bounded copy through consumer-group ownership.
 	code := Execute(ctx, []string{"run", "-e", query}, nil, &stdout, &stderr)

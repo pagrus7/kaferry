@@ -299,7 +299,9 @@ func (p *parser) option(scope Scope) Option {
 	p.expect("=")
 	o.ValuePosition = p.current.Position
 	switch o.Name {
-	case "MAX_STALENESS", "MAX_OUT_OF_ORDER":
+	case "FOLLOW":
+		o.Value = p.oneOf("ON", "OFF")
+	case "MAX_OUT_OF_ORDER":
 		if p.take("OFF") {
 			o.Value = "OFF"
 		} else {

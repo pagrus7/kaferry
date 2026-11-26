@@ -21,7 +21,8 @@ endpoint    = "TOPIC" string                 (* 'topic' or 'topic@alias' *)
             | "ARCHIVE" string ;             (* archive directory *)
 source_option = "GROUP" "=" ( string | "ONE_OFF" )
             | "START" "=" ( "EARLIEST" | "LATEST" )
-            | ( "MAX_STALENESS" | "MAX_OUT_OF_ORDER" ) "="
+            | "FOLLOW" "=" ( "ON" | "OFF" )
+            | "MAX_OUT_OF_ORDER" "="
               ( interval | "OFF" ) ;
 sink_option = "PARTITIONING" "=" ( "PRESERVE" | "KEY" )
             | "ROTATE_AFTER_SIZE" "=" integer [ "k" | "m" | "g" ]

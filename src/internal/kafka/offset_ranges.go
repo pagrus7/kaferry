@@ -34,7 +34,7 @@ func (p *positioner) resolveOffsetRanges(ctx context.Context, assignments []core
 
 func (p *positioner) offsetEndLookups(assignments []core.Assignment, saved map[int32]SavedProgress, ends map[int32]int64) ([]int32, error) {
 	var latest []int32
-	// START=LATEST and an offset end use the same sampled reply.
+	// A timestamp start with no match and the end share a readable-end sample.
 	for _, a := range assignments {
 		id := a.Cursor.Partition
 		r := p.plan.OffsetRange(id)
@@ -44,7 +44,7 @@ func (p *positioner) offsetEndLookups(assignments []core.Assignment, saved map[i
 		if r.Upper != nil && a.Cursor.End != nil && *r.Upper != *a.Cursor.End {
 			return nil, conflict("partition %d saved offset end differs from query", id)
 		}
-		if r.Latest && a.Cursor.End == nil {
+		if r.HasEnd() {
 			if _, sampled := ends[id]; !sampled {
 				latest = append(latest, id)
 			}
@@ -55,7 +55,7 @@ func (p *positioner) offsetEndLookups(assignments []core.Assignment, saved map[i
 func (p *positioner) applyOffsetRange(a *core.Assignment, saved map[int32]SavedProgress, ends map[int32]int64) error {
 	id := a.Cursor.Partition
 	r := p.plan.OffsetRange(id)
-	if r.Latest && a.Cursor.End == nil {
+	if r.HasEnd() {
 		p.high[id] = max(p.high[id], ends[id])
 	}
 	_, resuming := saved[id]
@@ -70,10 +70,19 @@ func (p *positioner) applyOffsetRange(a *core.Assignment, saved map[int32]SavedP
 func (p *positioner) applyOffsetEnd(a *core.Assignment, resuming bool, end int64) error {
 	id := a.Cursor.Partition
 	r := p.plan.OffsetRange(id)
-	if a.Cursor.End != nil || !r.HasEnd() {
+	if a.Cursor.End != nil {
+		if *a.Cursor.End > end {
+			return conflict("partition %d saved offset end exceeds the readable end", id)
+		}
+		return nil
+	}
+	if !r.HasEnd() {
 		return nil
 	}
 	if r.Upper != nil {
+		if *r.Upper > end {
+			return conflict("partition %d requested offset end exceeds the readable end", id)
+		}
 		end = *r.Upper
 	}
 	if end < p.low[id] || end > p.high[id] || r.Lower != nil && *r.Lower > end {

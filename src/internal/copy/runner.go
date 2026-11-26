@@ -57,7 +57,7 @@ func (r *Runner) Assign(assignments []Assignment) error {
 	}
 	for _, a := range assignments {
 		r.tracker.Assign(a.Cursor)
-		r.partitions[a.Cursor.Partition] = &partition{window: a.Window, position: a.Cursor.Position, high: a.Cursor.End, endSaved: a.Cursor.End != nil, stop: a.Cursor.Stop, stopSaved: a.Cursor.Stop != nil}
+		r.partitions[a.Cursor.Partition] = &partition{window: a.Window, position: a.Cursor.Position, high: a.Cursor.End, stop: a.Cursor.Stop, stopSaved: a.Cursor.Stop != nil}
 		r.log.Info("partition assigned", "partition", a.Cursor.Partition, "position", a.Cursor.Position, "window", a.Window)
 	}
 	return nil
@@ -169,7 +169,14 @@ func (r *Runner) advance(ctx context.Context) error {
 	if r.workerStopReached() {
 		return nil
 	}
-	return r.tips(ctx)
+	for id, p := range r.partitions {
+		if p.stop == nil && p.reachedHigh(p.position) {
+			p.stop = &Stop{Reason: "tip", At: p.position}
+			r.tipStops++
+			r.log.Info("partition stopped", "reason", "tip", "partition", id, "position", p.position)
+		}
+	}
+	return nil
 }
 
 func (r *Runner) checkpoint(ctx context.Context) error {
@@ -209,7 +216,6 @@ func (r *Runner) input(ctx context.Context, input Input) error {
 	if r.pending != nil || r.flow.deferred != nil {
 		return fmt.Errorf("source delivered a record while intake was paused")
 	}
-	p.atTip = false
 	if p.reachedHigh(input.Cursor.Position) {
 		cursor := Cursor{Partition: input.Cursor.Partition, Position: *p.high}
 		err := r.tracker.Advance(cursor)
@@ -261,7 +267,7 @@ func (r *Runner) stopAtTimestamp(p *partition, input Input) (bool, error) {
 }
 
 func (r *Runner) filterInput(window plan.Window, record Record, token Token) (bool, error) {
-	if r.plan.Offsets != nil || len(r.plan.PartitionOffsets) > 0 {
+	if r.plan.Offsets != nil && (r.plan.Offsets.Lower != nil || r.plan.Offsets.Upper != nil) || len(r.plan.PartitionOffsets) > 0 {
 		if record.Source == nil {
 			return true, fmt.Errorf("offset criteria require original source provenance")
 		}
@@ -374,64 +380,7 @@ func (r *Runner) eof(cursor Cursor) error {
 
 	return nil
 }
-func (r *Runner) tips(ctx context.Context) error {
-	wait := r.limits.TipWait
-	sampled := false // Interleave watermark queries with consumer polling.
-	for id, p := range r.partitions {
-		if !r.needsTip(p) {
-			continue
-		}
-		action := p.tipAction(r.clock.Now(), r.plan.MaxStalenessMS, wait)
-		if action == tipSample {
-			if sampled {
-				continue
-			}
-			sampled = true
-			if err := r.sampleHigh(ctx, id, p); err != nil {
-				return err
-			}
-			action = p.tipAction(r.clock.Now(), r.plan.MaxStalenessMS, wait)
-		}
-		switch action {
-		case tipStop:
-			p.stop = &Stop{Reason: "tip", At: p.position}
-			r.tipStops++
-			r.log.Info("partition stopped", "reason", "tip", "partition", id, "position", p.position, "high_watermark", *p.high)
-		case tipTimeout:
-			return fmt.Errorf("partition %d tip wait exceeded: H=%d stable=%d consumed=%d", id, *p.high, p.stable, p.position)
-		}
-	}
-	return nil
-}
 
-func (r *Runner) needsTip(p *partition) bool {
-	if p.stop != nil || r.plan.Source.Kind != "TOPIC" {
-		return false
-	}
-	return p.high != nil || p.window.Upper != nil && r.plan.ClockCaptureEnabled()
-}
-
-func (r *Runner) sampleHigh(ctx context.Context, id int32, p *partition) error {
-	high, err := r.source.HighWatermark(ctx, id)
-	if err != nil {
-		if !errors.Is(err, ErrRecoverable) {
-			return err
-		}
-		if p.sampling.failed(r.clock.Now()) {
-			r.log.Warn("tip watermark query retrying", "partition", id, "attempt", p.sampling.attempts, "reason", err)
-		}
-		return nil
-	}
-	if attempts := p.sampling.recovered(); attempts > 0 {
-		r.log.Info("tip watermark query recovered", "partition", id, "attempts", attempts)
-	}
-	if high < p.position {
-		return fmt.Errorf("partition %d captured end %d is below consumed position %d", id, high, p.position)
-	}
-	p.sampled(high)
-	r.log.Info("tip watermark sampled", "partition", id, "high_watermark", high, "stable", p.stable, "position", p.position)
-	return r.commit([]int32{id})
-}
 func (r *Runner) flush(ctx context.Context) error {
 	if err := r.sink.Flush(ctx); err != nil {
 		return err

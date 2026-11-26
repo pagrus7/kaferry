@@ -3,7 +3,6 @@ package copy
 import (
 	"math"
 	"testing"
-	"time"
 
 	"github.com/pagrus7/kaferry/src/internal/plan"
 	"github.com/stretchr/testify/require"
@@ -26,7 +25,7 @@ func TestPartitionTimestampThreshold(t *testing.T) {
 		{"overflow", new(int64(math.MaxInt64)), new(int64(math.MaxInt64)), false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Given a record timestamp and a window with a 100ms staleness.
+			// Given a record timestamp and a window with a 100ms disorder allowance.
 			p := partition{window: plan.Window{Upper: tc.upper}}
 
 			// When checking whether this record triggers the timestamp rule.
@@ -39,83 +38,4 @@ func TestPartitionTimestampThreshold(t *testing.T) {
 			require.Zero(t, p.position)
 		})
 	}
-}
-
-func TestPartitionSamplesOnlyAfterThresholdAndRetryDeadline(t *testing.T) {
-	// Given a bounded partition at the time threshold, but not at its readable tip.
-	upper := int64(1000)
-	p := partition{window: plan.Window{Upper: &upper}}
-	now := time.UnixMilli(1100)
-	assertAction := func(want tipAction) {
-		t.Helper()
-		got := p.tipAction(now, 100, time.Second)
-		require.Equal(t, want, got)
-	}
-
-	// When the readable tip is reached exactly at the threshold, equality still waits.
-	assertAction(tipWait)
-	p.reachedTip(0, false)
-	assertAction(tipWait)
-	// When wall time passes the threshold while the reader is behind, capture immediately.
-	p.atTip = false
-	now = now.Add(time.Millisecond)
-	assertAction(tipSample)
-	// Then reaching the tip does not change the capture decision.
-	p.reachedTip(0, false)
-	assertAction(tipSample)
-	p.sampling.failed(now)
-	assertAction(tipWait)
-	now = now.Add(time.Second)
-	assertAction(tipSample)
-
-	// Then a successful sample fixes the end and later input cannot request another.
-	p.sampled(3)
-	p.reachedTip(1, false)
-	assertAction(tipWait)
-	require.False(t, p.reachedHigh(2))
-	require.True(t, p.reachedHigh(3))
-	require.True(t, p.reachedHigh(100))
-	p.position = 3
-	assertAction(tipStop)
-}
-
-func TestPartitionTipTimeoutIsStrictAndCompletionWins(t *testing.T) {
-	// Given an unresolved sampled end and a one-second wait budget.
-	upper := int64(1000)
-	p := partition{window: plan.Window{Upper: &upper}}
-	now := time.UnixMilli(2000)
-	p.sampled(3)
-	p.reachedTip(0, false)
-	p.tipAction(now, 0, time.Second)
-
-	// When the wait budget is exactly reached, then exceeded.
-	atDeadline := p.tipAction(now.Add(time.Second), 0, time.Second)
-	afterDeadline := p.tipAction(now.Add(time.Second+time.Nanosecond), 0, time.Second)
-	p.position = 3
-	completed := p.tipAction(now.Add(2*time.Second), 0, time.Second)
-
-	// Then equality keeps waiting, timeout is strict, and a reached end completes.
-	require.Equal(t, tipWait, atDeadline)
-	require.Equal(t, tipTimeout, afterDeadline)
-	require.Equal(t, tipStop, completed)
-}
-
-func TestPartitionEmptyAndFileEnds(t *testing.T) {
-	// Given an empty Kafka partition and a file input with a captured final size.
-	upper := int64(1000)
-	kafka := partition{window: plan.Window{Upper: &upper}}
-	file := partition{}
-	now := time.UnixMilli(2000)
-
-	// When the empty log end is sampled and the file reaches its final cursor.
-	kafka.sampled(0)
-	action := kafka.tipAction(now, 0, time.Minute)
-	file.reachedTip(80, true)
-
-	// Then Kafka can stop immediately and file EOF stops at its captured position.
-	require.Equal(t, tipStop, action)
-	require.Equal(t, &Stop{Reason: "eof", At: 80}, file.stop)
-	require.True(t, file.atTip)
-	require.Equal(t, int64(80), file.position)
-	require.Equal(t, int64(80), file.stable)
 }

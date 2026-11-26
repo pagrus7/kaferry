@@ -41,7 +41,7 @@ func TestRebalanceChurnPreservesConfirmedProgressUnderFailFastCommits(t *testing
 	oracle := startFaultOracle(t, "fault/churn", broker(t), broker(t), src, dst, group, 2, false)
 	path := configuration(t, fmt.Sprintf("record_cap=32\npartition_record_cap=8\ndelivery_timeout=%q\nshutdown_timeout=%q\n",
 		oracle.timeouts["delivery_timeout"], oracle.timeouts["shutdown_timeout"]))
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='%d') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ",
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='%d') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON) ",
 		broker(t), oracle.timeouts["session.timeout.ms"].Milliseconds(), dst, src, group)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

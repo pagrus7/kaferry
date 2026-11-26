@@ -56,9 +56,6 @@ func (r *Runner) save(ids []int32, releasing bool) error {
 
 func (r *Runner) markCommitted(cursor Cursor) {
 	r.tracker.Committed(cursor)
-	if cursor.End != nil {
-		r.partitions[cursor.Partition].endSaved = true
-	}
 	if cursor.Stop != nil {
 		r.partitions[cursor.Partition].stopSaved = true
 	}
@@ -69,8 +66,7 @@ func (r *Runner) confirmedCursors(ids []int32) []Cursor {
 	var cursors []Cursor
 	for _, id := range ids {
 		p := r.partitions[id]
-		endChanged := p.high != nil && !p.endSaved
-		if !r.tracker.HasProgress(id) && (p.stop == nil || p.stopSaved) && !endChanged {
+		if !r.tracker.HasProgress(id) && (p.stop == nil || p.stopSaved) {
 			continue
 		}
 		cursor := r.tracker.Confirmed(id)
@@ -79,7 +75,7 @@ func (r *Runner) confirmedCursors(ids []int32) []Cursor {
 		if stopped {
 			cursor.Stop = p.stop
 		}
-		if r.tracker.HasProgress(id) || stopped && !p.stopSaved || endChanged {
+		if r.tracker.HasProgress(id) || stopped && !p.stopSaved {
 			cursors = append(cursors, cursor)
 		}
 	}

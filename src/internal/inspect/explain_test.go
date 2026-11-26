@@ -125,7 +125,7 @@ func (f *archivesMock) Destination(string) (archiveio.ArchiveInspection, error) 
 }
 
 func fixture() (*Service, plan.Plan, *factoryMock, *archivesMock) {
-	p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC", Name: "input"}, Destination: plan.Endpoint{Kind: "TOPIC", Name: "output", Partitioning: plan.Key}, Group: "g", Policies: plan.Policies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}, Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 100}, Upper: &plan.Expression{LiteralMS: 1000}}, MaxStalenessMS: 20}
+	p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC", Name: "input"}, Destination: plan.Endpoint{Kind: "TOPIC", Name: "output", Partitioning: plan.Key}, Group: "g", Policies: plan.Policies{MissingTimestamp: "FAIL", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}, Window: plan.WindowSpec{Lower: &plan.Expression{LiteralMS: 100}, Upper: &plan.Expression{LiteralMS: 1000}}, MaxOutOfOrderMS: new(int64(20))}
 	topic := func(name string) *topicMock {
 		return &topicMock{info: kafka.TopicDescription{ClusterID: "cluster", TopicID: name, Partitions: []int32{1, 0}, TimestampType: "CreateTime"}, saved: map[int32]kafka.SavedProgress{}, low: map[int32]int64{0: 0, 1: 0}, high: map[int32]int64{0: 10, 1: 11}, stable: map[int32]int64{0: 9, 1: 10}, failure: errors.New("injected"), times: func(queries map[int32]int64) map[int32]int64 {
 			found := make(map[int32]int64)
@@ -158,7 +158,7 @@ func TestTopicPreviewUsesSavedPositionsAndOnlyRequiredStartLookups(t *testing.T)
 	// When previewing through the real shared positioner with mocked metadata ports.
 	report := preview(t, service, p)
 	// Then starts, bounds and error policies are explicit without estimating work or changing progress.
-	require.EqualValues(t, 2, report.Version)
+	require.EqualValues(t, 3, report.Version)
 	require.NotEmpty(t, report.Fingerprint)
 	require.Equal(t, "g", report.Group)
 	require.Len(t, report.Partitions, 2)
@@ -311,10 +311,12 @@ func TestInvalidSavedPositionsAndWindowOverflowFailBeforeLookup(t *testing.T) {
 func TestUpperBoundOnlyDoesNotRequestTimestampLookups(t *testing.T) {
 	// Given an upper-bound-only filter with a pre-epoch stopping threshold.
 	service, p, factory, _ := fixture()
+	p.Start = ""
 	p.Window = plan.WindowSpec{Upper: &plan.Expression{LiteralMS: -21}}
-	p.MaxStalenessMS = 20
+	p.MaxOutOfOrderMS = new(int64(20))
 	// When previewing, then start at the earliest offset without looking up an end timestamp.
 	report := preview(t, service, p)
+	require.Equal(t, "EARLIEST", report.StartRule)
 	require.Len(t, factory.connections["input"].queries, 0)
 	require.Zero(t, report.Partitions[0].Start)
 }
@@ -430,7 +432,7 @@ func TestUnsavedExplicitOffsetEndHasLiteralOrigin(t *testing.T) {
 	p.Offsets = &plan.OffsetRange{Upper: number(8)}
 	// When explaining through the shared positioner, then label the end as a SQL literal.
 	report := preview(t, service, p)
-	require.Equal(t, "OFFSET", report.StartRule)
+	require.Equal(t, "OFFSET", report.EndRule)
 	require.Len(t, report.Partitions, 2)
 	for _, partition := range report.Partitions {
 		require.False(t, partition.Saved)

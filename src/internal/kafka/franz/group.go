@@ -90,7 +90,7 @@ func (i *Inspector) Membership(ctx context.Context, group, protocol string) (kaf
 	return kafka.Membership{State: g.State, Foreign: compatibleMembers(g, i.topic, protocol) != nil, Idle: len(g.Members) == 0 && (g.State == "Empty" || g.State == "Dead")}, nil
 }
 
-func (i *Inspector) Saved(parent context.Context, group, fp string, window plan.WindowSpec, staleness int64) (map[int32]kafka.SavedProgress, error) {
+func (i *Inspector) Saved(parent context.Context, group, fp string, window plan.WindowSpec, disorder int64) (map[int32]kafka.SavedProgress, error) {
 	if err := i.Refresh(parent); err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (i *Inspector) Saved(parent context.Context, group, fp string, window plan.
 	if err != nil {
 		return nil, err
 	}
-	return i.decodeSaved(parts, fp, window, staleness)
+	return i.decodeSaved(parts, fp, window, disorder)
 }
 
 func (i *Inspector) offsetParts(r *kmsg.OffsetFetchResponse, group string) (map[int32]kmsg.OffsetFetchResponseTopicPartition, error) {
@@ -152,7 +152,7 @@ func (i *Inspector) groupOffsetParts(g kmsg.OffsetFetchResponseGroup) (map[int32
 	return result, nil
 }
 
-func (i *Inspector) decodeSaved(parts map[int32]kmsg.OffsetFetchResponseTopicPartition, fp string, window plan.WindowSpec, staleness int64) (map[int32]kafka.SavedProgress, error) {
+func (i *Inspector) decodeSaved(parts map[int32]kmsg.OffsetFetchResponseTopicPartition, fp string, window plan.WindowSpec, disorder int64) (map[int32]kafka.SavedProgress, error) {
 	saved := make(map[int32]kafka.SavedProgress)
 	for _, id := range i.parts {
 		p, ok := parts[id]
@@ -177,9 +177,9 @@ func (i *Inspector) decodeSaved(parts map[int32]kmsg.OffsetFetchResponseTopicPar
 		}
 		saved[id] = kafka.SavedProgress{Position: p.Offset, Progress: progress}
 	}
-	return validateSavedWindows(saved, fp, window, staleness)
+	return validateSavedWindows(saved, fp, window, disorder)
 }
-func validateSavedWindows(saved map[int32]kafka.SavedProgress, fp string, window plan.WindowSpec, staleness int64) (map[int32]kafka.SavedProgress, error) {
+func validateSavedWindows(saved map[int32]kafka.SavedProgress, fp string, window plan.WindowSpec, disorder int64) (map[int32]kafka.SavedProgress, error) {
 	// Finish validating the source before exposing diagnostic positions. Every
 	// execution caller must stop on the fingerprint error; status can inspect it.
 	mismatch := false
@@ -191,7 +191,7 @@ func validateSavedWindows(saved map[int32]kafka.SavedProgress, fp string, window
 		if window.Relative() && progress.Window == nil {
 			return nil, conflict("NOW() commit is missing its window")
 		}
-		if err := kafka.ValidateWindow(progress.Progress, window, staleness); err != nil {
+		if err := kafka.ValidateWindow(progress.Progress, window, disorder); err != nil {
 			return nil, err
 		}
 	}

@@ -37,7 +37,7 @@ type Source interface {
 	// Pause suppresses input for this partition until resumed, while retaining ownership.
 	Pause(int32, bool) error
 	// HighWatermark returns Kafka's replicated end; archive sources do not support it.
-	HighWatermark(context.Context, int32) (int64, error)
+
 	Close() error
 }
 

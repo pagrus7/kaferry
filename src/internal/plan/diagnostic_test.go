@@ -30,18 +30,18 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 		{"empty endpoint", strings.Replace(files, "'out'", "''", 1), "''", "INTO endpoint: endpoint name is empty", nil, nil},
 		{"invalid policy", files + "OPTIONS(ON_ERROR=FAIL)", "FAIL", "ON_ERROR must be FAIL or SKIP", func(s *sql.Statement) { s.Options[0].Value = "RETRY" }, nil},
 		{"invalid start", source(topics, "GROUP='g', START=EARLIEST"), "EARLIEST", "START must be EARLIEST or LATEST", func(s *sql.Statement) { s.Source.Options[1].Value = "BEGIN" }, nil},
+		{"archive FOLLOW off", source(files, "GROUP='g', FOLLOW=OFF"), "FOLLOW", "FOLLOW requires a topic source; remove FOLLOW", nil, nil},
+		{"archive FOLLOW on", source(files, "GROUP='g', FOLLOW=ON"), "FOLLOW", "FOLLOW requires a topic source; remove FOLLOW", nil, nil},
 		{"file start", source(files, "GROUP='g', START=EARLIEST"), "START", "START requires a topic source; remove START for ARCHIVE sources", nil, nil},
-		{"WHERE and START", source(topics, "GROUP='g', START=EARLIEST") + "WHERE RECORD_TIMESTAMP < NOW()", "START", "START cannot be combined with timestamp bounds in WHERE; remove START", nil, nil},
-		{"missing max staleness interval", source(topics, "GROUP='g', MAX_STALENESS=INTERVAL '1' MINUTE") + "WHERE RECORD_TIMESTAMP < NOW()", "INTERVAL", "MAX_STALENESS requires an interval or OFF", func(s *sql.Statement) { s.Source.Options[1].Interval = nil }, nil},
-		{"MAX_STALENESS file", source(files, "GROUP='g', MAX_STALENESS=INTERVAL '1' MINUTE"), "MAX_STALENESS", "MAX_STALENESS requires a topic source; remove MAX_STALENESS for ARCHIVE sources", nil, nil},
-		{"MAX_STALENESS no upper", source(topics, "GROUP='g', MAX_STALENESS=INTERVAL '1' MINUTE") + "WHERE RECORD_TIMESTAMP >= NOW()", "MAX_STALENESS", "MAX_STALENESS requires an upper timestamp bound in WHERE", nil, nil},
+		{"WHERE and START", source(topics, "GROUP='g', START=EARLIEST, FOLLOW=ON") + "WHERE RECORD_TIMESTAMP >= NOW()", "START", "START cannot be combined with timestamp bounds in WHERE; remove START", nil, nil},
+		{"missing disorder interval", source(topics, "GROUP='g', MAX_OUT_OF_ORDER=INTERVAL '1' MINUTE") + "WHERE RECORD_TIMESTAMP < NOW()", "INTERVAL", "MAX_OUT_OF_ORDER requires an interval or OFF", func(s *sql.Statement) { s.Source.Options[1].Interval = nil }, nil},
+		{"MAX_OUT_OF_ORDER file", source(files, "GROUP='g', MAX_OUT_OF_ORDER=INTERVAL '1' MINUTE"), "MAX_OUT_OF_ORDER", "MAX_OUT_OF_ORDER requires a topic source; remove MAX_OUT_OF_ORDER", nil, nil},
+		{"MAX_OUT_OF_ORDER no upper", source(topics, "GROUP='g', MAX_OUT_OF_ORDER=INTERVAL '1' MINUTE") + "WHERE RECORD_TIMESTAMP >= NOW()", "MAX_OUT_OF_ORDER", "MAX_OUT_OF_ORDER requires an upper timestamp bound in WHERE; add a bound or remove MAX_OUT_OF_ORDER", nil, nil},
 		{"missing timestamp policy", files + "OPTIONS(ON_MISSING_TIMESTAMP=SKIP)", "ON_MISSING_TIMESTAMP", "ON_MISSING_TIMESTAMP requires timestamp bounds in WHERE", nil, nil},
 		{"rejected timestamp policy", files + "OPTIONS(ON_REJECTED_TIMESTAMP=SKIP)", "ON_REJECTED_TIMESTAMP", "ON_REJECTED_TIMESTAMP requires a topic destination", nil, nil},
 		{"interval too large", files + "WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '9223372036854775808' SECOND", "'9223372036854775808'", "interval is too large; reduce its magnitude", nil, nil},
 		{"interval overflow", files + "WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '9223372036854775807' HOUR", "'9223372036854775807'", "interval arithmetic overflows milliseconds; reduce its magnitude", nil, nil},
-		{"MAX_STALENESS overflow", source(topics, "GROUP='g', MAX_STALENESS=INTERVAL '9223372036854775' SECOND") + "WHERE RECORD_TIMESTAMP < TIMESTAMP '9999-12-31T23:59:59Z'", "MAX_STALENESS", "upper bound plus MAX_STALENESS: timestamp arithmetic overflows milliseconds", nil, nil},
-		{"MAX_OUT_OF_ORDER overflow", source(topics, "GROUP='g', MAX_STALENESS=OFF, MAX_OUT_OF_ORDER=INTERVAL '9223372036854775' SECOND") + "WHERE RECORD_TIMESTAMP < TIMESTAMP '1970-01-01T00:00:01Z'", "MAX_OUT_OF_ORDER", "upper bound plus MAX_OUT_OF_ORDER: timestamp arithmetic overflows milliseconds", nil, nil},
-		{"default MAX_STALENESS overflow", topics + "WHERE RECORD_TIMESTAMP < TIMESTAMP '1970-01-01T00:00:00Z' + INTERVAL '9223372036854775' SECOND", "WHERE", "upper bound plus MAX_STALENESS: timestamp arithmetic overflows milliseconds", nil, nil},
+		{"MAX_OUT_OF_ORDER overflow", source(topics, "GROUP='g', MAX_OUT_OF_ORDER=INTERVAL '9223372036854775' SECOND") + "WHERE RECORD_TIMESTAMP < TIMESTAMP '1970-01-01T00:00:01Z'", "MAX_OUT_OF_ORDER", "upper bound plus MAX_OUT_OF_ORDER: timestamp arithmetic overflows milliseconds", nil, nil},
 		{"empty range", files + "WHERE RECORD_TIMESTAMP >= NOW() AND RECORD_TIMESTAMP < NOW()", "< NOW()", "time range is empty; lower bound at line 4, column 24 must precede upper bound at line 4, column 54", nil, nil},
 		{"conflicting policies", topics + "WHERE RECORD_TIMESTAMP < NOW()\nOPTIONS(ON_ERROR=SKIP, ON_MISSING_TIMESTAMP=FAIL)", "ON_MISSING_TIMESTAMP", "ON_ERROR cannot be combined with specific error policies; choose ON_ERROR or the specific policies; conflicting declaration at line 5, column 9", nil, nil},
 		{"reversed policy conflict", topics + "WHERE RECORD_TIMESTAMP < NOW()\nOPTIONS(ON_MISSING_TIMESTAMP=FAIL, ON_ERROR=SKIP)", "ON_ERROR", "ON_ERROR cannot be combined with specific error policies; choose ON_ERROR or the specific policies; conflicting declaration at line 5, column 9", nil, nil},
@@ -213,15 +213,15 @@ func TestLocationFreeASTsKeepCompleteMessages(t *testing.T) {
 	require.NotContains(t, strings.ToLower(err.Error()), "sensitive-sentinel")
 }
 
-func TestMaxStalenessValueDiagnosticIsExactAndPrivate(t *testing.T) {
-	// Given private input in the max-staleness interval.
-	query := "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a'\nWITH(MAX_STALENESS=INTERVAL 'private_SENTINEL' MINUTE)\nWHERE RECORD_TIMESTAMP < NOW()"
+func TestDisorderValueDiagnosticIsExactAndPrivate(t *testing.T) {
+	// Given private input in the disorder interval.
+	query := "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a'\nWITH(MAX_OUT_OF_ORDER=INTERVAL 'private_SENTINEL' MINUTE)\nWHERE RECORD_TIMESTAMP < NOW()"
 	statement, err := sql.NewParser().Parse(query)
 	require.NoError(t, err)
 	// When planning, then identify the interval value without exposing it.
 	_, err = NewPlanner(nil).Build(statement, Profiles{"default": {"bootstrap.servers": "unused"}})
 	var diagnostic *sql.Diagnostic
 	require.ErrorAs(t, err, &diagnostic)
-	require.Equal(t, sql.Position{Line: 2, Column: 29}, diagnostic.Position)
+	require.Equal(t, sql.Position{Line: 2, Column: 32}, diagnostic.Position)
 	require.NotContains(t, err.Error(), "private_SENTINEL")
 }

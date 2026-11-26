@@ -135,7 +135,7 @@ func zombieWorkerConnection(timeouts map[string]time.Duration) map[string]int64 
 
 func zombieWorkerSQL(timeouts map[string]time.Duration, worker int, marker, src, dst, group string) string {
 	connection := zombieWorkerConnection(timeouts)
-	return fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='%s','session.timeout.ms'='%d','heartbeat.interval.ms'='%d','socket.timeout.ms'='%d'), CONNECTION destination AS ('bootstrap.servers'='%s','client.id'='%s') INSERT INTO TOPIC '%s@destination' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST)",
+	return fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','client.id'='%s','session.timeout.ms'='%d','heartbeat.interval.ms'='%d','socket.timeout.ms'='%d'), CONNECTION destination AS ('bootstrap.servers'='%s','client.id'='%s') INSERT INTO TOPIC '%s@destination' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON)",
 		strings.Join(faults.Endpoints("source", worker), ","), marker, connection["session.timeout.ms"], connection["heartbeat.interval.ms"], connection["socket.timeout.ms"],
 		strings.Join(faults.Endpoints("destination", worker), ","), marker, dst, src, group)
 }

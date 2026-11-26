@@ -11,12 +11,12 @@ type Report struct {
 	MaxOutOfOrderMS        *int64                      `json:"max_out_of_order_ms"`
 	Offsets                *plan.OffsetRange           `json:"offset_range,omitempty"`
 	PartitionOffsets       []plan.PartitionOffsetRange `json:"partition_offset_ranges,omitempty"`
-	MaxStalenessMS         int64                       `json:"max_staleness_ms"`
 	WorkerStopAfterRecords uint64                      `json:"worker_stop_after_records,omitempty"`
 	Source                 Endpoint                    `json:"source"`
 	Destination            Endpoint                    `json:"destination"`
 	Partitions             []Partition                 `json:"partitions"`
 	StartRule              string                      `json:"start_rule,omitempty"`
+	EndRule                string                      `json:"end_rule"`
 	RecordErrors           ErrorPolicies               `json:"record_errors"`
 	Warnings               []string                    `json:"warnings"`
 }

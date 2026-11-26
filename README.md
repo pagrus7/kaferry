@@ -25,8 +25,7 @@ Copy current records and stop.
 
 ```sql
 INSERT INTO TOPIC 'orders-copy@backup'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-copy-oct31')
-WHERE RECORD_OFFSET < LATEST;
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-copy-oct31');
 ```
 
 **Topic to file**
@@ -35,8 +34,7 @@ Save current records to disk and stop.
 
 ```sql
 INSERT INTO ARCHIVE 'orders-archive'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive-oct31')
-WHERE RECORD_OFFSET < LATEST;
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive-oct31');
 ```
 
 **Time range**
@@ -46,8 +44,7 @@ Copy records from 09:00 inclusive to 10:00 exclusive (UTC), within the current b
 ```sql
 INSERT INTO TOPIC 'orders-copy@backup'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-hour-oct01')
-WHERE RECORD_OFFSET < LATEST
-  AND RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
+WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
 ```
 

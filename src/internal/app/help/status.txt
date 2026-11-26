@@ -14,7 +14,7 @@ limit_reached                7  All selected partitions have saved stops and at
 complete_within_staleness    0  Source processing finished under the configured
                                 timestamp assumptions.
 complete                     0  Source processing finished for the selected
-                                finite scope: explicit offset bounds or the
+                                finite scope: saved offset ends or the
                                 saved archive selection.
 
 https://github.com/pagrus7/kaferry/blob/main/docs/reference.md#saved-status

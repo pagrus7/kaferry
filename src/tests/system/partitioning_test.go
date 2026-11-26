@@ -62,7 +62,7 @@ func TestPreservedPartitionsAndExplicitKeyRouting(t *testing.T) {
 		// When the destination is too small, then ON_ERROR=SKIP cannot suppress the layout error or create progress.
 		destination := topic(t, a, 2)
 		group := source + "-reject"
-		query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s',START=EARLIEST) OPTIONS(ON_ERROR=SKIP)", destination, source, group)
+		query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s',FOLLOW=ON) OPTIONS(ON_ERROR=SKIP)", destination, source, group)
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
 		result := binaryWorker(ctx, t, query, config)
@@ -79,7 +79,7 @@ func TestPreservedPartitionsAndExplicitKeyRouting(t *testing.T) {
 	t.Run("explicit key routing permits a smaller topic", func(t *testing.T) {
 		// When KEY is explicit, then original keys route through the destination partitioner.
 		destination := topic(t, a, 1)
-		query := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH(PARTITIONING=KEY) SELECT * FROM TOPIC '%s' WITH(GROUP='%s-key',START=EARLIEST) OPTIONS(WORKER_STOP_AFTER_RECORDS=6)", destination, source, source)
+		query := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH(PARTITIONING=KEY) SELECT * FROM TOPIC '%s' WITH(GROUP='%s-key',FOLLOW=ON) OPTIONS(WORKER_STOP_AFTER_RECORDS=6)", destination, source, source)
 		execute(t, query, config)
 		verify(t, destination, 1, false)
 	})
