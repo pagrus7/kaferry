@@ -118,7 +118,7 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 | --- | --- |
 | `version`, `fingerprint`, `group`, `one_off`, `max_out_of_order_ms` | Report format and query identity; one-off group is `ONE_OFF`. `max_out_of_order_ms=null` disables timestamp stopping |
 | `start_rule` | Kafka fallback for partitions without progress: `WINDOW`, `OFFSET`, `EARLIEST` or `LATEST`; absent for file sources |
-| `end_rule` | [Source end rule](#how-a-copy-ends) reported as `LATEST`, `OFFSET`, `FOLLOW` or archive `EOF` |
+| `end_rule` | [Source end rule](#how-a-copy-ends) reported as `LATEST`, `OFFSET` (numeric end or per-partition branches), `FOLLOW` or archive `EOF` |
 | `record_errors` | Effective `FAIL`/`SKIP` policies: `missing_timestamp`, `rejected_timestamp`, `other_record`; SKIP applies before writing, not to delivery failures |
 | `source`, `destination` | `kind`, `name`, optional connection alias, cluster/topic IDs, partition count, destination timestamp type and `partitioning` (`PRESERVE` or `KEY` for a Kafka destination) |
 | Endpoint `file` | `exists`; source adds `size_bytes`, `file_count`, `position_records`, `window`, `window_origin`, `checkpoint`, `checkpoint_exists`. Destination `size_bytes` is zero; destination size and file count are not inspected |
@@ -289,7 +289,7 @@ Queue/fetch overrides must be positive. Byte queue settings use KiB. Large or co
 
 | Normal exit | Meaning |
 | --- | --- |
-| 0 | This worker [finished the copy](#how-a-copy-ends) or a signal cleanly stopped uncapped FOLLOW. Status is `complete` or `complete_within_disorder`, or help or a preview printed. SKIP counts do not change the code |
+| 0 | This worker [finished its input or reached its record cap](#how-a-copy-ends) or a signal cleanly stopped uncapped FOLLOW. Status is `complete` or `complete_within_disorder`, or help or a preview printed. SKIP counts do not change the code |
 | 1 | Copy, inspection, output, cleanup or the shutdown deadline failed, or a signal arrived before completion of startup, a file copy, or a bounded Kafka copy or capped FOLLOW copy. Conflicts after the first consumed record also exit 1 |
 | 2 | Usage/parse/plan/configuration error, or a validation conflict before the first consumed record (Kafka topic validation, query/source identity, replay checkpoint/lock or self-copy) |
 | 3 | For a bounded Kafka copy or capped FOLLOW copy, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |

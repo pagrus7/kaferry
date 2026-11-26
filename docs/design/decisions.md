@@ -48,6 +48,8 @@ See [how a copy ends](../reference.md#how-a-copy-ends) for the source limits. Ka
 
 Saved timestamp and end stops remain complete across restart and reassignment. Worker record stops receive a fresh allowance. A crash before saving an end can lead to a later capture.
 
+### Offset ends
+
 Kafka reads committed records. A numeric or saved end above the current readable end fails assignment. Offset gaps, aborted records and control records count toward reaching the fixed end. An empty range completes immediately after confirming and saving progress.
 
 ### Added assignments and lookups
