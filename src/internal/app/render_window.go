@@ -136,6 +136,6 @@ func renderCompletion(output io.Writer, report inspect.Report, window plan.Windo
 	}
 	if report.MaxOutOfOrderMS != nil && window.Upper != nil {
 		threshold := *window.Upper + *report.MaxOutOfOrderMS
-		fmt.Fprintf(output, "    Stop earlier before the first visible record with timestamp after %s (MAX_OUT_OF_ORDER).\n", formatBound(&threshold))
+		fmt.Fprintf(output, "    Stop before the first visible record whose timestamp is after %s (MAX_OUT_OF_ORDER).\n", formatBound(&threshold))
 	}
 }

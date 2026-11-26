@@ -54,7 +54,7 @@ func TestTextExplanationStructuresBehaviorAndEscapesNames(t *testing.T) {
 		require.Greater(t, position, previous)
 		previous = position
 	}
-	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "saved captured end 12", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "1970-01-01T00:00:03Z", "saved readable end per partition", "saved offset 1 expired", "Record errors: stop", "Output: Kaferry archive files"} {
+	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "saved captured end 12", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "Stop before the first visible record whose timestamp is after 1970-01-01T00:00:03Z (MAX_OUT_OF_ORDER).", "saved readable end per partition", "saved offset 1 expired", "Record errors: stop", "Output: Kaferry archive files"} {
 		require.Contains(t, output, want)
 	}
 	for _, absent := range []string{"query-id", "topic-id", "lookup end", "span", "Run permissions", "\x1b"} {
@@ -208,7 +208,7 @@ func TestTextExplanationShowsOnlyApplicableSkipCategories(t *testing.T) {
 			require.NotContains(t, output, "rejected timestamps")
 			if filtered {
 				require.Contains(t, output, "Fresh start: earliest retained offset; apply the time filter while reading.")
-				require.Contains(t, output, "timestamp after 1970-01-01T00:00:03Z")
+				require.Contains(t, output, "timestamp is after 1970-01-01T00:00:03Z")
 			} else {
 				require.Contains(t, output, "Record errors: stop")
 				require.Contains(t, output, "start at the earliest retained offset.")

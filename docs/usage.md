@@ -154,7 +154,7 @@ Copies Kafka record timestamps from 09:00 inclusive to 10:00 exclusive (UTC), no
 ```sql
 INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM TOPIC 'orders@prod'
-WITH (GROUP = 'orders-hour-live',
+WITH (GROUP = 'orders-hour-historical',
       MAX_OUT_OF_ORDER = INTERVAL '5' MINUTE)
 WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
@@ -248,7 +248,7 @@ The first `copy summary` reports `submitted: 3` and `confirmed: 3`. This status 
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "verdict": "complete",
   "reason": "file selection completed",
   "meaning": "Source processing finished for the selected finite scope: saved offset ends or the saved archive selection.",
@@ -375,7 +375,7 @@ SIGINT/SIGTERM stop reading, allow 10 s for writes, then save progress. File flu
 kaferry status -c connections.toml -f copy.sql --json
 ```
 
-`complete` reports finished source processing for the selected scope; it does not verify destination contents. `limit_reached` means a worker record cap stopped processing; rerun the same job for another allowance. `complete_within_staleness` depends on the configured [timestamp assumptions](#shorten-a-historical-scan). Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](reference.md#saved-status).
+`complete` reports finished source processing for the selected scope; it does not verify destination contents. `limit_reached` means a worker record cap stopped processing; rerun the same job for another allowance. `complete_within_disorder` depends on the configured [timestamp assumptions](#shorten-a-historical-scan). After a clean Ctrl+C, an idle FOLLOW group with saved progress normally reports `incomplete` because it has no source end. [Status and exit codes](reference.md#saved-status).
 
 ## Resume or start over
 

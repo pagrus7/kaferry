@@ -24,8 +24,8 @@ func TestStatusCompletionScopeAndPrecedence(t *testing.T) {
 	}{
 		{"offset end", []string{"tip"}, true, nil, "complete", 0},
 		{"captured end", []string{"tip"}, false, nil, "complete", 0},
-		{"timestamp stop", []string{"timestamp"}, false, new(int64(0)), "complete_within_staleness", 0},
-		{"mixed timestamp and end", []string{"timestamp", "tip"}, false, new(int64(0)), "complete_within_staleness", 0},
+		{"timestamp stop", []string{"timestamp"}, false, new(int64(0)), "complete_within_disorder", 0},
+		{"mixed timestamp and end", []string{"timestamp", "tip"}, false, new(int64(0)), "complete_within_disorder", 0},
 		{"archive eof", []string{"eof"}, false, nil, "complete", 0},
 		{"archive disorder off", []string{"eof"}, false, new(int64(-1)), "complete", 0},
 		{"archive offset end", []string{"eof"}, true, nil, "complete", 0},
@@ -70,6 +70,22 @@ func TestKafkaStatusVerdictsAndReadOrder(t *testing.T) {
 		})
 	}
 }
+func TestIdleFollowStatusExplainsIncompleteProgress(t *testing.T) {
+	// Given an idle FOLLOW group with a saved position and no source end.
+	s, p, factory, _ := fixture()
+	p.Follow = true
+	p.Window.Upper, p.MaxOutOfOrderMS = nil, nil
+	factory.connections["input"].saved[0] = kafka.SavedProgress{Position: 4}
+
+	// When inspecting the group, then an incomplete verdict explains that following can continue.
+	r, err := s.Status(t.Context(), p, config.Worker{}, core.NoopStopObserver{})
+	require.NoError(t, err)
+	require.Equal(t, "incomplete", r.Verdict)
+	require.Equal(t, 4, r.ExitCode())
+	require.Contains(t, r.Notes, "FOLLOW = ON has no source end. An incomplete verdict is expected when following stops.")
+	require.Equal(t, "To keep following, rerun with the same query, group, and configuration.", r.Next)
+}
+
 func TestStatusExposesIncompatibleProgressAndActivity(t *testing.T) {
 	for _, activity := range []string{"idle", "active", "foreign"} {
 		t.Run(activity, func(t *testing.T) {
@@ -349,10 +365,10 @@ func requireStatusGuidance(t *testing.T, report StatusReport, savedArchiveSelect
 			meaning: "All selected partitions have saved stops and at least one stopped at a worker record cap.",
 			next:    "Rerun the same job for another allowance.",
 		},
-		"complete_within_staleness": {
-			meaning: "Source processing finished under the configured timestamp assumptions.",
+		"complete_within_disorder": {
+			meaning: "All selected partitions finished and at least one stopped early under MAX_OUT_OF_ORDER.",
 			notes: []string{
-				"Timestamp completion depends on the configured MAX_OUT_OF_ORDER assumption.",
+				"Later records in the time window can be missed if timestamps move backwards by more than the allowance.",
 				completionNote,
 			},
 		},
@@ -364,7 +380,7 @@ func requireStatusGuidance(t *testing.T, report StatusReport, savedArchiveSelect
 	if savedArchiveSelection {
 		want.notes = append(want.notes, "This group's saved archive checkpoint fixes the file selection.")
 	}
-	require.Equal(t, 2, report.Version)
+	require.Equal(t, 3, report.Version)
 	require.Equal(t, want.meaning, report.Meaning)
 	require.Equal(t, want.next, report.Next)
 	require.Equal(t, want.notes, report.Notes)

@@ -11,8 +11,8 @@ running                      6  Kafka group activity, unsettled state or a
 incomplete                   4  Part of the selection has no saved stop.
 limit_reached                7  All selected partitions have saved stops and at
                                 least one stopped at a worker record cap.
-complete_within_staleness    0  Source processing finished under the configured
-                                timestamp assumptions.
+complete_within_disorder     0  All selected partitions finished and at least
+                                one stopped early under MAX_OUT_OF_ORDER.
 complete                     0  Source processing finished for the selected
                                 finite scope: saved offset ends or the
                                 saved archive selection.

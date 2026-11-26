@@ -28,7 +28,7 @@ func TestSnapshotRejectsUnreadableNumericEndAndExcludesOpenTransaction(t *testin
 	// When requesting a numeric end beyond the readable end, fail before copying.
 	result := binaryWorker(ctx, t, query+" WHERE RECORD_OFFSET<1", cfg)
 	require.Equal(t, 2, result.code, result.detail)
-	require.Contains(t, result.detail, "exceeds the readable end")
+	require.Contains(t, result.detail, "requested offset end 1 exceeds the readable end 0. Lower the requested end or retry when more offsets are readable")
 	// Then a default snapshot finishes now and keeps the empty end even after commit.
 	result = binaryWorker(ctx, t, query, cfg)
 	require.Zero(t, result.code, result.detail)

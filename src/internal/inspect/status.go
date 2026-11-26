@@ -54,7 +54,7 @@ type SavedPartition struct {
 
 const (
 	verdictComplete          = "complete"
-	verdictTimestampComplete = "complete_within_staleness"
+	verdictTimestampComplete = "complete_within_disorder"
 	verdictIncomplete        = "incomplete"
 	verdictUnknown           = "unknown"
 	verdictRunning           = "running"
@@ -69,7 +69,7 @@ type StatusVerdict struct {
 
 var statusVerdicts = map[string]StatusVerdict{
 	verdictComplete:          {0, "Source processing finished for the selected finite scope: saved offset ends or the saved archive selection."},
-	verdictTimestampComplete: {0, "Source processing finished under the configured timestamp assumptions."},
+	verdictTimestampComplete: {0, "All selected partitions finished and at least one stopped early under MAX_OUT_OF_ORDER."},
 	verdictIncomplete:        {4, "Part of the selection has no saved stop."},
 	verdictUnknown:           {5, "Saved progress is absent, invalid or incompatible, or the group has an incompatible active member."},
 	verdictRunning:           {6, "Kafka group activity, unsettled state or a membership change was observed."},
@@ -96,7 +96,7 @@ func (r StatusReport) ExitCode() int {
 }
 
 func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker, stop core.StopObserver) (report StatusReport, result error) {
-	report = StatusReport{Version: 2, Group: p.Group, Partitions: []SavedPartition{}, Activity: "not checked for files"}
+	report = StatusReport{Version: 3, Group: p.Group, Partitions: []SavedPartition{}, Activity: "not checked for files"}
 	if p.Source.Kind == "TOPIC" {
 		report.Activity = "group check did not finish"
 	}
@@ -141,12 +141,12 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 		err = ctx.Err()
 	}
 	if err == nil {
-		report.addGuidance(savedArchiveSelection)
+		report.addGuidance(p.Follow, savedArchiveSelection)
 	}
 	return report, err
 }
 
-func (r *StatusReport) addGuidance(savedArchiveSelection bool) {
+func (r *StatusReport) addGuidance(follow, savedArchiveSelection bool) {
 	r.Meaning = statusVerdicts[r.Verdict].Meaning
 	switch r.Verdict {
 	case verdictUnknown:
@@ -154,11 +154,16 @@ func (r *StatusReport) addGuidance(savedArchiveSelection bool) {
 	case verdictRunning:
 		r.Next = "Wait briefly, then check status again."
 	case verdictIncomplete:
-		r.Next = "To resume, rerun with the same query, group, and configuration."
+		if follow {
+			r.Notes = append(r.Notes, "FOLLOW = ON has no source end. An incomplete verdict is expected when following stops.")
+			r.Next = "To keep following, rerun with the same query, group, and configuration."
+		} else {
+			r.Next = "To resume, rerun with the same query, group, and configuration."
+		}
 	case verdictLimitReached:
 		r.Next = "Rerun the same job for another allowance."
 	case verdictTimestampComplete:
-		r.Notes = append(r.Notes, "Timestamp completion depends on the configured MAX_OUT_OF_ORDER assumption.")
+		r.Notes = append(r.Notes, "Later records in the time window can be missed if timestamps move backwards by more than the allowance.")
 		fallthrough
 	case verdictComplete:
 		r.Notes = append(r.Notes, "Completion permits filtered or skipped records, does not guarantee exactly-once writes and does not verify destination data.")

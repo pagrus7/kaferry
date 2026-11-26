@@ -13,4 +13,4 @@
 - Explain JSON version 3 includes `end_rule` and removes `max_staleness_ms`.
 - Source installation requires Go 1.27 or newer.
 - Top-level `--help` and `-h` exit 0. Explicit help prints to stdout, and command help groups short and long flag names.
-- `kaferry status --json` uses version `2`. `meaning` is one sentence for the current verdict. Applicable caveats and suggested actions appear in the optional `notes` and `next` fields. Text output shows the current verdict's meaning. Use `kaferry help status` for the full legend.
+- `kaferry status --json` uses version `3`. Update scripts that check `complete_within_staleness` to use `complete_within_disorder` for scans that stopped early under MAX_OUT_OF_ORDER. Its exit code is still 0. `meaning` is one sentence for the current verdict. Applicable caveats and suggested actions appear in the optional `notes` and `next` fields. Text output shows the current verdict's meaning. Use `kaferry help status` for the full legend.

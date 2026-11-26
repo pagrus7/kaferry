@@ -51,7 +51,7 @@ Publishing renames synced private files without overwriting conflicting targets,
 
 ```text
 INSERT INTO ARCHIVE '/archive/orders' WITH (ROTATE_AFTER_SIZE = 512m, ROTATE_AFTER_AGE = INTERVAL '2' HOUR)
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive');
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive', FOLLOW = ON);
 ```
 
 Only the path is required; [rotation settings](../reference.md#archive-sink) define the size and age defaults. The complete crossing block may exceed the size target. Check age even when no records arrive.

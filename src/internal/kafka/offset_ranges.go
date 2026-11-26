@@ -81,7 +81,7 @@ func (p *positioner) applyOffsetEnd(a *core.Assignment, resuming bool, end int64
 	}
 	if r.Upper != nil {
 		if *r.Upper > end {
-			return conflict("partition %d requested offset end exceeds the readable end", id)
+			return conflict("partition %d requested offset end %d exceeds the readable end %d. Lower the requested end or retry when more offsets are readable", id, *r.Upper, end)
 		}
 		end = *r.Upper
 	}

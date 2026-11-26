@@ -84,7 +84,7 @@ func RunSaslTLSOAuthTokenFile(t *testing.T) {
 	cfg := oauthProperties(t)
 	path := filepath.Join(t.TempDir(), "token")
 	cfg["sasl.oauthbearer.token.file"] = path
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s') OPTIONS(WORKER_STOP_AFTER_RECORDS=1)", dst, src, group)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON) OPTIONS(WORKER_STOP_AFTER_RECORDS=1)", dst, src, group)
 	for round := range 2 {
 		token, err := signedFixtureToken(key, 1, "https://kaferry.test", "kaferry-qualification", time.Now().Add(time.Minute))
 		require.NoError(t, err)
@@ -145,7 +145,7 @@ func RunSaslTLSOAuthRenewalAndKeyRotation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	publish(t, producer, &kgo.Record{Topic: src, Value: []byte("before"), Timestamp: time.Now().Truncate(time.Millisecond)})
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s') OPTIONS(WORKER_STOP_AFTER_RECORDS=2)", dst, src, group)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON) OPTIONS(WORKER_STOP_AFTER_RECORDS=2)", dst, src, group)
 	process := startCLI(ctx, t, testBinary(t), "", "run", "-e", statement, "-c", secureConfig(t, cfg))
 	waitEnd(t, a, dst, 1)
 	// When the issuer rotates keys while the same process reauthenticates.
