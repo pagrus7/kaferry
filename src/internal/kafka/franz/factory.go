@@ -135,8 +135,8 @@ func (c *connection) ValidatePartitions(ctx context.Context, ids []int32) error 
 func (c *connection) CheckMembers(ctx context.Context, group, protocol string) error {
 	return c.inspector.CheckMembers(ctx, group, protocol)
 }
-func (c *connection) ReadProgress(ctx context.Context, group, fp string, window plan.WindowSpec, staleness int64) (map[int32]kafka.SavedProgress, error) {
-	return c.inspector.Saved(ctx, group, fp, window, staleness)
+func (c *connection) ReadProgress(ctx context.Context, group, fp string, window plan.WindowSpec, disorder int64) (map[int32]kafka.SavedProgress, error) {
+	return c.inspector.Saved(ctx, group, fp, window, disorder)
 }
 func (c *connection) Close(context.Context) error { c.cancel(); c.inspector.client.Close(); return nil }
 

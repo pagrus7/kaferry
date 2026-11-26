@@ -99,8 +99,8 @@ func (e *runtimeEngine) runInput(ctx context.Context, p plan.Plan, fp string, li
 	if input != nil {
 		source, store = input, input
 	} else {
-		if p.Window.Upper != nil && (p.ClockCaptureEnabled() || p.TimestampStopEnabled()) {
-			e.log.Warn("timestamp completion relies on configured arrival-delay and timestamp-disorder assumptions")
+		if p.Window.Upper != nil && p.TimestampStopEnabled() {
+			e.log.Warn("timestamp stopping assumes later records stay within MAX_OUT_OF_ORDER")
 		}
 		source, store, err = sourceConnection.Source(ctx, p, fp, limits, routingValidator(p, destinationConnection))
 		if err != nil {
@@ -212,7 +212,7 @@ func (e *runtimeEngine) prepareSource(ctx context.Context, p plan.Plan, fp strin
 	if err := connection.CheckMembers(ctx, p.Group, kafka.GroupProtocol(p, fp)); err != nil {
 		return nil, err
 	}
-	saved, err := connection.ReadProgress(ctx, p.Group, fp, p.Window, p.MaxStalenessMS)
+	saved, err := connection.ReadProgress(ctx, p.Group, fp, p.Window, p.DisorderMS())
 	if err != nil {
 		return nil, err
 	}

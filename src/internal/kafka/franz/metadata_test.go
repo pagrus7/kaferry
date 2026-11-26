@@ -162,6 +162,7 @@ func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
 			case "topic identity":
 				progress.TopicID = "other"
 			case "stop beyond commit":
+				progress.End = new(int64(43))
 				progress.Stop = &core.Stop{Reason: "tip", At: 43}
 			case "missing relative window":
 				spec.Lower = &plan.Expression{Now: true}

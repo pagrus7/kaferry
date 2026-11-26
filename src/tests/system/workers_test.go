@@ -22,8 +22,8 @@ func TestDistributedWorkersFinishIndependently(t *testing.T) {
 	source := topic(t, a, 2)
 	destination := topic(t, a, 3)
 	group := source + "-workers"
-	end := time.Now().Add(time.Hour).Truncate(time.Millisecond)
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND, MAX_OUT_OF_ORDER=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), destination, source, group, end.Format(time.RFC3339Nano))
+
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON) OPTIONS(WORKER_STOP_AFTER_RECORDS=30) ", broker(t), destination, source, group)
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 	results := make(chan workerResult, 2)
@@ -38,27 +38,29 @@ func TestDistributedWorkersFinishIndependently(t *testing.T) {
 	}
 	waitMembers(t, a, group, 2, 2, results)
 	p := producer(t)
-	for i := range 60 {
-		publish(t, p, &kgo.Record{Topic: source, Partition: int32(i % 2), Key: []byte(fmt.Sprintf("key-%d", i%7)), Value: []byte(fmt.Sprintf("record-%d", i)), Timestamp: time.Now()})
+	publishPartition := func(id int32) {
+		for i := range 30 {
+			n := i*2 + int(id)
+			publish(t, p, &kgo.Record{Topic: source, Partition: id, Key: []byte(fmt.Sprintf("key-%d", n%7)), Value: []byte(fmt.Sprintf("record-%d", n))})
+		}
 	}
-	// When only partition zero receives its timestamp stop trigger.
-	publish(t, p, &kgo.Record{Topic: source, Partition: 0, Value: []byte("trigger"), Timestamp: end.Add(time.Second)})
+	publishPartition(0)
 	select {
 	case result := <-results:
-		// Then its worker finishes while the other partition still needs its trigger.
+		// Then its worker finishes while the other partition still has no input.
 		require.Zero(t, result.code, result.detail)
 	case <-ctx.Done():
-		t.Fatal("first worker waited for the other partition's stop trigger")
+		t.Fatal("first worker waited for the other partition's worker allowance")
 	}
 	select {
 	case result := <-results:
-		t.Fatalf("remaining worker exited before its stop trigger: %+v", result)
+		t.Fatalf("remaining worker exited before its worker allowance: %+v", result)
 	case <-ctx.Done():
 		t.Fatal("workers exceeded their completion budget")
 	case <-time.After(300 * time.Millisecond):
 	}
 	// When the remaining partition receives its trigger, then its worker also completes.
-	publish(t, p, &kgo.Record{Topic: source, Partition: 1, Value: []byte("trigger"), Timestamp: end.Add(time.Second)})
+	publishPartition(1)
 	select {
 	case result := <-results:
 		require.Zero(t, result.code, result.detail)
@@ -91,7 +93,7 @@ func TestWorkerRecordThresholdAcrossTenPartitionsAndThreeWorkers(t *testing.T) {
 	source, destination := topic(t, a, 10), topic(t, a, 3)
 	group := source + "-worker-stop"
 	config := configuration(t)
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) OPTIONS (WORKER_STOP_AFTER_RECORDS=100)", destination, source, group)
+	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON) OPTIONS (WORKER_STOP_AFTER_RECORDS=100)", destination, source, group)
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 	results := make(chan workerResult, 3)

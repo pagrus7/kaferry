@@ -35,7 +35,7 @@ func TestPartitionLayoutsAllowExpansionButNotMissingIDs(t *testing.T) {
 
 func TestPartitioningIdentityAndDefault(t *testing.T) {
 	// Given equivalent default and explicit preserved routing, and explicit key routing.
-	const query = "INSERT INTO TOPIC 'out' %s SELECT * FROM TOPIC 'in' WITH(GROUP='g', START=EARLIEST)"
+	const query = "INSERT INTO TOPIC 'out' %s SELECT * FROM TOPIC 'in' WITH(GROUP='g' )"
 	defaultPlan := build(t, strings.Replace(query, "%s", "", 1))
 	preservePlan := build(t, strings.Replace(query, "%s", "WITH(PARTITIONING=PRESERVE)", 1))
 	keyPlan := build(t, strings.Replace(query, "%s", "WITH(PARTITIONING=KEY)", 1))

@@ -124,11 +124,11 @@ func RunStreamingSoakFidelityCommitLagMemoryAndShutdown(t *testing.T) {
 	reports := make(chan kgo.ProduceResult, 4096)
 	c := fixtureClient(t, destinationBrokers, kgo.FetchIsolationLevel(kgo.ReadCommitted()))
 	assign(t, c, dst, destinationPartitions)
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'), CONNECTION destination AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s@destination' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", broker(t), destinationBrokers, dst, src, group)
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s'), CONNECTION destination AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s@destination' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON) ", broker(t), destinationBrokers, dst, src, group)
 	archive := filepath.Join(t.TempDir(), "captured")
 	if archiveMode {
 		report.Kind, report.DestinationPartitions = "capture-soak", 0
-		statement = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", broker(t), archive, src, group)
+		statement = fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON) ", broker(t), archive, src, group)
 	}
 	configPath := filepath.Join(t.TempDir(), "soak.toml")
 	require.NoError(t, os.WriteFile(configPath, []byte("[worker]\nrecord_cap=1024\npartition_record_cap=256\nprogress_interval='0'\n"), 0600))

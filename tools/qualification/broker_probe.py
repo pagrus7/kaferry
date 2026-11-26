@@ -275,7 +275,7 @@ def run_probe(args):
             if producer.flush(60) or errors:
                 raise ValueError('independent fixture producer did not deliver its complete input')
         def source_sql(group):
-            return f"FROM TOPIC {sql_string(src + '@source')} WITH (GROUP={sql_string(namespace + '-' + group)}, START=EARLIEST) WHERE RECORD_OFFSET < LATEST"
+            return f"FROM TOPIC {sql_string(src + '@source')} WITH (GROUP={sql_string(namespace + '-' + group)}) WHERE RECORD_OFFSET < LATEST"
         for mode, partitions in [('PRESERVE', 4), ('KEY', 5)]:
             dst = topic(1, mode.lower(), partitions)
             query = f"INSERT INTO TOPIC {sql_string(dst + '@destination')} WITH (PARTITIONING={mode}) SELECT * " + source_sql(mode)

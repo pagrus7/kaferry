@@ -31,7 +31,7 @@ func testPlan(t *testing.T, properties map[string]string) plan.Plan {
 	for key, value := range properties {
 		values[key] = value
 	}
-	statement, err := sql.NewParser().Parse("INSERT INTO TOPIC 'output' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'input' WITH (GROUP='test', START=EARLIEST) ")
+	statement, err := sql.NewParser().Parse("INSERT INTO TOPIC 'output' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'input' WITH (GROUP='test', FOLLOW=ON) ")
 	require.NoError(t, err)
 	p, err := plan.NewPlanner(noEnvironment{}).Build(statement, plan.Profiles{"default": values})
 	require.NoError(t, err)

@@ -36,7 +36,7 @@ func RunSaslTLSExternalAuthentication(t *testing.T) {
 					return signedFixtureToken(key, 1, "https://kaferry.test", "kaferry-qualification", time.Now().Add(time.Hour))
 				})
 			}
-			statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s') OPTIONS(WORKER_STOP_AFTER_RECORDS=1)", dst, src, group)
+			statement := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON) OPTIONS(WORKER_STOP_AFTER_RECORDS=1)", dst, src, group)
 			// When separate CLI invocations copy and resume with that authentication method.
 			for round := range 2 {
 				if round == 1 {

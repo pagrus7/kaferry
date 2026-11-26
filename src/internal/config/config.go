@@ -36,7 +36,6 @@ type Worker struct {
 	DeliveryTimeout         Duration `toml:"delivery_timeout"`
 	ShutdownTimeout         Duration `toml:"shutdown_timeout"`
 	IdleExit                Duration `toml:"idle_exit"`
-	TipWait                 Duration `toml:"tip_wait"`
 	CheckpointDir           *string  `toml:"checkpoint_dir"` // Nil selects the default when opening a file source.
 	ProgressInterval        Duration `toml:"progress_interval"`
 }
@@ -68,7 +67,7 @@ func Defaults(home string) Config {
 		directory := filepath.Join(home, ".kaferry", "checkpoints")
 		checkpointDir = &directory
 	}
-	return Config{Connections: make(plan.Profiles), Worker: Worker{ArchiveCaptureOpenFiles: 1024, ArchiveReplayOpenFiles: 32, ArchiveReplayBlocks: 8, ArchiveBlockMaxBytes: 64 << 20, PartitionRecordCap: 5000, PartitionByteCap: 16 << 20, RecordCap: 20000, ByteCap: 128 << 20, DeliveryTimeout: Duration{time.Minute}, ShutdownTimeout: Duration{DefaultShutdownTimeout}, IdleExit: Duration{30 * time.Second}, TipWait: Duration{15 * time.Minute}, CheckpointDir: checkpointDir, ProgressInterval: Duration{30 * time.Second}}}
+	return Config{Connections: make(plan.Profiles), Worker: Worker{ArchiveCaptureOpenFiles: 1024, ArchiveReplayOpenFiles: 32, ArchiveReplayBlocks: 8, ArchiveBlockMaxBytes: 64 << 20, PartitionRecordCap: 5000, PartitionByteCap: 16 << 20, RecordCap: 20000, ByteCap: 128 << 20, DeliveryTimeout: Duration{time.Minute}, ShutdownTimeout: Duration{DefaultShutdownTimeout}, IdleExit: Duration{30 * time.Second}, CheckpointDir: checkpointDir, ProgressInterval: Duration{30 * time.Second}}}
 }
 
 func (l *Loader) Load(path string) (Config, error) {
@@ -126,7 +125,7 @@ func (w Worker) validateDurations() error {
 	for _, setting := range []struct {
 		name  string
 		value Duration
-	}{{"delivery_timeout", w.DeliveryTimeout}, {"shutdown_timeout", w.ShutdownTimeout}, {"idle_exit", w.IdleExit}, {"tip_wait", w.TipWait}} {
+	}{{"delivery_timeout", w.DeliveryTimeout}, {"shutdown_timeout", w.ShutdownTimeout}, {"idle_exit", w.IdleExit}} {
 		duration := setting.value.Duration
 		if duration <= 0 {
 			return fmt.Errorf("worker.%s must be a positive duration", setting.name)

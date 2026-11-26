@@ -16,15 +16,14 @@ docker exec kaferry-kafka-demo /opt/kafka/bin/kafka-topics.sh --bootstrap-server
 printf 'order-1\norder-2\norder-3\n' | docker exec -i kaferry-kafka-demo /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic orders --sync --producer-property acks=all
 ```
 
-Copy the current readable records and exit. `RECORD_OFFSET < LATEST` saves each partition's readable end on its first assignment; the same group keeps that end on reruns and excludes later appends.
+Copy the current readable records and exit. By default Kaferry saves each partition's readable end on its first assignment; the same group keeps that end on reruns and excludes later appends.
 
 <!-- kafka-quickstart-copy -->
 ```sh
 cat > copy.sql <<'SQL'
 WITH CONNECTION default AS ('bootstrap.servers' = 'localhost:9092')
 INSERT INTO TOPIC 'orders-copy'
-SELECT * FROM TOPIC 'orders' WITH (GROUP = 'demo')
-WHERE RECORD_OFFSET < LATEST;
+SELECT * FROM TOPIC 'orders' WITH (GROUP = 'demo');
 SQL
 kaferry run -f copy.sql
 ```
@@ -86,8 +85,7 @@ For a following copy, press Ctrl+C before checking status. `explain` checks the 
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-snapshot')
-WHERE RECORD_OFFSET < LATEST;
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-snapshot');
 ```
 
 An offset is a position within one partition. `LATEST` is its readable end, excluded from the copy: an end of 10 means `< LATEST` includes offset 9. Kaferry saves each partition's end when first assigned; an open transaction can hold it below records already written, and partitions capture their ends separately.
@@ -99,7 +97,6 @@ Only committed records still retained by Kafka can be copied. The named `GROUP` 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-preview')
-WHERE RECORD_OFFSET < LATEST
 OPTIONS (WORKER_STOP_AFTER_RECORDS = 100);
 ```
 
@@ -121,8 +118,7 @@ WHERE PARTITION IN (0)
 ```sql
 INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-partition-range')
-WHERE PARTITION BETWEEN 0 AND 2
-  AND RECORD_OFFSET < LATEST;
+WHERE PARTITION BETWEEN 0 AND 2;
 ```
 
 Copies source partitions 0, 1 and 2 to their saved readable ends; all three IDs must exist. Use `IN (0, 2)` for only those two IDs, or `NOT BETWEEN 0 AND 2` for every other partition, including eligible additions while the worker runs. Exited workers do not discover new partitions.
@@ -147,40 +143,33 @@ Use the connection profiles and commands from [Kafka setup](#copy-between-kafka-
 ```sql
 INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-hour')
-WHERE RECORD_OFFSET < LATEST
-  AND RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
+WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
 ```
 
 Copies Kafka record timestamps from 09:00 inclusive to 10:00 exclusive (UTC), not times inside the payload. Reading can continue from the first matching timestamp through each saved readable end, including records newer than the requested range. Matching records appended beyond those ends are excluded; timestamps only filter records in this example, without deciding when reading stops.
 
-### Allow late arrivals
+### Shorten a historical scan
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM TOPIC 'orders@prod'
-WITH (GROUP = 'orders-hour-live',
-      MAX_STALENESS = INTERVAL '5' MINUTE,
+WITH (GROUP = 'orders-hour-historical',
       MAX_OUT_OF_ORDER = INTERVAL '5' MINUTE)
 WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
 ```
 
-Use this when records for the range are still arriving, or to finish an old range without reading to today's end. The arrival-delay allowance defaults to five minutes. This example also opts into a five-minute disorder allowance; copying starts immediately:
-
-- `MAX_STALENESS`: once Kaferry's clock passes 10:05, it captures each partition's current end, including unfinished transactions, saves it and reads up to it. Records appended beyond that saved end are excluded; if the deadline is already past, capture happens at startup.
-- `MAX_OUT_OF_ORDER`: reading a record stamped strictly after 10:05 stops reading that partition, even before reaching its saved end. A later record stamped 09:59 can be missed, even if already present.
-
-Increase the arrival-delay or disorder allowance to match your input, or disable the corresponding rule with `OFF`. Either rule can finish a partition independently, so increasing one does not protect against the other stopping early; neither setting limits total run time. Consumer clock lead also counts against the arrival-delay allowance. [Relative windows with `NOW()`](reference.md#timestamp-filters).
+Use this option when you know how far timestamps can move backwards in each partition. With the five-minute allowance above, Kaferry stops before the first visible record stamped strictly after 10:05 UTC or when it reaches the saved readable end. A later record stamped 09:59 can be missed if the assumption is wrong. The default scans through the saved readable end. Schedule the copy after the window closes if late arrivals should be eligible.
 
 ## Keep copying new records
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-follow');
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-follow', FOLLOW = ON);
 ```
 
-Copies the retained backlog, then follows new records until you press Ctrl+C. Add `START = LATEST` inside source `WITH` to skip the backlog for a fresh group; saved progress takes precedence on resume. A partition filter without an offset end also keeps following.
+Copies the retained backlog, then follows new records until you press Ctrl+C. Add `START = LATEST` inside source `WITH` to skip the backlog for a fresh group; saved progress takes precedence on resume. A partition filter can restrict which partitions to follow.
 
 ## Archive a topic and replay it
 
@@ -259,10 +248,10 @@ The first `copy summary` reports `submitted: 3` and `confirmed: 3`. This status 
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "verdict": "complete",
   "reason": "file selection completed",
-  "meaning": "Source processing finished for the selected finite scope: explicit offset bounds or the saved archive selection.",
+  "meaning": "Source processing finished for the selected finite scope: saved offset ends or the saved archive selection.",
   "partitions": [{"id": 0, "position": 3, "stop": {"reason": "eof", "at": 3}}]
 }
 ```
@@ -281,7 +270,7 @@ Use storage where successful saves survive a crash, file replacement happens as 
 mkdir -p archive
 kaferry run -c connections.toml -f - <<'SQL'
 INSERT INTO ARCHIVE 'archive/orders'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive');
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive', FOLLOW = ON);
 SQL
 ```
 
@@ -316,8 +305,7 @@ TOML does not expand environment variables. Set `PROD_PASSWORD` in the environme
 ```sql
 WITH CONNECTION prod AS ('sasl.password' = ENV('PROD_PASSWORD'))
 INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-snapshot')
-WHERE RECORD_OFFSET < LATEST;
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-snapshot');
 ```
 
 Keep passwords out of SQL literals and shell arguments. SQL connection properties override TOML; use `-c connections.toml` to load profiles. [Configuration](reference.md#configuration-and-cli).
@@ -387,7 +375,7 @@ SIGINT/SIGTERM stop reading, allow 10 s for writes, then save progress. File flu
 kaferry status -c connections.toml -f copy.sql --json
 ```
 
-`complete` reports finished source processing for the selected scope; it does not verify destination contents. `limit_reached` means a worker record cap stopped processing; rerun the same job for another allowance. `complete_within_staleness` depends on the configured [timestamp assumptions](#allow-late-arrivals). Ctrl+C on a Kafka follow run leaves status `incomplete`. [Status and exit codes](reference.md#saved-status).
+`complete` reports finished source processing for the selected scope; it does not verify destination contents. `limit_reached` means a worker record cap stopped processing; rerun the same job for another allowance. `complete_within_disorder` depends on the configured [timestamp assumptions](#shorten-a-historical-scan). After a clean Ctrl+C, an idle FOLLOW group with saved progress normally reports `incomplete` because it has no source end. [Status and exit codes](reference.md#saved-status).
 
 ## Resume or start over
 
@@ -428,7 +416,7 @@ Different offset branches require upper bounds. To follow indefinitely, use one 
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-follow-recovery-p0')
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-follow-recovery-p0', FOLLOW = ON)
 WHERE PARTITION IN (0) AND RECORD_OFFSET >= 1001;
 ```
 

@@ -169,7 +169,7 @@ class OwnershipCasesTest(unittest.TestCase):
             endpoints = lambda base: ','.join(('127.0.0.1:' + str(base + worker_route * 100 + n) for n in range(3)))
             default = connection('default', [('bootstrap.servers', endpoints(26092)), ('client.id', marker), ('session.timeout.ms', 6000), ('heartbeat.interval.ms', 1000), ('max.poll.interval.ms', 30000), ('socket.timeout.ms', 8000)])
             destination = connection('destination', [('bootstrap.servers', endpoints(27092)), ('client.id', marker)])
-            (directory / f'worker-route-{worker_route}.sql').write_text('WITH ' + default + ', ' + destination + " INSERT INTO TOPIC 'destination@destination' SELECT * FROM TOPIC 'source' WITH (GROUP='group', START=EARLIEST)")
+            (directory / f'worker-route-{worker_route}.sql').write_text('WITH ' + default + ', ' + destination + " INSERT INTO TOPIC 'destination@destination' SELECT * FROM TOPIC 'source' WITH (GROUP='group', FOLLOW=ON)")
         safety_path = root / 'fault-oracle/fresh/case/observations/case.json'
         safety_path.parent.mkdir(parents=True)
         safety_path.write_text(json.dumps(dict(id=id)) + '\n')

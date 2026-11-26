@@ -106,7 +106,7 @@ func recoveryBlockedOutput(t *testing.T, failure string) bool {
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	oracle := startFaultOracle(t, "recovery/"+failure, broker(t), destination, src, dst, group, 2, false)
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='%d','heartbeat.interval.ms'='1000'), CONNECTION destination AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s@destination' SELECT * FROM TOPIC '%s' WITH (GROUP='%s')",
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='%d','heartbeat.interval.ms'='1000'), CONNECTION destination AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s@destination' SELECT * FROM TOPIC '%s' WITH (GROUP='%s',FOLLOW=ON)",
 		broker(t), oracle.timeouts["session.timeout.ms"].Milliseconds(), destination, dst, src, group)
 	deadlines := fmt.Sprintf("shutdown_timeout=%q\ndelivery_timeout=%q\n", oracle.timeouts["shutdown_timeout"], oracle.timeouts["delivery_timeout"])
 	settings := "record_cap=32\npartition_record_cap=16\nbyte_cap=8192\npartition_byte_cap=4096\nprogress_interval='20ms'\n" + deadlines

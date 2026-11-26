@@ -11,6 +11,6 @@ type Settings struct {
 	ByteCap            int64
 	DeliveryTimeout    time.Duration
 	IdleExit           time.Duration
-	TipWait            time.Duration
-	ProgressInterval   time.Duration
+
+	ProgressInterval time.Duration
 }

@@ -55,7 +55,7 @@ func TestArchiveCaptureCrashRecoversAcknowledgedData(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "archive")
 	config, binaryPath := configuration(t), testBinary(t)
 	query := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s', 'session.timeout.ms'='6000', 'heartbeat.interval.ms'='1000') "+
-		"INSERT INTO ARCHIVE '%s' WITH (ROTATE_AFTER_SIZE = 16k) SELECT * FROM TOPIC '%s' WITH (GROUP = '%s', START = EARLIEST)", broker(t), root, src, group)
+		"INSERT INTO ARCHIVE '%s' WITH (ROTATE_AFTER_SIZE = 16k) SELECT * FROM TOPIC '%s' WITH (GROUP = '%s', FOLLOW=ON)", broker(t), root, src, group)
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	process := startCLI(ctx, t, binaryPath, "", "run", "-e", query, "-c", config)

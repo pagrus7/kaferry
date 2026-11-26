@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
@@ -81,9 +80,8 @@ func (s *testSource) Poll(_ context.Context, d time.Duration) (Event, error) {
 	s.events = s.events[1:]
 	return e, nil
 }
-func (s *testSource) Pause(id int32, paused bool) error                   { s.paused[id] = paused; return nil }
-func (s *testSource) HighWatermark(context.Context, int32) (int64, error) { return s.high, nil }
-func (*testSource) Close() error                                          { return nil }
+func (s *testSource) Pause(id int32, paused bool) error { s.paused[id] = paused; return nil }
+func (*testSource) Close() error                        { return nil }
 
 type testSink struct {
 	reports chan Delivery
@@ -143,8 +141,8 @@ func fixture(t *testing.T) (*Runner, *testSource, *testSink, *testStore, *testCl
 		ByteCap:            128 << 20,
 		DeliveryTimeout:    time.Minute,
 		IdleExit:           30 * time.Second,
-		TipWait:            15 * time.Minute,
-		ProgressInterval:   30 * time.Second,
+
+		ProgressInterval: 30 * time.Second,
 	}
 	r := NewRunner(s, d, p, c, slog.New(slog.NewTextHandler(io.Discard, nil)), plan.Plan{Source: plan.Endpoint{Kind: "ARCHIVE"}}, settings, NewTracker(), NoopStopObserver{}, nil)
 	return r, s, d, p, c
@@ -351,9 +349,10 @@ func TestTimestampTriggerReplaysTriggerOffset(t *testing.T) {
 	r.plan.Source.Kind = "TOPIC"
 	r.plan.MaxOutOfOrderMS = new(int64(0))
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: hi}
-	r.plan.MaxStalenessMS = 1000
+
 	s.high = 1
 	s.assignments[0].Window.Upper = &hi
+	s.assignments[0].Cursor.End = &s.high
 	in := incoming(0, 0, 1)
 	in.Record.TimestampMS = &stamp
 	s.events = []Event{{Input: &in}}
@@ -363,38 +362,8 @@ func TestTimestampTriggerReplaysTriggerOffset(t *testing.T) {
 
 	// Then
 	require.NoError(t, runErr)
-	if len(d.writes) != 0 || len(p.saves) != 2 || p.saves[0][0].Position != 0 || p.saves[0][0].Stop != nil || p.saves[1][0].Position != 0 || p.saves[1][0].Stop == nil || p.saves[1][0].Stop.Reason != "timestamp" {
+	if len(d.writes) != 0 || len(p.saves) != 1 || p.saves[0][0].Position != 0 || p.saves[0][0].Stop == nil || p.saves[0][0].Stop.Reason != "timestamp" {
 		t.Fatal("trigger record was written or checkpointed past")
-	}
-}
-
-//kaferry:guarantee completion.offset-end
-func TestTipWaitUsesSampledHighWatermarkAndTimesOut(t *testing.T) {
-	// Given
-	r, s, _, _, c := fixture(t)
-	hi := int64(1000)
-	r.plan.Source.Kind = "TOPIC"
-	r.plan.Window.Upper = &plan.Expression{LiteralMS: hi}
-	r.limits.TipWait = 1 * time.Second
-	_ = r.Assign([]Assignment{{Cursor: Cursor{Partition: 0, Position: 0}, Window: plan.Window{Upper: &hi}}})
-	s.high = 2
-	_ = r.eof(Cursor{Partition: 0, Position: 0})
-
-	// When
-	tipsErr := r.tips(context.Background())
-
-	// Then
-	require.NoError(t, tipsErr)
-
-	// When the topic grows after the sample and tip_wait expires.
-	s.high = 999
-	c.Sleep(2 * time.Second)
-	tipsErr = r.tips(context.Background())
-
-	// Then the original boundary stays fixed and the diagnostic names the cursors.
-	require.Equal(t, int64(2), *r.partitions[0].high, "tip boundary moved")
-	if tipsErr == nil || !strings.Contains(tipsErr.Error(), "H=2 stable=0 consumed=0") {
-		t.Fatal("stalled transaction must name its boundary and cursors", tipsErr)
 	}
 }
 
@@ -461,45 +430,6 @@ type cancellingPoll struct {
 	*testSource
 	cancel context.CancelFunc
 	err    error
-}
-
-type cancellingWatermark struct {
-	*testSource
-	cancel context.CancelFunc
-	err    error
-}
-
-func (s *cancellingWatermark) HighWatermark(context.Context, int32) (int64, error) {
-	s.cancel()
-	return 0, s.err
-}
-func TestSignalDuringWatermarkQueryReportsInterruptionAndPreservesOtherErrors(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		unrelated bool
-	}{{"cancelled query", false}, {"broker failure", true}} {
-		t.Run(tc.name, func(t *testing.T) {
-			// Given a bounded copy that reaches the topic tip and samples its ending offset.
-			r, source, _, _, _ := fixture(t)
-			r.plan.Source.Kind = "TOPIC"
-			hi := int64(1)
-			r.plan.Window.Upper = &plan.Expression{LiteralMS: hi}
-			source.assignments[0].Window.Upper = &hi
-			source.events = []Event{{EOF: &Cursor{Partition: 0, Position: 0}}}
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			failure := error(context.Canceled)
-			if tc.unrelated {
-				failure = errors.New("topic authorization failed")
-			}
-			r.source = &cancellingWatermark{testSource: source, cancel: cancel, err: failure}
-			// When a signal arrives during the query, then cancellation follows the ordinary interrupted-copy path.
-			err := r.Run(ctx)
-			if err == nil || tc.unrelated && !errors.Is(err, failure) || !tc.unrelated && !strings.Contains(err.Error(), "bounded copy interrupted before completion") {
-				t.Fatal("unclear interruption or hidden broker failure", err)
-			}
-		})
-	}
 }
 
 func (s *cancellingPoll) Poll(context.Context, time.Duration) (Event, error) {
@@ -677,8 +607,9 @@ func capturedTipCompletion(t *testing.T, gap bool) {
 	stamp := int64(500)
 	r.plan.Source.Kind = "TOPIC"
 	r.plan.Window.Upper = &plan.Expression{LiteralMS: hi}
-	r.limits.TipWait = 1 * time.Second
+
 	s.assignments[0].Window.Upper = &hi
+	s.assignments[0].Cursor.End = &s.high
 	first := incoming(0, 0, 1)
 	first.Record.TimestampMS = &stamp
 	second := incoming(0, 1, 1)

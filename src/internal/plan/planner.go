@@ -44,9 +44,6 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 	if plan.Destination.Kind == "TOPIC" {
 		plan.Destination.Partitioning = Preserve
 	}
-	if plan.Source.Kind == "TOPIC" && plan.Window.Upper != nil && !plan.HasOffsetEnd() {
-		plan.MaxStalenessMS = 300000
-	}
 	if err = plan.Destination.destinationOptions(statement.Destination.Options); err != nil {
 		return Plan{}, err
 	}
@@ -56,7 +53,7 @@ func (p *Planner) Build(statement sql.Statement, profiles Profiles) (Plan, error
 	if err = applyOptions(statement.Options, sql.CopySettings, plan.applyOption); err != nil {
 		return Plan{}, err
 	}
-	if err = plan.validateTimeAllowances(statement); err != nil {
+	if err = plan.resolveEnd(statement); err != nil {
 		return Plan{}, err
 	}
 	if err = plan.resolveStartRule(statement); err != nil {
@@ -127,23 +124,9 @@ func (p Plan) Fingerprint(sourceClusterID, destinationClusterID, destinationTopi
 	if source.Kind == "TOPIC" && source == destination {
 		return "", fmt.Errorf("source and destination are the same Kafka topic")
 	}
-	canonical := fingerprintQuery{Version: 1, Source: source, Destination: destination, Window: p.Window, MaxStalenessMS: p.MaxStalenessMS, DestinationTopicID: destinationTopicID}
-	if p.Source.Kind == "TOPIC" && p.Window.Upper != nil {
-		canonical.Version = 2
-	}
-	canonical.Offsets, canonical.PartitionOffsets = p.Offsets, p.PartitionOffsets
-	// The wire encoding omits disorder when it equals the topic staleness
-	// allowance (or OFF for archives and offset ends). Keep that encoding for
-	// explicit settings so existing progress retains its identity.
-	wireDisorder := int64(-1)
-	if p.Source.Kind == "TOPIC" && !p.HasOffsetEnd() {
-		wireDisorder = p.MaxStalenessMS
-	}
-	if disorder := p.DisorderMS(); p.Window.Upper != nil && disorder != wireDisorder {
-		canonical.Disorder = &disorder
-	}
-	if canonical.Disorder != nil || p.MaxStalenessMS < 0 || p.Offsets != nil || len(p.PartitionOffsets) > 0 {
-		canonical.Version = 3
+	canonical := fingerprintQuery{
+		Version: 4, Source: source, Destination: destination, DestinationTopicID: destinationTopicID,
+		Window: p.Window, Offsets: p.Offsets, PartitionOffsets: p.PartitionOffsets, Disorder: p.MaxOutOfOrderMS,
 	}
 	if p.Destination.PreservesPartitions() {
 		canonical.Partitioning = Preserve
@@ -176,15 +159,13 @@ func endpointIdentity(endpoint Endpoint, clusterID string) (fingerprintEndpoint,
 }
 
 type fingerprintQuery struct {
-	Version     int
-	Source      fingerprintEndpoint
-	Destination fingerprintEndpoint
-	Window      WindowSpec
-	// CutoffMS is the fixed serialized field name for unbounded Kafka and archive queries.
+	Version            int
+	Source             fingerprintEndpoint
+	Destination        fingerprintEndpoint
+	Window             WindowSpec
 	Disorder           *int64                 `json:",omitempty"`
 	Offsets            *OffsetRange           `json:",omitempty"`
 	PartitionOffsets   []PartitionOffsetRange `json:",omitempty"`
-	MaxStalenessMS     int64                  `json:"CutoffMS"`
 	Partitioning       string                 `json:",omitempty"`
 	Partitions         *PartitionFilter       `json:",omitempty"`
 	DestinationTopicID string                 `json:",omitempty"`
@@ -230,25 +211,34 @@ func (p *Planner) inlineProperties(values map[string]string, properties []sql.Pr
 	return nil
 }
 
-func (p Plan) validateTimeAllowances(statement sql.Statement) error {
-	hi := p.Window.Upper
-	if hi == nil || hi.Now {
+func (p *Plan) resolveEnd(s sql.Statement) error {
+	if p.Source.Kind != "TOPIC" {
 		return nil
 	}
-	if p.MaxStalenessMS >= 0 {
-		if _, err := checkedAdd(hi.LiteralMS, p.MaxStalenessMS); err != nil {
-			return sql.At(optionPosition(statement.Source.Options, "MAX_STALENESS", statement.WherePosition), fmt.Errorf("upper bound plus MAX_STALENESS: %w", err))
+	if p.Follow {
+		if p.Window.Upper != nil || p.HasOffsetEnd() {
+			return sql.At(optionPosition(s.Source.Options, "FOLLOW", s.WherePosition), fmt.Errorf("FOLLOW = ON cannot have an upper bound; remove FOLLOW or the upper bound"))
+		}
+		return nil
+	}
+	if p.Start != "" {
+		return sql.At(optionPosition(s.Source.Options, "START", s.Source.OptionsPosition), fmt.Errorf("START requires FOLLOW = ON; remove START or add FOLLOW = ON"))
+	}
+	if p.TimestampStopEnabled() && p.Window.Upper != nil && !p.Window.Upper.Now {
+		if _, err := checkedAdd(p.Window.Upper.LiteralMS, p.DisorderMS()); err != nil {
+			return sql.At(optionPosition(s.Source.Options, "MAX_OUT_OF_ORDER", s.WherePosition), fmt.Errorf("upper bound plus MAX_OUT_OF_ORDER: %w", err))
 		}
 	}
-	if p.MaxOutOfOrderMS != nil && *p.MaxOutOfOrderMS >= 0 {
-		if _, err := checkedAdd(hi.LiteralMS, *p.MaxOutOfOrderMS); err != nil {
-			return sql.At(optionPosition(statement.Source.Options, "MAX_OUT_OF_ORDER", statement.WherePosition), fmt.Errorf("upper bound plus MAX_OUT_OF_ORDER: %w", err))
+	if !p.HasOffsetEnd() {
+		if p.Offsets == nil {
+			p.Offsets = &OffsetRange{}
 		}
+		p.Offsets.Latest = true
 	}
 	return nil
 }
-func (p *Plan) resolveStartRule(statement sql.Statement) error {
 
+func (p *Plan) resolveStartRule(statement sql.Statement) error {
 	if p.Source.Kind == "TOPIC" {
 		if len(statement.Bounds) == 0 && p.Start == "" {
 			p.Start = "EARLIEST"

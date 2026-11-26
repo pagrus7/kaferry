@@ -23,8 +23,8 @@ func (c *connection) Membership(ctx context.Context, group, protocol string) (ka
 	return c.inspector.Membership(ctx, group, protocol)
 }
 
-func (c *connection) Saved(ctx context.Context, group, fingerprint string, window plan.WindowSpec, staleness int64) (map[int32]kafka.SavedProgress, error) {
-	return c.inspector.Saved(ctx, group, fingerprint, window, staleness)
+func (c *connection) Saved(ctx context.Context, group, fingerprint string, window plan.WindowSpec, disorder int64) (map[int32]kafka.SavedProgress, error) {
+	return c.inspector.Saved(ctx, group, fingerprint, window, disorder)
 }
 func (c *connection) Offsets(ctx context.Context, parts []int32, kind kafka.OffsetKind, committed bool) (map[int32]int64, error) {
 	return c.inspector.Offsets(ctx, parts, kind, committed)

@@ -51,7 +51,7 @@ Publishing renames synced private files without overwriting conflicting targets,
 
 ```text
 INSERT INTO ARCHIVE '/archive/orders' WITH (ROTATE_AFTER_SIZE = 512m, ROTATE_AFTER_AGE = INTERVAL '2' HOUR)
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive', START = EARLIEST);
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive', FOLLOW = ON);
 ```
 
 Only the path is required; [rotation settings](../reference.md#archive-sink) define the size and age defaults. The complete crossing block may exceed the size target. Check age even when no records arrive.
@@ -73,7 +73,7 @@ Merge overlaps by original source identity, partition and offset. Preserve dupli
 
 ### Checkpoints
 
-Checkpoints use group-derived filenames and stable `.lock` files in `worker.checkpoint_dir`; [worker settings](../reference.md#worker-settings) define its default and creation rules. Explain and status do not create directories. A group and checkpoint directory identify one replay; another directory starts fresh and can duplicate output. The canonical JSON envelope contains `state` and its lowercase `sha256` digest. State version `1` stores `group`, query `fingerprint`, resolved `window`, confirmed `position`, `complete`, selected `files` and optional `stop` (`reason`, `at`). Stop reason `eof` means the fixed selection completed, including configured offset or timestamp stops; `worker_record_cap` means the requested worker threshold was reached. `at` equals the confirmed input-record count. Restart clears a previous threshold stop when new progress is saved.
+Checkpoints use group-derived filenames and stable `.lock` files in `worker.checkpoint_dir`; [worker settings](../reference.md#worker-settings) define its default and creation rules. Explain and status do not create directories. A group and checkpoint directory identify one replay; another directory starts fresh and can duplicate output. The canonical JSON envelope contains `state` and its lowercase `sha256` digest. State version `1` stores `group`, query `fingerprint`, resolved `window`, confirmed `position`, `complete`, selected `files` and optional `stop` (`reason`, `at`). Stop reason `eof` means the fixed selection completed, including configured offset ends; `worker_record_cap` means the requested worker threshold was reached. `at` equals the confirmed input-record count. Restart clears a previous threshold stop when new progress is saved.
 
 Each `files` entry contains:
 
@@ -86,4 +86,4 @@ Writer-state checksums are calculated on durability flushes and publication; rep
 
 A checkpoint failure stops new reads. A source failure still allows saving earlier confirmed output. Destination-confirmed records after the last saved checkpoint can repeat after restart.
 
-The session retains the resolved time window for the caller's filter. By default it examines every selected record. Explicit timestamp disorder or offset ends can finish one original source stream across overlapping files; other streams remain eligible. [Completion](decisions.md#completion). No active-file reads, replay follow mode, global completion barrier or built-in consolidation.
+The session retains the resolved time window for the caller's filter. By default it examines every selected record. Explicit offset ends can finish one original source stream across overlapping files; other streams remain eligible. [Completion](decisions.md#completion). No active-file reads, replay follow mode, global completion barrier or built-in consolidation.

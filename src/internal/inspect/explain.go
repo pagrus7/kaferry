@@ -35,7 +35,7 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 	if err := ctx.Err(); err != nil {
 		return report, err
 	}
-	report = Report{Version: 2, Group: p.Group, OneOff: p.OneOff, MaxStalenessMS: p.MaxStalenessMS, WorkerStopAfterRecords: p.WorkerStopAfterRecords, StartRule: p.Start, RecordErrors: ErrorPolicies{p.Policies.MissingTimestamp, p.Policies.RejectedTimestamp, p.Policies.OtherRecord}, Partitions: []Partition{}, Warnings: []string{}}
+	report = Report{Version: 3, Group: p.Group, OneOff: p.OneOff, EndRule: endRule(p), WorkerStopAfterRecords: p.WorkerStopAfterRecords, StartRule: p.Start, RecordErrors: ErrorPolicies{p.Policies.MissingTimestamp, p.Policies.RejectedTimestamp, p.Policies.OtherRecord}, Partitions: []Partition{}, Warnings: []string{}}
 	if d := p.DisorderMS(); p.TimestampStopEnabled() && p.Window.Upper != nil {
 		report.MaxOutOfOrderMS = &d
 	}
@@ -82,6 +82,19 @@ func (s *Service) Explain(ctx context.Context, p plan.Plan, limits config.Worker
 	}
 	addWarnings(&report)
 	return report, ctx.Err()
+}
+
+func endRule(p plan.Plan) string {
+	switch {
+	case p.Source.Kind == "ARCHIVE":
+		return "EOF"
+	case p.Follow:
+		return "FOLLOW"
+	case len(p.PartitionOffsets) > 0 || p.Offsets != nil && p.Offsets.Upper != nil:
+		return "OFFSET"
+	default:
+		return "LATEST"
+	}
 }
 
 func (s *Service) open(ctx context.Context, endpoint plan.Endpoint, configuration bool, filter *plan.PartitionFilter, stop core.StopObserver) (kafka.InspectionConnection, Endpoint, error) {

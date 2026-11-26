@@ -7,11 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/pagrus7/kaferry/src/internal/app"
 	"github.com/pagrus7/kaferry/src/internal/inspect"
+	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -32,7 +35,7 @@ func TestSavedStopsDescribeEveryCurrentKafkaPartition(t *testing.T) {
 	}
 	group := source + "-status"
 	config := configuration(t)
-	query := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND, MAX_OUT_OF_ORDER=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", destination, source, group, end.Format(time.RFC3339Nano))
+	query := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_OUT_OF_ORDER=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", destination, source, group, end.Format(time.RFC3339Nano))
 	// When a worker finishes both partitions and saves progress.
 	execute(t, query, config)
 	waitMembers(t, a, group, 0, 0, nil)
@@ -41,7 +44,7 @@ func TestSavedStopsDescribeEveryCurrentKafkaPartition(t *testing.T) {
 	code := app.Execute(t.Context(), []string{"status", "-e", query, "-c", config, "--json"}, nil, &out, &errout)
 	// Then status reports both durable reasons and leaves offsets/metadata unchanged.
 	var report inspect.StatusReport
-	if err := json.Unmarshal(out.Bytes(), &report); err != nil || code != 0 || report.Verdict != "complete_within_staleness" || len(report.Partitions) != 2 {
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil || code != 0 || report.Verdict != "complete_within_disorder" || len(report.Partitions) != 2 {
 		t.Fatal(code, out.String(), errout.String(), err)
 	}
 	if report.Partitions[0].Stop == nil || report.Partitions[0].Stop.Reason != "timestamp" || report.Partitions[1].Stop == nil || report.Partitions[1].Stop.Reason != "tip" {
@@ -75,4 +78,30 @@ func TestSavedStopsDescribeEveryCurrentKafkaPartition(t *testing.T) {
 			t.Fatal(got)
 		}
 	}
+}
+
+//kaferry:guarantee inspect
+func TestStatusRejectsSavedStopWithoutItsEnd(t *testing.T) {
+	// Given a completed empty snapshot with otherwise valid identities and stop metadata.
+	a := admin(t)
+	src, dst := topic(t, a, 1), topic(t, a, 1)
+	group := src + "-damaged"
+	query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s')", dst, src, group)
+	cfg := configuration(t)
+	execute(t, query, cfg)
+	waitMembers(t, a, group, 0, 0, nil)
+	row := committedPartitions(t, a, group, src, 1)[0]
+	require.Contains(t, row.Metadata, `,"end":0`)
+	row.Metadata = strings.Replace(row.Metadata, `,"end":0`, "", 1)
+	result, err := a.CommitOffsets(t.Context(), group, kadm.Offsets{src: {0: row}})
+	require.NoError(t, err)
+	require.NoError(t, result.Error())
+	// When status reads the damaged group, then it withholds completion and positions.
+	var out, diagnostics bytes.Buffer
+	code := app.Execute(t.Context(), []string{"status", "-e", query, "-c", cfg, "--json"}, nil, &out, &diagnostics)
+	require.Equal(t, 5, code, diagnostics.String())
+	var report inspect.StatusReport
+	require.NoError(t, json.Unmarshal(out.Bytes(), &report))
+	require.Equal(t, "unknown", report.Verdict)
+	require.Empty(t, report.Partitions)
 }

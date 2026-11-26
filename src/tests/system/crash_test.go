@@ -36,7 +36,7 @@ func TestCrashResumeReconcilesRetainedRecords(t *testing.T) {
 	publishRange(0, 16)
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='%d','heartbeat.interval.ms'='1000') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST)",
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='%d','heartbeat.interval.ms'='1000') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON)",
 		broker(t), oracle.timeouts["session.timeout.ms"].Milliseconds(), dst, src, group)
 	config := configuration(t, fmt.Sprintf("delivery_timeout=%q\nshutdown_timeout=%q\n", oracle.timeouts["delivery_timeout"], oracle.timeouts["shutdown_timeout"]))
 	process := startCLI(ctx, t, testBinary(t), "", "run", "-e", statement, "-c", config)

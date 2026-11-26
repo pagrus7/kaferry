@@ -61,8 +61,16 @@ func (p *Plan) applyOption(option sql.Option) error {
 			return fmt.Errorf("START must be EARLIEST or LATEST")
 		}
 		p.Start = option.Value
-	case "MAX_STALENESS", "MAX_OUT_OF_ORDER":
-		return p.stalenessOption(option)
+	case "FOLLOW":
+		if p.Source.Kind != "TOPIC" {
+			return sql.At(option.Position, fmt.Errorf("FOLLOW requires a topic source; remove FOLLOW"))
+		}
+		if option.Value != "ON" && option.Value != "OFF" {
+			return fmt.Errorf("FOLLOW must be ON or OFF")
+		}
+		p.Follow = option.Value == "ON"
+	case "MAX_OUT_OF_ORDER":
+		return p.disorderOption(option)
 	case "WORKER_STOP_AFTER_RECORDS":
 		value, err := strconv.ParseUint(option.Value, 10, 64)
 		if err != nil || value == 0 || value > 1<<53 {
@@ -84,26 +92,26 @@ func (p *Plan) groupOption(option sql.Option) error {
 	return nil
 }
 
-func (p *Plan) stalenessOption(option sql.Option) error {
-	if option.Name == "MAX_STALENESS" && p.Source.Kind != "TOPIC" {
-		return sql.At(option.Position, fmt.Errorf("MAX_STALENESS requires a topic source; remove MAX_STALENESS for ARCHIVE sources"))
+func (p *Plan) disorderOption(option sql.Option) error {
+	if p.Source.Kind != "TOPIC" {
+		return sql.At(option.Position, fmt.Errorf("MAX_OUT_OF_ORDER requires a topic source; remove MAX_OUT_OF_ORDER"))
 	}
 	if p.Window.Upper == nil {
-		return sql.At(option.Position, fmt.Errorf("%s requires an upper timestamp bound in WHERE", option.Name))
+		return sql.At(option.Position, fmt.Errorf("MAX_OUT_OF_ORDER requires an upper timestamp bound in WHERE; add a bound or remove MAX_OUT_OF_ORDER"))
 	}
-	if p.HasOffsetEnd() {
-		return sql.At(option.Position, fmt.Errorf("%s cannot be combined with an explicit offset end", option.Name))
+	if p.Offsets != nil && p.Offsets.Upper != nil {
+		return sql.At(option.Position, fmt.Errorf("MAX_OUT_OF_ORDER cannot be combined with a numeric offset end; remove MAX_OUT_OF_ORDER"))
+	}
+	for _, branch := range p.PartitionOffsets {
+		if branch.Range.Upper != nil {
+			return sql.At(option.Position, fmt.Errorf("MAX_OUT_OF_ORDER cannot be combined with a numeric offset end; remove MAX_OUT_OF_ORDER"))
+		}
 	}
 	value, err := allowance(option)
-	if err != nil {
-		return err
-	}
-	if option.Name == "MAX_OUT_OF_ORDER" {
+	if err == nil && value >= 0 {
 		p.MaxOutOfOrderMS = &value
-	} else {
-		p.MaxStalenessMS = value
 	}
-	return nil
+	return err
 }
 
 func (p *Plan) policyOption(option sql.Option) error {

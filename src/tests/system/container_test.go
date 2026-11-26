@@ -196,7 +196,7 @@ func TestContainerShutdownAndResume(t *testing.T) {
 			require.NoError(t, err)
 			// When the mounted TOML/SQL copy is stopped and restarted in separate containers.
 			const group = "container-copy"
-			writeInputs(t, directory, "INSERT INTO TOPIC 'orders-copy' SELECT * FROM TOPIC 'orders' WITH (GROUP='"+group+"')", "")
+			writeInputs(t, directory, "INSERT INTO TOPIC 'orders-copy' SELECT * FROM TOPIC 'orders' WITH (GROUP='"+group+"',FOLLOW=ON)", "")
 			var previous string
 			for round := range 2 {
 				process := launch(t, directory)

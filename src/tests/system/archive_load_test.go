@@ -72,7 +72,7 @@ func TestLoadArchiveCopy(t *testing.T) {
 							t.Fatal(seedCtx.Err())
 						}
 					}
-					sourceOptions += ",START=EARLIEST"
+					sourceOptions += ",FOLLOW=ON"
 					copyOptions = fmt.Sprintf(" OPTIONS(WORKER_STOP_AFTER_RECORDS=%d)", count)
 				} else {
 					outputSQL = fmt.Sprintf("TOPIC '%s' WITH(PARTITIONING=KEY)", name)

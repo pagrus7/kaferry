@@ -39,7 +39,7 @@ func TestDocumentedExamples(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%d", name, index), func(t *testing.T) {
 				input := strings.SplitN(part, "```", 2)[0]
 				if !strings.Contains(input, "INSERT INTO") {
-					input += " INSERT INTO TOPIC 'b@prod' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='example', START=EARLIEST) ;"
+					input += " INSERT INTO TOPIC 'b@prod' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='example', START=EARLIEST, FOLLOW=ON) ;"
 				}
 				// When parsing and planning without opening endpoints.
 				statement, err := sql.NewParser().Parse(input)
@@ -96,9 +96,9 @@ func TestWindowBoundaries(t *testing.T) {
 
 func TestNowRemainsSymbolicAndUsesOneInstant(t *testing.T) {
 	// Given
-	p := build(t, "INSERT INTO TOPIC 'b' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a' WITH (GROUP='g', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP > NOW() - INTERVAL '1' HOUR AND RECORD_TIMESTAMP <= NOW() ")
+	p := build(t, "INSERT INTO TOPIC 'b' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a' WITH (GROUP='g', MAX_OUT_OF_ORDER=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP > NOW() - INTERVAL '1' HOUR AND RECORD_TIMESTAMP <= NOW() ")
 	require.True(t, p.Window.Relative())
-	require.Zero(t, p.MaxStalenessMS)
+	require.Zero(t, p.DisorderMS())
 	now := time.Date(2026, 10, 3, 0, 0, 0, 123000000, time.UTC)
 
 	// When
@@ -142,7 +142,7 @@ func TestInvalidTimeExpressions(t *testing.T) {
 
 func TestPlannerRejectsOverflowingMaxStaleness(t *testing.T) {
 	// Given valid SQL whose upper timestamp plus staleness exceeds int64 milliseconds.
-	statement, err := sql.NewParser().Parse("INSERT INTO TOPIC 'b@staging' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='g', MAX_STALENESS=INTERVAL '9223372036854775' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '9999-12-31T23:59:59Z' ")
+	statement, err := sql.NewParser().Parse("INSERT INTO TOPIC 'b@staging' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='g', MAX_OUT_OF_ORDER=INTERVAL '9223372036854775' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '9999-12-31T23:59:59Z' ")
 	require.NoError(t, err)
 
 	// When compiling the copy plan, before any endpoint is opened.
@@ -155,7 +155,7 @@ func TestPlannerRejectsOverflowingMaxStaleness(t *testing.T) {
 
 func TestInlinePrecedenceAndSecretRedaction(t *testing.T) {
 	// Given
-	statement, err := sql.NewParser().Parse("WITH CONNECTION prod AS ('bootstrap.servers'='override:9092', 'sasl.password'=ENV('PASSWORD')) INSERT INTO TOPIC 'b@prod' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='g', START=EARLIEST) ")
+	statement, err := sql.NewParser().Parse("WITH CONNECTION prod AS ('bootstrap.servers'='override:9092', 'sasl.password'=ENV('PASSWORD')) INSERT INTO TOPIC 'b@prod' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='g', START=EARLIEST, FOLLOW=ON) ")
 	require.NoError(t, err)
 	secret := "unique-secret-marker"
 
@@ -207,7 +207,7 @@ func TestFingerprintIdentity(t *testing.T) {
 	require.NotEqual(t, want, got)
 	_, err = p.testFingerprint("", "destination-cluster")
 	require.Error(t, err)
-	self := build(t, "INSERT INTO TOPIC 'a@staging' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='g', START=EARLIEST) ")
+	self := build(t, "INSERT INTO TOPIC 'a@staging' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a@prod' WITH (GROUP='g', START=EARLIEST, FOLLOW=ON) ")
 	_, err = self.testFingerprint("same", "same")
 	require.Error(t, err)
 }

@@ -58,8 +58,7 @@ printf 'order-1\norder-2\norder-3\n' > "$work/expected.txt"
 
 sql="WITH CONNECTION default AS ('bootstrap.servers' = 'localhost:9092')
 INSERT INTO TOPIC 'orders-copy'
-SELECT * FROM TOPIC 'orders' WITH (GROUP = 'demo')
-WHERE RECORD_OFFSET < LATEST;"
+SELECT * FROM TOPIC 'orders' WITH (GROUP = 'demo');"
 printf '\nRunning Kaferry:\n%s\n\n' "$sql"
 kaferry run -e "$sql"
 

@@ -82,7 +82,7 @@ func TestRecreatedSourceFailsBeforeJoiningEvenWithValidOffsets(t *testing.T) {
 	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte("original"), Timestamp: stamp})
 	group := src + "-recreated"
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), dst, src, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s') WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), dst, src, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
 	execute(t, statement, "")
 	old := committedPartitions(t, a, group, src, 1)[0]
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -139,8 +139,8 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
 	group := src + "-excess-workers"
-	end := time.Now().Add(time.Hour).Truncate(time.Millisecond)
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND, MAX_OUT_OF_ORDER=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), dst, src, group, end.Format(time.RFC3339Nano))
+
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON) OPTIONS(WORKER_STOP_AFTER_RECORDS=1) ", broker(t), dst, src, group)
 	cfg := configuration(t, "idle_exit='5s'\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
@@ -167,7 +167,6 @@ func TestMoreWorkersThanPartitionsIdleAndFinishIndependently(t *testing.T) {
 	}
 	p := producer(t)
 	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte("work"), Timestamp: time.Now()})
-	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte("trigger"), Timestamp: end.Add(time.Second)})
 	select {
 	case result := <-results:
 		if result.code != 0 || strings.Contains(result.detail, "local idle exit") {
@@ -201,44 +200,24 @@ func relativeWindows(t *testing.T, parts []kadm.Offset) map[int32]plan.Window {
 }
 
 //kaferry:guarantee window
-func TestConcurrentNowWindowsPersistAcrossWorkersAndRestart(t *testing.T) {
+func TestNowWindowsPersistAcrossPartitionsAndRestart(t *testing.T) {
 	// Given
 	a := admin(t)
 	src, dst := topic(t, a, 2), topic(t, a, 1)
 	group := src + "-now-workers"
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND, MAX_OUT_OF_ORDER=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR AND RECORD_TIMESTAMP < NOW() + INTERVAL '1' HOUR ", broker(t), dst, src, group)
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-	defer cancel()
-	results := make(chan workerResult, 2)
-	for range 2 {
-		go func() {
-
-			// When
-			results <- loggedWorker(ctx, statement, "")
-		}()
-	}
-	waitMembers(t, a, group, 2, 2, results)
-	before := relativeWindows(t, committedPartitions(t, a, group, src, 2))
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_OUT_OF_ORDER=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' HOUR AND RECORD_TIMESTAMP < NOW() + INTERVAL '1' HOUR ", broker(t), dst, src, group)
 	p := producer(t)
 	for id := range 2 {
 		publish(t, p, &kgo.Record{Topic: src, Partition: int32(id), Value: []byte(fmt.Sprintf("work-%d", id)), Timestamp: time.Now()})
 		publish(t, p, &kgo.Record{Topic: src, Partition: int32(id), Value: []byte("trigger"), Timestamp: time.Now().Add(3 * time.Hour)})
 	}
-	for range 2 {
-		select {
-		case result := <-results:
-
-			// Then
-			if result.code != 0 || !strings.Contains(result.detail, "partition window positioned") {
-				t.Fatal("relative worker failed or did not log its windows", result)
-			}
-		case <-ctx.Done():
-			t.Fatal("relative workers did not finish")
-		}
-	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	execute(t, statement, "")
+	before := relativeWindows(t, committedPartitions(t, a, group, src, 2))
 	execute(t, statement, "")
 	after := relativeWindows(t, committedPartitions(t, a, group, src, 2))
-	require.Equal(t, after, before, "restart changed saved per-partition windows")
+	require.Equal(t, before, after)
 	end, err := a.ListEndOffsets(ctx, dst)
 	info, ok := end.Lookup(dst, 0)
 	if err != nil || !ok || info.Offset != 2 {
@@ -329,7 +308,7 @@ func TestWorkerCrashBeforeDeliveryProcessingReplaysWithoutLoss(t *testing.T) {
 	for i := range 32 {
 		publish(t, p, &kgo.Record{Topic: src, Partition: 0, Key: []byte("stable"), Value: []byte(fmt.Sprint(i)), Timestamp: stamp})
 	}
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000'), CONNECTION slow AS ('bootstrap.servers'='%s','linger.ms'='100') INSERT INTO TOPIC '%s@slow' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), broker(t), dst, src, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s','session.timeout.ms'='6000'), CONNECTION slow AS ('bootstrap.servers'='%s','linger.ms'='100') INSERT INTO TOPIC '%s@slow' SELECT * FROM TOPIC '%s' WITH (GROUP='%s') WHERE RECORD_TIMESTAMP < TIMESTAMP '%s' ", broker(t), broker(t), dst, src, group, stamp.Add(time.Second).Format(time.RFC3339Nano))
 	cfg := configuration(t, "record_cap=16\npartition_record_cap=16\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -406,7 +385,7 @@ func TestRunningSourceOffsetOutOfRangeFailsWithoutSavingProgress(t *testing.T) {
 		}
 		return res, nil, len(res.Topics) > 0
 	})
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC 'output' SELECT * FROM TOPIC 'input' WITH (GROUP='running-retention', START=EARLIEST)", strings.Join(cluster.ListenAddrs(), ","))
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC 'output' SELECT * FROM TOPIC 'input' WITH (GROUP='running-retention', FOLLOW=ON)", strings.Join(cluster.ListenAddrs(), ","))
 
 	// When the selected CLI receives that broker error after saving its initial position.
 	process := startCLI(ctx, t, binary, "", "run", "-e", statement)
@@ -434,7 +413,7 @@ func TestExpiredSourceProgressRestartReportsGapAndCopiesRetainedRecords(t *testi
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
 	group := src + "-running-retention"
-	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) ", broker(t), dst, src, group)
+	statement := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON) ", broker(t), dst, src, group)
 	binary := testBinary(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

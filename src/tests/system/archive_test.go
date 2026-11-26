@@ -44,7 +44,7 @@ func TestAvroCaptureAndReplayCLI(t *testing.T) {
 	root := t.TempDir()
 	archive := filepath.Join(root, "archive")
 	prefix := fmt.Sprintf("WITH CONNECTION default AS ('bootstrap.servers'='%s') ", broker(t))
-	capture := prefix + fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', START=EARLIEST) OPTIONS (WORKER_STOP_AFTER_RECORDS=32)", archive, source, source+"-archive")
+	capture := prefix + fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', FOLLOW=ON) OPTIONS (WORKER_STOP_AFTER_RECORDS=32)", archive, source, source+"-archive")
 	// When capturing through the public command, then completed files retain every record.
 	result := run(capture, "")
 	require.Zero(t, result.code, result.detail)

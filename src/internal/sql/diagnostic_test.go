@@ -34,7 +34,7 @@ func TestParserDiagnosticsLocateTheOffendingToken(t *testing.T) {
 		{"invisible character", "\x00", "unexpected invisible or control character; remove it", Position{1, 1}},
 		{"unquoted archive", "INSERT INTO ARCHIVE 'out'\nSELECT * FROM ARCHIVE sensitive_SENTINEL_5c27", "expected single-quoted string; found identifier", Position{2, 23}},
 		{"unit before invalid character", prefix + "WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '1' WEEK ?", "expected SECOND, MINUTE, HOUR or DAY; found identifier", Position{3, 48}},
-		{"unquoted interval", bare + "WITH(GROUP='g', MAX_STALENESS=INTERVAL 5 MINUTE)", "expected single-quoted string; found integer", Position{3, 40}},
+		{"unquoted interval", bare + "WITH(GROUP='g', MAX_OUT_OF_ORDER=INTERVAL 5 MINUTE)", "expected single-quoted string; found integer", Position{3, 43}},
 		{"option before invalid character", prefix + "OPTIONS(STRAT ?)", "expected WORKER_STOP_AFTER_RECORDS, ON_ERROR, ON_MISSING_TIMESTAMP or ON_REJECTED_TIMESTAMP; found identifier", Position{3, 9}},
 		{"projection", "INSERT INTO ARCHIVE 'out'\nSELECT 'secret' FROM ARCHIVE 'in'", "expected \"*\"; found string literal", Position{2, 8}},
 		{"missing equals", bare + "WITH(GROUP 'g')", "expected \"=\"; found string literal", Position{3, 12}},
@@ -94,7 +94,7 @@ func TestParserDiagnosticsNeverEchoArbitraryInput(t *testing.T) {
 func TestASTCapturesEachAnchorBeforeAdvancingTokens(t *testing.T) {
 	// Given one statement exercising every source-location field.
 	input := "WITH CONNECTION prod AS ('sasl.password'=ENV('PASSWORD'), 'bootstrap.servers'='broker')\n" +
-		"INSERT INTO TOPIC 'out@prod'\nSELECT * FROM TOPIC 'in@prod' WITH (GROUP='g', MAX_STALENESS=INTERVAL '3' MINUTE)\n" +
+		"INSERT INTO TOPIC 'out@prod'\nSELECT * FROM TOPIC 'in@prod' WITH (GROUP='g', MAX_OUT_OF_ORDER=INTERVAL '3' MINUTE)\n" +
 		"WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T00:00:00Z' + INTERVAL '1' HOUR\n" +
 		"AND RECORD_TIMESTAMP < NOW() - INTERVAL '2' SECOND\nOPTIONS(ON_ERROR=FAIL)"
 	// When parsing while preserving transient locations.
@@ -115,7 +115,7 @@ func TestASTCapturesEachAnchorBeforeAdvancingTokens(t *testing.T) {
 		{statement.Bounds[1].Position, "< NOW"}, {statement.Bounds[1].Time.Position, "NOW"},
 		{statement.Bounds[1].Time.Adjustments[0].Position, "'2'"},
 		{statement.Source.Options[0].Position, "GROUP"}, {statement.Source.Options[0].ValuePosition, "'g'"},
-		{statement.Source.Options[1].Position, "MAX_STALENESS"}, {statement.Source.Options[1].ValuePosition, "INTERVAL '3'"},
+		{statement.Source.Options[1].Position, "MAX_OUT_OF_ORDER"}, {statement.Source.Options[1].ValuePosition, "INTERVAL '3'"},
 		{statement.Source.Options[1].Interval.Position, "'3'"},
 	} {
 		// Then each anchor points to its own token, never the following token.

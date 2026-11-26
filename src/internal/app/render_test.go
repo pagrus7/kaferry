@@ -17,7 +17,7 @@ import (
 
 func explanationFixture() inspect.Report {
 	lo, hi := int64(1000), int64(2000)
-	return inspect.Report{Version: 2, Fingerprint: "query-id", Group: "backfill", MaxStalenessMS: 1000, MaxOutOfOrderMS: new(int64(1000)), StartRule: "WINDOW",
+	return inspect.Report{Version: 3, Fingerprint: "query-id", Group: "backfill", EndRule: "LATEST", MaxOutOfOrderMS: new(int64(1000)), StartRule: "WINDOW",
 		Source:       inspect.Endpoint{Kind: "TOPIC", Name: "input", Connection: "prod", ClusterID: "cluster-id", TopicID: "topic-id", PartitionCount: 1},
 		Destination:  inspect.Endpoint{Kind: "ARCHIVE", Name: "out.avro", File: &inspect.ArchiveSummary{}},
 		Partitions:   []inspect.Partition{{ID: 0, Start: 4, LogEnd: 12, End: new(int64(12)), Saved: true, Window: plan.Window{Lower: &lo, Upper: &hi}, WindowOrigin: "literal"}},
@@ -25,7 +25,7 @@ func explanationFixture() inspect.Report {
 }
 
 func TestExplanationJSONContract(t *testing.T) {
-	// Given the public version-two JSON report.
+	// Given the public explain JSON report.
 	want, err := os.ReadFile("testdata/explain.json")
 	require.NoError(t, err)
 	var output bytes.Buffer
@@ -44,6 +44,8 @@ func textExplanation(t *testing.T, report inspect.Report) string {
 func TestTextExplanationStructuresBehaviorAndEscapesNames(t *testing.T) {
 	// Given a bounded report with one saved partition and names containing terminal controls.
 	report := explanationFixture()
+	report.Offsets = &plan.OffsetRange{Latest: true}
+	report.Partitions[0].EndOrigin = "saved"
 	report.Source.Name, report.Group = "input\n\x1b", "group\n\x1b"
 	report.Warnings = []string{"Partition 0: saved offset 1 expired; start is log start 4."}
 	// When rendering, then lead with endpoints and progress, followed by behavior and limitations.
@@ -54,10 +56,10 @@ func TestTextExplanationStructuresBehaviorAndEscapesNames(t *testing.T) {
 		require.Greater(t, position, previous)
 		previous = position
 	}
-	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "saved captured end 12", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "1970-01-01T00:00:03Z", "reuse a saved captured end", "Otherwise, once the clock passes the threshold, save the current replicated end", "Open transactions", "worker.tip_wait", "saved offset 1 expired", "Record errors: stop", "Output: Kaferry archive files"} {
+	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "Partition 0: start 4; exclusive end 12 (saved); offset span 8", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "Stop before the first visible record whose timestamp is after 1970-01-01T00:00:03Z (MAX_OUT_OF_ORDER).", "saved readable end per partition", "saved offset 1 expired", "Record errors: stop", "Output: Kaferry archive files"} {
 		require.Contains(t, output, want)
 	}
-	for _, absent := range []string{"query-id", "topic-id", "lookup end", "span", "Run permissions", "\x1b"} {
+	for _, absent := range []string{"query-id", "topic-id", "lookup end", "Run permissions", "\x1b"} {
 		require.NotContains(t, output, absent)
 	}
 }
@@ -105,12 +107,12 @@ func TestTextExplanationFollowingRoutingAndSkipPolicies(t *testing.T) {
 			// Given a following copy, destination routing and one explicit SKIP policy.
 			report := explanationFixture()
 			report.Partitions[0].Window, report.Partitions[0].Saved = plan.Window{}, false
-			report.StartRule = "LATEST"
+			report.StartRule, report.EndRule = "LATEST", "FOLLOW"
 			report.Destination = inspect.Endpoint{Kind: "TOPIC", Name: "output", Connection: "backup", ClusterID: "other-cluster", PartitionCount: 3, TimestampType: policy, Partitioning: plan.Key}
 			report.RecordErrors.RejectedTimestamp = "SKIP"
 			// When rendering, then state continuous follow, dropped-record scope, and whether the timestamp policy is known.
 			output := textExplanation(t, report)
-			for _, want := range []string{"current read-committed end", "Filter: none", "no end time; follow", "original key bytes; destination key partitioner", "Skip before writing: rejected timestamps (records dropped)", "Delivery and unclassified errors: stop"} {
+			for _, want := range []string{"current read-committed end", "Filter: none", "no source end (FOLLOW = ON)", "original key bytes; destination key partitioner", "Skip before writing: rejected timestamps (records dropped)", "Delivery and unclassified errors: stop"} {
 				require.Contains(t, output, want)
 			}
 			if policy == "" {
@@ -130,22 +132,27 @@ func TestTextExplanationLimitedStopRules(t *testing.T) {
 			// Given a limited copy that can also reach its source's normal stop.
 			report := explanationFixture()
 			report.WorkerStopAfterRecords = 5
-			want := "Stop: worker record threshold or all assigned partitions stopping, whichever comes first."
+			want := "saved readable end per partition"
 			switch source {
 			case "file":
 				position, window := int64(0), plan.Window{}
 				saved := false
+				report.EndRule = "EOF"
+				report.MaxOutOfOrderMS = nil
 				report.Source = inspect.Endpoint{Kind: "ARCHIVE", File: &inspect.ArchiveSummary{PositionRecords: &position, Window: &window, CheckpointExists: &saved}}
 				report.Partitions = nil
-				want = "Stop: worker record threshold or end of this group's fixed selection of completed archive files, whichever comes first"
+				want = "fixed selection of completed archive files"
 			case "following topic":
 				report.Partitions[0].Window = plan.Window{}
-				want = "Stop: follow new records until the worker record threshold is reached or interrupted."
+				report.EndRule = "FOLLOW"
+				want = "no source end (FOLLOW = ON)"
 			}
 			// When rendering, then the stop description includes the limit and source completion.
 			output := textExplanation(t, report)
 			require.Contains(t, output, want)
-			require.NotContains(t, output, "follow new records until stopped")
+			if source == "time-bounded topic" {
+				require.NotContains(t, output, "FOLLOW = ON")
+			}
 		})
 	}
 }
@@ -157,6 +164,8 @@ func TestTextExplanationArchiveProgressAndSelection(t *testing.T) {
 			report := explanationFixture()
 			position, upper := int64(200), int64(2000)
 			window := plan.Window{Upper: &upper}
+			report.EndRule = "EOF"
+			report.MaxOutOfOrderMS = nil
 			report.Source = inspect.Endpoint{Kind: "ARCHIVE", Name: "input.avro", File: &inspect.ArchiveSummary{Exists: true, SizeBytes: 500, PositionRecords: &position, Window: &window, CheckpointExists: &saved}}
 			report.Partitions = nil
 			report.OneOff = !saved
@@ -201,7 +210,7 @@ func TestTextExplanationShowsOnlyApplicableSkipCategories(t *testing.T) {
 			require.NotContains(t, output, "rejected timestamps")
 			if filtered {
 				require.Contains(t, output, "Fresh start: earliest retained offset; apply the time filter while reading.")
-				require.Contains(t, output, "Timestamp stop threshold: 1970-01-01T00:00:03Z")
+				require.Contains(t, output, "timestamp is after 1970-01-01T00:00:03Z")
 			} else {
 				require.Contains(t, output, "Record errors: stop")
 				require.Contains(t, output, "start at the earliest retained offset.")
@@ -298,29 +307,11 @@ func TestFilePartitionTextExplainsItsFixedSelection(t *testing.T) {
 	}
 }
 
-func TestTextExplanationDistinguishesIndependentCompletionRules(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		s      int64
-		d      *int64
-		offset *plan.OffsetRange
-		want   []string
-	}{
-		{name: "clock only", s: 1000, want: []string{"Timestamp stopping: OFF", "Clock capture threshold:"}},
-		{name: "data only", s: -1, d: new(int64(0)), want: []string{"Timestamp stop threshold:", "Wall-clock end capture: OFF"}},
-		{name: "both disabled", s: -1, want: []string{"Timestamp stopping: OFF", "keep following"}},
-		{name: "different allowances", s: 10000, d: new(int64(1000)), want: []string{"1000 ms MAX_OUT_OF_ORDER", "10000 ms MAX_STALENESS"}},
-		{name: "offset end", offset: &plan.OffsetRange{Latest: true}, want: []string{"fixed exclusive offset end", "timestamps filter records"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			// Given the resolved report, when rendering, then explain each active completion rule separately.
-			report := explanationFixture()
-			report.MaxStalenessMS, report.MaxOutOfOrderMS, report.Offsets = tc.s, tc.d, tc.offset
-			report.WorkerStopAfterRecords = 10
-			output := textExplanation(t, report)
-			for _, want := range tc.want {
-				require.Contains(t, output, want)
-			}
-		})
+func TestStopRules(t *testing.T) {
+	for rule, want := range map[string]string{"LATEST": "saved readable end", "OFFSET": "saved exclusive offset end", "FOLLOW": "no source end", "EOF": "fixed selection"} {
+		// Given a resolved end rule, when rendering, then describe that source boundary.
+		r := explanationFixture()
+		r.EndRule = rule
+		require.Contains(t, textExplanation(t, r), want)
 	}
 }

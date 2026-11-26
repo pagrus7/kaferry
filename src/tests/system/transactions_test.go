@@ -5,150 +5,87 @@ package compat
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/pagrus7/kaferry/src/internal/kafka/commitmeta"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func tipSamples(samples chan<- int64) func(slog.Record) {
-	return func(record slog.Record) {
-		if record.Message != "tip watermark sampled" {
-			return
-		}
-		record.Attrs(func(attr slog.Attr) bool {
-			if attr.Key == "high_watermark" {
-				select {
-				case samples <- attr.Value.Int64():
-				default:
-				}
-			}
-			return true
-		})
-	}
-}
-
-//kaferry:guarantee start
-func TestNoMatchLookupOpenTransactionAndTrailingMarker(t *testing.T) {
-	// Given
-	for _, abort := range []bool{false, true} {
-		t.Run(map[bool]string{false: "commit", true: "abort"}[abort], func(t *testing.T) {
-			a := admin(t)
-			src := topic(t, a, 1)
-			p := producer(t, kgo.TransactionalID(src+"-open"))
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			defer cancel()
-			require.NoError(t, p.BeginTransaction())
-			stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
-			publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte("transactional"), Timestamp: stamp})
-			path := filepath.Join(t.TempDir(), "out.avro")
-			group := src + "-copy"
-			cfg := configuration(t)
-			statement := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' ", path, src, group, stamp.Add(-time.Second).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano))
-			result := make(chan workerResult, 1)
-			samples := make(chan int64, 1)
-			go func() {
-				// When
-				result <- loggedWorker(ctx, statement, cfg, tipSamples(samples))
-			}()
-			finished := false
-			t.Cleanup(func() {
-				cancel()
-				if !finished {
-					<-result
-				}
-			})
-			deadline := time.Now().Add(10 * time.Second)
-			initialized := false
-			for time.Now().Before(deadline) {
-				select {
-				case r := <-result:
-					finished = true
-					t.Fatalf("copy ended before transaction resolution: %d %s", r.code, r.detail)
-				default:
-				}
-				positions, err := a.FetchOffsets(ctx, group)
-				if err == nil && positions.Error() == nil && len(positions[src]) == 1 && positions[src][0].At == 0 {
-					initialized = true
-					break
-				}
-				select {
-				case <-ctx.Done():
-					t.Fatal("initialization timed out")
-				case <-time.After(20 * time.Millisecond):
-				}
-			}
-
-			// Then
-			if !initialized {
-				t.Fatal("no-match lookup did not initialize at LSO")
-			}
-			// When the worker samples the tip while the transaction remains open.
-			select {
-			case high := <-samples:
-				// Then H includes the unread transaction, rather than the stable offset 0.
-				require.Equal(t, int64(1), high, "sampled high watermark=%d, want 1", high)
-			case r := <-result:
-				finished = true
-				t.Fatalf("copy ended before sampling the open transaction: %d %s", r.code, r.detail)
-			case <-ctx.Done():
-				t.Fatal("open transaction was not included in the tip sample")
-			}
-			if abort {
-				require.NoError(t, p.EndTransaction(ctx, kgo.TryAbort))
-			} else {
-				require.NoError(t, p.EndTransaction(ctx, kgo.TryCommit))
-			}
-			select {
-			case r := <-result:
-				finished = true
-				require.Zero(t, r.code, "transaction tail exit=%d: %s", r.code, r.detail)
-			case <-ctx.Done():
-				t.Fatal("control marker did not complete tip")
-			}
-			want := 1
-			if abort {
-				want = 0
-			}
-			if records := archiveRecords(t, path); len(records) != want {
-				t.Fatalf("visible=%d want=%d", len(records), want)
-			}
-			execute(t, statement, cfg)
-			if records := archiveRecords(t, path); len(records) != want {
-				t.Fatal("control cursor failed to prevent recopy")
-			}
-		})
-	}
-}
-
 //kaferry:guarantee completion.offset-end
-func TestOpenTransactionReachesTipWaitInsteadOfSuccessfulCompletion(t *testing.T) {
-	// Given an in-window record in a transaction that stays open past tip_wait.
+func TestSnapshotRejectsUnreadableNumericEndAndExcludesOpenTransaction(t *testing.T) {
+	// Given one record in a transaction that has not committed.
 	a := admin(t)
 	src, dst := topic(t, a, 1), topic(t, a, 1)
 	p := producer(t, kgo.TransactionalID(src+"-open"))
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	require.NoError(t, p.BeginTransaction())
-	defer func() {
-		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
-		defer stop()
-		_ = p.EndTransaction(cleanup, kgo.TryAbort)
-	}()
-	stamp := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
-	publish(t, p, &kgo.Record{Topic: src, Partition: 0, Value: []byte("transactional"), Timestamp: stamp})
-	statement := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC '%s' WITH (GROUP='%s', MAX_STALENESS=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP >= TIMESTAMP '%s' AND RECORD_TIMESTAMP < TIMESTAMP '%s' ", dst, src, src+"-wait", stamp.Add(-time.Second).Format(time.RFC3339Nano), stamp.Add(time.Second).Format(time.RFC3339Nano))
-	cfg := configuration(t, "tip_wait='100ms'\n")
+	publish(t, p, &kgo.Record{Topic: src, Value: []byte("pending")})
+	query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s')", dst, src, src+"-snapshot")
+	cfg := configuration(t)
+	// When requesting a numeric end beyond the readable end, fail before copying.
+	result := binaryWorker(ctx, t, query+" WHERE RECORD_OFFSET<1", cfg)
+	require.Equal(t, 2, result.code, result.detail)
+	require.Contains(t, result.detail, "requested offset end 1 exceeds the readable end 0. Lower the requested end or retry when more offsets are readable")
+	// Then a default snapshot finishes now and keeps the empty end even after commit.
+	result = binaryWorker(ctx, t, query, cfg)
+	require.Zero(t, result.code, result.detail)
+	require.NoError(t, p.EndTransaction(ctx, kgo.TryCommit))
+	result = binaryWorker(ctx, t, query, cfg)
+	require.Zero(t, result.code, result.detail)
+	require.Zero(t, topicRecordCount(t, a, dst, 1))
+}
 
-	// When the worker drains toward the sampled log end without a transaction commit.
-	r := loggedWorker(ctx, statement, cfg)
-
-	// Then it fails with the pending end/stable positions, without publishing.
-	if r.code != 1 || !strings.Contains(r.detail, "tip wait exceeded: H=1 stable=0 consumed=0") || !strings.Contains(r.detail, `"submitted":0,"confirmed":0`) {
-		t.Fatalf("open transaction falsely completed: %d %s", r.code, r.detail)
+//kaferry:guarantee completion.timestamp
+func TestDisorderStopsOnlyAtVisibleTrigger(t *testing.T) {
+	// Given an aborted trigger, an in-range committed record, a visible trigger and a late match.
+	a := admin(t)
+	src := topic(t, a, 1)
+	p := producer(t, kgo.TransactionalID(src+"-aborted"))
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	hi := time.Now().Truncate(time.Millisecond)
+	publishAt := func(value string, stamp time.Time) {
+		publish(t, p, &kgo.Record{Topic: src, Value: []byte(value), Timestamp: stamp})
+	}
+	require.NoError(t, p.BeginTransaction())
+	publishAt("aborted", hi.Add(time.Second))
+	require.NoError(t, p.EndTransaction(ctx, kgo.TryAbort))
+	require.NoError(t, p.BeginTransaction())
+	publishAt("match", hi.Add(-time.Second))
+	publishAt("trigger", hi.Add(time.Second))
+	publishAt("late", hi.Add(-time.Second))
+	require.NoError(t, p.EndTransaction(ctx, kgo.TryCommit))
+	for _, tc := range []struct {
+		name, option, reason string
+		values               []string
+	}{
+		{"bounded", "", "tip", []string{"match", "late"}},
+		{"disorder", ",MAX_OUT_OF_ORDER=INTERVAL '0' SECOND", "timestamp", []string{"match"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// When each group scans the same committed records twice.
+			dst, group := topic(t, a, 1), src+"-"+tc.name
+			query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s'%s) WHERE RECORD_TIMESTAMP<TIMESTAMP '%s'", dst, src, group, tc.option, hi.Format(time.RFC3339Nano))
+			cfg := configuration(t)
+			for range 2 {
+				result := binaryWorker(ctx, t, query, cfg)
+				require.Zero(t, result.code, result.detail)
+			}
+			// Then only the opt-in stop omits the late match, and resume never repeats it.
+			require.EqualValues(t, len(tc.values), topicRecordCount(t, a, dst, 1))
+			c := consumer(t)
+			assign(t, c, dst, 1)
+			for _, value := range tc.values {
+				require.Equal(t, value, string(read(t, c).Value))
+			}
+			raw := committedPartitions(t, a, group, src, 1)[0]
+			progress, err := commitmeta.NewCodec().Decode(raw.Metadata)
+			require.NoError(t, err)
+			require.NotNil(t, progress.Stop)
+			require.Equal(t, tc.reason, progress.Stop.Reason)
+		})
 	}
 }

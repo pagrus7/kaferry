@@ -14,7 +14,7 @@ import (
 )
 
 func TestArchiveCriteriaCLIUsesOriginalStreamsAndResumesCompletion(t *testing.T) {
-	for _, mode := range []string{"full snapshot", "disorder", "offset end"} {
+	for _, mode := range []string{"full snapshot", "offset end"} {
 		t.Run(mode, func(t *testing.T) {
 			archiveCriteriaCLI(t, mode)
 		})
@@ -33,17 +33,13 @@ func archiveCriteriaCLI(t *testing.T, mode string) {
 	archiveFixture(t, input, 1, values)
 	cfg := filepath.Join(root, "worker.toml")
 	require.NoError(t, os.WriteFile(cfg, []byte(fmt.Sprintf("[worker]\ncheckpoint_dir=%q\n", root)), 0600))
-	settings, criteria := "", "RECORD_TIMESTAMP < TIMESTAMP '1970-01-01T00:00:00.050Z'"
+	criteria := "RECORD_TIMESTAMP < TIMESTAMP '1970-01-01T00:00:00.050Z'"
 	want := []int64{100, 102}
-	if mode == "disorder" {
-		settings = ",MAX_OUT_OF_ORDER=INTERVAL '0' SECOND"
-		want = []int64{100}
-	}
 	if mode == "offset end" {
 		criteria = "RECORD_OFFSET>=101 AND RECORD_OFFSET<102"
 		want = []int64{101}
 	}
-	query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH(GROUP='criteria'%s) WHERE %s", output, input, settings, criteria)
+	query := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH(GROUP='criteria') WHERE %s", output, input, criteria)
 	// When run and then resumed, then copy only matching original records and do not reopen completed streams.
 	for range 2 {
 		var logs bytes.Buffer
@@ -57,9 +53,6 @@ func archiveCriteriaCLI(t *testing.T, mode string) {
 	var status inspect.StatusReport
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &status))
 	wantVerdict := "complete"
-	if mode == "disorder" {
-		wantVerdict = "complete_within_staleness"
-	}
 	require.Equal(t, wantVerdict, status.Verdict)
 	require.Len(t, status.Partitions, 1)
 	require.NotNil(t, status.Partitions[0].Stop)

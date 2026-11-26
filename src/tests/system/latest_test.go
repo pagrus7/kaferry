@@ -26,7 +26,7 @@ func TestLatestEndRemainsPinnedAfterCompletion(t *testing.T) {
 	}
 	group := source + "-latest"
 	config := configuration(t)
-	query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s') WHERE RECORD_OFFSET < LATEST", destination, source, group)
+	query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH (GROUP='%s')", destination, source, group)
 	run := func() copySummary {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -50,7 +50,8 @@ func TestLatestEndRemainsPinnedAfterCompletion(t *testing.T) {
 		publish(t, p, &kgo.Record{Topic: source, Partition: 0, Value: []byte(fmt.Sprintf("appended-%d", offset))})
 	}
 	require.EqualValues(t, initial+appended, topicRecordCount(t, a, source, 1))
-	// When the exact same query and group run again.
+	// When the group resumes with the equivalent explicit LATEST end.
+	query += " WHERE RECORD_OFFSET < LATEST"
 	second := run()
 	// Then no records are submitted or confirmed, and only the original records remain in the destination.
 	require.Zero(t, second.Submitted)

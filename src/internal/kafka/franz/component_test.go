@@ -369,7 +369,6 @@ func componentRunnerSettings(limits config.Worker) core.Settings {
 		ByteCap:            limits.ByteCap,
 		DeliveryTimeout:    limits.DeliveryTimeout.Duration,
 		IdleExit:           limits.IdleExit.Duration,
-		TipWait:            limits.TipWait.Duration,
 		ProgressInterval:   limits.ProgressInterval.Duration,
 	}
 }

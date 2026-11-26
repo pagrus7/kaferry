@@ -39,15 +39,10 @@ func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafka
 			return err
 		}
 		var err error
-		saved, err = connection.Saved(ctx, p.Group, report.Fingerprint, p.Window, p.MaxStalenessMS)
+		saved, err = connection.Saved(ctx, p.Group, report.Fingerprint, p.Window, p.DisorderMS())
 		if err != nil {
 			return err
 		}
-	}
-	if p.Window.Lower != nil || p.Window.Upper != nil {
-		report.StartRule = "WINDOW"
-	} else if len(saved) > 0 {
-		report.StartRule = "EARLIEST"
 	}
 	topic, err := connection.Describe(ctx, false)
 	if err != nil {
@@ -57,9 +52,7 @@ func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafka
 	if err != nil {
 		return &kafka.Conflict{Err: err}
 	}
-	if p.Offsets != nil || len(p.PartitionOffsets) > 0 {
-		report.StartRule = "OFFSET"
-	}
+	report.StartRule = topicStartRule(p, selected, len(saved) > 0)
 	report.Source.PartitionCount = len(topic.Partitions)
 	located, err := s.positioning.New(connection, connection, p, report.Fingerprint, topic.TopicID).Locate(ctx, selected, saved)
 	if err != nil {
@@ -82,4 +75,19 @@ func hasPreviewEnd(partitions []Partition) bool {
 		}
 	}
 	return false
+}
+
+func topicStartRule(p plan.Plan, partitions []int32, hasSaved bool) string {
+	for _, id := range partitions {
+		if bounds := p.OffsetRange(id); bounds != nil && bounds.Lower != nil {
+			return "OFFSET"
+		}
+	}
+	if p.Window.Lower != nil {
+		return "WINDOW"
+	}
+	if !hasSaved && p.Start == "LATEST" {
+		return "LATEST"
+	}
+	return "EARLIEST"
 }

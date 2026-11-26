@@ -18,7 +18,6 @@ type Query struct {
 	Partitions         *plan.PartitionFilter
 	Offsets            *plan.OffsetRange
 	PartitionOffsets   []plan.PartitionOffsetRange
-	MaxOutOfOrderMS    *int64
 	// PartitionCount bounds original IDs when replay requires an existing layout.
 	// Zero leaves IDs unrestricted; the constraint is not persisted.
 	PartitionCount int
@@ -47,7 +46,6 @@ type Session struct {
 	closed       bool
 	PrivateFiles int
 	criteria     plan.Plan
-	threshold    *int64
 }
 
 // NewSession takes ownership of store and blocks only on success.
@@ -58,7 +56,7 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 	if maxPending < 1 {
 		return nil, errors.New("replay pending-record cap must be positive")
 	}
-	s := &Session{store: store, blocks: blocks, limit: maxPending, criteria: plan.Plan{Offsets: query.Offsets, PartitionOffsets: query.PartitionOffsets, MaxOutOfOrderMS: query.MaxOutOfOrderMS}}
+	s := &Session{store: store, blocks: blocks, limit: maxPending, criteria: plan.Plan{Offsets: query.Offsets, PartitionOffsets: query.PartitionOffsets}}
 	saved, err := store.Load()
 	if err != nil {
 		return nil, err
@@ -72,10 +70,6 @@ func NewSession(query Query, clock Clock, store Checkpoints, inputs Snapshot, bl
 		return nil, err
 	}
 
-	if s.criteria.TimestampStopEnabled() && s.saved.Window.Upper != nil {
-		threshold := *s.saved.Window.Upper + s.criteria.DisorderMS()
-		s.threshold = &threshold
-	}
 	if !s.saved.Complete {
 		s.reader, err = NewReader(s.saved.Files, blocks)
 		if err != nil {
@@ -91,7 +85,7 @@ func (s *Session) initialize(query Query, clock Clock, inputs Snapshot) error {
 	if checkErr != nil {
 		return checkErr
 	}
-	if checkErr = query.Window.ValidateStored(window, query.disorderAllowance()); checkErr != nil {
+	if checkErr = query.Window.ValidateStored(window, -1); checkErr != nil {
 		return checkErr
 	}
 	selection, checkErr := inputs.Select(query.Partitions)
@@ -123,7 +117,7 @@ func (s *Session) restore(query Query, saved *State, inputs Snapshot) error {
 	if s.saved.Group != query.Group || s.saved.Fingerprint != query.Fingerprint {
 		return errors.New("replay checkpoint query identity mismatch")
 	}
-	if err := query.Window.ValidateStored(s.saved.Window, query.disorderAllowance()); err != nil {
+	if err := query.Window.ValidateStored(s.saved.Window, -1); err != nil {
 		return err
 	}
 	if err := query.validatePartitions(s.saved.Files); err != nil {
@@ -183,8 +177,7 @@ func (s *Session) Next() (item Item, err error) {
 	d := delta{file: entry.File, next: entry.Next}
 	bounds := s.criteria.OffsetRange(entry.Record.Source.Partition)
 	pastOffset := bounds != nil && bounds.Upper != nil && entry.Record.Offset >= *bounds.Upper
-	pastTime := s.threshold != nil && entry.Record.TimestampMS != nil && *entry.Record.TimestampMS > *s.threshold
-	if pastOffset || pastTime {
+	if pastOffset {
 		d.skipped = s.reader.finishSource(entry.Record.Source)
 	}
 	s.pending = append(s.pending, d)
@@ -253,10 +246,3 @@ func (s *Session) Close() error {
 }
 
 func equalStop(a, b *core.Stop) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
-
-func (q Query) disorderAllowance() int64 {
-	if q.MaxOutOfOrderMS != nil {
-		return max(0, *q.MaxOutOfOrderMS)
-	}
-	return 0
-}

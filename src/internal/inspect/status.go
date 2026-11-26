@@ -54,7 +54,7 @@ type SavedPartition struct {
 
 const (
 	verdictComplete          = "complete"
-	verdictTimestampComplete = "complete_within_staleness"
+	verdictTimestampComplete = "complete_within_disorder"
 	verdictIncomplete        = "incomplete"
 	verdictUnknown           = "unknown"
 	verdictRunning           = "running"
@@ -68,8 +68,8 @@ type StatusVerdict struct {
 }
 
 var statusVerdicts = map[string]StatusVerdict{
-	verdictComplete:          {0, "Source processing finished for the selected finite scope: explicit offset bounds or the saved archive selection."},
-	verdictTimestampComplete: {0, "Source processing finished under the configured timestamp assumptions."},
+	verdictComplete:          {0, "Source processing finished for the selected finite scope: saved offset ends or the saved archive selection."},
+	verdictTimestampComplete: {0, "All selected partitions finished and at least one stopped early under MAX_OUT_OF_ORDER."},
 	verdictIncomplete:        {4, "Part of the selection has no saved stop."},
 	verdictUnknown:           {5, "Saved progress is absent, invalid or incompatible, or the group has an incompatible active member."},
 	verdictRunning:           {6, "Kafka group activity, unsettled state or a membership change was observed."},
@@ -96,7 +96,7 @@ func (r StatusReport) ExitCode() int {
 }
 
 func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker, stop core.StopObserver) (report StatusReport, result error) {
-	report = StatusReport{Version: 2, Group: p.Group, Partitions: []SavedPartition{}, Activity: "not checked for files"}
+	report = StatusReport{Version: 3, Group: p.Group, Partitions: []SavedPartition{}, Activity: "not checked for files"}
 	if p.Source.Kind == "TOPIC" {
 		report.Activity = "group check did not finish"
 	}
@@ -141,12 +141,12 @@ func (s *Service) Status(ctx context.Context, p plan.Plan, limits config.Worker,
 		err = ctx.Err()
 	}
 	if err == nil {
-		report.addGuidance(savedArchiveSelection)
+		report.addGuidance(p.Follow, savedArchiveSelection)
 	}
 	return report, err
 }
 
-func (r *StatusReport) addGuidance(savedArchiveSelection bool) {
+func (r *StatusReport) addGuidance(follow, savedArchiveSelection bool) {
 	r.Meaning = statusVerdicts[r.Verdict].Meaning
 	switch r.Verdict {
 	case verdictUnknown:
@@ -154,11 +154,16 @@ func (r *StatusReport) addGuidance(savedArchiveSelection bool) {
 	case verdictRunning:
 		r.Next = "Wait briefly, then check status again."
 	case verdictIncomplete:
-		r.Next = "To resume, rerun with the same query, group, and configuration."
+		if follow {
+			r.Notes = append(r.Notes, "FOLLOW = ON has no source end. An incomplete verdict is expected when following stops.")
+			r.Next = "To keep following, rerun with the same query, group, and configuration."
+		} else {
+			r.Next = "To resume, rerun with the same query, group, and configuration."
+		}
 	case verdictLimitReached:
 		r.Next = "Rerun the same job for another allowance."
 	case verdictTimestampComplete:
-		r.Notes = append(r.Notes, "Timestamp completion depends on the enabled MAX_STALENESS (arrival delay and consumer clock lead) or MAX_OUT_OF_ORDER (timestamp disorder) assumptions.")
+		r.Notes = append(r.Notes, "Later records in the time window can be missed if timestamps move backwards by more than the allowance.")
 		fallthrough
 	case verdictComplete:
 		r.Notes = append(r.Notes, "Completion permits filtered or skipped records, does not guarantee exactly-once writes and does not verify destination data.")
@@ -173,7 +178,7 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafka.Inspecti
 	if err != nil {
 		return err
 	}
-	saved, progressErr := c.Saved(ctx, p.Group, r.Fingerprint, p.Window, p.MaxStalenessMS)
+	saved, progressErr := c.Saved(ctx, p.Group, r.Fingerprint, p.Window, p.DisorderMS())
 	if progressErr != nil && !errors.Is(progressErr, plan.ErrFingerprintMismatch) {
 		return progressErr
 	}
@@ -211,7 +216,7 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafka.Inspecti
 		}
 		return progressErr
 	}
-	r.observed(before, after, p)
+	r.observed(before, after)
 	return nil
 }
 
@@ -234,14 +239,14 @@ func membershipChanged(before, after kafka.Membership) bool {
 	return !before.Idle || !after.Idle || before.State != after.State
 }
 
-func (r *StatusReport) observed(before, after kafka.Membership, p plan.Plan) {
+func (r *StatusReport) observed(before, after kafka.Membership) {
 	switch {
 	case before.Foreign || after.Foreign:
 		r.Verdict, r.Reason = verdictUnknown, "group has an incompatible active member"
 	case membershipChanged(before, after):
 		r.Verdict = verdictRunning
 	default:
-		r.classify(p)
+		r.classify()
 	}
 }
 
@@ -259,21 +264,19 @@ func (s *Service) archiveStatus(p plan.Plan, limits config.Worker, r *StatusRepo
 	}
 	r.Partitions = append(r.Partitions, row)
 	if err == nil {
-		r.classify(p)
+		r.classify()
 	}
 	return info.Saved, err
 }
 
-func (r *StatusReport) classify(p plan.Plan) {
+func (r *StatusReport) classify() {
 	anySaved, allStopped := false, len(r.Partitions) > 0
-	usesTime := false
 	reasons := make(map[string]bool)
 	for _, row := range r.Partitions {
 		anySaved = anySaved || row.Position != nil
 		allStopped = allStopped && row.Position != nil && row.Stop != nil
 		if row.Stop != nil {
 			reasons[row.Stop.Reason] = true
-			usesTime = usesTime || p.StopUsesTime(row.Stop.Reason)
 		}
 	}
 	switch {
@@ -286,7 +289,7 @@ func (r *StatusReport) classify(p plan.Plan) {
 		switch {
 		case reasons["worker_record_cap"]:
 			r.Verdict = verdictLimitReached
-		case usesTime:
+		case reasons["timestamp"]:
 			r.Verdict = verdictTimestampComplete
 		}
 		var descriptions []string

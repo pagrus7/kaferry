@@ -8,7 +8,7 @@ import (
 )
 
 func TestWorkerStopValidationAndFingerprint(t *testing.T) {
-	const base = "INSERT INTO TOPIC 'b' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a' WITH (GROUP='g', START=EARLIEST) "
+	const base = "INSERT INTO TOPIC 'b' WITH (PARTITIONING = KEY) SELECT * FROM TOPIC 'a' WITH (GROUP='g', START=EARLIEST,FOLLOW=ON) "
 	original := build(t, base)
 	want, err := original.testFingerprint("source-cluster", "destination-cluster")
 	require.NoError(t, err)
@@ -48,7 +48,7 @@ func TestInvalidWorkerStopRangeDoesNotEchoInput(t *testing.T) {
 func TestWorkerStopKeepsSourceDefaults(t *testing.T) {
 	for _, tc := range []struct{ settings, group string }{
 		{"WITH (GROUP='g')", "g"},
-		{"WITH (START=EARLIEST)", "ONE_OFF"},
+		{"WITH (START=EARLIEST,FOLLOW=ON)", "ONE_OFF"},
 		{"", "ONE_OFF"},
 	} {
 		// Given a cap and optional source settings.

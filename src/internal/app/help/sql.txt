@@ -14,7 +14,8 @@ endpoint    = "TOPIC" string                 (* 'topic' or 'topic@alias' *)
             | "ARCHIVE" string ;             (* archive directory *)
 source_option = "GROUP" "=" ( string | "ONE_OFF" )
             | "START" "=" ( "EARLIEST" | "LATEST" )
-            | ( "MAX_STALENESS" | "MAX_OUT_OF_ORDER" ) "="
+            | "FOLLOW" "=" ( "ON" | "OFF" )
+            | "MAX_OUT_OF_ORDER" "="
               ( interval | "OFF" ) ;
 sink_option = "PARTITIONING" "=" ( "PRESERVE" | "KEY" )
             | "ROTATE_AFTER_SIZE" "=" integer [ "k" | "m" | "g" ]
@@ -49,15 +50,15 @@ Source WITH (after FROM)
 Kafka source
   GROUP                      ONE_OFF
   START                      EARLIEST
-  MAX_STALENESS              INTERVAL '5' MINUTE with a timestamp upper bound
+  FOLLOW                     OFF
   MAX_OUT_OF_ORDER           OFF
 
-START applies without timestamp bounds. Saved positions take precedence.
-MAX_STALENESS applies when there is no explicit offset end.
+START requires FOLLOW = ON and no timestamp filter.
+Saved positions take precedence.
+MAX_OUT_OF_ORDER can stop a bounded scan early on a visible record.
 
 Archive source
   GROUP                      ONE_OFF
-  MAX_OUT_OF_ORDER           OFF
 
 Sink WITH (after INSERT INTO)
 Kafka sink

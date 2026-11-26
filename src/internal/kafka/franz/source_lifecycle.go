@@ -19,7 +19,7 @@ func (s *Source) lifecycle(ctx context.Context, event lifecycleEvent) error {
 		return err
 	}
 
-	saved, err := s.inspector.Saved(ctx, s.plan.Group, s.fingerprint, s.plan.Window, s.plan.MaxStalenessMS)
+	saved, err := s.inspector.Saved(ctx, s.plan.Group, s.fingerprint, s.plan.Window, s.plan.DisorderMS())
 	if err != nil {
 		event.answer <- lifecycleAnswer{err: err}
 		return err

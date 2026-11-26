@@ -169,6 +169,9 @@ func TestSignalDuringBoundedCopySavesProgressAndFails(t *testing.T) {
 			// Given a bounded source with confirmed work and another record in Poll.
 			r, source, sink, store, clock := fixture(t)
 			r.plan.Source.Kind = kind
+			if kind == "TOPIC" {
+				r.plan.Offsets = &plan.OffsetRange{Latest: true}
+			}
 			upper := int64(200000)
 			r.plan.Window.Upper = &plan.Expression{LiteralMS: upper}
 			source.assignments[0].Window.Upper = &upper
@@ -190,12 +193,10 @@ func TestSignalDuringBoundedCopySavesProgressAndFails(t *testing.T) {
 			err := r.Run(ctx)
 
 			// Then the bounded copy fails and commits only the completed record.
-			if err == nil || exitCode(err) != 1 || !strings.Contains(err.Error(), "bounded copy interrupted") || len(sink.writes) != 1 {
-				t.Fatalf("err=%v writes=%v", err, sink.writes)
-			}
-			if len(store.saves) != 1 || store.saves[0][0] != (Cursor{Partition: 0, Position: 1}) {
-				t.Fatalf("incorrect interrupted progress: %v", store.saves)
-			}
+			require.ErrorContains(t, err, "bounded copy interrupted")
+			require.Equal(t, 1, exitCode(err))
+			require.Len(t, sink.writes, 1)
+			require.Equal(t, [][]Cursor{{{Partition: 0, Position: 1}}}, store.saves)
 		})
 	}
 }

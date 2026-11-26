@@ -10,8 +10,8 @@ import (
 func TestPartitionIdentityIsCanonicalAndKeepsPositioningDefaults(t *testing.T) {
 	// Given equivalent predicates with different order, duplicates and locations.
 	const base = "INSERT INTO TOPIC 'b' SELECT * FROM TOPIC 'a' "
-	a := build(t, base+"WHERE PARTITION IN (2,0,2)")
-	b := build(t, base+"WITH(START=LATEST)\nWHERE PARTITION IN (0,2)")
+	a := build(t, base+"WITH(FOLLOW=ON) WHERE PARTITION IN (2,0,2)")
+	b := build(t, base+"WITH(FOLLOW=ON,START=LATEST)\nWHERE PARTITION IN (0,2)")
 	// When fingerprinting, then syntax locations and START do not change selection identity.
 	x, err := a.testFingerprint("source", "dest")
 	require.NoError(t, err)

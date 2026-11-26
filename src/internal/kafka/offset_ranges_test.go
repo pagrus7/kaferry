@@ -18,8 +18,8 @@ func TestOffsetEndResolutionAndResume(t *testing.T) {
 	}{
 		{name: "latest", bounds: plan.OffsetRange{Latest: true}, wantStart: 100, wantEnd: 900, calls: 1},
 		{name: "latest start uses same sample", start: "LATEST", bounds: plan.OffsetRange{Latest: true}, wantStart: 900, wantEnd: 900, calls: 1},
-		{name: "literal", bounds: plan.OffsetRange{Lower: new(int64(200)), Upper: new(int64(800))}, wantStart: 200, wantEnd: 800},
-		{name: "timestamp beyond end", bounds: plan.OffsetRange{Upper: new(int64(400))}, timestamp: true, wantStart: 400, wantEnd: 400},
+		{name: "literal", bounds: plan.OffsetRange{Lower: new(int64(200)), Upper: new(int64(800))}, wantStart: 200, wantEnd: 800, calls: 1},
+		{name: "timestamp beyond end", bounds: plan.OffsetRange{Upper: new(int64(400))}, timestamp: true, wantStart: 400, wantEnd: 400, calls: 1},
 		{name: "lower only", bounds: plan.OffsetRange{Lower: new(int64(200))}, wantStart: 200, wantEnd: -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -54,7 +54,7 @@ func TestOffsetEndResolutionAndResume(t *testing.T) {
 			located, err = positioner.Locate(t.Context(), []int32{1}, map[int32]SavedProgress{1: {Position: a.Cursor.Position, Progress: saved}})
 			require.NoError(t, err)
 			require.Equal(t, tc.wantEnd, *located.Assignments[0].Cursor.End)
-			require.Equal(t, tc.calls, readableCalls(backend.calls))
+			require.Equal(t, tc.calls+1, readableCalls(backend.calls))
 		})
 	}
 }
@@ -65,7 +65,7 @@ func TestRequestedOffsetRangesRejectUnavailablePositions(t *testing.T) {
 		b := &countingOffsets{low: 100, high: 1000, stable: 900}
 		p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC"}, Start: "EARLIEST", Offsets: &r}
 		_, err := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(b, &countingTimes{}, p, "fp", "id").Locate(t.Context(), []int32{1}, nil)
-		require.ErrorContains(t, err, "outside retained positions")
+		require.ErrorContains(t, err, "requested offset")
 	}
 }
 
@@ -115,4 +115,18 @@ func TestOffsetResumeRejectsMissingOrChangedFixedEnds(t *testing.T) {
 			require.Zero(t, readableCalls(backend.calls))
 		})
 	}
+}
+
+func TestResumeRejectsEndBeyondReadableOffsets(t *testing.T) {
+	// Given a checkpoint within the retained log whose end exceeds the stable offset.
+	backend := &countingOffsets{low: 100, high: 1000, stable: 700}
+	p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC"}, Offsets: &plan.OffsetRange{Latest: true}}
+	saved := SavedProgress{Position: 200, Progress: Progress{Fingerprint: "fp", TopicID: "id", End: new(int64(800))}}
+	positioner := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(backend, &countingTimes{}, p, "fp", "id")
+	// When resuming, then fail before exposing the unreadable range to a worker.
+	located, err := positioner.Locate(t.Context(), []int32{1}, map[int32]SavedProgress{1: saved})
+	require.ErrorContains(t, err, "saved offset end exceeds the readable end")
+	var conflict *Conflict
+	require.ErrorAs(t, err, &conflict)
+	require.Empty(t, located.Assignments)
 }

@@ -68,7 +68,7 @@ type Plan struct {
 	MaxOutOfOrderMS        *int64
 	Offsets                *OffsetRange
 	PartitionOffsets       []PartitionOffsetRange
-	MaxStalenessMS         int64
+	Follow                 bool
 	WorkerStopAfterRecords uint64
 	Policies               Policies
 }

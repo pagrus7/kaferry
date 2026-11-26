@@ -57,6 +57,8 @@ func boundedComponentPlan(t *testing.T, cluster *kfake.Cluster) plan.Plan {
 	t.Helper()
 	p := componentPlan(t, cluster)
 	p.Start = ""
+	p.Follow = false
+	p.Offsets = &plan.OffsetRange{Latest: true}
 	p.Window.Upper = &plan.Expression{LiteralMS: time.Now().Add(-30 * time.Minute).UnixMilli()}
 	return p
 }

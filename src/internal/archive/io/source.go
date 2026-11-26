@@ -68,10 +68,7 @@ func (s *Source) Save(ctx context.Context, cursors []core.Cursor) (map[int32]err
 	return map[int32]error{0: nil}, nil
 }
 func (s *Source) Pause(_ int32, pause bool) error { s.paused = pause; return nil }
-func (s *Source) HighWatermark(context.Context, int32) (int64, error) {
-	return 0, errors.New("archive replay has no Kafka high watermark")
-}
-func (s *Source) Close() error { return s.session.Close() }
+func (s *Source) Close() error                    { return s.session.Close() }
 func (s *Source) DeleteCheckpoint() error {
 	if err := os.Remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
