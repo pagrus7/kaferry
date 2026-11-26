@@ -294,15 +294,15 @@ Nightly A/A calibration uses the same binary on both sides. Review at least 20 c
 
 ## Published-version contracts
 
-The [release catalog](../../src/tests/qualification/releases.json) explicitly selects successful resume or rejection for each release.
+The [release catalog](../../src/tests/qualification/releases.json) selects the expected saved-state behavior for each release.
 
 ```sh
 python3 -m tools.qualification.qualify releases --output build-results/released-versions
 python3 -m tools.qualification.qualify run migration --previous-binary /path/to/previous/kaferry
-python3 -m tools.qualification.qualify run migration --previous-binary /path/to/incompatible/kaferry --state-contract reject
+python3 -m tools.qualification.qualify run migration --previous-binary /path/to/previous/kaferry --state-contract reject-progress
 ```
 
-`releases` downloads native archives/checksums and verifies attestations with `gh`; downloads stay in the ignored cache. Resume checks both binary directions and unsupported metadata rejection. Rejection must occur before destination records change and checks that completed old Avro remains readable with a fresh group. [Upgrade contracts](../releases/v0.10.0.md#upgrade).
+`releases` downloads native archives/checksums and verifies attestations with `gh`; downloads stay in the ignored cache. The default contract (`resume`) requires both binaries to continue the same job in either direction. Use `reject-progress` when the saved Kafka commits or archive replay identities are incompatible. Each binary must reject the other’s group before writing, and a fresh group must still read the completed Avro records. The `reject` contract separately checks old archive writer state. [Upgrade contracts](../releases/v0.10.0.md#upgrade).
 
 ## Managed-service qualification
 

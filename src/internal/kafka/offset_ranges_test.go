@@ -116,3 +116,17 @@ func TestOffsetResumeRejectsMissingOrChangedFixedEnds(t *testing.T) {
 		})
 	}
 }
+
+func TestResumeRejectsEndBeyondReadableOffsets(t *testing.T) {
+	// Given a checkpoint within the retained log whose end exceeds the stable offset.
+	backend := &countingOffsets{low: 100, high: 1000, stable: 700}
+	p := plan.Plan{Source: plan.Endpoint{Kind: "TOPIC"}, Offsets: &plan.OffsetRange{Latest: true}}
+	saved := SavedProgress{Position: 200, Progress: Progress{Fingerprint: "fp", TopicID: "id", End: new(int64(800))}}
+	positioner := NewPositionerFactory(&fixedClock{}, quietLogger(), NewOffsetLookupFactory()).New(backend, &countingTimes{}, p, "fp", "id")
+	// When resuming, then fail before exposing the unreadable range to a worker.
+	located, err := positioner.Locate(t.Context(), []int32{1}, map[int32]SavedProgress{1: saved})
+	require.ErrorContains(t, err, "saved offset end exceeds the readable end")
+	var conflict *Conflict
+	require.ErrorAs(t, err, &conflict)
+	require.Empty(t, located.Assignments)
+}

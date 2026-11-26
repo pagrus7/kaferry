@@ -164,7 +164,7 @@ Source properties follow `FROM`; sink properties follow `INSERT INTO`. Unknown o
 | `FOLLOW` | `OFF` | ON keeps reading new records until interrupted or the worker cap is reached. Accepts lower bounds and partition filters. Remove upper bounds to follow |
 | `MAX_OUT_OF_ORDER` | `OFF` | Allowance before timestamp progress can finish a partition; `OFF` disables timestamp stopping |
 
-For timestamp filters without saved progress, a positive lower bound starts at Kafka’s first matching offset; a non-positive or absent lower bound starts at earliest retained data. With no timestamp match, start at the readable committed end so open transactions remain eligible. Saved positions take precedence.
+For timestamp filters without saved progress, a positive lower bound starts at Kafka’s first matching offset; a non-positive or absent lower bound starts at earliest retained data. With no timestamp match, the copy starts at the readable committed end. A bounded copy finishes there. A FOLLOW copy can read records at later offsets once they become visible. Saved positions take precedence.
 
 MAX_OUT_OF_ORDER requires an upper timestamp bound. It accepts an implicit or explicit LATEST end and rejects numeric ends. Each partition stops before the first visible record whose timestamp strictly exceeds the upper bound plus the allowance, or at its saved offset end. A later in-range record can be missed if timestamps exceed the assumed disorder. [Historical scan example](usage.md#shorten-a-historical-scan).
 

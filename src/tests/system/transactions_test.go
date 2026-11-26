@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pagrus7/kaferry/src/internal/kafka/commitmeta"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -41,7 +42,7 @@ func TestSnapshotRejectsUnreadableNumericEndAndExcludesOpenTransaction(t *testin
 func TestDisorderStopsOnlyAtVisibleTrigger(t *testing.T) {
 	// Given an aborted trigger, an in-range committed record, a visible trigger and a late match.
 	a := admin(t)
-	src, dst := topic(t, a, 1), topic(t, a, 1)
+	src := topic(t, a, 1)
 	p := producer(t, kgo.TransactionalID(src+"-aborted"))
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
@@ -57,16 +58,34 @@ func TestDisorderStopsOnlyAtVisibleTrigger(t *testing.T) {
 	publishAt("trigger", hi.Add(time.Second))
 	publishAt("late", hi.Add(-time.Second))
 	require.NoError(t, p.EndTransaction(ctx, kgo.TryCommit))
-	// When scanning with zero disorder, the committed trigger ends the scan.
-	query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s',MAX_OUT_OF_ORDER=INTERVAL '0' SECOND) WHERE RECORD_TIMESTAMP<TIMESTAMP '%s'", dst, src, src+"-disorder", hi.Format(time.RFC3339Nano))
-	cfg := configuration(t)
-	for range 2 {
-		result := binaryWorker(ctx, t, query, cfg)
-		require.Zero(t, result.code, result.detail)
+	for _, tc := range []struct {
+		name, option, reason string
+		values               []string
+	}{
+		{"bounded", "", "tip", []string{"match", "late"}},
+		{"disorder", ",MAX_OUT_OF_ORDER=INTERVAL '0' SECOND", "timestamp", []string{"match"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// When each group scans the same committed records twice.
+			dst, group := topic(t, a, 1), src+"-"+tc.name
+			query := fmt.Sprintf("INSERT INTO TOPIC '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s'%s) WHERE RECORD_TIMESTAMP<TIMESTAMP '%s'", dst, src, group, tc.option, hi.Format(time.RFC3339Nano))
+			cfg := configuration(t)
+			for range 2 {
+				result := binaryWorker(ctx, t, query, cfg)
+				require.Zero(t, result.code, result.detail)
+			}
+			// Then only the opt-in stop omits the late match, and resume never repeats it.
+			require.EqualValues(t, len(tc.values), topicRecordCount(t, a, dst, 1))
+			c := consumer(t)
+			assign(t, c, dst, 1)
+			for _, value := range tc.values {
+				require.Equal(t, value, string(read(t, c).Value))
+			}
+			raw := committedPartitions(t, a, group, src, 1)[0]
+			progress, err := commitmeta.NewCodec().Decode(raw.Metadata)
+			require.NoError(t, err)
+			require.NotNil(t, progress.Stop)
+			require.Equal(t, tc.reason, progress.Stop.Reason)
+		})
 	}
-	// Then resume preserves the early stop and only the first visible match was published.
-	require.EqualValues(t, 1, topicRecordCount(t, a, dst, 1))
-	c := consumer(t)
-	assign(t, c, dst, 1)
-	require.Equal(t, "match", string(read(t, c).Value))
 }

@@ -36,7 +36,7 @@ Saved commits take precedence. Without a commit:
 | No timestamp bounds, group has no valid progress | Earliest retained offset by default; with FOLLOW = ON, START = LATEST uses the stable end |
 | No timestamp bounds, group already has valid progress | Earliest retained offset for the uncommitted partition |
 
-`LATEST` and a timestamp lookup with no match use the read-committed end (last stable offset, LSO), so records in open transactions remain eligible. Initial positions are committed before copying. Every partition is positioned explicitly; automatic offset reset is disabled. Out-of-range positions follow the rules below.
+`LATEST` and a timestamp lookup with no match use the read-committed end (last stable offset, LSO). A bounded copy excludes open transactions beyond that end. A FOLLOW copy can read their records after commit. Initial positions are committed before copying. Every partition is positioned explicitly; automatic offset reset is disabled. Out-of-range positions follow the rules below.
 
 - Commit below log start: resume at log start; log old position, log start and offset gap, which is not a lost-record count.
 - Commit above log end: fail as truncation. An out-of-range position during copying fails; restart reevaluates it.

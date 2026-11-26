@@ -48,6 +48,7 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			limited := func(query string) string {
 				return query + " OPTIONS(WORKER_STOP_AFTER_RECORDS=1)"
 			}
+			compatible := migrationMayResume(t, direction.first, direction.second, sql, config)
 			runMigrationBinary(t, direction.first, limited(sql), config)
 			first := archiveRecords(t, archive)
 			require.Len(t, first, 1)
@@ -55,15 +56,6 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			require.NotNil(t, first[0].Value, "empty value must remain distinct from null")
 			progress := committedPartitions(t, admin, group, source, 1)[0]
 			require.Equal(t, int64(1), progress.At)
-			// When the second binary writes a fresh group, its metadata identifies its progress format.
-			probeGroup := group + "-probe"
-			probeSQL := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM TOPIC '%s' WITH(GROUP='%s')", filepath.Join(t.TempDir(), "probe"), source, probeGroup)
-			runMigrationBinary(t, direction.second, limited(probeSQL), config)
-			probe := committedPartitions(t, admin, probeGroup, source, 1)[0]
-			firstVersion, _, firstTagged := strings.Cut(progress.Metadata, ";")
-			secondVersion, _, secondTagged := strings.Cut(probe.Metadata, ";")
-			require.True(t, firstTagged && secondTagged)
-			compatible := firstVersion == secondVersion
 			// Then compatible progress resumes, and a version boundary rejects the group before writing.
 			if compatible {
 				runMigrationBinary(t, direction.second, limited(sql), config)
@@ -91,6 +83,35 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 		})
 	}
 }
+
+// Release checks enforce a declared contract. A PR base can be on either side
+// of a fingerprint change, so compare both previews before creating its group.
+func migrationMayResume(t *testing.T, first, second, query, config string) bool {
+	t.Helper()
+	switch contract := os.Getenv("KAFERRY_PREVIOUS_STATE"); contract {
+	case "resume":
+		return true
+	case "reject-progress":
+		return false
+	case "":
+	default:
+		t.Fatalf("unexpected progress contract %q", contract)
+	}
+	fingerprint := func(binary string) string {
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+		defer cancel()
+		process := startCLI(ctx, t, binary, "", "explain", "-e", query, "-c", config, "--json")
+		require.NoError(t, process.wait(), process.logs())
+		var report struct {
+			Fingerprint string
+		}
+		require.NoError(t, json.Unmarshal([]byte(process.logs()), &report))
+		require.NotEmpty(t, report.Fingerprint)
+		return report.Fingerprint
+	}
+	return fingerprint(first) == fingerprint(second)
+}
+
 func runMigrationBinary(t *testing.T, binary, statement, config string) {
 	t.Helper()
 	runMigrationExpect(t, binary, statement, config, 0)
@@ -174,8 +195,9 @@ func TestPreviousBinaryRejectsUnsupportedCaptureState(t *testing.T) {
 	runMigrationBinary(t, previous, query+" OPTIONS(WORKER_STOP_AFTER_RECORDS=1)", config)
 	before := archiveRecords(t, output)
 	require.Len(t, before, 1)
-	// When the candidate opens the old writer state, then recovery fails without changing records.
-	runMigrationExpect(t, testBinary(t), query, config, 1, "recover archive writer.*state JSON is not canonical")
+	// When the candidate opens the same writer with a fresh source checkpoint directory,
+	// then recovery must reject the writer state before it can change the archive.
+	runMigrationExpect(t, testBinary(t), query, configuration(t), 1, "recover archive writer.*state JSON is not canonical")
 	require.Equal(t, before, archiveRecords(t, output))
 	// A fresh group can still read the completed Avro records from the old release.
 	runMigrationBinary(t, testBinary(t), fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH (GROUP='fresh-release')", fresh, output), config)
@@ -209,20 +231,7 @@ func TestPreviousBinaryDestinationProgressCompatibility(t *testing.T) {
 				config := configuration(t)
 				group := destination + "-migration"
 				query := fmt.Sprintf("INSERT INTO TOPIC '%s' WITH (PARTITIONING = KEY) SELECT * FROM %s '%s' WITH(GROUP='%s')", destination, kind, source, group)
-				fingerprint := func(binary string) string {
-					ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
-					defer cancel()
-					process := startCLI(ctx, t, binary, "", "explain", "-e", query, "-c", config, "--json")
-					require.NoError(t, process.wait(), process.logs())
-					var report struct {
-						Fingerprint string `json:"fingerprint"`
-					}
-					require.NoError(t, json.Unmarshal([]byte(process.logs()), &report))
-					require.NotEmpty(t, report.Fingerprint)
-					return report.Fingerprint
-				}
-				// Compatibility is defined by the declared fingerprints, including after both binaries support UUID binding.
-				compatible := fingerprint(direction.first) == fingerprint(direction.second)
+				compatible := migrationMayResume(t, direction.first, direction.second, query, config)
 				limited := query + " OPTIONS(WORKER_STOP_AFTER_RECORDS=1)"
 				runMigrationBinary(t, direction.first, limited, config)
 				require.EqualValues(t, 1, topicRecordCount(t, a, destination, 1))

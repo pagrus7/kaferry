@@ -251,7 +251,7 @@ The first `copy summary` reports `submitted: 3` and `confirmed: 3`. This status 
   "version": 2,
   "verdict": "complete",
   "reason": "file selection completed",
-  "meaning": "Source processing finished for the selected finite scope: explicit offset bounds or the saved archive selection.",
+  "meaning": "Source processing finished for the selected finite scope: saved offset ends or the saved archive selection.",
   "partitions": [{"id": 0, "position": 3, "stop": {"reason": "eof", "at": 3}}]
 }
 ```
@@ -270,7 +270,7 @@ Use storage where successful saves survive a crash, file replacement happens as 
 mkdir -p archive
 kaferry run -c connections.toml -f - <<'SQL'
 INSERT INTO ARCHIVE 'archive/orders'
-SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive');
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-archive', FOLLOW = ON);
 SQL
 ```
 

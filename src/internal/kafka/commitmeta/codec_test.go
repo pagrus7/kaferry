@@ -20,7 +20,7 @@ func TestCodecContract(t *testing.T) {
 	}{
 		{"minimal", Progress{Fingerprint: "fp", TopicID: "/////////////////////w"}, `kaferry:4;{"fp":"fp","tid":"/////////////////////w"}`},
 		{"worker stop", Progress{Fingerprint: "fp", TopicID: "id", Stop: &core.Stop{Reason: "worker_record_cap", At: 42}}, `kaferry:4;{"fp":"fp","tid":"id","stop":{"reason":"worker_record_cap","at":42}}`},
-		{"full", Progress{Fingerprint: "fp", TopicID: "id", Window: &plan.Window{Lower: &zero, Upper: &upper}, Stop: &core.Stop{Reason: "tip", At: 0}}, `kaferry:4;{"fp":"fp","tid":"id","win":{"lower":0,"upper":9223372036854775807},"stop":{"reason":"tip","at":0}}`},
+		{"full", Progress{Fingerprint: "fp", TopicID: "id", Window: &plan.Window{Lower: &zero, Upper: &upper}, Stop: &core.Stop{Reason: "tip", At: 0}, End: &zero}, `kaferry:4;{"fp":"fp","tid":"id","win":{"lower":0,"upper":9223372036854775807},"stop":{"reason":"tip","at":0},"end":0}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given logical progress independent of serialized field names.
@@ -73,6 +73,9 @@ func TestCodecRejectsMalformedOrUnsupportedData(t *testing.T) {
 		{"unknown field", `kaferry:4;{"fp":"fp","tid":"id","future":1}`, "invalid"},
 		{"unknown nested field", `kaferry:4;{"fp":"fp","tid":"id","win":{"lower":0,"extra":1}}`, "invalid"},
 		{"duplicate nested field", `kaferry:4;{"fp":"fp","tid":"id","stop":{"reason":"tip","at":0,"at":1}}`, "invalid"},
+		{"tip without end", `kaferry:4;{"fp":"fp","tid":"id","stop":{"reason":"tip","at":0}}`, "invalid"},
+		{"timestamp without end", `kaferry:4;{"fp":"fp","tid":"id","stop":{"reason":"timestamp","at":0}}`, "invalid"},
+		{"timestamp at end", `kaferry:4;{"fp":"fp","tid":"id","end":1,"stop":{"reason":"timestamp","at":1}}`, "invalid"},
 		{"null window", `kaferry:4;{"fp":"fp","tid":"id","win":null}`, "invalid"},
 		{"reversed window", `kaferry:4;{"fp":"fp","tid":"id","win":{"lower":1,"upper":0}}`, "invalid"},
 		{"fractional bound", `kaferry:4;{"fp":"fp","tid":"id","win":{"lower":1.5}}`, "invalid"},

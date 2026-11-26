@@ -129,7 +129,10 @@ func renderCompletion(output io.Writer, report inspect.Report, window plan.Windo
 	case "OFFSET":
 		fmt.Fprintln(output, "  Stop: saved exclusive offset end for each partition.")
 	default:
-		fmt.Fprintln(output, "  Stop: saved readable end per partition (default). Use FOLLOW = ON to keep copying new records.")
+		fmt.Fprintln(output, "  Stop: saved readable end per partition (default).")
+		if window.Upper == nil && len(report.PartitionOffsets) == 0 {
+			fmt.Fprintln(output, "    To follow new records, start a new group with FOLLOW = ON and omit the offset end.")
+		}
 	}
 	if report.MaxOutOfOrderMS != nil && window.Upper != nil {
 		threshold := *window.Upper + *report.MaxOutOfOrderMS

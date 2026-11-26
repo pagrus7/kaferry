@@ -373,7 +373,7 @@ def resolve_run(args, receipt):
             raise ValueError('unknown replicated fault case')
         receipt['case_selection'] = [selected_case] if selected_case else list(REPLICATED_CASES)
     two_brokers = not replicated_fixture(args) and (args.suite in TWO_BROKER_SUITES or
-        args.suite == 'migration' and args.state_contract == 'resume')
+        args.suite == 'migration' and args.state_contract != 'reject')
     if replicated_fixture(args):
         if args.source != VERSIONS[-1] or args.destination != VERSIONS[-1]:
             raise ValueError('replicated uses the newest catalog image and its dedicated fixture')
@@ -791,7 +791,7 @@ def main(argv=None):
         running.add_argument('--destination', choices=VERSIONS)
         running.add_argument('--binary', default='bin/kaferry', help='existing candidate executable (default: %(default)s)')
         running.add_argument('--previous-binary', type=Path)
-        running.add_argument('--state-contract', choices=('resume', 'reject'), default='resume')
+        running.add_argument('--state-contract', choices=('resume', 'reject-progress', 'reject'), default='resume')
         running.add_argument('--config', type=Path)
         running.add_argument('--duration', type=duration)
         running.add_argument('--rate', type=int, choices=range(1, 10001), metavar='1..10000')

@@ -139,7 +139,6 @@ func TestTextExplanationLimitedStopRules(t *testing.T) {
 				report.MaxOutOfOrderMS = nil
 				report.Source = inspect.Endpoint{Kind: "ARCHIVE", File: &inspect.ArchiveSummary{PositionRecords: &position, Window: &window, CheckpointExists: &saved}}
 				report.Partitions = nil
-				report.EndRule = "EOF"
 				want = "fixed selection of completed archive files"
 			case "following topic":
 				report.Partitions[0].Window = plan.Window{}
@@ -149,7 +148,9 @@ func TestTextExplanationLimitedStopRules(t *testing.T) {
 			// When rendering, then the stop description includes the limit and source completion.
 			output := textExplanation(t, report)
 			require.Contains(t, output, want)
-			require.NotContains(t, output, "follow new records until stopped")
+			if source == "time-bounded topic" {
+				require.NotContains(t, output, "FOLLOW = ON")
+			}
 		})
 	}
 }

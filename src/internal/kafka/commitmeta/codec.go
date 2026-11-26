@@ -124,13 +124,29 @@ func validate(p Progress) error {
 	if p.Window != nil && p.Window.Lower != nil && p.Window.Upper != nil && *p.Window.Lower >= *p.Window.Upper {
 		return &Error{Kind: "invalid"}
 	}
-	if p.End != nil && (*p.End < 0 || p.Stop != nil && (p.Stop.At > *p.End || p.Stop.Reason == "tip" && p.Stop.At != *p.End)) {
-		return &Error{Kind: "invalid"}
-	}
-	if p.Stop != nil && (p.Stop.At < 0 || (p.Stop.Reason != "timestamp" && p.Stop.Reason != "tip" && p.Stop.Reason != "worker_record_cap")) {
+	if p.End != nil && *p.End < 0 || !validStop(p.Stop, p.End) {
 		return &Error{Kind: "invalid"}
 	}
 	return nil
+}
+
+func validStop(stop *core.Stop, end *int64) bool {
+	if stop == nil {
+		return true
+	}
+	if stop.At < 0 {
+		return false
+	}
+	switch stop.Reason {
+	case "worker_record_cap":
+		return end == nil || stop.At <= *end
+	case "tip":
+		return end != nil && stop.At == *end
+	case "timestamp":
+		return end != nil && stop.At < *end
+	default:
+		return false
+	}
 }
 
 // checkObject checks exact field names before encoding/json can apply Unicode
