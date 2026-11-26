@@ -66,6 +66,8 @@ func TestPreviousBinaryProgressAndArchiveCompatibility(t *testing.T) {
 			}
 			complete := archiveRecords(t, archive)
 			require.Len(t, complete, 2)
+			require.Equal(t, []byte{0, 1}, complete[1].Key)
+			require.EqualValues(t, 2, committedPartitions(t, admin, group, source, 1)[0].At)
 			cloneSQL := fmt.Sprintf("INSERT INTO ARCHIVE '%s' SELECT * FROM ARCHIVE '%s' WITH(GROUP='file-migration')", clone, archive)
 			runMigrationBinary(t, direction.first, limited(cloneSQL), config)
 			if compatible {

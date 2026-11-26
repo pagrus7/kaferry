@@ -120,7 +120,7 @@ Kafka stores `kaferry:4;` followed by a UTF-8 JSON object with each committed of
 | `win` | Optional `{"lower": integer-or-null, "upper": integer-or-null}`; signed 64-bit Unix milliseconds, lower inclusive/upper exclusive. Required for saved `NOW()` bounds |
 | `stop` | Optional `{"reason": "timestamp", "tip" or "worker_record_cap", "at": integer}`; nonnegative source offset where the stopping rule was reached, at or below the committed offset. `at` is not a timestamp |
 
-Absent `stop` means no saved stop. Zero is a valid offset or time bound. Unknown/duplicate fields, null fields other than window bounds, invalid values, foreign prefixes and unsupported versions are rejected. JSON whitespace and field order do not matter. Optional `end` holds the fixed exclusive offset. A committed position or stop cannot exceed its captured end.
+Absent `stop` means no saved stop. Zero is a valid offset or time bound. Unknown/duplicate fields, null fields other than window bounds, invalid values, foreign prefixes and unsupported versions are rejected. JSON whitespace and field order do not matter. The fixed exclusive offset `end` is required for a `tip` stop, where `at == end`, and for a `timestamp` stop, where `at < end`. A `worker_record_cap` stop can omit `end` on a FOLLOW query. When present, `end` bounds both the committed position and the stop.
 
 The initial assignment commit preserves saved timestamp and end stops and clears worker record stops. A later commit includes it only after every earlier required write succeeds (Kafka acknowledgment or file fsync), including stops at unchanged offsets. Lost assignments never commit. A crash before saving can replay writes.
 
