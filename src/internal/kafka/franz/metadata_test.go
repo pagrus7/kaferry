@@ -182,16 +182,16 @@ func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
 			// When startup or assignment validates saved progress through their common path.
 			saved, err := inspector.decodeSaved(map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 42, Metadata: &text}}, plan.Plan{Window: spec, MaxOutOfOrderMS: allowance}, "fp")
 			// Then only compatible progress can reach positioning.
-			if scenario == "valid" || scenario == "captured end without upper bound" {
+			switch scenario {
+			case "valid", "captured end without upper bound":
 				require.NoError(t, err)
 				require.Len(t, saved, 1)
 				require.EqualValues(t, 42, saved[0].Position)
-
-			} else if scenario == "fingerprint" {
+			case "fingerprint":
 				require.ErrorIs(t, err, plan.ErrFingerprintMismatch)
 				require.Equal(t, int64(42), saved[0].Position)
 				require.Equal(t, progress, saved[0].Progress)
-			} else {
+			default:
 				var conflict *kafka.Conflict
 				require.ErrorAs(t, err, &conflict)
 				require.Nil(t, saved)
