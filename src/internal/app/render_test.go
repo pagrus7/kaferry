@@ -25,7 +25,7 @@ func explanationFixture() inspect.Report {
 }
 
 func TestExplanationJSONContract(t *testing.T) {
-	// Given the public version-two JSON report.
+	// Given the public explain JSON report.
 	want, err := os.ReadFile("testdata/explain.json")
 	require.NoError(t, err)
 	var output bytes.Buffer
@@ -44,6 +44,8 @@ func textExplanation(t *testing.T, report inspect.Report) string {
 func TestTextExplanationStructuresBehaviorAndEscapesNames(t *testing.T) {
 	// Given a bounded report with one saved partition and names containing terminal controls.
 	report := explanationFixture()
+	report.Offsets = &plan.OffsetRange{Latest: true}
+	report.Partitions[0].EndOrigin = "saved"
 	report.Source.Name, report.Group = "input\n\x1b", "group\n\x1b"
 	report.Warnings = []string{"Partition 0: saved offset 1 expired; start is log start 4."}
 	// When rendering, then lead with endpoints and progress, followed by behavior and limitations.
@@ -54,10 +56,10 @@ func TestTextExplanationStructuresBehaviorAndEscapesNames(t *testing.T) {
 		require.Greater(t, position, previous)
 		previous = position
 	}
-	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "saved captured end 12", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "Stop before the first visible record whose timestamp is after 1970-01-01T00:00:03Z (MAX_OUT_OF_ORDER).", "saved readable end per partition", "saved offset 1 expired", "Record errors: stop", "Output: Kaferry archive files"} {
+	for _, want := range []string{`input\n\x1b`, `group\n\x1b`, "Resume: 1 of 1 partitions", "Partition 0: start 4; exclusive end 12 (saved); offset span 8", "1970-01-01T00:00:01Z (inclusive)", "1970-01-01T00:00:02Z (exclusive)", "Stop before the first visible record whose timestamp is after 1970-01-01T00:00:03Z (MAX_OUT_OF_ORDER).", "saved readable end per partition", "saved offset 1 expired", "Record errors: stop", "Output: Kaferry archive files"} {
 		require.Contains(t, output, want)
 	}
-	for _, absent := range []string{"query-id", "topic-id", "lookup end", "span", "Run permissions", "\x1b"} {
+	for _, absent := range []string{"query-id", "topic-id", "lookup end", "Run permissions", "\x1b"} {
 		require.NotContains(t, output, absent)
 	}
 }

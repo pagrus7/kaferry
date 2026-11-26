@@ -29,6 +29,7 @@ func TestPlannerDiagnosticsIdentifyTheInvalidClauseOrValue(t *testing.T) {
 		{"unknown AST setting", files, "GROUP=", "unsupported setting; use the settings supported in WITH after the FROM endpoint", func(s *sql.Statement) { s.Source.Options[0].Name = "secret-setting" }, nil},
 		{"empty endpoint", strings.Replace(files, "'out'", "''", 1), "''", "INTO endpoint: endpoint name is empty", nil, nil},
 		{"invalid policy", files + "OPTIONS(ON_ERROR=FAIL)", "FAIL", "ON_ERROR must be FAIL or SKIP", func(s *sql.Statement) { s.Options[0].Value = "RETRY" }, nil},
+		{"invalid follow", source(topics, "GROUP='g', FOLLOW=ON"), "ON)", "FOLLOW must be ON or OFF", func(s *sql.Statement) { s.Source.Options[1].Value = "private/path" }, nil},
 		{"invalid start", source(topics, "GROUP='g', START=EARLIEST"), "EARLIEST", "START must be EARLIEST or LATEST", func(s *sql.Statement) { s.Source.Options[1].Value = "BEGIN" }, nil},
 		{"archive FOLLOW off", source(files, "GROUP='g', FOLLOW=OFF"), "FOLLOW", "FOLLOW requires a topic source; remove FOLLOW", nil, nil},
 		{"archive FOLLOW on", source(files, "GROUP='g', FOLLOW=ON"), "FOLLOW", "FOLLOW requires a topic source; remove FOLLOW", nil, nil},

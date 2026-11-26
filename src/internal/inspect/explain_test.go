@@ -346,17 +346,20 @@ func TestCancelledInspectionDoesNotAcquireConnections(t *testing.T) {
 }
 
 func TestPreviewReportsNewPartitionFallbackAndEffectiveRecordPolicies(t *testing.T) {
-	// Given START=LATEST, existing group progress and a missing timestamp SKIP policy.
+	// Given START=LATEST, existing group progress and a rejected timestamp SKIP policy.
 	service, p, factory, _ := fixture()
-	p.Window, p.Start = plan.WindowSpec{}, "LATEST"
-	p.Policies.MissingTimestamp = "SKIP"
+	p.Window, p.Start, p.Follow = plan.WindowSpec{}, "LATEST", true
+	p.MaxOutOfOrderMS = nil
+	p.Policies.RejectedTimestamp = "SKIP"
 	source := factory.connections["input"]
 	source.saved[0] = kafka.SavedProgress{Position: 4}
 	// When inspecting, then new partitions start earliest and the actual policy is exposed.
 	report := preview(t, service, p)
 	require.Equal(t, "EARLIEST", report.StartRule)
+	require.Equal(t, "FOLLOW", report.EndRule)
+	require.Nil(t, report.Partitions[1].End)
 	require.Zero(t, report.Partitions[1].Start)
-	require.Equal(t, (ErrorPolicies{MissingTimestamp: "SKIP", RejectedTimestamp: "FAIL", OtherRecord: "FAIL"}), report.RecordErrors)
+	require.Equal(t, (ErrorPolicies{MissingTimestamp: "FAIL", RejectedTimestamp: "SKIP", OtherRecord: "FAIL"}), report.RecordErrors)
 }
 
 func TestFilePreviewPreservesFreshAndSavedRelativeWindows(t *testing.T) {
@@ -426,17 +429,20 @@ func TestExplainUsesArchiveProvenanceAndReportsDestinationRouting(t *testing.T) 
 }
 
 func TestUnsavedExplicitOffsetEndHasLiteralOrigin(t *testing.T) {
-	// Given an explicit offset upper bound and no saved partition progress.
+	// Given an explicit offset range and no saved partition progress.
 	service, p, _, _ := fixture()
-	p.Window = plan.WindowSpec{}
-	p.Offsets = &plan.OffsetRange{Upper: number(8)}
+	p.Window, p.Start = plan.WindowSpec{}, "EARLIEST"
+	p.Offsets = &plan.OffsetRange{Lower: number(3), Upper: number(8)}
+	p.MaxOutOfOrderMS = nil
 	// When explaining through the shared positioner, then label the end as a SQL literal.
 	report := preview(t, service, p)
 	require.Equal(t, "OFFSET", report.EndRule)
+	require.Equal(t, "OFFSET", report.StartRule)
 	require.Len(t, report.Partitions, 2)
 	for _, partition := range report.Partitions {
 		require.False(t, partition.Saved)
 		require.NotNil(t, partition.End)
+		require.EqualValues(t, 3, partition.Start)
 		require.EqualValues(t, 8, *partition.End)
 		require.Equal(t, "literal", partition.EndOrigin)
 	}
