@@ -73,7 +73,7 @@ func (w Window) StopThreshold(disorder int64) (int64, error) {
 }
 
 // ValidateStored rejects incomplete or altered persisted windows before reading.
-func (s WindowSpec) ValidateStored(w Window, disorder int64) error {
+func (s WindowSpec) ValidateStored(w Window) error {
 	if (s.Lower == nil) != (w.Lower == nil) || (s.Upper == nil) != (w.Upper == nil) {
 		return fmt.Errorf("stored time window has different bounds")
 	}
@@ -87,10 +87,6 @@ func (s WindowSpec) ValidateStored(w Window, disorder int64) error {
 	}
 	if w.Lower != nil && w.Upper != nil && *w.Lower >= *w.Upper {
 		return fmt.Errorf("stored time range is empty")
-	}
-	if w.Upper != nil && disorder >= 0 {
-		_, err := checkedAdd(*w.Upper, disorder)
-		return err
 	}
 	return nil
 }
@@ -237,5 +233,12 @@ func checkedAdd(a, b int64) (int64, error) {
 
 // ValidateWindow checks resolved bounds and every enabled completion threshold.
 func (p Plan) ValidateWindow(w Window) error {
-	return p.Window.ValidateStored(w, p.DisorderMS())
+	if err := p.Window.ValidateStored(w); err != nil {
+		return err
+	}
+	if disorder := p.DisorderMS(); w.Upper != nil && disorder >= 0 {
+		_, err := w.StopThreshold(disorder)
+		return err
+	}
+	return nil
 }

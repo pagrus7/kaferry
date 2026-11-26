@@ -16,7 +16,7 @@ docker exec kaferry-kafka-demo /opt/kafka/bin/kafka-topics.sh --bootstrap-server
 printf 'order-1\norder-2\norder-3\n' | docker exec -i kaferry-kafka-demo /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic orders --sync --producer-property acks=all
 ```
 
-Copy the current readable records and exit. By default Kaferry saves each partition's readable end on its first assignment; the same group keeps that end on reruns and excludes later appends.
+Copy the current readable records and exit. [How a copy ends](reference.md#how-a-copy-ends).
 
 <!-- kafka-quickstart-copy -->
 ```sh
@@ -88,9 +88,7 @@ INSERT INTO TOPIC 'orders@backup'
 SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-snapshot');
 ```
 
-An offset is a position within one partition. `LATEST` is its readable end, excluded from the copy: an end of 10 means `< LATEST` includes offset 9. Kaferry saves each partition's end when first assigned; an open transaction can hold it below records already written, and partitions capture their ends separately.
-
-Only committed records still retained by Kafka can be copied. The named `GROUP` saves progress in the source Kafka group: rerunning it keeps the saved ends and excludes later appends. A new group, or omitting `GROUP`, starts an independent copy and can duplicate existing output; see [resuming](#resume-or-start-over).
+Copies retained, readable records up to each partition's [saved end](reference.md#how-a-copy-ends). Rerun with the same group to reuse those ends. A new or omitted group can copy records again. [Resume or start over](#resume-or-start-over).
 
 ### Try a small copy first
 
@@ -100,7 +98,7 @@ SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-preview')
 OPTIONS (WORKER_STOP_AFTER_RECORDS = 100);
 ```
 
-Each invocation accepts at most 100 records for writing in this process, or stops sooner at the saved ends. A saved `worker_record_cap` stop means the allowance was reached; rerun without `OPTIONS` to continue to those same ends, or keep it for another allowance of 100. Filtered records, synchronous SKIP rejections and queue-full retries do not count; this is a per-process allowance, not a shared group limit.
+This worker accepts up to 100 records for writing. A saved `worker_record_cap` stop means it reached that allowance. Rerun without `OPTIONS` to continue to the same ends, or keep it for another 100. [What counts toward the cap](reference.md#final-options).
 
 ### Copy an offset range
 
@@ -147,7 +145,7 @@ WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
 ```
 
-Copies Kafka record timestamps from 09:00 inclusive to 10:00 exclusive (UTC), not times inside the payload. Reading can continue from the first matching timestamp through each saved readable end, including records newer than the requested range. Matching records appended beyond those ends are excluded; timestamps only filter records in this example, without deciding when reading stops.
+Copies records with Kafka timestamps from 09:00 inclusive to 10:00 exclusive (UTC). The scan continues to each partition's [saved end](reference.md#how-a-copy-ends).
 
 ### Shorten a historical scan
 
@@ -160,7 +158,7 @@ WHERE RECORD_TIMESTAMP >= TIMESTAMP '2026-10-01T09:00:00Z'
   AND RECORD_TIMESTAMP <  TIMESTAMP '2026-10-01T10:00:00Z';
 ```
 
-Use this option when you know how far timestamps can move backwards in each partition. With the five-minute allowance above, Kaferry stops before the first visible record stamped strictly after 10:05 UTC or when it reaches the saved readable end. A later record stamped 09:59 can be missed if the assumption is wrong. The default scans through the saved readable end. Schedule the copy after the window closes if late arrivals should be eligible.
+With this allowance, the first visible record stamped after 10:05 UTC can stop that partition's scan. A later record stamped 09:59 can be missed. Schedule the copy after the window closes if late arrivals should be eligible. [Timestamp stop rule](reference.md#how-a-copy-ends).
 
 ## Keep copying new records
 
@@ -375,7 +373,7 @@ SIGINT/SIGTERM stop reading, allow 10 s for writes, then save progress. File flu
 kaferry status -c connections.toml -f copy.sql --json
 ```
 
-`complete` reports finished source processing for the selected scope; it does not verify destination contents. `limit_reached` means a worker record cap stopped processing; rerun the same job for another allowance. `complete_within_disorder` depends on the configured [timestamp assumptions](#shorten-a-historical-scan). After a clean Ctrl+C, an idle FOLLOW group with saved progress normally reports `incomplete` because it has no source end. [Status and exit codes](reference.md#saved-status).
+A clean Ctrl+C can leave a following copy at `incomplete`. Use [saved status](reference.md#saved-status) to check progress across the group and [exit codes](reference.md#exit-codes) to check how this worker stopped.
 
 ## Resume or start over
 

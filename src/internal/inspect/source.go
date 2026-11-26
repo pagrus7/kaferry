@@ -39,7 +39,7 @@ func (s *Service) topicSource(ctx context.Context, p plan.Plan, connection kafka
 			return err
 		}
 		var err error
-		saved, err = connection.Saved(ctx, p.Group, report.Fingerprint, p.Window, p.DisorderMS())
+		saved, err = connection.Saved(ctx, p, report.Fingerprint)
 		if err != nil {
 			return err
 		}

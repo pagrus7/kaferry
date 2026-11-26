@@ -23,7 +23,6 @@ Completion, delivery and restart contracts. See the [usage guide](../usage.md) f
 - For archives, `PARTITION` is the original Kafka partition, across all topics/clusters represented in the directory. Validate every completed header, then replay only matching files; excluded payloads are not hashed or decoded. Pin the filtered selection before output. Resume validates only that saved selection, never discovering additions or requiring excluded files to remain present. Both operators use the existing file checkpoint and one virtual progress cursor.
 - Kafka assigns only selected partitions through cooperative sticky balancing. Excluded partitions are never fetched or committed and do not count toward completion or destination layout checks. Saved metadata on all source partitions is still checked for query compatibility.
 - All workers in a group use the same predicate and query identity. Selected Kafka copies advertise a query-specific group protocol, without a fallback for older or differently configured members. Changing the predicate requires a new group.
-- A Kafka partition-only `WHERE` scans from earliest to the saved readable ends by default. Explicit `START` requires `FOLLOW = ON` and no timestamp bounds. Empty assignments follow the existing worker idle rules; they do not establish group completion. Workers that exited do not discover additions.
 
 ## Kafka start positions
 
@@ -36,7 +35,7 @@ Saved commits take precedence. Without a commit:
 | No timestamp bounds, group has no valid progress | Earliest retained offset by default; with FOLLOW = ON, START = LATEST uses the stable end |
 | No timestamp bounds, group already has valid progress | Earliest retained offset for the uncommitted partition |
 
-`LATEST` and a timestamp lookup with no match use the read-committed end (last stable offset, LSO). A bounded copy excludes open transactions beyond that end. A FOLLOW copy can read their records after commit. Initial positions are committed before copying. Every partition is positioned explicitly; automatic offset reset is disabled. Out-of-range positions follow the rules below.
+A readable end uses Kafka's last stable offset (LSO). Initial positions are committed before copying. Every partition is positioned explicitly; automatic offset reset is disabled.
 
 - Commit below log start: resume at log start; log old position, log start and offset gap, which is not a lost-record count.
 - Commit above log end: fail as truncation. An out-of-range position during copying fails; restart reevaluates it.
@@ -45,21 +44,15 @@ Saved commits take precedence. Without a commit:
 
 ## Completion
 
-A bounded Kafka copy saves each partition's exclusive offset end at first assignment. The default is the readable committed end. An explicit numeric end must already be readable. Reassignments and reruns keep the saved end. FOLLOW = ON keeps reading beyond today's backlog and accepts partition and lower-bound filters.
+See [how a copy ends](../reference.md#how-a-copy-ends) for the source limits. Kaferry saves a timestamp stop at the triggering record's offset after confirming earlier writes. A partition that first reaches its offset end saves an end stop.
 
-Timestamps filter records within each offset range. With an upper bound and explicit MAX_OUT_OF_ORDER, stop before the first visible record whose timestamp strictly exceeds the resolved upper bound plus the allowance. Save its offset as the timestamp stop after confirming earlier writes. A later in-range record may be missed if the disorder assumption fails. When the partition reaches its offset end first, save an ordinary end stop. Archives filter records across their pinned file selection.
-
-### Offset ends
-
-`RECORD_OFFSET < LATEST` captures the readable committed end (last stable offset) on a partition's first assignment. It excludes unresolved transactions and later appends. Numeric offset bounds supply positions directly; explicit Kafka bounds outside retained positions fail at initialization. Numeric ends reject timestamp stopping. For files, offsets refer to original Kafka offsets and LATEST means EOF of the pinned file selection.
-
-Ends stay fixed across restart and reassignment. Saved timestamp and end stops remain complete; worker record stops receive a fresh allowance. Appends at or beyond a saved end are excluded. A crash before saving an end can lead to a later capture. Each partition captures independently; neither end mode is an atomic topic snapshot. With saved H, resume fails if log end is below H or retention has moved log start beyond H. Do not capture a replacement end.
+Saved timestamp and end stops remain complete across restart and reassignment. Worker record stops receive a fresh allowance. A crash before saving an end can lead to a later capture.
 
 Kafka reads committed records. A numeric or saved end above the current readable end fails assignment. Offset gaps, aborted records and control records count toward reaching the fixed end. An empty range completes immediately after confirming and saving progress.
 
 ### Added assignments and lookups
 
-Eligible added Kafka partitions use the startup assignment path: validate identity and destination layout, load saved progress, reuse resolved windows and ends, resolve missing positions, then save initial state before exposing input. A partition without progress adopts a saved relative window when available. `START = LATEST` bootstraps a fresh group; an uncommitted partition in an established group starts at earliest retained data. A new LATEST range captures its readable end at initialization. Exited workers do not discover additions.
+Eligible added partitions use the startup assignment path. Kaferry validates identity and layout, loads saved progress, resolves missing positions and saves initial state before exposing input. Exited workers do not discover additions.
 
 All explicit broker position queries use the injected `OffsetLookup`: earliest retained, readable end, replicated end, or earliest retained match at/after a requested timestamp. The timestamp request includes partition and Unix milliseconds. No match is distinct from an unknown partition, failed request or missing response. A timestamp older than retention can still return a retained match; the broker cannot establish whether earlier matching records expired. Timestamp lower bounds can use this lookup; an upper timestamp lookup alone is not a safe end because later offsets can have earlier timestamps.
 
@@ -67,10 +60,8 @@ Stop logs identify reason, partition and position. Timestamp stops identify the 
 
 ## Worker record stop
 
-- `WORKER_STOP_AFTER_RECORDS = n` in `OPTIONS` caps records accepted for writing in this process invocation. Filtered records, synchronous SKIP rejections and queue-full retries do not count. Writes remain asynchronous and batched.
-- At the threshold, stop reading, allow up to 10 seconds for writes from still-owned partitions, save confirmed progress and exit `0`. Earlier file EOF or Kafka time-window completion also exits `0`. A quiet Kafka follow query can wait indefinitely for enough records. A signal before the threshold exits `1`; at the threshold it succeeds if writes and saving succeed.
+- At the [worker record threshold](../reference.md#final-options), stop reading, allow up to 10 seconds for writes from still-owned partitions, save confirmed progress and exit `0`. A quiet FOLLOW query can wait indefinitely for enough records. A signal at the threshold succeeds if writes and saving succeed.
 - Accepted writes still count after revocation; their late outcomes are discarded and the next owner may replay them. Rebalances do not reset the count. Only currently owned partitions save progress.
-- Each invocation gets a fresh allowance across all its assigned partitions. Three workers with `WORKER_STOP_AFTER_RECORDS = 100` can accept 300 writes total, across any number of source partitions. Reruns add another allowance; unsaved writes can repeat.
 - A successful drain saves `worker_record_cap` at each owned partition's confirmed position, preserving existing source stops. Write/drain failures save confirmed progress without a new worker stop; save and shutdown failures fail the run. Stop reasons clear when processing resumes. They describe saved partition progress, not worker history.
 - `status` distinguishes worker record limits from source completion using [saved-status verdicts](../reference.md#saved-status). Mixed saved stop reasons are listed. `explain` shows the allowance in text and optional JSON `worker_stop_after_records`, without estimating records.
 
@@ -83,7 +74,7 @@ Stop logs identify reason, partition and position. Timestamp stops identify the 
 
 ### When a worker exits
 
-- A worker exits `0` after every partition it still holds stops or its record limit is reached, outstanding writes are acknowledged and progress is committed. Partitions released during a rebalance do not count toward source completion. Uncapped FOLLOW copies keep waiting for records or assignments until signalled.
+- A successful worker exit requires outstanding writes to be acknowledged and progress to be saved. Partitions released during a rebalance do not count toward that worker's completion.
 - For a bounded Kafka copy or capped FOLLOW copy, the wait starts when Kafka reports an empty assignment while the worker holds no partitions. If it still has none after `worker.idle_exit` ([worker settings](../reference.md#worker-settings)), it exits `3`. Another empty-assignment notification restarts the timer. Waiting for the first assignment notification or losing all partitions during a rebalance does not start it. The exit logs `local idle exit`, the timeout and the code. A worker assigned an empty partition does not exit this way.
 - More workers than source partitions can leave some workers with no partitions to read. This can also happen while Kafka moves partitions between workers. If the last workers exit before a partition reaches its new owner, that partition can remain unfinished. Rerunning the same query and group resumes saved positions and may copy late arrivals.
 - If your supervisor restarts workers on nonzero exits, set a policy for code `3`. Restarting rejoins the group and can give the worker partitions to copy.

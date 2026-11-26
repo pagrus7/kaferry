@@ -178,7 +178,7 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafka.Inspecti
 	if err != nil {
 		return err
 	}
-	saved, progressErr := c.Saved(ctx, p.Group, r.Fingerprint, p.Window, p.DisorderMS())
+	saved, progressErr := c.Saved(ctx, p, r.Fingerprint)
 	if progressErr != nil && !errors.Is(progressErr, plan.ErrFingerprintMismatch) {
 		return progressErr
 	}
