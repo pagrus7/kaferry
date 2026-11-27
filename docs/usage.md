@@ -298,7 +298,7 @@ A fingerprint conflict returns `unknown` (exit 5). For Kafka, confirm the group 
 
 **Start fresh.** Use a new group to copy the retained source. It captures new ends, resolves `NOW()` again and can duplicate records already in the replacement. Use this option for archive replay, whose positions count examined records.
 
-**Continue from Kafka offsets.** This skips records lost with the old topic before each saved position. Start at each partition's exact `position` and stop at its saved exclusive `captured_end`. For example:
+**Continue from Kafka offsets.** Use a new named group and start at each partition's exact `position`. This skips earlier records, including any lost with the old topic. For a bounded copy, reuse each saved exclusive `captured_end`:
 
 ```sql
 INSERT INTO TOPIC 'orders@backup'
@@ -313,7 +313,15 @@ Use only partitions selected by the original query:
 - For saved time windows, replace entire timestamp predicates with `RECORD_TIMESTAMP >= window.lower` and `RECORD_TIMESTAMP < window.upper`, including their operators. Convert Unix milliseconds to RFC 3339, omit null bounds, and use separate queries and groups for different windows.
 - A position below the current retained start fails. Choose a start for selected partitions without saved positions.
 
-To resume following, run one query per original partition with its own new group, `FOLLOW = ON`, and `RECORD_OFFSET >= position`. These queries exclude later partitions. Writes after the last save can repeat.
+To resume a following copy, use a new group per original partition and only a lower offset bound:
+
+```sql
+INSERT INTO TOPIC 'orders@backup'
+SELECT * FROM TOPIC 'orders@prod' WITH (GROUP = 'orders-follow-recovery-p0', FOLLOW = ON)
+WHERE PARTITION IN (0) AND RECORD_OFFSET >= 1001;
+```
+
+These queries exclude later partitions. Writes after the last save can repeat.
 
 ## Archive procedures
 
