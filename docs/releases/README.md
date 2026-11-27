@@ -2,7 +2,7 @@
 
 ## Release notes
 
-`docs/releases/vX.Y.Z.md` is the source for the GitHub release body. Write it before tagging; the workflow reads the file from the tagged commit and fails if it is missing, has the wrong title or lacks a nonempty `Changes` section. The script omits the file's heading because GitHub supplies the release title. Keep notes concise and useful to someone installing or upgrading.
+Write concise notes for installers and upgraders in `docs/releases/unreleased.md`. The workflow publishes the tagged commit’s copy without its heading. GitHub Releases supplies the title and keeps the published notes.
 
 ```markdown
 # Kaferry vX.Y.Z
@@ -28,7 +28,7 @@ Supported platforms, prerequisites and available verification files.
 [Installation](https://github.com/pagrus7/kaferry/blob/vX.Y.Z/README.md#install) · [Changes since vA.B.C](https://github.com/pagrus7/kaferry/compare/vA.B.C...vX.Y.Z)
 ```
 
-`Changes` is required. Omit other sections when unnecessary. No review transcripts, implementation history, test logs or commit lists. Link version-specific docs for detail. Mention SBOMs or attestations only if that release includes them. Separate a shipped workaround from later source fixes; never infer failure frequency from passing tests.
+`Changes` must be nonempty. Omit other sections when unnecessary. No review transcripts, implementation history, test logs or commit lists. Link version-specific docs for detail. Mention SBOMs or attestations only if that release includes them. Separate a shipped workaround from later source fixes; never infer failure frequency from passing tests.
 
 ## Example download
 
@@ -61,7 +61,7 @@ Each extracted archive passes version/commit and file-copy checks. Linux Kafka, 
 
 ## Procedure
 
-1. Inspect the intended tag's source, dependency versions and upgrade changes. Write its notes and validate with `python3 -m tools.release.release_notes vX.Y.Z`. Update living known-issue docs with current behavior, without release chronology; do not copy the release's change narrative into them.
+1. Check the candidate's source, dependencies and upgrade steps. Finish `unreleased.md` with the candidate heading (`# Kaferry vX.Y.Z`), then validate with `python3 -m tools.release.release_notes vX.Y.Z`. Keep known-issue docs current.
 2. Follow the [review process](../development/reviews/README.md) for required reviews, formatting-only exceptions and PR statuses. Validate changed claims against the tagged implementation and run the appropriate [checks](../../CONTRIBUTING.md#test-targets).
 3. Commit the notes with the release changes. Before tagging, dispatch the release workflow on the candidate branch with publishing disabled and `candidate_version` set to the intended `vX.Y.Z`. This validates the authored notes and embeds the intended version using the publishing build flags. Check that the completed run succeeded and its `headSha` equals the full reviewed commit SHA, including the notes. Manual dispatch defaults to validation without publishing; omitting `candidate_version` uses `validation-COMMIT` instead. The pinned Go toolchain derives main-module version metadata from Git tags, so adding the version tag can change the binary digest even with the same source and explicit version/revision flags. Validation artifacts do not establish qualification of the published binary.
 4. Push an annotated `vX.Y.Z` tag on that exact validated commit. A version tag makes the source available to `go install` before archive publication; do not tag a candidate that has not passed validation. The workflow publishes a GitHub prerelease without changing the latest release. Manual publishing does the same and must select that version tag; the workflow verifies that the built commit matches it and rejects a different supplied candidate version.
@@ -81,15 +81,19 @@ Each extracted archive passes version/commit and file-copy checks. Linux Kafka, 
      --binary "$PWD/DOWNLOAD/kaferry" --output build-results/published-matrix
    ```
 
-6. Only after all required qualification passes for that published executable, promote the same prerelease with `gh release edit vX.Y.Z --prerelease=false --latest`. Then dispatch [container publishing](#container-publishing) for that stable tag. Keep notes aligned with the tag. If a tagged build or published-binary qualification fails, fix the problem and use a new patch version tag; never move the tag or replace published binaries.
+6. After the published executable passes all required qualification, promote it with `gh release edit vX.Y.Z --prerelease=false --latest`. Dispatch [container publishing](#container-publishing) for that stable tag. If the tagged build or qualification fails, fix it under a new patch tag. Never move tags or replace published binaries.
+7. In the first PR after promotion, reset `unreleased.md` to `# Kaferry unreleased`, a blank line and an empty `## Changes` section. Carry forward any next-release entries added since the tag.
 
-To correct published prose, edit the tracked note file, then validate before updating the body. Keep tags and assets unchanged:
+Amend the current GitHub body with corrections, known issues or later test results for the released binary. `EDITOR` must name one executable that waits for editing to finish (default `vi`).
 
 ```sh
-release_notes_file=$(mktemp)
-python3 -m tools.release.release_notes vX.Y.Z > "$release_notes_file" &&
-  gh release edit vX.Y.Z --notes-file "$release_notes_file"
-rm "$release_notes_file"
+(
+  notes=$(mktemp) || exit 1
+  trap 'rm -f "$notes"' EXIT
+  gh release view vX.Y.Z --json body --jq .body > "$notes" &&
+    "${EDITOR:-vi}" "$notes" &&
+    gh release edit vX.Y.Z --notes-file "$notes"
+)
 ```
 
 ## Source-installation checks

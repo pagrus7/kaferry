@@ -8,7 +8,7 @@ import sys
 def read_notes(tag, root):
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9.-]+)?", tag):
         raise ValueError("release tag must be a version such as v0.3.0")
-    body = (root / "docs/releases" / f"{tag}.md").read_text(encoding="utf-8")
+    body = (root / "docs/releases/unreleased.md").read_text(encoding="utf-8")
     heading = f"# Kaferry {tag}\n\n"
     if not body.startswith(heading):
         raise ValueError(f"release notes must start with '# Kaferry {tag}' and a blank line")

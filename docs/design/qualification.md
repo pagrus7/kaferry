@@ -168,7 +168,7 @@ python3 -m tools.qualification.qualify run migration --previous-binary /path/to/
 python3 -m tools.qualification.qualify run migration --previous-binary /path/to/previous/kaferry --state-contract reject-progress
 ```
 
-`releases` downloads native archives/checksums and verifies attestations with `gh`; downloads stay in the ignored cache. The default contract (`resume`) requires both binaries to continue the same job in either direction. Use `reject-progress` when the saved Kafka commits or archive replay identities are incompatible. Each binary must reject the other’s group before writing, and a fresh group must still read the completed Avro records. The `reject` contract separately checks old archive writer state. [Upgrade contracts](../releases/v0.10.0.md#upgrade).
+`releases` downloads native archives/checksums and verifies attestations with `gh`; downloads stay in the ignored cache. The default contract (`resume`) requires both binaries to continue the same job in either direction. Use `reject-progress` when the saved Kafka commits or archive replay identities are incompatible. Each binary must reject the other’s group before writing, and a fresh group must still read the completed Avro records. The `reject` contract separately checks old archive writer state. [v0.10.0 upgrade instructions](https://github.com/pagrus7/kaferry/releases/tag/v0.10.0).
 
 ## Managed-service qualification
 
