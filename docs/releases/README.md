@@ -96,7 +96,7 @@ rm "$release_notes_file"
 
 [User installation and redistribution instructions](../install.md).
 
-CI installs synthetic tagged and pseudo-versioned module archives through a local proxy and checks the resulting executable's identity. It does not publish a tag. Module installs that include version metadata report that version; a commit is `unknown` when Go supplies no VCS metadata. The source-install check requires cached dependency archives and access to Go's checksum database. It authenticates published dependencies through that database and exempts only the synthetic Kaferry module.
+CI installs synthetic tagged and pseudo-versioned module archives through a local proxy and checks the resulting executable's identity. It does not publish a tag. The CLI and metrics prefer linker-supplied values. Otherwise they report the embedded module version (including pseudo-versions), or `dev` for an absent or `(devel)` version. The commit comes from embedded VCS metadata, with `-dirty` for a modified checkout, or `unknown` when unavailable. The source-install check requires cached dependency archives and access to Go's checksum database. It authenticates published dependencies through that database and exempts only the synthetic Kaferry module.
 
 ## Container publishing
 

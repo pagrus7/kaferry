@@ -12,6 +12,33 @@ A PR that only deletes or moves tests or tooling, changes no product code (`src/
 
 Run documentation validation and final-head CI for every PR. Review sections use `Passed`, `Pending` or `Failed: reason`; ready PRs require `Passed`. For an entirely formatting-only PR, Tests instead uses `Not required: formatting only`, with Docs `Passed`. Dependabot retains its generated description, with the same review requirements.
 
+## Client setup
+
+From the repository root, fetch the intended base before starting (for example, `git fetch origin main`). Use your subscription login. The client needs GitHub read access and permission to cache evidence.
+
+**Codex.** Check `codex login status` for a ChatGPT login. From an existing session, ask Codex to follow this guide against your base, or start a session with:
+
+```sh
+codex exec 'Follow docs/development/reviews/README.md against origin/main.'
+```
+
+The [Codex reviewers](../../../.codex/agents) use your configured model and permissions.
+
+**Claude Code.** Use `claude auth login --claudeai` to sign in. Unset API credentials and check that the reported auth method is `claude.ai`:
+
+```sh
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+claude auth status
+```
+
+Run `/review-local [base]` in an existing session, or use:
+
+```sh
+CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude -p '/review-local'
+```
+
+The [command](../../../.claude/skills/review-local/SKILL.md) waits for the [configured reviewers](../../../.claude/agents).
+
 ## Run a review
 
 The coordinator follows these steps; reviewers follow the contract below.
