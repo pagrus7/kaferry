@@ -130,7 +130,9 @@ Identity conflicts take precedence over activity, then missing stops, worker cap
 
 An idle FOLLOW group with saved progress normally reports `incomplete`. See [how a copy ends](#how-a-copy-ends) for the assumptions behind `complete_within_disorder`. Completion describes source processing. Filtered or skipped records can be absent, writes can repeat, and destination data may have been removed.
 
-Text shows the verdict, its meaning and up to eight Kafka partitions or the archive's replay progress. JSON version 3 includes all partitions, observed `activity`, and applicable `notes` and `next` actions. A Kafka `position` is the next offset to read. A file `position` counts confirmed examined input records. Archive sizes and counts describe the saved selection, or current completed files before the first run. Status checks headers and sizes for incomplete groups without verifying payloads or destination writes.
+Text shows the verdict, its meaning and up to eight Kafka partitions or the archive's replay progress. `status --json` version 3 includes `version`, `verdict`, `meaning`, `group`, `fingerprint`, `source`, `destination`, `activity` and `partitions`. It omits `reason` (text), `notes` (an array of strings) and `next` (a suggested action) when empty. JSON lists all partitions. Each entry has `id` and may include `position`, `fingerprint`, `stop`, `window` and `captured_end`.
+
+A Kafka `position` is the next offset to read. A file `position` counts confirmed examined input records. Archive sizes and counts describe the saved selection, or current completed files before the first run. Status checks headers and sizes for incomplete groups without verifying payloads or destination writes.
 
 On a fingerprint mismatch, `unknown` can still report observed Kafka activity and source-validated positions, including partitions outside the current selection. Invalid metadata or a changed source UUID withholds positions. [Recovering a recreated destination](usage.md#recover-after-destination-topic-recreation).
 
@@ -273,7 +275,7 @@ Queue/fetch overrides must be positive. Byte queue settings use KiB. Large or co
 | 0 | This worker [finished its input or reached its record cap](#how-a-copy-ends) or a signal cleanly stopped uncapped FOLLOW. Status is `complete` or `complete_within_disorder`, or help or a preview printed. SKIP counts do not change the code |
 | 1 | Copy, inspection, output, cleanup or the shutdown deadline failed, or a signal arrived before completion of startup, a file copy, or a bounded Kafka copy or capped FOLLOW copy. Conflicts after the first consumed record also exit 1 |
 | 2 | Usage/parse/plan/configuration error, or a validation conflict before the first consumed record (Kafka topic validation, query/source identity, replay checkpoint/lock or self-copy) |
-| 3 | For a bounded Kafka copy or capped FOLLOW copy, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |
+| 3 | For a bounded Kafka copy or capped FOLLOW copy, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). Other workers may still be copying. Configure whether your supervisor restarts this worker on code 3 |
 | 4 | Status is `incomplete`: a partition lacks a saved stop |
 | 5 | Status is `unknown`: progress is absent, invalid or incompatible, or the group has an incompatible active member |
 | 6 | Status is `running`: group activity or a change was observed |
