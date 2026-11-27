@@ -85,7 +85,7 @@ func (s *Session) initialize(query Query, clock Clock, inputs Snapshot) error {
 	if checkErr != nil {
 		return checkErr
 	}
-	if checkErr = query.Window.ValidateStored(window, -1); checkErr != nil {
+	if checkErr = query.Window.ValidateStored(window); checkErr != nil {
 		return checkErr
 	}
 	selection, checkErr := inputs.Select(query.Partitions)
@@ -117,7 +117,7 @@ func (s *Session) restore(query Query, saved *State, inputs Snapshot) error {
 	if s.saved.Group != query.Group || s.saved.Fingerprint != query.Fingerprint {
 		return errors.New("replay checkpoint query identity mismatch")
 	}
-	if err := query.Window.ValidateStored(s.saved.Window, -1); err != nil {
+	if err := query.Window.ValidateStored(s.saved.Window); err != nil {
 		return err
 	}
 	if err := query.validatePartitions(s.saved.Files); err != nil {

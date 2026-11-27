@@ -127,7 +127,7 @@ func TestSavedProgressRequiresEveryPartitionAndExactMetadata(t *testing.T) {
 			}
 			i := &Inspector{codec: commitmeta.NewCodec(), topicID: id, parts: []int32{0, 2}}
 			// When decoding the assignment's saved starts, then only absent commits permit a fresh start.
-			saved, err := i.decodeSaved(parts, "fp", plan.WindowSpec{}, 0)
+			saved, err := i.decodeSaved(parts, plan.Plan{}, "fp")
 			valid := mode == "valid" || mode == "absent"
 			require.Equal(t, valid, (err == nil), "invalid saved-position decision")
 			if mode == "nil metadata" {
@@ -143,13 +143,13 @@ func TestSavedProgressRequiresEveryPartitionAndExactMetadata(t *testing.T) {
 }
 
 func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
-	for _, scenario := range []string{"valid", "fingerprint", "topic identity", "missing relative window", "stop beyond commit", "window shape", "literal mismatch", "staleness overflow", "offset beyond captured end", "captured end without upper bound"} {
+	for _, scenario := range []string{"valid", "fingerprint", "topic identity", "missing relative window", "stop beyond commit", "window shape", "literal mismatch", "disorder overflow", "offset beyond captured end", "captured end without upper bound"} {
 		t.Run(scenario, func(t *testing.T) {
 			// Given committed progress whose query, window or output may be incompatible.
 			id := [16]byte{1}
 			progress := kafka.Progress{Fingerprint: "fp", TopicID: topicID(id)}
 			var spec plan.WindowSpec
-			var staleness int64
+			var allowance *int64
 			lower := int64(10)
 			switch scenario {
 			case "offset beyond captured end":
@@ -171,28 +171,33 @@ func TestSavedWindowsNeverBecomeAStartFallback(t *testing.T) {
 			case "literal mismatch":
 				progress.Window = &plan.Window{Lower: &lower}
 				spec.Lower = &plan.Expression{LiteralMS: lower + 1}
-			case "staleness overflow":
+			case "disorder overflow":
 				upper := int64(math.MaxInt64)
 				progress.Window = &plan.Window{Upper: &upper}
-				spec.Upper = &plan.Expression{LiteralMS: upper}
-				staleness = 1
+				spec.Upper = &plan.Expression{Now: true}
+				allowance = new(int64(1))
 			}
 			text := encodeMetadata(progress)
 			inspector := &Inspector{codec: commitmeta.NewCodec(), topicID: id, parts: []int32{0}}
 			// When startup or assignment validates saved progress through their common path.
-			saved, err := inspector.decodeSaved(map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 42, Metadata: &text}}, "fp", spec, staleness)
+			saved, err := inspector.decodeSaved(map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 42, Metadata: &text}}, plan.Plan{Window: spec, MaxOutOfOrderMS: allowance}, "fp")
 			// Then only compatible progress can reach positioning.
-			if scenario == "valid" || scenario == "captured end without upper bound" {
+			switch scenario {
+			case "valid", "captured end without upper bound":
 				require.NoError(t, err)
 				require.Len(t, saved, 1)
 				require.EqualValues(t, 42, saved[0].Position)
-
-			} else if scenario == "fingerprint" {
+			case "fingerprint":
 				require.ErrorIs(t, err, plan.ErrFingerprintMismatch)
 				require.Equal(t, int64(42), saved[0].Position)
 				require.Equal(t, progress, saved[0].Progress)
-			} else if err == nil || len(saved) > 0 {
-				t.Fatal("invalid progress became usable", saved, err)
+			default:
+				var conflict *kafka.Conflict
+				require.ErrorAs(t, err, &conflict)
+				require.Nil(t, saved)
+				if scenario == "disorder overflow" {
+					require.ErrorContains(t, err, "invalid stored time window: timestamp arithmetic overflows milliseconds")
+				}
 			}
 		})
 	}
@@ -224,7 +229,7 @@ func TestFingerprintConflictCannotHideUnsafeSourceProgress(t *testing.T) {
 			parts := map[int32]kmsg.OffsetFetchResponseTopicPartition{0: {Offset: 3, Metadata: &first}, 2: {Offset: 7, Metadata: &encoded}}
 			inspector := &Inspector{codec: commitmeta.NewCodec(), topicID: id, parts: []int32{0, 2}}
 			// When validating all source partitions, not merely the first incompatible one.
-			saved, err := inspector.decodeSaved(parts, "current", spec, 0)
+			saved, err := inspector.decodeSaved(parts, plan.Plan{Window: spec}, "current")
 			// Then only source-safe fingerprint conflicts expose diagnostic positions.
 			require.Error(t, err)
 			if scenario == "mixed identities" {

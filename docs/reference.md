@@ -41,9 +41,7 @@ Partition IDs range from 0 to 2,147,483,647. Lists are nonempty; order and repea
 
 Offset and timestamp `BETWEEN` include both ends. Internally, bounds use an inclusive lower and exclusive upper end. `> x` advances the lower end by one; `<= x` advances the upper end by one. That unit is one offset or one millisecond. Empty ranges and overflowing adjustments fail. For example, `RECORD_OFFSET BETWEEN 100 AND 199` equals `RECORD_OFFSET >= 100 AND RECORD_OFFSET < 200`.
 
-Kafka numeric starts and exclusive ends must be within retained positions when initialized. Offset gaps mean a range's width is not a record count. Archive offsets are original Kafka offsets, not byte positions or replay cursors.
-
-`RECORD_OFFSET < LATEST` fixes each Kafka partition's readable committed end when first assigned and saves it for resume; later appends are excluded. An open transaction can hold that end below records already written. Partitions capture ends separately. Explicit numeric ends must be readable when assigned. A timestamp-derived start beyond the fixed end produces an empty snapshot. For archives, `LATEST` means the pinned completed-file selection's EOF. [Backlog and resume example](usage.md#copy-the-current-backlog-and-stop).
+An offset is a position within a partition. Kafka numeric starts must be within retained positions when initialized. Offset gaps mean a range's width can exceed its record count. Archive offsets refer to original Kafka positions. See [how a copy ends](#how-a-copy-ends) for upper bounds and `LATEST`.
 
 Different offset ranges may use parenthesized branches joined by `OR`. Each branch needs `PARTITION IN` or `PARTITION BETWEEN` and an upper offset bound; selections must be disjoint. Unlisted partitions are excluded. Shared timestamp predicates may follow the branches with `AND`; shared partition/offset predicates and timestamps inside branches are unsupported:
 
@@ -69,7 +67,7 @@ WHERE RECORD_TIMESTAMP >= NOW() - INTERVAL '7' DAY
 
 This includes the lower timestamp and excludes the upper timestamp. `BETWEEN` includes its upper millisecond too: `BETWEEN TIMESTAMP '2026-10-01T09:00:00Z' AND TIMESTAMP '2026-10-01T09:30:00Z'` normalizes to `[09:00:00.000, 09:30:00.001)` UTC.
 
-Timestamp bounds cannot be combined with explicit source `START`. Bounded Kafka copies filter timestamps through the saved readable end or a requested numeric end. To shorten a scan, set [MAX_OUT_OF_ORDER](#kafka-source) with an upper timestamp bound. Archive replay filters timestamps throughout the pinned file selection.
+Timestamp bounds cannot be combined with explicit `START`. To stop a Kafka scan early based on timestamps, see [how a copy ends](#how-a-copy-ends).
 
 ### Final OPTIONS
 
@@ -94,6 +92,16 @@ SQL errors identify the first error found by one-based line and character (code 
 
 Common rejected forms include `PARTITION IN ()` (empty list), `OPTIONS (GROUP = 'g')` (wrong clause), `SELECT key` (only `SELECT *`), `INTERVAL '1' MONTH` (unsupported unit), and two statements separated by `;`. The [formal grammar](design/grammar.md) is a contributor reference.
 
+## How a copy ends
+
+- **Kafka readable end.** By default, or with `RECORD_OFFSET < LATEST`, Kaferry saves each partition's exclusive readable end on first assignment and reuses it on resume. Later appends are outside that end. An open transaction can hold the readable end below records already written. Each partition captures its end independently.
+- **Kafka numeric end.** An explicit upper offset sets the end for that partition. The exclusive end must be within retained, readable positions on first assignment. With either Kafka end, a timestamp lookup with no match or a timestamp-derived start at or beyond the end yields an empty copy for that partition.
+- **Earlier timestamp stop.** Timestamp bounds normally filter records throughout the offset range. On Kafka, `MAX_OUT_OF_ORDER` requires an upper timestamp bound and a `LATEST` end. A partition stops at its offset end or before the first visible record stamped strictly after the resolved exclusive upper bound plus the allowance, whichever comes first. A later in-range record can be missed if timestamps move backwards by more than the allowance. [Historical scan example](usage.md#shorten-a-historical-scan).
+- **Following.** `FOLLOW = ON` keeps reading new Kafka records until interrupted or capped. It accepts partition filters and lower bounds. Remove upper bounds to follow.
+- **Archive replay.** The end is the pinned completed-file selection's EOF, including with `< LATEST`. A numeric end can finish an original source partition early. Timestamp bounds filter records during replay. New files enter only a fresh selection.
+
+A [worker record cap](#final-options) can end any copy before its source is finished. Bounded Kafka workers finish independently after the partitions they still hold stop and their progress is saved. See [exit codes](#exit-codes) for interruption and empty assignments, and [saved status](#saved-status) for the verdict across the selection.
+
 ## Inspection
 
 `explain` previews the same statement, configuration, identity and start-position rules as `run`. It never joins a group, consumes records, commits, creates/truncates files or takes locks. Observations can change during inspection; this is not an atomic snapshot or a guarantee that a later run succeeds. Write access is not checked. Records, output bytes and duration are not estimated.
@@ -110,7 +118,7 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 | --- | --- |
 | `version`, `fingerprint`, `group`, `one_off`, `max_out_of_order_ms` | Report format and query identity; one-off group is `ONE_OFF`. `max_out_of_order_ms=null` disables timestamp stopping |
 | `start_rule` | Kafka fallback for partitions without progress: `WINDOW`, `OFFSET`, `EARLIEST` or `LATEST`; absent for file sources |
-| `end_rule` | Source boundary: `LATEST` (saved readable end), `OFFSET` (numeric or per-partition ends), `FOLLOW` or archive `EOF`. An enabled disorder allowance can stop a Kafka scan sooner. |
+| `end_rule` | [Source end rule](#how-a-copy-ends) reported as `LATEST`, `OFFSET` (numeric end or per-partition branches), `FOLLOW` or archive `EOF` |
 | `record_errors` | Effective `FAIL`/`SKIP` policies: `missing_timestamp`, `rejected_timestamp`, `other_record`; SKIP applies before writing, not to delivery failures |
 | `source`, `destination` | `kind`, `name`, optional connection alias, cluster/topic IDs, partition count, destination timestamp type and `partitioning` (`PRESERVE` or `KEY` for a Kafka destination) |
 | Endpoint `file` | `exists`; source adds `size_bytes`, `file_count`, `position_records`, `window`, `window_origin`, `checkpoint`, `checkpoint_exists`. Destination `size_bytes` is zero; destination size and file count are not inspected |
@@ -133,9 +141,9 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 | `complete_within_disorder` | All selected partitions finished and at least one stopped early under MAX_OUT_OF_ORDER. |
 | `complete` | Source processing finished for the selected finite scope: saved offset ends or the saved archive selection. |
 
-Identity conflicts and incompatible active members take precedence over activity. Activity takes precedence over saved progress; missing stops take precedence over caps, and caps over completion. Added eligible partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. New archive files do not expand a saved replay selection. A checkpoint or saved selection that cannot be validated yields `unknown`; other operational read failures exit 1 without a verdict.
+Identity conflicts and incompatible active members take precedence over activity. Activity takes precedence over saved progress; missing stops take precedence over caps, and caps over completion. Added eligible Kafka partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. A checkpoint or saved selection that cannot be validated yields `unknown`; other operational read failures exit 1 without a verdict.
 
-An idle FOLLOW group with saved progress normally reports `incomplete` because it has no source end. Rerun it when you want to keep following. Timestamp completion depends on later records staying within the configured disorder allowance. Completion permits filtered/skipped records, does not guarantee exactly-once writes and does not establish that destination data still exists. Workers never wait for other workers' stops.
+An idle FOLLOW group with saved progress normally reports `incomplete`. See [how a copy ends](#how-a-copy-ends) for the assumptions behind `complete_within_disorder`. Completion refers to source processing. Filtered or skipped records can be absent, writes can repeat, and destination data may have been removed.
 
 Text output lists up to eight Kafka partitions or reports archive replay progress. It shows the current verdict's meaning, with applicable notes and a suggested action when available. Run `kaferry help status` for all verdicts.
 
@@ -160,13 +168,11 @@ Source properties follow `FROM`; sink properties follow `INSERT INTO`. Unknown o
 | Property | Default | Meaning |
 | --- | --- | --- |
 | `GROUP` | `ONE_OFF` | Named consumer-group progress, or a generated independent group per invocation |
-| `START` | `EARLIEST` | Explicit START requires FOLLOW = ON and no timestamp bounds; `LATEST` starts at the readable committed end. Saved progress takes precedence; new partitions in an established group start at earliest retained data |
-| `FOLLOW` | `OFF` | ON keeps reading new records until interrupted or the worker cap is reached. Accepts lower bounds and partition filters. Remove upper bounds to follow |
-| `MAX_OUT_OF_ORDER` | `OFF` | Allowance before timestamp progress can finish a partition; `OFF` disables timestamp stopping |
+| `START` | `EARLIEST` | Explicit `START` requires `FOLLOW = ON` and no timestamp bounds. `LATEST` starts a fresh group at the readable end. Saved positions take precedence. New partitions in an established group start at the earliest retained offset. See [how a copy ends](#how-a-copy-ends) |
+| `FOLLOW` | `OFF` | Set `ON` to [follow new records](#how-a-copy-ends) |
+| `MAX_OUT_OF_ORDER` | `OFF` | Set a timestamp allowance to [stop a scan early](#how-a-copy-ends) |
 
-For timestamp filters without saved progress, a positive lower bound starts at Kafka’s first matching offset; a non-positive or absent lower bound starts at earliest retained data. With no timestamp match, a bounded partition starts and finishes at its exclusive offset end without copying records. A FOLLOW partition starts at the readable committed end and can read from that offset as records become visible. Saved positions take precedence.
-
-MAX_OUT_OF_ORDER requires an upper timestamp bound. It accepts an implicit or explicit LATEST end and rejects numeric ends. Each partition stops before the first visible record whose timestamp strictly exceeds the upper bound plus the allowance, or at its saved offset end. A later in-range record can be missed if timestamps exceed the assumed disorder. [Historical scan example](usage.md#shorten-a-historical-scan).
+For timestamp filters without saved progress, a positive lower bound starts at Kafka’s first matching offset. A non-positive or absent lower bound starts at the earliest retained offset. A FOLLOW partition with no timestamp match starts at the readable end.
 
 Explicit group names must be nonblank. Quoted `GROUP = 'ONE_OFF'` is an ordinary named group. Omitting `GROUP` generates and logs a fresh `kaferry-<hex>` group each run. Quote that logged name to resume. Use the same named group for cooperating Kafka workers; unnamed runs copy independently.
 
@@ -176,7 +182,7 @@ Explicit group names must be nonblank. Quoted `GROUP = 'ONE_OFF'` is an ordinary
 | --- | --- | --- |
 | `GROUP` | `ONE_OFF` | Checkpoint containing the pinned completed-file selection and physical replay cursors |
 
-`FOLLOW`, `START` and `MAX_OUT_OF_ORDER` require a Kafka source. New files do not expand a saved selection. Timestamp and original-offset criteria filter archived records; filesystem modification times and byte positions are not record criteria. [File replay](design/archive.md#replay-and-progress).
+`FOLLOW`, `START` and `MAX_OUT_OF_ORDER` require a Kafka source. See [archive completion](#how-a-copy-ends) and [file replay](design/archive.md#replay-and-progress).
 
 #### Kafka sink
 
@@ -283,7 +289,7 @@ Queue/fetch overrides must be positive. Byte queue settings use KiB. Large or co
 
 | Normal exit | Meaning |
 | --- | --- |
-| 0 | Status is `complete` or `complete_within_disorder`, help or a preview printed, or this worker finished its file input or remaining Kafka partitions, or reached its worker record threshold. A signal cleanly stopped a FOLLOW copy without a worker record threshold. SKIP counts do not change the code |
+| 0 | This worker [finished its input or reached its record cap](#how-a-copy-ends) or a signal cleanly stopped uncapped FOLLOW. Status is `complete` or `complete_within_disorder`, or help or a preview printed. SKIP counts do not change the code |
 | 1 | Copy, inspection, output, cleanup or the shutdown deadline failed, or a signal arrived before completion of startup, a file copy, or a bounded Kafka copy or capped FOLLOW copy. Conflicts after the first consumed record also exit 1 |
 | 2 | Usage/parse/plan/configuration error, or a validation conflict before the first consumed record (Kafka topic validation, query/source identity, replay checkpoint/lock or self-copy) |
 | 3 | For a bounded Kafka copy or capped FOLLOW copy, Kafka assigned this worker no partitions, and none arrived within `worker.idle_exit` (default 30 seconds). This does not say whether other workers finished |

@@ -16,7 +16,7 @@ import (
 type sourceMetadata interface {
 	kafka.OffsetReader
 	kafka.TimeReader
-	Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafka.SavedProgress, error)
+	Saved(context.Context, plan.Plan, string) (map[int32]kafka.SavedProgress, error)
 }
 type sourcePartition struct {
 	position  int64

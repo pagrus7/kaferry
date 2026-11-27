@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/pagrus7/kaferry/src/internal/kafka/commitmeta"
-	"github.com/pagrus7/kaferry/src/internal/plan"
 )
 
 type Conflict struct{ Err error }
@@ -37,13 +36,4 @@ func DecodeProgress(codec commitmeta.Codec, metadata *string, topicID string) (P
 		return progress, conflict("source topic identity mismatch: saved=%s current=%s", progress.TopicID, topicID)
 	}
 	return progress, nil
-}
-
-func ValidateWindow(progress Progress, spec plan.WindowSpec, disorder int64) error {
-	if progress.Window != nil {
-		if err := spec.ValidateStored(*progress.Window, disorder); err != nil {
-			return conflict("invalid stored time window: %v", err)
-		}
-	}
-	return nil
 }

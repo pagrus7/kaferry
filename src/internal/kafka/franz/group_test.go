@@ -290,7 +290,7 @@ func TestSavedOffsetsRejectFailedMetadataWithoutChangingCachedIdentity(t *testin
 				response.Topics[0].Partitions[1].ErrorCode = kerr.NotLeaderForPartition.Code
 			}
 			// When saved progress refreshes the source metadata before requesting offsets.
-			saved, err := inspector.Saved(t.Context(), "group", "fp", plan.WindowSpec{}, 0)
+			saved, err := inspector.Saved(t.Context(), plan.Plan{Group: "group"}, "fp")
 			// Then failure preserves the cache and exposes no progress or offset-fetch request.
 			require.Error(t, err)
 			require.Nil(t, saved)
@@ -363,7 +363,7 @@ func savedOffsetInspection(t *testing.T, grouped bool, code int16, failure error
 	}}
 	inspector := &Inspector{codec: commitmeta.NewCodec(), client: client, topic: "input", log: quietLogger()}
 	// When loading progress before positioning a source.
-	saved, err := inspector.Saved(t.Context(), "group", "fp", plan.WindowSpec{}, 0)
+	saved, err := inspector.Saved(t.Context(), plan.Plan{Group: "group"}, "fp")
 	// Then unavailable or unauthorized progress cannot become a fresh start.
 	require.ErrorIs(t, err, failure, "incorrect saved-offset outcome")
 	if failure != nil || code == kerr.GroupIDNotFound.Code {

@@ -231,13 +231,13 @@ func TestStrictRFC3339AndPersistedWindow(t *testing.T) {
 	} {
 
 		// When
-		validateStoredErr := spec.ValidateStored(tc.window, 0)
+		validateStoredErr := spec.ValidateStored(tc.window)
 
 		// Then
 		require.Error(t, validateStoredErr)
 		require.Contains(t, validateStoredErr.Error(), tc.want)
 	}
-	require.NoError(t, spec.ValidateStored(Window{Lower: &lo, Upper: &hi}, 0))
+	require.NoError(t, spec.ValidateStored(Window{Lower: &lo, Upper: &hi}))
 }
 
 func TestQuotedOneOffGroupRemainsNamed(t *testing.T) {

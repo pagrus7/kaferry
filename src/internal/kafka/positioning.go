@@ -165,9 +165,9 @@ func (p *positioner) window(id int32, saved map[int32]SavedProgress, adopted *pl
 		if err != nil {
 			return window, progress, position, conflict("invalid resolved time window: %v", err)
 		}
-	}
-	if err := p.plan.ValidateWindow(window); err != nil {
-		return window, progress, position, conflict("invalid time window: %v", err)
+		if err := p.plan.ValidateWindow(window); err != nil {
+			return window, progress, position, conflict("invalid time window: %v", err)
+		}
 	}
 
 	if p.plan.Window.Relative() {

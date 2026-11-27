@@ -69,7 +69,7 @@ func (m *topicMock) Membership(context.Context, string, string) (kafka.Membershi
 	m.membershipReads++
 	return observation, m.err("members")
 }
-func (m *topicMock) Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafka.SavedProgress, error) {
+func (m *topicMock) Saved(context.Context, plan.Plan, string) (map[int32]kafka.SavedProgress, error) {
 	m.groupReads++
 	m.observations = append(m.observations, "saved")
 	if m.afterSaved != nil {

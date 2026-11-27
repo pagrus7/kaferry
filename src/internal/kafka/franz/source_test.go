@@ -69,7 +69,7 @@ func (m *sourceMetadataMock) Offsets(_ context.Context, ids []int32, kind kafka.
 func (m *sourceMetadataMock) OffsetsForTimes(context.Context, map[int32]int64) (map[int32]int64, error) {
 	return map[int32]int64{0: 0}, m.err
 }
-func (m *sourceMetadataMock) Saved(context.Context, string, string, plan.WindowSpec, int64) (map[int32]kafka.SavedProgress, error) {
+func (m *sourceMetadataMock) Saved(context.Context, plan.Plan, string) (map[int32]kafka.SavedProgress, error) {
 	m.savedReads++
 	return m.saved, m.err
 }
