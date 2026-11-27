@@ -104,29 +104,14 @@ A [worker record cap](#final-options) can end any copy before its source is fini
 
 ## Inspection
 
-`explain` previews the same statement, configuration, identity and start-position rules as `run`. It never joins a group, consumes records, commits, creates/truncates files or takes locks. Observations can change during inspection; this is not an atomic snapshot or a guarantee that a later run succeeds. Write access is not checked. Records, output bytes and duration are not estimated.
+`explain` previews a copy using current endpoint metadata and saved progress. It never joins the group, writes, locks files or checks write access. The source can change between preview and execution. Archive previews read completed-file headers, sizes and the checkpoint without scanning payloads or recovering private files. `ONE_OFF` previews a fresh group.
 
-Text sections show endpoints, progress, time windows, behavior and any warnings. They summarize saved/fresh partitions, resolved bounds, start/stop rules, destination routing and record-error policies. Identical bounds and origins share a window summary. At most eight window groups, eight partition IDs per group and eight warnings are printed; omitted counts point to `--json`. Cluster IDs are shown separately from connection aliases; fingerprints and topic IDs stay in JSON.
+The text groups similar partitions and limits the windows, partition IDs per window and warnings shown to eight each. Use `--json` for all partitions, identifiers and warnings. See the [version 3 JSON example](../src/internal/app/testdata/explain.json).
 
-Kafka JSON rows show the selected start and retained/log-end offsets; log end includes open transactions. Offset differences are not record counts or completion evidence. Fresh `NOW()` values are preview-only.
-
-Archive inspection reads completed-file headers, sizes and saved checkpoint data without scanning record payloads, taking locks or recovering private files. Source positions count confirmed examined input records. `ONE_OFF` never generates a group or reads an existing checkpoint; the preview says a fresh group would be used.
-
-`--json` emits version 3 with all partitions and warnings. Time bounds use signed Unix milliseconds; byte and offset fields are counts. Connection properties and SQL text are excluded.
-
-| Fields | Meaning |
-| --- | --- |
-| `version`, `fingerprint`, `group`, `one_off`, `max_out_of_order_ms` | Report format and query identity; one-off group is `ONE_OFF`. `max_out_of_order_ms=null` disables timestamp stopping |
-| `start_rule` | Kafka fallback for partitions without progress: `WINDOW`, `OFFSET`, `EARLIEST` or `LATEST`; absent for file sources |
-| `end_rule` | [Source end rule](#how-a-copy-ends) reported as `LATEST`, `OFFSET` (numeric end or per-partition branches), `FOLLOW` or archive `EOF` |
-| `record_errors` | Effective `FAIL`/`SKIP` policies: `missing_timestamp`, `rejected_timestamp`, `other_record`; SKIP applies before writing, not to delivery failures |
-| `source`, `destination` | `kind`, `name`, optional connection alias, cluster/topic IDs, partition count, destination timestamp type and `partitioning` (`PRESERVE` or `KEY` for a Kafka destination) |
-| Endpoint `file` | `exists`; source adds `size_bytes`, `file_count`, `position_records`, `window`, `window_origin`, `checkpoint`, `checkpoint_exists`. Destination `size_bytes` is zero; destination size and file count are not inspected |
-| `source.partition_filter` | Optional `{exclude, ids}` predicate; `exclude=true` means NOT IN. Kafka discovers eligible added partitions while workers run; archives retain their saved file selection |
-| `partitions` | Sorted `partition`, `start`, `log_start`, `log_end`, `saved`, `window`, `window_origin`; optional `captured_end` is the exclusive end offset; `end_origin` distinguishes `saved`, `literal` and unsaved `preview` |
-| `offset_range`, `partition_offset_ranges` | Optional symbolic offset criteria; per-partition entries include original partition IDs |
-| `window` | Inclusive `lower`, exclusive `upper`; null means unbounded. `window_origin`: `literal`, `saved`, `adopted` or `resolved` for preview-only NOW |
-| `warnings` | Detected retention gaps and unavailable/changed destination timestamp behavior; may be empty |
+- For Kafka, `start` is the selected offset. `log_end` includes open transactions. An offset difference is a distance in the log, so it cannot tell you how many records will be copied.
+- `end_rule` is `LATEST`, `OFFSET`, `FOLLOW` or archive `EOF`. For bounded Kafka copies, `captured_end` is exclusive. An `end_origin` of `preview` means the end has yet to be saved. [How a copy ends](#how-a-copy-ends).
+- Window bounds are signed Unix milliseconds, lower inclusive and upper exclusive. A null bound is open. Freshly resolved `NOW()` values are provisional. A null `max_out_of_order_ms` disables timestamp stopping.
+- For archives, `position_records` counts confirmed, examined input records. Destination size and file count are not inspected. SQL text and connection properties are excluded from the report.
 
 ### Saved status
 
@@ -141,17 +126,13 @@ Archive inspection reads completed-file headers, sizes and saved checkpoint data
 | `complete_within_disorder` | All selected partitions finished and at least one stopped early under MAX_OUT_OF_ORDER. |
 | `complete` | Source processing finished for the selected finite scope: saved offset ends or the saved archive selection. |
 
-Identity conflicts and incompatible active members take precedence over activity. Activity takes precedence over saved progress; missing stops take precedence over caps, and caps over completion. Added eligible Kafka partitions count. Kafka membership is read before and after offsets; observations are not atomic and cannot detect every concurrent start. File activity is not checked. A checkpoint or saved selection that cannot be validated yields `unknown`; other operational read failures exit 1 without a verdict.
+Identity conflicts take precedence over activity, then missing stops, worker caps and completion. Added eligible partitions count. Kafka activity can change during inspection and file activity is unobserved. An invalid checkpoint or selection yields `unknown`. Other operational read failures exit 1 without a verdict.
 
-An idle FOLLOW group with saved progress normally reports `incomplete`. See [how a copy ends](#how-a-copy-ends) for the assumptions behind `complete_within_disorder`. Completion refers to source processing. Filtered or skipped records can be absent, writes can repeat, and destination data may have been removed.
+An idle FOLLOW group with saved progress normally reports `incomplete`. See [how a copy ends](#how-a-copy-ends) for the assumptions behind `complete_within_disorder`. Completion describes source processing. Filtered or skipped records can be absent, writes can repeat, and destination data may have been removed.
 
-Text output lists up to eight Kafka partitions or reports archive replay progress. It shows the current verdict's meaning, with applicable notes and a suggested action when available. Run `kaferry help status` for all verdicts.
+Text shows the verdict, its meaning and up to eight Kafka partitions or the archive's replay progress. JSON version 3 includes all partitions, observed `activity`, and applicable `notes` and `next` actions. A Kafka `position` is the next offset to read. A file `position` counts confirmed examined input records. Archive sizes and counts describe the saved selection, or current completed files before the first run. Status checks headers and sizes for incomplete groups without verifying payloads or destination writes.
 
-`--json` includes all partitions. JSON version `3` contains `verdict`, optional human-readable `reason`, `meaning`, `group`, current query `fingerprint`, source/destination endpoints, `activity`, and `partitions` (`id`, optional saved `position`, `fingerprint`, `stop`, `window`, `captured_end`). `meaning` is the sentence for the current verdict in the table above. `notes` is an array of applicable caveats and `next` is a suggested action string. Both fields are omitted when empty.
-
-A Kafka `position` is the next offset to read. A file `position` counts confirmed examined input records. A fingerprint mismatch reports `unknown` but retains source-validated saved progress, including Kafka partitions outside the current selection. Kafka `activity` still reports observed membership. Invalid metadata or a changed source UUID withholds positions. [Recovery](usage.md#recover-after-destination-topic-recreation).
-
-File `size_bytes` and `file_count` describe the saved selection, or current completed files before the first run. Inspection checks selected headers and sizes for incomplete groups, not payload checksums. Status does not scan records or verify destination writes.
+On a fingerprint mismatch, `unknown` can still report observed Kafka activity and source-validated positions, including partitions outside the current selection. Invalid metadata or a changed source UUID withholds positions. [Recovering a recreated destination](usage.md#recover-after-destination-topic-recreation).
 
 ## Configuration and CLI
 
