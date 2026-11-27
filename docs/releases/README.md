@@ -82,12 +82,13 @@ Each extracted archive passes version/commit and file-copy checks. Linux Kafka, 
    ```
 
 6. After the published executable passes all required qualification, promote it with `gh release edit vX.Y.Z --prerelease=false --latest`. Dispatch [container publishing](#container-publishing) for that stable tag. If the tagged build or qualification fails, fix it under a new patch tag. Never move tags or replace published binaries.
-7. In the first PR after promotion, reset `unreleased.md` to `# Kaferry unreleased`, a blank line and an empty `## Changes` section.
+7. In the first PR after promotion, reset `unreleased.md` to `# Kaferry unreleased`, a blank line and an empty `## Changes` section. Carry forward any next-release entries added since the tag.
 
-For corrections, new known issues or later test results for the released binary, edit the current GitHub release body.
+For corrections, new known issues or later test results for the released binary, edit the current GitHub body in a new `notes.md` file.
 
 ```sh
-gh release view vX.Y.Z --json body --jq .body > notes.md &&
+test ! -e notes.md &&
+  gh release view vX.Y.Z --json body --jq .body > notes.md &&
   vi notes.md &&
   gh release edit vX.Y.Z --notes-file notes.md
 ```
