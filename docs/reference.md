@@ -104,7 +104,7 @@ A [worker record cap](#final-options) can end any copy before its source is fini
 
 ## Inspection
 
-`explain` previews a copy using current endpoint metadata and saved progress. It never joins the group, writes, locks files or checks write access. The source can change between preview and execution. Archive previews read completed-file headers, sizes and the checkpoint without scanning payloads or recovering private files. `ONE_OFF` previews a fresh group.
+`explain` previews a copy using current endpoint metadata and saved progress. It never joins the group, writes, locks files or checks write access. The source can change between preview and execution. For a fresh or incomplete archive selection, the preview reads headers and sizes without scanning payloads or recovering private files. For a completed checkpoint it reports saved file metadata even if those files have since disappeared. `ONE_OFF` previews a fresh group.
 
 The text groups similar partitions and limits the windows, partition IDs per window and warnings shown to eight each. Use `--json` for all partitions, identifiers and warnings. See the [version 3 JSON example](../src/internal/app/testdata/explain.json).
 
