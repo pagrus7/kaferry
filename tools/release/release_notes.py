@@ -9,9 +9,9 @@ def read_notes(tag, root):
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9.-]+)?", tag):
         raise ValueError("release tag must be a version such as v0.3.0")
     body = (root / "docs/releases/unreleased.md").read_text(encoding="utf-8")
-    heading = "# Kaferry unreleased\n\n"
+    heading = f"# Kaferry {tag}\n\n"
     if not body.startswith(heading):
-        raise ValueError("release notes must start with '# Kaferry unreleased' and a blank line")
+        raise ValueError(f"release notes must start with '# Kaferry {tag}' and a blank line")
     sections = re.split(r"^## ", body, flags=re.MULTILINE)
     changes = next((section for section in sections[1:] if section.startswith("Changes\n")), "")
     if not changes.removeprefix("Changes\n").strip():
