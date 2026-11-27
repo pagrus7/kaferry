@@ -26,21 +26,9 @@ Completion, delivery and restart contracts. See the [usage guide](../usage.md) f
 
 ## Kafka start positions
 
-Saved commits take precedence. Without a commit:
+Kafka's [source settings](../reference.md#kafka-source) define the first offset. The positioner disables automatic offset reset and commits explicit initial positions before copying. It uses the last stable offset for a readable end. Resume checks the saved position and end against current retention and truncation bounds. A saved end is never recaptured. [Out-of-range behavior](../reference.md#record-error-policies).
 
-| Query / group state | Starting position |
-| --- | --- |
-| `WHERE` with positive lower bound | First offset returned by timestamp lookup for `lo` |
-| Non-positive lower bound or upper-only filter | Earliest retained offset |
-| No timestamp bounds, group has no valid progress | Earliest retained offset by default; with FOLLOW = ON, START = LATEST uses the stable end |
-| No timestamp bounds, group already has valid progress | Earliest retained offset for the uncommitted partition |
-
-A readable end uses Kafka's last stable offset (LSO). Initial positions are committed before copying. Every partition is positioned explicitly; automatic offset reset is disabled.
-
-- Commit below log start: resume at log start; log old position, log start and offset gap, which is not a lost-record count.
-- Commit above log end: fail as truncation. An out-of-range position during copying fails; restart reevaluates it.
-- With a saved captured end H, resume fails if the current log end is below H or retention has moved log start beyond H. Kaferry does not capture a replacement end.
-- Only retained data is available. A nonzero log start whose first retained timestamp exceeds `lo` produces a retention warning.
+A nonzero log start whose first retained timestamp exceeds the lower time bound produces a retention warning. The broker can identify a retained match but cannot establish whether earlier matching records expired.
 
 ## Completion
 
@@ -56,30 +44,29 @@ Kafka reads committed records. A numeric or saved end above the current readable
 
 Eligible added partitions use the startup assignment path. Kaferry validates identity and layout, loads saved progress, resolves missing positions and saves initial state before exposing input. Exited workers do not discover additions.
 
-All explicit broker position queries use the injected `OffsetLookup`: earliest retained, readable end, replicated end, or earliest retained match at/after a requested timestamp. The timestamp request includes partition and Unix milliseconds. No match is distinct from an unknown partition, failed request or missing response. A timestamp older than retention can still return a retained match; the broker cannot establish whether earlier matching records expired. Timestamp lower bounds can use this lookup; an upper timestamp lookup alone is not a safe end because later offsets can have earlier timestamps.
+All explicit broker position queries use the injected `OffsetLookup`: earliest retained, readable end, replicated end, or earliest retained match at/after a requested timestamp. The timestamp request includes partition and Unix milliseconds. No match is distinct from an unknown partition, failed request or missing response. Timestamp lower bounds can use this lookup; an upper timestamp lookup alone is not a safe end because later offsets can have earlier timestamps.
 
 Stop logs identify reason, partition and position. Timestamp stops identify the trigger and flag it if more than one minute ahead of the local clock. Inspection previews unsaved offset ends and reports saved ends; it never saves a boundary or validates source-order and clock assumptions.
 
 ## Worker record stop
 
-- At the [worker record threshold](../reference.md#final-options), stop reading, allow up to 10 seconds for writes from still-owned partitions, save confirmed progress and exit `0`. A quiet FOLLOW query can wait indefinitely for enough records. A signal at the threshold succeeds if writes and saving succeed.
-- Accepted writes still count after revocation; their late outcomes are discarded and the next owner may replay them. Rebalances do not reset the count. Only currently owned partitions save progress.
-- A successful drain saves `worker_record_cap` at each owned partition's confirmed position, preserving existing source stops. Write/drain failures save confirmed progress without a new worker stop; save and shutdown failures fail the run. Stop reasons clear when processing resumes. They describe saved partition progress, not worker history.
-- `status` distinguishes worker record limits from source completion using [saved-status verdicts](../reference.md#saved-status). Mixed saved stop reasons are listed. `explain` shows the allowance in text and optional JSON `worker_stop_after_records`, without estimating records.
+The [record cap](../reference.md#final-options) counts accepted writes across assignments in one invocation. Revocation discards late outcomes and leaves those writes eligible for replay. It does not restore the worker's allowance.
+
+At the cap the worker stops reading, drains still-owned writes for up to ten seconds and saves each owned partition's confirmed position with `worker_record_cap`, preserving existing source stops. A signal at the cap succeeds if draining and saving succeed. On write or drain failure it saves only confirmed progress without a new cap stop. A save or shutdown failure fails the run.
 
 ## Groups and workers
 
 ### Group names
 
-- `GROUP` identifies a Kafka consumer group or a file-source checkpoint. Omitting it means `GROUP = ONE_OFF`: generate and log `kaferry-<hex>` for a single worker. Repeated or concurrent unnamed runs independently copy the source. Resume an unfinished one-off run with its logged group name; use a shared named group for cooperating Kafka workers. Successful file-source ONE_OFF runs without `WORKER_STOP_AFTER_RECORDS` delete the checkpoint but retain its lock. Runs with a worker threshold keep the checkpoint, even at EOF. Kafka progress expires under broker offset retention.
-- Topic→topic workers share a named group and progress independently using classic `cooperative-sticky` assignment. There is no group-wide done marker or external coordinator.
+The [source group](../reference.md#kafka-source) owns Kafka offsets or a file checkpoint. A successful file-source `ONE_OFF` run deletes its checkpoint but retains its lock, unless a worker record cap was configured. With a cap it keeps the checkpoint even at EOF. Kafka progress expires under broker offset retention.
+
+Kafka workers share partitions through classic cooperative-sticky assignment. The group has no shared completion marker.
 
 ### When a worker exits
 
-- A successful worker exit requires outstanding writes to be acknowledged and progress to be saved. Partitions released during a rebalance do not count toward that worker's completion.
-- For a bounded Kafka copy or capped FOLLOW copy, the wait starts when Kafka reports an empty assignment while the worker holds no partitions. If it still has none after `worker.idle_exit` ([worker settings](../reference.md#worker-settings)), it exits `3`. Another empty-assignment notification restarts the timer. Waiting for the first assignment notification or losing all partitions during a rebalance does not start it. The exit logs `local idle exit`, the timeout and the code. A worker assigned an empty partition does not exit this way.
-- More workers than source partitions can leave some workers with no partitions to read. This can also happen while Kafka moves partitions between workers. If the last workers exit before a partition reaches its new owner, that partition can remain unfinished. Rerunning the same query and group resumes saved positions and may copy late arrivals.
-- If your supervisor restarts workers on nonzero exits, set a policy for code `3`. Restarting rejoins the group and can give the worker partitions to copy.
+A worker confirms outstanding writes and saves progress for partitions it still owns. A released partition may remain unfinished if all workers exit before its new owner receives it. Resume the same group to finish.
+
+For a bounded or capped Kafka copy, an empty assignment notification starts the idle timer when the worker holds no partitions. A repeated empty notification restarts it. Initial waiting, revocation alone and an assigned partition containing no records do not start the timer. The [exit-code table](../reference.md#exit-codes) distinguishes this worker's idle exit from a completed copy.
 
 ### Rebalances
 
@@ -120,10 +107,9 @@ The initial assignment commit preserves saved timestamp and end stops and clears
 ## Kafka output
 
 - One asynchronous idempotent producer per worker, with delivery reports and client batching.
-- With `PARTITIONING = PRESERVE`: write original partition N to destination partition N, keeping original key bytes, including nulls. Check all selected input partition IDs before output; Kafka assignments recheck the destination. Archive replay uses the fixed selection's original IDs, never its replay cursor. This includes selected partitions whose records the timestamp filter excludes. Destination counts may be larger; missing IDs fail under every policy. Topics must exist.
-- `WITH (PARTITIONING = KEY)` on the destination selects Java-compatible Murmur2 key routing; null keys use sticky routing. Equal non-null keys stay together with a stable partitioner/count. Preserved placement can differ from other destination producers' key routing. Destination partition-count changes are logged. Source offsets are never copied; destination offsets are new.
+- With preserved routing, validate all selected original partition IDs before output, including partitions whose records the time filter excludes. Kafka rechecks on assignment. Replay checks the fixed selection's original IDs. Log destination partition-count changes. [Routing, keys and ordering](../reference.md#kafka-sink).
+
 - Layout checks are not atomic with publishing. Topic recreation or partition changes during a copy can fail after partial output; missing partitions never fall back to key routing. The producer retains the first topic UUID it learns and refuses a replacement; that UUID can differ from the one in the startup fingerprint. Brokers using topic-name Produce requests can accept replacement-topic writes before detection; see [franz-go's topic-recreation limits](https://github.com/twmb/franz-go/blob/v1.22.2/README.md#topic-recreation).
-- Submission order is preserved for records from one source partition routed to one destination partition during an uninterrupted producer session with stable routing. With `KEY`, null keys can spread. Replay and rebalances can duplicate and reorder output; there is no cross-partition order guarantee.
 - Client delivery retries use `worker.delivery_timeout` ([worker settings](../reference.md#worker-settings)). Connection `message.timeout.ms` / `delivery.timeout.ms` overrides it; values must be positive and conflicting aliases fail. Deadlines start at submission, independently of record timestamps. Exhausted delivery fails the run.
 - Queue-full refusal pauses reading and retries the same record first, up to `worker.delivery_timeout`. Accepted records are not submitted again within that assignment.
 - Optional destination configuration supports size/timestamp preflight; denial logs a warning. [Checks and fallbacks](client-compatibility.md#optional-destination-configuration). Preflight cannot guarantee broker acceptance: clocks, settings, framing and compression may differ.
@@ -142,15 +128,8 @@ The initial assignment commit preserves saved timestamp and end stops and clears
 
 ## Errors
 
-Default FAIL. Choose `ON_ERROR` or the specific timestamp policies; they are mutually exclusive. SKIP drops and logs an identified record rejected synchronously before delivery acceptance.
+The [record-error policies](../reference.md#record-error-policies) apply while the caller can identify and reject an individual record before delivery acceptance. Once the sink accepts a write, its asynchronous failure stops the run.
 
-| Skippable failure | Policy |
-| --- | --- |
-| Missing timestamp required by timestamp bounds in `WHERE` | `ON_MISSING_TIMESTAMP` or `ON_ERROR` |
-| Timestamp outside known destination bounds or client range | `ON_REJECTED_TIMESTAMP` or `ON_ERROR` |
-| Synchronous size refusal or supported record validation failure | `ON_ERROR` |
-
-- Async delivery errors, fatal client errors, authentication/authorization, out-of-range positions, archive corruption and changed source files cannot be skipped.
 - Consumer polling retries classified transient connection/coordinator errors without a total deadline.
 - Required startup inspection and initial/periodic commits fail on error. Optional destination-config inspection warns. Kafka inspection and commit requests use context deadlines; the CLI shutdown budget also covers client cleanup and blocked filesystem or stdio calls.
 - Incomplete file replay rechecks every selected file; missing, changed or corrupt inputs fail. [Archive replay](archive.md#replay-and-progress).
@@ -160,7 +139,3 @@ Default FAIL. Choose `ON_ERROR` or the specific timestamp policies; they are mut
 `ARCHIVE 'directory'` captures independently recoverable compressed files. Multiple workers can capture to local or shared storage. Replay uses one process per group/checkpoint directory, saves a fixed completed-file selection, and preserves original Kafka identity. Storage needs durable sync, atomic rename and exclusive locks across its users. [Archive contract](archive.md).
 
 Kafka consumers are created and validated before opening archive output. Kaferry saves source progress only after the archive has synced its data and recovery state. The runner saves progress before closing adapters; closing a Kafka source does not commit offsets. [Capture and recovery](archive.md#capture-and-recovery).
-
-## Settings and results
-
-See the [user reference](../reference.md) for inspection output, saved status, configuration, exit codes and metrics.
