@@ -48,7 +48,9 @@ Select `pr` for the four oldest/newest broker pairs, `nightly` for each pinned v
 python3 -m tools.qualification.qualify matrix --tier full --output build-results/full-matrix
 ```
 
-The independent Kafka client and Avro reader check routing, capture, replay and record fidelity after a partial copy, a resume and a completed rerun. Security fixtures cover supported authentication methods, TLS, denied access and replicated destination-leader failure. Token rotation is exercised with the fixture issuer. Prolonged Kerberos renewal and deployment-specific identity providers need their own runs.
+The independent Kafka client and Avro reader check routing, capture, replay and record fidelity after a partial copy, a resume and a completed rerun. Security fixtures exercise PLAIN, SCRAM, OAuth and Kerberos authentication, TLS and mTLS, denied access and replicated destination-leader failure. The fixture issuer exercises token rotation. Live AWS MSK IAM and prolonged Kerberos renewal need separate runs.
+
+Scheduled checks can reuse a passing execution for the same commit and tier while its tests are less than 30 days old. Follow the planner’s link to the original execution for its test date and evidence. Releases always exercise the packaged executable.
 
 ## Replicated faults
 
