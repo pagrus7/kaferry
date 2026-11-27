@@ -80,6 +80,8 @@ python3 -m unittest discover -s tools -t .
 | `make qualification` | Authentication, ACLs and replicated failover; starts its own fixtures |
 | `make fuzz`, `make benchmark` | Parser/archive/lifecycle fuzzing and codec/replay benchmarks |
 
+To include the local Kafka playground in an integration run, set `KAFERRY_QUICKSTART=1`. Keep port 9092 free and the Docker container name `kaferry-kafka-demo` unused.
+
 Tests of the system-test harness use the `harness` build tag and run through `make harness`. Shared helpers remain available to broker tests. The real zombie-worker broker scenario runs separately in replicated qualification.
 
 For broker matrices, endurance runs and retained evidence, use the [qualification guide](docs/design/qualification.md). Add `ci:performance` for PR performance checks; re-add it to rerun. To compare revisions locally, use the [comparison command](docs/design/qualification.md#paired-performance).
