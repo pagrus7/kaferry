@@ -212,7 +212,7 @@ func (e *runtimeEngine) prepareSource(ctx context.Context, p plan.Plan, fp strin
 	if err := connection.CheckMembers(ctx, p.Group, kafka.GroupProtocol(p, fp)); err != nil {
 		return nil, err
 	}
-	saved, err := connection.ReadProgress(ctx, p, fp)
+	saved, err := connection.Saved(ctx, p, fp)
 	if err != nil {
 		return nil, err
 	}

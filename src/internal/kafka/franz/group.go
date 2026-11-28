@@ -178,29 +178,5 @@ func (i *Inspector) decodeSaved(parts map[int32]kmsg.OffsetFetchResponseTopicPar
 		}
 		saved[id] = kafka.SavedProgress{Position: p.Offset, Progress: progress}
 	}
-	return validateSavedWindows(saved, query, fp)
-}
-func validateSavedWindows(saved map[int32]kafka.SavedProgress, p plan.Plan, fp string) (map[int32]kafka.SavedProgress, error) {
-	// Finish validating the source before exposing diagnostic positions. Every
-	// execution caller must stop on the fingerprint error; status can inspect it.
-	mismatch := false
-	for _, progress := range saved {
-		if progress.Fingerprint != fp {
-			mismatch = true
-			continue
-		}
-		if progress.Window == nil {
-			if p.Window.Relative() {
-				return nil, conflict("NOW() commit is missing its window")
-			}
-			continue
-		}
-		if err := p.ValidateWindow(*progress.Window); err != nil {
-			return nil, conflict("invalid stored time window: %v", err)
-		}
-	}
-	if mismatch {
-		return saved, &kafka.Conflict{Err: plan.ErrFingerprintMismatch}
-	}
-	return saved, nil
+	return kafka.ValidateSavedProgress(saved, query, fp)
 }
