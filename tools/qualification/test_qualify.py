@@ -13,7 +13,8 @@ import unittest
 from unittest.mock import patch
 
 from tools.ci.ci import verify_tests
-from tools.qualification.qualify import lab_lock, plan, report, run_suite, verify_replicated_tests, InconclusivePrecondition, valid_receipts
+from tools.qualification.fixtures import lab_lock
+from tools.qualification.qualify import plan, report, run_suite, verify_replicated_tests, InconclusivePrecondition, valid_receipts
 from tools.qualification.broker_probe import reconcile, records
 
 
@@ -23,7 +24,7 @@ class MatrixTest(unittest.TestCase):
             'binary_platform': 'linux-amd64', 'execution_platform': 'linux-amd64'})
         identity.start()
         self.addCleanup(identity.stop)
-        images = patch('tools.qualification.qualify.fixture_images', return_value='fixture')
+        images = patch('tools.qualification.fixtures.fixture_images', return_value='fixture')
         images.start()
         self.addCleanup(images.stop)
 
@@ -136,11 +137,11 @@ class MatrixTest(unittest.TestCase):
                     return [dict(id=selected, status='passed' if outcomes[len(runs)-1] in ('passed', 'passed-dirty', 'passed-untracked') else 'inconclusive')]
                 # Given a proved pre-fault zombie attempt or an independent failure,
                 # when qualification finishes, then only the former can retry.
-                with patch('tools.qualification.qualify.LAB_LOCK', root/'host.lock'), \
+                with patch('tools.qualification.fixtures.LAB_LOCK', root/'host.lock'), \
                      patch('tools.qualification.qualify.capture', side_effect=capture), \
                      patch('tools.qualification.fault_results.configure', side_effect=lambda env: env.update(KAFERRY_ORACLE_RUN=os.urandom(4).hex())), \
-                     patch('tools.qualification.qualify.broker_fixture', side_effect=fixture), \
-                     patch('tools.qualification.qualify.logged', side_effect=command), \
+                     patch('tools.qualification.fixtures.broker_fixture', side_effect=fixture), \
+                     patch('tools.qualification.run_io.logged', side_effect=command), \
                      patch('tools.qualification.replicated_results.collect', side_effect=collect):
                     if error:
                         with self.assertRaises(error):

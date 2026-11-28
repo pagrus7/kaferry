@@ -39,7 +39,7 @@ if [ -n "${KAFERRY_REPORT_DIR:-}" ]; then
   "${KAFERRY_QUAL_PYTHON:-python3}" - "$image_receipt.tmp" <<'PY'
 from pathlib import Path
 import sys
-from tools.qualification.qualify import validate_fixture_images
+from tools.qualification.fixtures import validate_fixture_images
 validate_fixture_images(Path(sys.argv[1]).read_text())
 PY
   mv "$image_receipt.tmp" "$image_receipt"

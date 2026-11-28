@@ -71,8 +71,8 @@ class AuthRunnerTest(unittest.TestCase):
                 args = argparse.Namespace(suite='auth', binary=str(binary), output=root / 'evidence',
                                           source='3.9.2', destination='3.9.2', config=None, duration=60)
                 failed = image_exit or suite_exit or cleanup_exit or image_output != images
-                with patch.dict(os.environ, env, clear=True), patch('tools.qualification.qualify.ROOT', root), \
-                     patch('tools.qualification.qualify.LAB_LOCK', root / 'lease'), \
+                with patch.dict(os.environ, env, clear=True), patch('tools.qualification.run_io.ROOT', root), \
+                     patch('tools.qualification.fixtures.LAB_LOCK', root / 'lease'), \
                      patch('tools.qualification.qualify.capture', return_value='fixture'), \
                      patch('tools.qualification.qualify.identity_platforms', return_value={}), \
                      patch('builtins.print'):

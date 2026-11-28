@@ -34,13 +34,13 @@ class FixtureImagesTest(unittest.TestCase):
                     if isinstance(outcome, Exception):
                         raise outcome
                     return outcome
-                with patch('tools.qualification.qualify.LAB_LOCK', root / 'lease'), \
+                with patch('tools.qualification.fixtures.LAB_LOCK', root / 'lease'), \
                      patch('tools.qualification.qualify.capture', return_value='fixture'), \
                      patch('tools.qualification.qualify.platform.platform', return_value='fixture-platform'), \
                      patch('tools.qualification.qualify.identity_platforms', return_value={}), \
-                     patch('tools.qualification.qualify.logged', side_effect=command), \
-                     patch('tools.qualification.qualify.subprocess.check_output', side_effect=images) as inspect, \
-                     patch('tools.qualification.qualify.subprocess.run'), patch('tools.qualification.qualify.verify_run'):
+                     patch('tools.qualification.run_io.logged', side_effect=command), \
+                     patch('tools.qualification.network.subprocess.check_output', side_effect=images) as inspect, \
+                     patch('tools.qualification.fixtures.subprocess.run'), patch('tools.qualification.qualify.verify_run'):
                     # When image collection fails or lacks identities, then the suite cannot run or pass.
                     if outcome == image_evidence:
                         run_suite(args)
