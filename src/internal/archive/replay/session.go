@@ -230,7 +230,11 @@ func (s *Session) CheckpointStop(position int64, stop *core.Stop) error {
 	return nil
 }
 
-func (s *Session) Saved() State { return s.saved.clone() }
+// ResumePosition returns the confirmed input position and an independent copy of its window.
+func (s *Session) ResumePosition() (int64, plan.Window) {
+	return s.saved.Position, cloneWindow(s.saved.Window)
+}
+
 func (s *Session) Close() error {
 	if s.closed {
 		return nil

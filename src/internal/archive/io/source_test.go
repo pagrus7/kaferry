@@ -3,16 +3,19 @@ package archiveio
 import (
 	"context"
 	"errors"
-	"github.com/pagrus7/kaferry/src/internal/archive/replay"
-	core "github.com/pagrus7/kaferry/src/internal/copy"
-	"github.com/stretchr/testify/require"
 	"io"
 	"testing"
 	"time"
+
+	"github.com/pagrus7/kaferry/src/internal/archive/replay"
+	core "github.com/pagrus7/kaferry/src/internal/copy"
+	"github.com/pagrus7/kaferry/src/internal/plan"
+	"github.com/stretchr/testify/require"
 )
 
 type replayMock struct {
-	state     replay.State
+	position  int64
+	window    plan.Window
 	err       error
 	reads     int
 	closed    bool
@@ -29,8 +32,8 @@ func (m *replayMock) CheckpointStop(position int64, stop *core.Stop) error {
 	m.stop = stop
 	return m.err
 }
-func (m *replayMock) Saved() replay.State { return m.state }
-func (m *replayMock) Close() error        { m.closed = true; return nil }
+func (m *replayMock) ResumePosition() (int64, plan.Window) { return m.position, m.window }
+func (m *replayMock) Close() error                         { m.closed = true; return nil }
 
 type clockMock struct{ sleeps int }
 
@@ -43,12 +46,13 @@ func (m *lifecycleMock) Assign(a []core.Assignment) error { m.assignments = a; r
 func (m *lifecycleMock) Revoke([]int32, bool) error       { return nil }
 func TestReplaySourceBackpressureEOFAndConfirmedStop(t *testing.T) {
 	// Given an initialized session whose progress is counted in input records.
-	session := &replayMock{state: replay.State{Position: 10}}
+	session := &replayMock{position: 10, window: plan.Window{Lower: new(int64(100))}}
 	clock := &clockMock{}
 	source := NewSource(session, clock, "")
 	life := &lifecycleMock{}
 	require.NoError(t, source.Start(context.Background(), life, nil))
 	require.EqualValues(t, 10, life.assignments[0].Cursor.Position)
+	require.Equal(t, session.window, life.assignments[0].Window)
 	// When paused or checkpoint capacity is full, then polling waits without inventing EOF or losing a record.
 	require.NoError(t, source.Pause(0, true))
 	event, err := source.Poll(context.Background(), time.Millisecond)
