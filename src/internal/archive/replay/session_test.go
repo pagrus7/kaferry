@@ -175,9 +175,12 @@ func TestResolvedWindowSurvivesRestartAndOutOfOrderTimestamps(t *testing.T) {
 	require.EqualValues(t, 9000, *window.Lower)
 	require.EqualValues(t, 10000, *window.Upper)
 	*window.Lower, *window.Upper = 0, 1
+	_, savedWindow := s.ResumePosition()
+	require.EqualValues(t, 9000, *savedWindow.Lower)
+	require.EqualValues(t, 10000, *savedWindow.Upper)
 	got := drain(t, s)
 	require.Equal(t, values, got)
-	require.True(t, s.saved.Window.Contains(*got[1].TimestampMS), "a later in-range timestamp is not lost after an out-of-range record")
+	require.True(t, savedWindow.Contains(*got[1].TimestampMS), "a later in-range timestamp is not lost after an out-of-range record")
 }
 
 func TestStartupFailureNeverProducesOrChangesSavedProgress(t *testing.T) {
