@@ -19,18 +19,18 @@ func TestStopSavesAtUnchangedPositionWithoutClaimingEOF(t *testing.T) {
 	// When saving a worker cap, then the selection remains incomplete and owns its stop data.
 	require.NoError(t, s.CheckpointStop(1, stop))
 	stop.At = 99
-	require.EqualValues(t, 1, s.Saved().Stop.At)
-	require.False(t, s.Saved().Complete)
+	require.EqualValues(t, 1, s.saved.Stop.At)
+	require.False(t, s.saved.Complete)
 	require.ErrorContains(t, s.CheckpointStop(1, &core.Stop{Reason: "eof", At: 1}), "invalid replay stop")
 	require.NoError(t, s.CheckpointStop(1, nil))
-	require.Nil(t, s.Saved().Stop)
+	require.Nil(t, s.saved.Stop)
 	// When EOF is confirmed after a periodic save, then the unchanged position still saves its reason.
 	_, err = s.Next()
 	require.NoError(t, err)
 	require.NoError(t, s.Checkpoint(2))
-	require.True(t, s.Saved().Complete)
+	require.True(t, s.saved.Complete)
 	before := len(store.writes)
 	require.NoError(t, s.CheckpointStop(2, &core.Stop{Reason: "eof", At: 2}))
 	require.Len(t, store.writes, before+1)
-	require.Equal(t, "eof", s.Saved().Stop.Reason)
+	require.Equal(t, "eof", s.saved.Stop.Reason)
 }

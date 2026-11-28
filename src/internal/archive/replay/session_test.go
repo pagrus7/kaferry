@@ -82,7 +82,7 @@ func TestSaveFailureStopsIntakeWithoutAdvancingMemoryOrRetryingWrites(t *testing
 	require.Equal(t, before, blocks.reads)
 	require.ErrorIs(t, s.Checkpoint(1), errDisk)
 	require.Len(t, store.writes, 2)
-	require.Zero(t, s.Saved().Position)
+	require.Zero(t, s.saved.Position)
 }
 
 func TestReadFailureStillAllowsSavingAnEarlierConfirmedPrefix(t *testing.T) {
@@ -170,11 +170,17 @@ func TestResolvedWindowSurvivesRestartAndOutOfOrderTimestamps(t *testing.T) {
 	s, err = NewSession(q, clock{time.UnixMilli(20000)}, store, inputs, blocks, 10)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
-	require.EqualValues(t, 9000, *s.Saved().Window.Lower)
-	require.EqualValues(t, 10000, *s.Saved().Window.Upper)
+	position, window := s.ResumePosition()
+	require.Zero(t, position)
+	require.EqualValues(t, 9000, *window.Lower)
+	require.EqualValues(t, 10000, *window.Upper)
+	*window.Lower, *window.Upper = 0, 1
+	_, savedWindow := s.ResumePosition()
+	require.EqualValues(t, 9000, *savedWindow.Lower)
+	require.EqualValues(t, 10000, *savedWindow.Upper)
 	got := drain(t, s)
 	require.Equal(t, values, got)
-	require.True(t, s.Saved().Window.Contains(*got[1].TimestampMS), "a later in-range timestamp is not lost after an out-of-range record")
+	require.True(t, savedWindow.Contains(*got[1].TimestampMS), "a later in-range timestamp is not lost after an out-of-range record")
 }
 
 func TestStartupFailureNeverProducesOrChangesSavedProgress(t *testing.T) {
@@ -190,7 +196,7 @@ func TestEmptySelectionAndClosedSession(t *testing.T) {
 	store := &memoryCheckpoints{}
 	blocks := &memoryBlocks{}
 	s := session(t, store, &memorySnapshots{}, blocks, 10)
-	require.True(t, s.Saved().Complete)
+	require.True(t, s.saved.Complete)
 	_, err := s.Next()
 	require.ErrorIs(t, err, io.EOF)
 	// When closed, then its resources close exactly once and later operations fail.
