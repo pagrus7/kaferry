@@ -79,15 +79,6 @@ var statusVerdicts = map[string]StatusVerdict{
 // StatusVerdicts returns the descriptions of the saved status verdicts.
 func StatusVerdicts() map[string]StatusVerdict { return maps.Clone(statusVerdicts) }
 
-// StatusExitCodes returns the exit code for each saved status verdict.
-func StatusExitCodes() map[string]int {
-	codes := make(map[string]int, len(statusVerdicts))
-	for verdict, info := range statusVerdicts {
-		codes[verdict] = info.ExitCode
-	}
-	return codes
-}
-
 func (r StatusReport) ExitCode() int {
 	if info, ok := statusVerdicts[r.Verdict]; ok {
 		return info.ExitCode
@@ -203,21 +194,33 @@ func (s *Service) topicStatus(ctx context.Context, p plan.Plan, c kafka.Inspecti
 		slices.Sort(selected)
 	}
 	r.Partitions = append(r.Partitions, savedPartitionRows(selected, saved)...)
-	r.Activity = "group observed idle twice; observations are not atomic"
-	if before.Foreign || after.Foreign {
-		r.Activity = "group has an incompatible active member"
-	} else if membershipChanged(before, after) {
-		r.Activity = "group activity or a membership change was observed"
-	}
+	r.Verdict, r.Activity = membershipVerdict(before, after)
 	if progressErr != nil {
 		r.Reason = "saved query or endpoint fingerprint mismatch; saved positions are for inspection"
-		if before.Foreign || after.Foreign || membershipChanged(before, after) {
+		if r.Verdict != "" {
 			r.Reason += "; " + r.Activity
 		}
 		return progressErr
 	}
-	r.observed(before, after)
+	switch r.Verdict {
+	case verdictUnknown:
+		r.Reason = r.Activity
+	case "":
+		r.classify()
+	}
 	return nil
+}
+
+// An idle group leaves the verdict to the saved partition stops.
+func membershipVerdict(before, after kafka.Membership) (verdict, activity string) {
+	switch {
+	case before.Foreign || after.Foreign:
+		return verdictUnknown, "group has an incompatible active member"
+	case !before.Idle || !after.Idle || before.State != after.State:
+		return verdictRunning, "group activity or a membership change was observed"
+	default:
+		return "", "group observed idle twice; observations are not atomic"
+	}
 }
 
 func savedPartitionRows(selected []int32, saved map[int32]kafka.SavedProgress) []SavedPartition {
@@ -234,20 +237,6 @@ func savedPartitionRows(selected []int32, saved map[int32]kafka.SavedProgress) [
 		rows = append(rows, row)
 	}
 	return rows
-}
-func membershipChanged(before, after kafka.Membership) bool {
-	return !before.Idle || !after.Idle || before.State != after.State
-}
-
-func (r *StatusReport) observed(before, after kafka.Membership) {
-	switch {
-	case before.Foreign || after.Foreign:
-		r.Verdict, r.Reason = verdictUnknown, "group has an incompatible active member"
-	case membershipChanged(before, after):
-		r.Verdict = verdictRunning
-	default:
-		r.classify()
-	}
 }
 
 func (s *Service) archiveStatus(p plan.Plan, limits config.Worker, r *StatusReport) (savedSelection bool, err error) {
