@@ -98,15 +98,13 @@ func TestHelpStatusVerdictsMatchInspection(t *testing.T) {
 	// When extracting meanings and exit codes, joining wrapped help lines.
 	documented := helpTableRows(t, docTable, `(?m)^\| ([a-z_]+) \| ([^|\n]+) \|$`)
 	rows := regexp.MustCompile(`(?m)^([a-z_]+) +([0-9]+) {2,}([^\n]+(?:\n +[^\n]+)*)$`)
-	embedded := make(map[string]string, len(verdicts))
-	codes := make(map[string]int, len(verdicts))
+	embedded := make(map[string]inspect.StatusVerdict, len(verdicts))
 	for _, match := range rows.FindAllStringSubmatch(helpTable, -1) {
 		verdict := match[1]
 		require.NotContains(t, embedded, verdict, "duplicate row %q", verdict)
 		code, err := strconv.Atoi(match[2])
 		require.NoError(t, err)
-		codes[verdict] = code
-		embedded[verdict] = strings.Join(strings.Fields(match[3]), " ")
+		embedded[verdict] = inspect.StatusVerdict{ExitCode: code, Meaning: strings.Join(strings.Fields(match[3]), " ")}
 	}
 
 	// Then both tables list the exact meanings and help lists the exit codes.
@@ -114,9 +112,8 @@ func TestHelpStatusVerdictsMatchInspection(t *testing.T) {
 	for verdict, info := range verdicts {
 		want[verdict] = info.Meaning
 	}
-	require.Equal(t, want, embedded)
+	require.Equal(t, verdicts, embedded)
 	require.Equal(t, want, documented)
-	require.Equal(t, inspect.StatusExitCodes(), codes)
 }
 
 func readHelpDoc(t *testing.T, name string) string {
