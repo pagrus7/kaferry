@@ -2,6 +2,7 @@ GO ?= go
 PYTHON ?= python3
 JSCPD ?= jscpd
 GOLANGCI_LINT ?= golangci-lint
+GOLANGCI_LINT_CACHE ?= $(CURDIR)/.cache/golangci-lint
 GOVULNCHECK = $(GO) run golang.org/x/vuln/cmd/govulncheck@v1.9.0
 DUPLICATION_BASE ?= origin/main
 export CGO_ENABLED := 0
@@ -39,7 +40,10 @@ wording:
 		exit 1; \
 	fi
 fmt:
-	test -z "$$(gofmt -l src)"
+	@files=$$(gofmt -l src); status=$$?; \
+	if [ -n "$$files" ]; then printf '%s\n' "$$files"; fi; \
+	if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+	test -z "$$files"
 vulnerabilities:
 	mkdir -p build-results
 	rm -f build-results/govulncheck.sarif
@@ -91,9 +95,11 @@ metrics:
 	@git ls-files -z -- 'src/cmd/*.go' 'src/internal/*.go' ':!src/**/*_test.go' | xargs -0 wc -l
 duplicates:
 	$(JSCPD) --config .jscpd.json --baseline-from-ref "$(DUPLICATION_BASE)" --fail-on-new-clones --no-tips
+# A cached Linux result can hide an error in a Darwin-only file.
 lint:
 	$(GOLANGCI_LINT) config verify
-	$(GOLANGCI_LINT) run --build-tags=integration,load,fault,qualification,migration,container,harness ./...
+	GOOS=linux GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)/linux" $(GOLANGCI_LINT) run ./src/...
+	GOOS=darwin GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)/darwin" $(GOLANGCI_LINT) run ./src/internal/archive/capture ./src/tests/system
 
 # Standalone qualification: Python 3.11+, Go, Docker and Compose; no agent required.
 .PHONY: qualification-setup qualification-pr qualification-full model

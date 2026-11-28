@@ -1,5 +1,8 @@
 version: "2"
 
+run:
+  build-tags: [integration, load, fault, qualification, migration, container, harness]
+
 linters:
   default: none
   enable:
@@ -7,6 +10,8 @@ linters:
     - ineffassign
     - staticcheck
     - errorlint
+    - depguard
+    - nolintlint
     - gocognit
     - nestif
     - dupl
@@ -15,6 +20,19 @@ linters:
     - unparam
     - unused
   settings:
+    depguard:
+      rules:
+        copy-core:
+          files:
+            - '${base-path}/src/internal/copy/**'
+          deny:
+            - pkg: go.uber.org/fx
+              desc: Wire dependencies in the application layer.
+            - pkg: github.com/twmb/franz-go
+              desc: Access Kafka through the copy ports.
+    nolintlint:
+      require-specific: true
+      require-explanation: true
     gocognit:
       min-complexity: 15
     nestif:
