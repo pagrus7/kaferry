@@ -11,12 +11,13 @@ import (
 
 	"github.com/pagrus7/kaferry/src/internal/archive/replay"
 	core "github.com/pagrus7/kaferry/src/internal/copy"
+	"github.com/pagrus7/kaferry/src/internal/plan"
 )
 
 type Replay interface {
 	Next() (replay.Item, error)
 	CheckpointStop(int64, *core.Stop) error
-	Saved() replay.State
+	ResumePosition() (int64, plan.Window)
 	Close() error
 }
 
@@ -26,14 +27,15 @@ type Source struct {
 	path          string
 	paused, ended bool
 	position      int64
+	window        plan.Window
 }
 
 func NewSource(session Replay, clock core.Clock, path string) *Source {
-	return &Source{session: session, clock: clock, path: path, position: session.Saved().Position}
+	position, window := session.ResumePosition()
+	return &Source{session: session, clock: clock, path: path, position: position, window: window}
 }
 func (s *Source) Start(_ context.Context, life core.Lifecycle, _ core.Observer) error {
-	saved := s.session.Saved()
-	return life.Assign([]core.Assignment{{Cursor: core.Cursor{Partition: 0, Position: saved.Position}, Window: saved.Window}})
+	return life.Assign([]core.Assignment{{Cursor: core.Cursor{Partition: 0, Position: s.position}, Window: s.window}})
 }
 func (s *Source) Poll(_ context.Context, timeout time.Duration) (core.Event, error) {
 	if s.paused || s.ended {

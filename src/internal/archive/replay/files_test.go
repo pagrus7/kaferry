@@ -127,7 +127,7 @@ func TestRestartUsesPhysicalCursorsAndIgnoresNewFiles(t *testing.T) {
 	// When restarting the same group, then only the first confirmed physical record is excluded.
 	resumed := diskSession(t, root, checkpoints, query(), Limits{OpenFiles: 1, Blocks: 1})
 	require.Equal(t, []avro.Record{a[1], b[0], a[2], b[1]}, drain(t, resumed))
-	require.True(t, resumed.Saved().Complete)
+	require.True(t, resumed.saved.Complete)
 	require.NoError(t, resumed.Close())
 	// A new group sees the additional completed file too.
 	q := query()
@@ -280,7 +280,7 @@ func TestRestartSkipsConsumedFilesAndResumesAtNextBlock(t *testing.T) {
 	// When restarting, then only the second block is returned and the group completes.
 	resumed := diskSession(t, root, checkpoints, query(), Limits{})
 	require.Equal(t, records(45, 46), drain(t, resumed))
-	require.True(t, resumed.Saved().Complete)
+	require.True(t, resumed.saved.Complete)
 }
 
 func TestMalformedCompletedInputFailsBeforeOutputOrProgress(t *testing.T) {
