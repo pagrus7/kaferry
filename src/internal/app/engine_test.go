@@ -103,7 +103,7 @@ func (c *engineConnection) ValidatePartitions(context.Context, []int32) error { 
 func (c *engineConnection) CheckMembers(context.Context, string, string) error {
 	return c.fixture.stage("members")
 }
-func (c *engineConnection) ReadProgress(context.Context, plan.Plan, string) (map[int32]kafka.SavedProgress, error) {
+func (c *engineConnection) Saved(context.Context, plan.Plan, string) (map[int32]kafka.SavedProgress, error) {
 	return c.fixture.saved, c.fixture.stage("progress")
 }
 func (c *engineConnection) Source(_ context.Context, _ plan.Plan, _ string, _ config.Worker, routing kafka.PartitionValidator) (core.Source, core.ProgressStore, error) {

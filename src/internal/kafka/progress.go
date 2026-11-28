@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/pagrus7/kaferry/src/internal/kafka/commitmeta"
+	"github.com/pagrus7/kaferry/src/internal/plan"
 )
 
 type Conflict struct{ Err error }
@@ -36,4 +37,29 @@ func DecodeProgress(codec commitmeta.Codec, metadata *string, topicID string) (P
 		return progress, conflict("source topic identity mismatch: saved=%s current=%s", progress.TopicID, topicID)
 	}
 	return progress, nil
+}
+
+// ValidateSavedProgress checks decoded source progress against the query. A fingerprint
+// mismatch returns the rows for status inspection. Execution must stop on any error.
+func ValidateSavedProgress(saved map[int32]SavedProgress, p plan.Plan, fp string) (map[int32]SavedProgress, error) {
+	mismatch := false
+	for _, progress := range saved {
+		if progress.Fingerprint != fp {
+			mismatch = true
+			continue
+		}
+		if progress.Window == nil {
+			if p.Window.Relative() {
+				return nil, conflict("NOW() commit is missing its window")
+			}
+			continue
+		}
+		if err := p.ValidateWindow(*progress.Window); err != nil {
+			return nil, conflict("invalid stored time window: %v", err)
+		}
+	}
+	if mismatch {
+		return saved, &Conflict{Err: plan.ErrFingerprintMismatch}
+	}
+	return saved, nil
 }
