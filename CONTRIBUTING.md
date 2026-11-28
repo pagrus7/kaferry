@@ -32,7 +32,9 @@ make lint GOLANGCI_LINT=./bin/golangci-lint
 make fast GOLANGCI_LINT=./bin/golangci-lint
 ```
 
-[.golangci.yml](.golangci.yml) defines the checks. All build tags are linted; findings fail unless explicitly excluded.
+`make fmt` lists Go files under `src/` that need formatting and fails on formatting or syntax errors. `make lint` checks all Go packages under `src/` for Linux, then checks archive capture and the system test package for macOS. Both passes use the suite build tags in [.golangci.yml](.golangci.yml).
+
+Keep Fx and the franz-go Kafka client out of `src/internal/copy`. Each `//nolint` directive must name the linter it suppresses and explain why the exception is needed.
 
 ## Duplication checks
 
