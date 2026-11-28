@@ -2,48 +2,34 @@
 """Plan, execute and report standalone local/CI qualification suites."""
 
 import argparse
-from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from dataclasses import dataclass
-import fcntl
 import hashlib
 import itertools
 import json
 import os
 from pathlib import Path
 import platform
-import shutil
 import signal
-import socket
 import subprocess
 import sys
 import time
-import threading
 import uuid
 import venv
 
 from tools.ci.ci import capture, verify_tests
 from tools.ci.suites import command as go_suite, EXPECTED, REPLICATED_CASES, replicated_execution_seconds
-from tools.qualification import network
+from tools.qualification import fixtures, network, run_io
 
-ROOT = Path(__file__).resolve().parents[2]
-IMAGES = json.loads((ROOT / 'src/tests/qualification/matrix.json').read_text())
+IMAGES = json.loads((run_io.ROOT / 'src/tests/qualification/matrix.json').read_text())
 VERSIONS = list(IMAGES)
-RELEASES = json.loads((ROOT / 'src/tests/qualification/releases.json').read_text())
+RELEASES = json.loads((run_io.ROOT / 'src/tests/qualification/releases.json').read_text())
 SUITES = ('broker', 'replicated', 'fault-replicated', 'auth', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'migration',
           'model', 'resources', 'integration', 'fuzz', 'benchmark', 'smoke', 'cloud')
-STOP_GRACE = 5
 SOAK_DRAIN_SECONDS = 10
 STREAMING_SUITES = ('soak', 'capture', 'endurance')
 TWO_BROKER_SUITES = ('broker', 'fault', 'load', 'soak', 'capture', 'endurance', 'recovery', 'integration')
-LAB_LOCK = Path('/tmp/kaferry-qualification.lock')
-VENV = ROOT / ('.cache/qualification/venv-' + str(sys.version_info.major) + '.' + str(sys.version_info.minor))
-REPLICATED_SUITES = ('replicated', 'fault-replicated')
-
-
-def replicated_fixture(args):
-    return (getattr(args, 'suite', None) in REPLICATED_SUITES or
-            getattr(args, 'suite', None) == 'endurance' and getattr(args, 'topology', None) == 'replicated')
+VENV = run_io.ROOT / ('.cache/qualification/venv-' + str(sys.version_info.major) + '.' + str(sys.version_info.minor))
 
 
 def plan(tier):
@@ -69,12 +55,6 @@ def duration(value):
     return seconds
 
 
-def write_json(path, value):
-    temporary = path.with_suffix(path.suffix + '.tmp')
-    temporary.write_text(json.dumps(value, indent=2) + '\n')
-    temporary.replace(path)
-
-
 def canonical_platform(system, architecture):
     if system not in ('linux', 'darwin') or architecture not in ('amd64', 'arm64'):
         raise ValueError('qualification requires Linux/macOS AMD64/ARM64 platform metadata')
@@ -93,67 +73,6 @@ def identity_platforms(binary, go):
         raise ValueError('Go did not report the checkout execution platform')
     return dict(binary_platform=canonical_platform(settings.get('GOOS'), settings.get('GOARCH')),
                 execution_platform=canonical_platform(*execution))
-
-
-def logged(command, directory, label, env, timeout=1800, cancelled=None):
-    print('+ ' + ' '.join(map(str, command)), flush=True)
-    with (directory / f'{label}.log').open('w') as log:
-        process = subprocess.Popen(list(map(str, command)), cwd=ROOT, env=env,
-                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   text=True, errors='replace', start_new_session=True)
-        expired, finished = threading.Event(), threading.Event()
-        def signal_group(signum):
-            try:
-                os.killpg(process.pid, signum)
-            except ProcessLookupError:
-                pass
-        def terminate():
-            # An exited parent can leave a descendant holding the output pipe.
-            expired.set()
-            signal_group(signal.SIGTERM)
-            if not finished.wait(STOP_GRACE):
-                signal_group(signal.SIGKILL)
-        def watch():
-            deadline = time.monotonic() + timeout
-            while not finished.wait(0.1):
-                if time.monotonic() >= deadline or cancelled is not None and cancelled.is_set():
-                    terminate()
-                    return
-        watchdog = threading.Thread(target=watch, daemon=True)
-        watchdog.start()
-        try:
-            for line in process.stdout:
-                print(line, end='', flush=True)
-                log.write(line)
-                log.flush()
-            code = process.wait()
-        finally:
-            finished.set()
-            signal_group(signal.SIGTERM)
-            try:
-                process.wait(timeout=STOP_GRACE)
-            except subprocess.TimeoutExpired:
-                signal_group(signal.SIGKILL)
-                process.wait()
-            signal_group(signal.SIGKILL)
-            process.stdout.close()
-            watchdog.join(timeout=STOP_GRACE+1)
-    if cancelled is not None and cancelled.is_set():
-        raise InterruptedError(f'{label} cancelled')
-    if expired.is_set():
-        raise RuntimeError(f'{label} exceeded {timeout}s; inspect {directory / (label + ".log")}')
-    if code:
-        raise RuntimeError(f'{label} exited {code}; inspect {directory / (label + ".log")}')
-
-
-@contextmanager
-def lab_lock():
-    with LAB_LOCK.open('a') as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise ValueError('another qualification suite owns this host’s disposable broker ports')
-        yield
 
 
 def suite_command(args, env):
@@ -221,130 +140,6 @@ def suite_command(args, env):
     return go_suite(args.suite, go=prefix[0], timeout='20m' if args.suite == 'load' else '10m'), EXPECTED[args.suite]
 
 
-def endurance_allowance(seconds, replicas=1):
-    bursts = 1 + (seconds - 10) // 60
-    records = seconds * 200 + bursts * 400
-    return dict(records=records, required_broker_bytes=records * (5120 + 256) * 3 * replicas + 4 * 1024**3,
-                required_evidence_bytes=max(1024**3, seconds * 8192))
-
-
-def endurance_capacity(seconds, output, compose, env):
-    # No compression credit. Require the combined allowance on each filesystem
-    # because Docker may put both writable container layers on the same disk.
-    capacity = endurance_allowance(seconds)
-    free = {}
-    for service in ('kafka', 'kafka-dr'):
-        result = subprocess.check_output(compose + ['exec', '-T', service, 'df', '-Pk',
-            '/tmp/kaferry-logs'], env=env, cwd=ROOT, text=True, timeout=15)
-        free[service] = int(result.splitlines()[-1].split()[3]) * 1024
-    evidence_free = shutil.disk_usage(output).free
-    capacity.update(broker_free_bytes=free, evidence_free_bytes=evidence_free)
-    write_json(output / 'capacity.json', capacity)
-    if min(free.values()) < capacity['required_broker_bytes'] or evidence_free < capacity['required_evidence_bytes']:
-        raise ValueError('insufficient endurance disk allowance; inspect capacity.json')
-    return capacity
-
-
-def fixture_capacity(output, required):
-    for attempt in range(1, 4):
-        started = time.monotonic()
-        stdout, stderr, status, timed_out = b'', b'', None, False
-        failure = None
-        try:
-            result = subprocess.run(['docker', 'info', '--format', '{{json .}}'],
-                                    capture_output=True, cwd=ROOT, timeout=60)
-            stdout, stderr, status = result.stdout or b'', result.stderr or b'', result.returncode
-            if status != 0:
-                failure = f'exited with code {status}: ' + stderr.decode(errors='replace').strip()[:400]
-        except subprocess.TimeoutExpired as error:
-            stdout, stderr = error.stdout or b'', error.stderr or b''
-            timed_out = True
-            failure = 'timed out after 60 seconds'
-        except OSError as error:
-            stderr = str(error).encode()
-            failure = 'could not execute: ' + str(error)
-        if failure is None:
-            try:
-                runtime = json.loads(stdout)
-                if not isinstance(runtime, dict):
-                    failure = 'returned unparsable output: expected a JSON object'
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                failure = 'returned unparsable output' if stdout.strip() else 'returned empty output'
-        write_json(output / f'docker-info-attempt-{attempt}.json', dict(
-            stdout=stdout.decode(errors='replace'), stderr=stderr.decode(errors='replace'),
-            exit_status=status, duration_seconds=time.monotonic() - started,
-            timed_out=timed_out, error=failure))
-        if failure is None:
-            break
-    else:
-        raise ValueError('docker info failed after 3 attempts: ' + failure +
-                         '; inspect docker-info-attempt-*.json')
-    capacity = dict(required,
-                    runtime_cpus=runtime.get('NCPU', 0), runtime_memory_bytes=runtime.get('MemTotal', 0),
-                    evidence_free_bytes=shutil.disk_usage(output).free)
-    write_json(output / 'capacity.json', capacity)
-    if (capacity['runtime_cpus'] < capacity['required_cpus'] or
-            capacity['runtime_memory_bytes'] < capacity['required_runtime_memory_bytes'] or
-            capacity['evidence_free_bytes'] < capacity['required_evidence_bytes']):
-        raise ValueError('insufficient fixture capacity; inspect capacity.json')
-    return capacity
-
-
-def replicated_admission(output, endurance_seconds=None):
-    required = dict(required_cpus=2, required_runtime_memory_bytes=8 * 1024**3,
-        required_broker_bytes=4 * 1024**3, required_evidence_bytes=1024**3)
-    if endurance_seconds is not None:
-        required.update(endurance_allowance(endurance_seconds, replicas=3))
-    capacity = fixture_capacity(output, required)
-    for port in (*network.client_ports(), network.API_PORT):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-                # Closed fixture connections may still be in TIME_WAIT.
-                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                listener.bind(('127.0.0.1', port))
-            # On macOS, SO_REUSEADDR lets a 127.0.0.1 bind succeed beside a wildcard listener.
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-                probe.settimeout(0.2)
-                if probe.connect_ex(('127.0.0.1', port)) == 0:
-                    raise ValueError(f'replicated fixture port {port} is unavailable')
-        except OSError as error:
-            raise ValueError(f'replicated fixture port {port} is unavailable') from error
-    return capacity
-
-
-def replicated_storage_command(compose, operation):
-    # Send the script through argv: a remote Docker daemon cannot bind a client-side checkout path.
-    script = (ROOT / 'src/tests/replicated/storage.sh').read_text()
-    return compose + ['run', '--rm', '--no-deps', '--entrypoint', '/bin/sh',
-                      'storage', '-ec', script, 'storage', operation]
-
-
-def replicated_storage(output, compose, env, capacity, cancelled):
-    logged(replicated_storage_command(compose, 'capacity'), output,
-           'storage-capacity', env, timeout=180, cancelled=cancelled)
-    readings = [int(line) for line in (output / 'storage-capacity.log').read_text().splitlines() if line.isdecimal()]
-    if len(readings) != 1:
-        raise ValueError('fixture storage did not report exactly one free-space reading')
-    capacity['broker_free_bytes'] = readings[0] * 1024
-    write_json(output / 'capacity.json', capacity)
-    if capacity['broker_free_bytes'] < capacity['required_broker_bytes']:
-        raise ValueError('insufficient fixture broker space; inspect capacity.json')
-    logged(replicated_storage_command(compose, 'prepare'), output,
-           'storage-prepare', env, timeout=60, cancelled=cancelled)
-
-
-def cleanup_replicated(output, compose, env):
-    # Stop writers before deleting only the directory bearing this run's marker.
-    errors = []
-    try:
-        logged(compose + ['stop', '--timeout', '10'], output, 'brokers-stop', env, timeout=90)
-        logged(replicated_storage_command(compose, 'clean'), output,
-               'storage-clean', env, timeout=60)
-    except (OSError, RuntimeError) as error:
-        errors.append({'phase': 'storage-clean', 'error': str(error)})
-    return errors
-
-
 @dataclass(frozen=True)
 class RunSpec:
     command: list
@@ -372,9 +167,9 @@ def resolve_run(args, receipt):
         if selected_case is not None and selected_case not in REPLICATED_CASES:
             raise ValueError('unknown replicated fault case')
         receipt['case_selection'] = [selected_case] if selected_case else list(REPLICATED_CASES)
-    two_brokers = not replicated_fixture(args) and (args.suite in TWO_BROKER_SUITES or
+    two_brokers = not fixtures.replicated_fixture(args) and (args.suite in TWO_BROKER_SUITES or
         args.suite == 'migration' and args.state_contract != 'reject')
-    if replicated_fixture(args):
+    if fixtures.replicated_fixture(args):
         if args.source != VERSIONS[-1] or args.destination != VERSIONS[-1]:
             raise ValueError('replicated uses the newest catalog image and its dedicated fixture')
         project = 'kaferry-replicated'
@@ -392,7 +187,7 @@ def resolve_run(args, receipt):
                                      replication_factor=3, min_insync_replicas=2, client_paths=4)
         receipt['fixture_storage'] = dict(mode='disposable-volume',
                                          run_id=env['KAFERRY_REPLICATED_RUN_ID'])
-    fixtures = two_brokers or replicated_fixture(args)
+    needs_brokers = two_brokers or fixtures.replicated_fixture(args)
     if not Path(args.binary).is_file():
         raise ValueError('binary is missing; run make build or pass --binary')
     receipt['binary_sha256'] = hashlib.sha256(Path(args.binary).read_bytes()).hexdigest()
@@ -403,8 +198,8 @@ def resolve_run(args, receipt):
         receipt['state_contract'] = args.state_contract
     env.update(KAFERRY_TEST_BINARY=args.binary, KAFERRY_EXPECT_BINARY_SHA256=receipt['binary_sha256'],
                KAFERRY_SOURCE_IMAGE=IMAGES[args.source], KAFERRY_DESTINATION_IMAGE=IMAGES[args.destination])
-    receipt['requested_images'] = [env['KAFERRY_SOURCE_IMAGE'], env['KAFERRY_DESTINATION_IMAGE']] if fixtures else []
-    if replicated_fixture(args):
+    receipt['requested_images'] = [env['KAFERRY_SOURCE_IMAGE'], env['KAFERRY_DESTINATION_IMAGE']] if needs_brokers else []
+    if fixtures.replicated_fixture(args):
         receipt['requested_images'].append(network.IMAGE)
     if args.config and args.suite != 'cloud':
         raise ValueError('--config is only accepted by the external cloud suite')
@@ -416,7 +211,7 @@ def resolve_run(args, receipt):
         receipt['fault_oracle_run'] = env['KAFERRY_ORACLE_RUN']
     command, expected = suite_command(args, env)
     receipt.update(command=list(map(str, command)), expected_tests=expected)
-    if fixtures:
+    if needs_brokers:
         receipt.update(fixture_project=project, fixture_brokers=[env['KAFKA_TEST_BROKERS'], env['KAFKA_TEST_DEST_BROKERS']])
     timeout = 1800
     if args.suite in STREAMING_SUITES:
@@ -425,90 +220,7 @@ def resolve_run(args, receipt):
         timeout = args.duration + 600
     elif args.suite == 'fault-replicated':
         timeout = replicated_execution_seconds(receipt['case_selection'])+60
-    return RunSpec(command, expected, env, compose if fixtures else [], timeout)
-
-
-def fixture_images(spec):
-    images = network.docker_query(spec.compose + ['images', '--format', 'json'], env=spec.env, cwd=ROOT)
-    return validate_fixture_images(images)
-
-
-def validate_fixture_images(images):
-    images = images.strip()
-    if not images:
-        raise ValueError('fixture did not report its broker images')
-    rows = json.loads(images)
-    if isinstance(rows, dict):
-        rows = list(rows.values())
-    if not isinstance(rows, list) or not rows or any(
-            not isinstance(row, dict) or not isinstance(row.get('ID'), str) or not row['ID'].strip() for row in rows):
-        raise ValueError('fixture did not report its broker image identities')
-    return images
-
-
-@contextmanager
-def broker_fixture(args, spec, receipt, cancelled, *, lease_held=False):
-    with nullcontext() if lease_held else lab_lock():
-        owns_fixture = False
-        try:
-            if replicated_fixture(args):
-                receipt['capacity'] = replicated_admission(args.output,
-                    args.duration if args.suite == 'endurance' else None)
-                owns_fixture = True
-                replicated_storage(args.output, spec.compose, spec.env, receipt['capacity'], cancelled)
-                logged(spec.compose + ['up', '-d', '--wait', 'toxiproxy'], args.output,
-                       'proxy-up', spec.env, timeout=90, cancelled=cancelled)
-                # Allow both Docker query retry budgets, then route configuration.
-                logged([sys.executable, '-m', 'tools.qualification.network', '--output', str(args.output)],
-                       args.output, 'proxy-configure', spec.env, timeout=420, cancelled=cancelled)
-            if spec.compose and args.suite != 'auth':
-                owns_fixture = True
-                logged(spec.compose + ['up', '-d', '--wait', '--wait-timeout', '120'], args.output,
-                       'brokers-up', spec.env, timeout=180, cancelled=cancelled)
-                receipt['broker_images'] = fixture_images(spec)
-            if args.suite == 'endurance':
-                if not replicated_fixture(args):
-                    receipt['capacity'] = endurance_capacity(args.duration, args.output, spec.compose, spec.env)
-                write_json(args.output / 'manifest.json', receipt)
-            yield
-        except (Exception, KeyboardInterrupt) as error:
-            receipt['suite_error'] = str(error) or 'interrupted'
-            raise
-        finally:
-            if spec.compose and owns_fixture:
-                errors = []
-                logs_captured = False
-                def capture_logs():
-                    nonlocal logs_captured
-                    if logs_captured:
-                        return
-                    logs_captured = True
-                    try:
-                        with (args.output / 'brokers.log').open('w') as log:
-                            subprocess.run(spec.compose + ['logs', '--no-color'], cwd=ROOT, env=spec.env,
-                                           stdout=log, stderr=subprocess.STDOUT, timeout=30, check=False)
-                    except (OSError, subprocess.SubprocessError) as error:
-                        errors.append({'phase': 'logs', 'error': str(error)})
-                try:
-                    if args.suite == 'fault-replicated' or 'suite_error' in receipt or receipt.get('fault_results', {}).get('status') == 'inconclusive':
-                        capture_logs()
-                finally:
-                    owned_storage = replicated_fixture(args)
-                    if owned_storage:
-                        errors.extend(cleanup_replicated(args.output, spec.compose, spec.env))
-                    if errors:
-                        capture_logs()
-                    try:
-                        # Keep storage if ownership validation or writer shutdown failed.
-                        volumes = [] if owned_storage and errors else ['-v']
-                        logged(spec.compose + ['down', *volumes, '--remove-orphans'], args.output, 'brokers-down', spec.env, timeout=60)
-                    except (OSError, RuntimeError) as error:
-                        errors.append({'phase': 'teardown', 'error': str(error)})
-                        capture_logs()
-                if errors:
-                    receipt['cleanup_errors'] = errors
-                    if 'suite_error' not in receipt:
-                        raise RuntimeError('fixture diagnostics or teardown failed; inspect manifest.json')
+    return RunSpec(command, expected, env, compose if needs_brokers else [], timeout)
 
 
 def verify_run(args, spec, receipt):
@@ -588,10 +300,10 @@ def run_suite(args, *, cancelled=None):
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     summary = dict(schema=1, suite=args.suite, status='running', attempts=[])
-    write_json(output/'manifest.json', summary)
+    run_io.write_json(output/'manifest.json', summary)
     try:
         # Keep the host lease across teardown and the one fresh-fixture rerun.
-        with lab_lock():
+        with fixtures.lab_lock():
             for number in (1, 2):
                 if cancelled is not None and cancelled.is_set():
                     raise InterruptedError('qualification cancelled before fresh fixture')
@@ -612,12 +324,12 @@ def run_suite(args, *, cancelled=None):
                     summary.update(status='passed', qualified_attempt=f'attempt-{number}/manifest.json',
                                    **{key: result[key] for key in ('source_commit', 'working_tree_dirty', 'binary_sha256', 'binary_platform', 'execution_platform')})
                     return summary
-                write_json(output/'manifest.json', summary)
+                run_io.write_json(output/'manifest.json', summary)
     except (Exception, KeyboardInterrupt) as error:
         summary.update(failed_outcome(error))
         raise
     finally:
-        write_json(output/'manifest.json', summary)
+        run_io.write_json(output/'manifest.json', summary)
 
 
 def run_suite_attempt(args, *, cancelled=None, lease_held=False, identity=None):
@@ -646,7 +358,7 @@ def run_suite_attempt(args, *, cancelled=None, lease_held=False, identity=None):
     if args.suite == 'cloud':
         receipt.update(source_version='external', destination_version='external', id='cloud-external-external')
     started = time.monotonic()
-    write_json(args.output / 'manifest.json', receipt)
+    run_io.write_json(args.output / 'manifest.json', receipt)
     try:
         spec = resolve_run(args, receipt)
         if identity is not None and (identity['working_tree_dirty'] or receipt['working_tree_dirty']):
@@ -654,15 +366,15 @@ def run_suite_attempt(args, *, cancelled=None, lease_held=False, identity=None):
         if identity is not None and any(identity[key] != receipt[key] for key in
                 ('source_commit', 'working_tree_dirty', 'binary_sha256', 'binary_platform', 'execution_platform')):
             raise ValueError('qualification identity changed between attempts')
-        write_json(args.output / 'manifest.json', receipt)
-        with broker_fixture(args, spec, receipt, cancelled, lease_held=lease_held):
+        run_io.write_json(args.output / 'manifest.json', receipt)
+        with fixtures.broker_fixture(args, spec, receipt, cancelled, lease_held=lease_held):
             try:
-                logged(spec.command, args.output, 'suite', spec.env, timeout=spec.timeout, cancelled=cancelled)
+                run_io.logged(spec.command, args.output, 'suite', spec.env, timeout=spec.timeout, cancelled=cancelled)
             finally:
                 if args.suite == 'auth':
                     suite_failed = sys.exc_info()[0] is not None
                     try:
-                        receipt['broker_images'] = validate_fixture_images(
+                        receipt['broker_images'] = fixtures.validate_fixture_images(
                             (args.output / 'qualification.broker-images.json').read_text())
                     except (OSError, ValueError) as error:
                         if not suite_failed:
@@ -683,7 +395,7 @@ def run_suite_attempt(args, *, cancelled=None, lease_held=False, identity=None):
             except (OSError, ValueError, KeyError) as error:
                 receipt['diagnostic_error'] = str(error)
         receipt.update(elapsed_seconds=time.monotonic() - started, finished_at=datetime.now(timezone.utc).isoformat())
-        write_json(args.output / 'manifest.json', receipt)
+        run_io.write_json(args.output / 'manifest.json', receipt)
         if args.suite == 'endurance':
             from tools.qualification.endurance_results import prepare
             try:
@@ -704,7 +416,7 @@ def released_binaries(args):
         raise ValueError('release binaries support Linux/macOS AMD64/ARM64')
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
-    download = ROOT / '.cache/qualification/releases' / uuid.uuid4().hex
+    download = run_io.ROOT / '.cache/qualification/releases' / uuid.uuid4().hex
     for version, contract in RELEASES.items():
         directory = download / version
         directory.mkdir(parents=True)
@@ -765,7 +477,7 @@ def report(directory, tier):
         result = by_id.get(name, {})
         rows.append(f"| {name} | {result.get('status', 'missing')} | {result.get('elapsed_seconds', 0):.1f} |")
     passed = valid_receipts(receipts, tier)
-    write_json(directory / 'qualification.json', {'schema': 1, 'tier': tier,
+    run_io.write_json(directory / 'qualification.json', {'schema': 1, 'tier': tier,
         'status': 'passed' if passed else 'incomplete', 'expected': sorted(expected), 'cases': receipts})
     (directory / 'qualification.md').write_text('\n'.join(rows) + '\n')
     print('\n'.join(rows))
@@ -809,19 +521,19 @@ def main(argv=None):
     requested_duration = getattr(args, 'duration', None)
     if args.action in ('run', 'matrix', 'releases'):
         endurance = getattr(args, 'suite', None) == 'endurance'
-        newest = replicated_fixture(args)
+        newest = fixtures.replicated_fixture(args)
         args.source = args.source or VERSIONS[-1 if newest else 0]
         args.destination = args.destination or VERSIONS[-1 if newest else 0]
         args.duration = args.duration if args.duration is not None else (86400 if endurance else 7200 if getattr(args, 'suite', None) == 'recovery' else 120)
         args.rate = args.rate if args.rate is not None else (200 if endurance else 50)
-    os.chdir(ROOT)
+    os.chdir(run_io.ROOT)
     if args.action == 'setup':
         if sys.version_info < (3, 11):
             raise ValueError('qualification setup requires Python 3.11+; select that interpreter for setup and runs')
         venv.EnvBuilder(with_pip=True).create(VENV)
         requirements = 'requirements-cloud.txt' if args.cloud else 'requirements.txt'
         subprocess.run([str(VENV / 'bin/python'), '-m', 'pip', 'install', '--no-cache-dir', '-r',
-                        str(ROOT / 'src/tests/qualification' / requirements)], check=True)
+                        str(run_io.ROOT / 'src/tests/qualification' / requirements)], check=True)
         return 0
     if args.action == 'plan':
         print(json.dumps({'include': plan(args.tier)}))
